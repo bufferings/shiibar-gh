@@ -360,3 +360,92 @@ fn snoozing_a_pr_with_undelivered_rows_moves_them_to_the_release() {
     let out = h.delivered();
     assert_eq!(out[0].title, "org · Back from Snooze");
 }
+
+#[test]
+fn undelivered_rows_from_before_the_snooze_survive_a_manual_unsnooze() {
+    let mut h = H::new();
+    h.prs(vec![other("PR_1")]);
+    let before = h.ev("BEFORE", "PR_1", EventKind::Comment);
+    h.events(vec![before]);
+    h.offline();
+    h.snooze(&key("PR_1"));
+    assert_eq!(h.row("BEFORE").notify, NotifyState::HeldUndelivered);
+    let during = h.ev("DURING", "PR_1", EventKind::Comment);
+    h.events(vec![during]);
+    assert_eq!(h.row("DURING").notify, NotifyState::Held);
+    assert!(h.reconnect().is_empty(), "both wait during the Snooze");
+
+    h.unsnooze(&key("PR_1"));
+    assert_eq!(h.row("BEFORE").notify, NotifyState::Pending);
+    assert_eq!(h.row("DURING").notify, NotifyState::None);
+    let out = h.reconnect();
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].rows, ["BEFORE"]);
+    assert_eq!(out[0].title, "org · 1 new event");
+}
+
+#[test]
+fn undelivered_rows_from_before_the_snooze_join_the_return_time_summary() {
+    let mut h = H::new();
+    h.prs(vec![other("PR_1")]);
+    let before = h.ev("BEFORE", "PR_1", EventKind::Comment);
+    h.events(vec![before]);
+    h.offline();
+    h.snooze(&key("PR_1"));
+    let during = h.ev("DURING", "PR_1", EventKind::Comment);
+    h.events(vec![during]);
+    h.set_time(NEXT_0900);
+    h.tick();
+    let out = h.delivered();
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].title, "org · Back from Snooze");
+    assert_eq!(out[0].rows.len(), 2);
+}
+
+#[test]
+fn a_row_from_before_the_snooze_marked_done_leaves_the_return_time_summary() {
+    let mut h = H::new();
+    h.prs(vec![other("PR_1")]);
+    let before = h.ev("BEFORE", "PR_1", EventKind::Comment);
+    h.events(vec![before]);
+    h.offline();
+    h.snooze(&key("PR_1"));
+    h.engine.done("BEFORE").unwrap();
+    h.set_time(NEXT_0900);
+    h.tick();
+    assert!(h.delivered().is_empty());
+    assert_eq!(h.row("BEFORE").notify, NotifyState::None);
+}
+
+#[test]
+fn an_undelivered_row_found_on_a_snoozed_pr_at_reconnect_is_also_kept() {
+    let mut h = H::new();
+    let e = h.ev("E_1", "PR_1", EventKind::Comment);
+    h.push(vec![other("PR_1")], vec![e], vec![]);
+    let out = h.engine.take_notifications(true, &h.now);
+    h.snooze(&key("PR_1"));
+    h.engine.delivery_failed(&out[0].rows);
+    assert!(h.reconnect().is_empty());
+    assert_eq!(h.row("E_1").notify, NotifyState::HeldUndelivered);
+    h.unsnooze(&key("PR_1"));
+    assert_eq!(h.reconnect().len(), 1);
+}
+
+#[test]
+fn an_unreadable_pr_gets_no_dot_at_release_and_loses_its_summary_record() {
+    let mut h = H::new();
+    h.prs(vec![other("PR_1")]);
+    h.snooze(&key("PR_1"));
+    let e = h.ev("E_1", "PR_1", EventKind::Comment);
+    h.events(vec![e]);
+    h.missing("PR_1");
+    h.set_time(NEXT_0900);
+    h.tick();
+    assert!(!h.dot());
+    assert!(h.delivered().is_empty());
+    assert_eq!(h.row("E_1").notify, NotifyState::None);
+    assert!(h.row("E_1").unread, "state is kept");
+    h.prs(vec![other("PR_1")]);
+    assert!(h.reconnect().is_empty(), "cleared for good");
+    assert!(h.visible("PR_1"));
+}

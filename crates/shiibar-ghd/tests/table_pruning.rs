@@ -160,3 +160,56 @@ fn hidden_bot_comments_do_not_take_a_slot_and_are_not_pruned() {
     assert!(!h.row("BOT2").pruned);
     assert!(!h.row("E_0").pruned, "hidden rows take no slot");
 }
+
+#[test]
+fn a_done_request_pruned_while_requested_stays_pruned() {
+    let mut h = H::new();
+    let requested = IngestPr {
+        requested_me: true,
+        ..other("PR_1")
+    };
+    let e = h.ev("RR", "PR_1", EventKind::ReviewRequested);
+    h.push(vec![requested.clone()], vec![e], vec![]);
+    h.engine.done("RR").unwrap();
+    let events: Vec<_> = (0..3)
+        .map(|i| h.ev_at(&format!("E_{i}"), "PR_1", EventKind::Closed, h.at() + i))
+        .collect();
+    h.events(events);
+    h.seen(&["RR", "E_0", "E_1", "E_2"]);
+    h.close();
+    assert!(h.row("RR").pruned);
+
+    h.tick();
+    assert!(h.row("RR").pruned, "across a periodic pass");
+    assert!(not_found(h.engine.done("RR")));
+    h.prs(vec![requested]);
+    assert!(h.row("RR").pruned, "across a fetch of the open PR");
+    assert!(h.wire_row("RR").is_none());
+    assert!(h.row("RR").done);
+}
+
+#[test]
+fn reopening_restores_a_pruned_request_only_on_the_transition() {
+    let mut h = H::new();
+    let requested = IngestPr {
+        requested_me: true,
+        ..other("PR_1")
+    };
+    let e = h.ev("RR", "PR_1", EventKind::ReviewRequested);
+    h.push(vec![requested.clone()], vec![e], vec![]);
+    h.prs(vec![IngestPr {
+        state: PrState::Closed,
+        ..requested.clone()
+    }]);
+    let events: Vec<_> = (0..3)
+        .map(|i| h.ev_at(&format!("E_{i}"), "PR_1", EventKind::Closed, h.at() + i))
+        .collect();
+    h.events(events);
+    h.seen(&["RR", "E_0", "E_1", "E_2"]);
+    h.close();
+    assert!(h.row("RR").pruned);
+    h.tick();
+    assert!(h.row("RR").pruned, "still closed");
+    h.prs(vec![requested]);
+    assert!(!h.row("RR").pruned, "reopened");
+}

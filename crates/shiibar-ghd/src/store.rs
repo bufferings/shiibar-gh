@@ -9,6 +9,7 @@ use anyhow::Context;
 use rusqlite::config::DbConfig;
 use rusqlite::{Connection, ErrorCode, OpenFlags, OptionalExtension, Transaction, params};
 use std::collections::BTreeMap;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -150,13 +151,42 @@ fn restrict_side_files(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Open read-only and let SQLite walk every page. Never writes to the main
-/// database file.
+/// A `file:` URI for any path. Every byte outside a safe set is percent-encoded,
+/// so `?`, `#` and `%` in a directory name stay part of the path.
+fn immutable_uri(path: &Path) -> String {
+    let mut uri = String::from(if path.is_absolute() {
+        "file://"
+    } else {
+        "file:"
+    });
+    for byte in path.as_os_str().as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'.' | b'-' | b'_' | b'~' => {
+                uri.push(*byte as char)
+            }
+            other => uri.push_str(&format!("%{other:02X}")),
+        }
+    }
+    uri.push_str("?immutable=1");
+    uri
+}
+
+/// Let SQLite walk every page, never writing to the main database file.
+///
+/// A plain read-only open of a WAL database fails on this system's libsqlite3
+/// once `-wal` and `-shm` are gone, so a WAL without content is skipped with
+/// `immutable=1`: the main file then holds everything, and SQLite's warning
+/// about immutable files changing does not apply because only this daemon
+/// writes, under the lock file, and never at the same time as this check.
+/// A WAL with content holds saved state, so it has to be read the normal way.
 fn verify(path: &Path) -> rusqlite::Result<bool> {
-    let conn = Connection::open_with_flags(
-        path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )?;
+    let wal_has_content = std::fs::metadata(side_file(path, "-wal")).is_ok_and(|wal| wal.len() > 0);
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let conn = if wal_has_content {
+        Connection::open_with_flags(path, flags)?
+    } else {
+        Connection::open_with_flags(immutable_uri(path), flags | OpenFlags::SQLITE_OPEN_URI)?
+    };
     conn.busy_timeout(BUSY_TIMEOUT)?;
     let result: String = conn.query_row("PRAGMA quick_check(1)", [], |row| row.get(0))?;
     Ok(result == "ok")
@@ -616,4 +646,21 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
         data.baselines.insert(baseline.comment_id.clone(), baseline);
     }
     Ok(Some(data))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uri_special_characters_stay_part_of_the_path() {
+        assert_eq!(
+            immutable_uri(Path::new("/a b/c?d#e%f/state.db")),
+            "file:///a%20b/c%3Fd%23e%25f/state.db?immutable=1"
+        );
+        assert_eq!(
+            immutable_uri(Path::new("rel/state.db")),
+            "file:rel/state.db?immutable=1"
+        );
+    }
 }

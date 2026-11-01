@@ -10,6 +10,7 @@ use shiibar_gh_proto::{Request, codec};
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::net::SocketAddr;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -22,6 +23,9 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 /// DESIGN.md brief, "Files and constants".
 const PERIODIC_PASS: Duration = Duration::from_secs(30);
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+/// No longer than the socket's own name: a Unix socket path has a small length
+/// limit, and a state directory that fits the socket must fit the draft too.
+const SOCKET_DRAFT: &str = "shiibar-ghd.new";
 
 type Shared = Arc<Mutex<Daemon>>;
 
@@ -76,16 +80,40 @@ fn clear_stale_socket(path: &Path) -> anyhow::Result<()> {
     std::fs::remove_file(path).context("cannot remove the stale socket")
 }
 
+/// The draft name is shorter than the socket's, so a path past the limit would
+/// bind, rename and leave a daemon no client can ever reach.
+fn check_socket_path(path: &Path) -> anyhow::Result<()> {
+    SocketAddr::from_pathname(path)
+        .map(|_| ())
+        .with_context(|| format!("the socket path is too long: {}", path.display()))
+}
+
+/// A socket takes its mode from the umask at bind time and accepts connections
+/// from then on. Binding under another name and renaming it into place means
+/// nobody can connect before the mode is 0600.
+fn bind_socket(path: &Path) -> anyhow::Result<UnixListener> {
+    let draft = path.with_file_name(SOCKET_DRAFT);
+    match std::fs::remove_file(&draft) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e).context("cannot remove an unfinished socket"),
+    }
+    let listener = UnixListener::bind(&draft).context("cannot bind the socket")?;
+    std::fs::set_permissions(&draft, std::fs::Permissions::from_mode(0o600))
+        .context("cannot set the socket mode")?;
+    std::fs::rename(&draft, path).context("cannot move the socket into place")?;
+    Ok(listener)
+}
+
 /// Run until a `shutdown` request.
 pub async fn run(dir: StateDir, clock: Clock) -> anyhow::Result<()> {
+    let socket = dir.socket();
+    check_socket_path(&socket)?;
     ensure_dir(&dir)?;
     let _lock = acquire_lock(&dir.lock())?;
-    let socket = dir.socket();
     clear_stale_socket(&socket)?;
     let daemon: Shared = Arc::new(Mutex::new(Daemon::start(dir, clock)?));
-    let listener = UnixListener::bind(&socket).context("cannot bind the socket")?;
-    std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))
-        .context("cannot set the socket mode")?;
+    let listener = bind_socket(&socket)?;
     logging::info(format_args!("listening on {}", socket.display()));
 
     let shutdown = Arc::new(Notify::new());

@@ -541,6 +541,8 @@ impl Engine {
     fn apply_pr(&mut self, p: IngestPr, viewer: &str, now: &Now) -> bool {
         let existing = self.data.prs.get(&p.id);
         let prev = existing.and_then(|pr| pr.prev);
+        let reopened =
+            p.state == proto::PrState::Open && existing.is_some_and(|pr| pr.state != PrState::Open);
         let record = PrRec {
             mine: p.author == viewer,
             unreadable: false,
@@ -579,12 +581,31 @@ impl Engine {
         let id = record.id.clone();
         self.dirty.prs.insert(id.clone());
         self.data.prs.insert(id.clone(), record);
+        if reopened {
+            self.restore_review_request(&id);
+        }
         match prev {
             Some(prev) => {
                 self.state_change_rows(&id, prev, now);
                 false
             }
             None => true,
+        }
+    }
+
+    /// DESIGN.md, "Review requested rows": reopening returns the row to Needs
+    /// action, even from the pruned rows. Only the reopening does: a Done row
+    /// pruned while requested stays pruned.
+    fn restore_review_request(&mut self, pr_id: &str) {
+        let Some(pr) = self.data.prs.get(pr_id) else {
+            return;
+        };
+        let restored = self
+            .latest_review_request(pr_id)
+            .filter(|latest| latest.pruned && self.is_needs_action(latest, pr))
+            .map(|latest| latest.id.clone());
+        if let Some(row) = restored.and_then(|id| self.row_mut(&id)) {
+            row.pruned = false;
         }
     }
 
@@ -758,7 +779,8 @@ impl Engine {
         let hidden = self.hidden(&row);
         row.unread = !hidden;
         let snoozed = pr.snoozed;
-        row.notify = if !silent && scope.notify && self.kind_notifies(&row, pr) {
+        let unreadable = pr.unreadable;
+        row.notify = if !silent && !unreadable && scope.notify && self.kind_notifies(&row, pr) {
             if snoozed {
                 NotifyState::Held
             } else {
@@ -772,6 +794,7 @@ impl Engine {
         }
         if row.unread
             && !snoozed
+            && !unreadable
             && !self.open.contains(&scope_id)
             && let Some(scope) = self.scope_mut(&scope_id)
         {
@@ -785,29 +808,15 @@ impl Engine {
         self.data.rows.insert(row.id.clone(), row);
     }
 
-    /// Rules that follow from the state rather than from one command: a card
-    /// gets its fixed position the first time it qualifies, and the Review
-    /// requested row that is something to do again leaves the pruned rows.
+    /// A card gets its fixed position the first time it qualifies.
     fn settle(&mut self, now: &Now) {
-        let mut restore = Vec::new();
         let mut add = Vec::new();
         for pr in self.data.prs.values() {
-            if let Some(latest) = self.latest_review_request(&pr.id)
-                && latest.pruned
-                && self.is_needs_action(latest, pr)
-            {
-                restore.push(latest.id.clone());
-            }
             if pr.added_at.is_none()
                 && self.enabled_scope_of(pr).is_some()
                 && self.would_show(pr, now.at)
             {
                 add.push(pr.id.clone());
-            }
-        }
-        for id in restore {
-            if let Some(row) = self.row_mut(&id) {
-                row.pruned = false;
             }
         }
         for id in add {
@@ -947,7 +956,7 @@ impl Engine {
             .collect();
         for id in rows {
             if let Some(row) = self.row_mut(&id) {
-                row.notify = NotifyState::Held;
+                row.notify = NotifyState::HeldUndelivered;
             }
         }
     }
@@ -958,14 +967,17 @@ impl Engine {
             return Ok(());
         }
         self.end_snooze(&id);
-        let held: Vec<String> = self
+        let held: Vec<(String, NotifyState)> = self
             .rows_of(&id)
-            .filter(|row| row.notify == NotifyState::Held)
-            .map(|row| row.id.clone())
+            .filter_map(|row| match row.notify {
+                NotifyState::Held => Some((row.id.clone(), NotifyState::None)),
+                NotifyState::HeldUndelivered => Some((row.id.clone(), NotifyState::Pending)),
+                _ => None,
+            })
             .collect();
-        for row in held {
+        for (row, notify) in held {
             if let Some(row) = self.row_mut(&row) {
-                row.notify = NotifyState::None;
+                row.notify = notify;
             }
         }
         self.settle(now);
@@ -977,7 +989,7 @@ impl Engine {
         if let Some(pr) = self.pr_mut(pr_id) {
             pr.snoozed = false;
         }
-        let Some(pr) = self.data.prs.get(pr_id) else {
+        let Some(pr) = self.data.prs.get(pr_id).filter(|pr| !pr.unreadable) else {
             return;
         };
         let Some(scope) = self.scope_of(pr).map(|s| s.id.clone()) else {
@@ -1014,7 +1026,9 @@ impl Engine {
             self.end_snooze(&pr_id);
             let held: Vec<(String, bool)> = self
                 .rows_of(&pr_id)
-                .filter(|row| row.notify == NotifyState::Held)
+                .filter(|row| {
+                    matches!(row.notify, NotifyState::Held | NotifyState::HeldUndelivered)
+                })
                 .map(|row| (row.id.clone(), row.done))
                 .collect();
             for (id, done) in held {
@@ -1188,7 +1202,7 @@ impl Engine {
         let pr = self.data.prs.get(&row.pr_id)?;
         let scope = self
             .enabled_scope_of(pr)
-            .filter(|scope| scope.notify && self.kind_notifies(row, pr))
+            .filter(|scope| !pr.unreadable && scope.notify && self.kind_notifies(row, pr))
             .map(|scope| scope.id.clone());
         if scope.is_none()
             && let Some(row) = self.row_mut(row_id)
@@ -1265,7 +1279,7 @@ impl Engine {
         for (id, pr_id) in pending {
             if self.pr_snoozed(&pr_id) && !self.in_flight.contains(&id) {
                 if let Some(row) = self.row_mut(&id) {
-                    row.notify = NotifyState::Held;
+                    row.notify = NotifyState::HeldUndelivered;
                 }
             } else {
                 rows.push(id);

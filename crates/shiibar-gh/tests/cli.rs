@@ -2,11 +2,39 @@
 //! a temporary state directory.
 
 use serde_json::{Value, json};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
+
+/// The bound on every wait here: past it a test fails, it never hangs.
+const WAIT: Duration = Duration::from_secs(60);
+const BUILD_WAIT: Duration = Duration::from_secs(600);
+
+/// Wait for a process, killing it and failing the test past the limit.
+fn wait_within(child: &mut Child, limit: Duration, what: &str) -> ExitStatus {
+    let deadline = Instant::now() + limit;
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("{what} did not exit within {limit:?}");
+        }
+        std::thread::yield_now();
+    }
+}
+
+fn read_all(mut pipe: impl Read + Send + 'static) -> std::thread::JoinHandle<String> {
+    std::thread::spawn(move || {
+        let mut text = String::new();
+        pipe.read_to_string(&mut text).unwrap();
+        text
+    })
+}
 
 /// `shiibar-ghd` belongs to another package, so Cargo gives no env var for it.
 /// Both binaries land in the same directory.
@@ -16,12 +44,12 @@ fn daemon_binary() -> PathBuf {
     let binary = dir.join("shiibar-ghd");
     if !binary.exists() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let status = Command::new(env!("CARGO"))
+        let mut build = Command::new(env!("CARGO"))
             .args(["build", "-p", "shiibar-ghd", "--bin", "shiibar-ghd"])
             .current_dir(root)
-            .status()
+            .spawn()
             .expect("run cargo");
-        assert!(status.success());
+        assert!(wait_within(&mut build, BUILD_WAIT, "cargo build").success());
     }
     binary
 }
@@ -59,6 +87,8 @@ impl Daemon {
 
     fn send(&self, value: Value) -> Value {
         let mut stream = UnixStream::connect(self.dir.path().join("shiibar-ghd.sock")).unwrap();
+        stream.set_read_timeout(Some(WAIT)).unwrap();
+        stream.set_write_timeout(Some(WAIT)).unwrap();
         stream.write_all(format!("{value}\n").as_bytes()).unwrap();
         let mut text = String::new();
         BufReader::new(stream).read_line(&mut text).unwrap();
@@ -80,15 +110,20 @@ struct Run {
 }
 
 fn run(state_dir: &Path, args: &[&str]) -> Run {
-    let output = Command::new(env!("CARGO_BIN_EXE_shiibar-gh"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_shiibar-gh"))
         .args(args)
         .env("SHIIBAR_GH_STATE_DIR", state_dir)
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .unwrap();
+    let stdout = read_all(child.stdout.take().unwrap());
+    let stderr = read_all(child.stderr.take().unwrap());
+    let status = wait_within(&mut child, WAIT, "shiibar-gh");
     Run {
-        code: output.status.code().unwrap(),
-        stdout: String::from_utf8(output.stdout).unwrap(),
-        stderr: String::from_utf8(output.stderr).unwrap(),
+        code: status.code().unwrap(),
+        stdout: stdout.join().unwrap(),
+        stderr: stderr.join().unwrap(),
     }
 }
 

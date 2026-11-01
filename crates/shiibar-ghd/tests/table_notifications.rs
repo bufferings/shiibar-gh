@@ -421,3 +421,26 @@ fn turning_a_kind_back_on_does_not_notify_rows_made_while_off() {
     assert!(h.delivered().is_empty());
     assert!(h.reconnect().is_empty());
 }
+
+#[test]
+fn an_unreadable_pr_loses_its_undelivered_record_at_reconnect() {
+    let mut h = H::new();
+    let e = h.ev("E_1", "PR_1", EventKind::Comment);
+    h.push(vec![other("PR_1")], vec![e], vec![]);
+    h.offline();
+    h.missing("PR_1");
+    assert!(h.reconnect().is_empty());
+    assert_eq!(h.row("E_1").notify, NotifyState::None);
+}
+
+#[test]
+fn a_new_row_on_an_unreadable_pr_neither_notifies_nor_raises_the_dot() {
+    let mut h = H::new();
+    h.prs(vec![other("PR_1")]);
+    h.missing("PR_1");
+    let e = h.ev("E_1", "PR_1", EventKind::Comment);
+    h.events(vec![e]);
+    assert!(h.delivered().is_empty());
+    assert!(!h.dot());
+    assert_eq!(h.row("E_1").notify, NotifyState::None);
+}

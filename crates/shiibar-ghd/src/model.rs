@@ -166,8 +166,11 @@ stored_enum!(NotifyState {
     None = "none",
     // Waiting for the app. Becomes a summary if the app was not there.
     Pending = "pending",
-    // On a snoozed PR, waiting for the release.
+    // Made on a snoozed PR, waiting for the release.
     Held = "held",
+    // Undelivered before the PR was snoozed. A manual Unsnooze returns it to
+    // Pending, where Held is cleared.
+    HeldUndelivered = "held_undelivered",
     Delivered = "delivered",
 });
 

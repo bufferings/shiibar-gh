@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 pub const T0: i64 = 1_800_000_000;
@@ -15,7 +15,40 @@ pub const DAY: i64 = 86_400;
 pub const TZ: &str = "Asia/Tokyo";
 /// 09:00 in Tokyo the day after `T0`.
 pub const NEXT_0900: i64 = T0 + 16 * 3600;
-const WAIT: Duration = Duration::from_secs(10);
+/// The bound on every wait in the harness: past it a test fails, it never
+/// hangs.
+pub const WAIT: Duration = Duration::from_secs(30);
+
+/// Wait for a process, killing it and failing the test past the limit.
+pub fn wait_within(child: &mut Child, limit: Duration, what: &str) -> ExitStatus {
+    let deadline = Instant::now() + limit;
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("{what} did not exit within {limit:?}");
+        }
+        std::thread::yield_now();
+    }
+}
+
+/// The exit code of a process that has to end by itself.
+pub fn exit_code(mut command: Command) -> i32 {
+    let mut child = command
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    wait_within(&mut child, WAIT, "the command").code().unwrap()
+}
+
+fn timed(stream: &UnixStream) {
+    stream.set_read_timeout(Some(WAIT)).unwrap();
+    stream.set_write_timeout(Some(WAIT)).unwrap();
+}
 
 pub fn binary() -> &'static str {
     env!("CARGO_BIN_EXE_shiibar-ghd")
@@ -63,7 +96,7 @@ impl TestDaemon {
 
     fn wait_ready(&mut self) {
         let deadline = Instant::now() + WAIT;
-        while UnixStream::connect(self.socket()).is_err() {
+        while !self.answers() {
             if let Some(status) = self.child.try_wait().unwrap() {
                 panic!("the daemon exited during startup: {status}");
             }
@@ -72,13 +105,27 @@ impl TestDaemon {
         }
     }
 
+    /// A full round trip: a stale socket file can briefly accept a connection
+    /// while a process forked by a parallel test still holds its listener.
+    fn answers(&self) -> bool {
+        let Ok(mut stream) = UnixStream::connect(self.socket()) else {
+            return false;
+        };
+        timed(&stream);
+        if stream.write_all(b"{\"cmd\":\"info\"}\n").is_err() {
+            return false;
+        }
+        let mut text = String::new();
+        matches!(BufReader::new(stream).read_line(&mut text), Ok(n) if n > 0)
+    }
+
     pub fn socket(&self) -> PathBuf {
         self.dir.join("shiibar-ghd.sock")
     }
 
     pub fn raw(&self, line: &str) -> Value {
         let mut stream = UnixStream::connect(self.socket()).unwrap();
-        stream.set_read_timeout(Some(WAIT)).unwrap();
+        timed(&stream);
         stream.write_all(line.as_bytes()).unwrap();
         stream.write_all(b"\n").unwrap();
         let mut text = String::new();
@@ -149,7 +196,7 @@ impl TestDaemon {
 
     pub fn subscribe(&self, client: &str) -> Subscriber {
         let mut stream = UnixStream::connect(self.socket()).unwrap();
-        stream.set_read_timeout(Some(WAIT)).unwrap();
+        timed(&stream);
         let line = format!("{}\n", json!({"cmd":"subscribe","client":client}));
         stream.write_all(line.as_bytes()).unwrap();
         Subscriber {
@@ -160,12 +207,12 @@ impl TestDaemon {
     /// Ask the daemon to stop and wait for the process to end.
     pub fn stop(mut self) {
         self.ok(json!({"cmd":"shutdown"}));
-        self.child.wait().unwrap();
+        wait_within(&mut self.child, WAIT, "the daemon");
     }
 
     pub fn kill(mut self) {
         self.child.kill().unwrap();
-        self.child.wait().unwrap();
+        wait_within(&mut self.child, WAIT, "the killed daemon");
     }
 }
 
@@ -203,7 +250,9 @@ impl Subscriber {
 
     /// Skip events until one matches.
     pub fn until(&mut self, what: impl Fn(&Value) -> bool) -> Value {
+        let deadline = Instant::now() + WAIT;
         loop {
+            assert!(Instant::now() < deadline, "no matching event in time");
             let event = self.next().expect("the wanted event before the close");
             if what(&event) {
                 return event;
@@ -218,8 +267,10 @@ impl Subscriber {
 
     /// Everything until the daemon closes the connection.
     pub fn until_closed(&mut self) -> Vec<Value> {
+        let deadline = Instant::now() + WAIT;
         let mut events = Vec::new();
         while let Some(event) = self.next() {
+            assert!(Instant::now() < deadline, "the connection stayed open");
             events.push(event);
         }
         events

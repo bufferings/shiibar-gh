@@ -356,3 +356,15 @@ fn unknown_config_keys_are_invalid() {
         &h.now.clone()
     )));
 }
+
+#[test]
+fn a_disabled_scope_reports_no_badge_or_dot_and_the_dot_returns_on_enable() {
+    let mut h = H::new();
+    let e = h.ev("E_1", "PR_1", EventKind::Comment);
+    h.push(vec![other("PR_1")], vec![e], vec![]);
+    assert_eq!((h.badge(), h.dot()), (1, true));
+    h.engine.scope_disable(ORG).unwrap();
+    assert_eq!((h.badge(), h.dot()), (0, false));
+    h.engine.scope_enable(ORG, &h.now).unwrap();
+    assert_eq!((h.badge(), h.dot()), (1, true));
+}

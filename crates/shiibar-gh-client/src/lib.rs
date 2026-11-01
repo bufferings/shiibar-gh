@@ -11,6 +11,8 @@ use std::time::Duration;
 
 /// How long a one-shot request waits for its response.
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long sending a request may block on a daemon that does not read.
+const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug)]
 pub enum ClientError {
@@ -100,6 +102,9 @@ fn request_raw(socket: &Path, request: &Request) -> Result<String, ClientError> 
     stream
         .set_read_timeout(Some(RESPONSE_TIMEOUT))
         .map_err(ClientError::Io)?;
+    stream
+        .set_write_timeout(Some(SEND_TIMEOUT))
+        .map_err(ClientError::Io)?;
     let line = codec::encode_line(request).map_err(|e| ClientError::Protocol(e.to_string()))?;
     stream.write_all(line.as_bytes()).map_err(ClientError::Io)?;
     let mut reader = BufReader::new(stream);
@@ -124,6 +129,9 @@ pub struct Subscription {
 impl Subscription {
     pub fn open(socket: &Path, client: ClientKind) -> Result<Self, ClientError> {
         let mut stream = UnixStream::connect(socket).map_err(ClientError::Connect)?;
+        stream
+            .set_write_timeout(Some(SEND_TIMEOUT))
+            .map_err(ClientError::Io)?;
         let line = codec::encode_line(&Request::Subscribe { client })
             .map_err(|e| ClientError::Protocol(e.to_string()))?;
         stream.write_all(line.as_bytes()).map_err(ClientError::Io)?;
@@ -139,10 +147,9 @@ impl Subscription {
         &mut self,
         timeout: Option<Duration>,
     ) -> Result<Option<SubscribeEvent>, ClientError> {
-        self.reader
-            .get_ref()
-            .set_read_timeout(timeout)
-            .map_err(ClientError::Io)?;
+        // macOS refuses this with EINVAL once the daemon has closed its side.
+        // The read below then reports the close, which is the useful answer.
+        let _ = self.reader.get_ref().set_read_timeout(timeout);
         match self.reader.read_line(&mut self.partial) {
             Ok(0) => Ok(None),
             // A connection cut in the middle of a write ends without a newline.
@@ -163,6 +170,9 @@ mod tests {
     use super::*;
     use std::os::unix::net::UnixListener;
 
+    /// Every blocking read in these tests fails after this instead of hanging.
+    const TEST_WAIT: Duration = Duration::from_secs(10);
+
     #[test]
     fn a_line_split_over_several_reads_is_one_event() {
         let dir = tempfile_dir("split");
@@ -170,6 +180,7 @@ mod tests {
         let listener = UnixListener::bind(&socket).unwrap();
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(TEST_WAIT)).unwrap();
             let mut request = String::new();
             BufReader::new(stream.try_clone().unwrap())
                 .read_line(&mut request)
@@ -203,6 +214,7 @@ mod tests {
         let listener = UnixListener::bind(&socket).unwrap();
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(TEST_WAIT)).unwrap();
             let mut request = String::new();
             BufReader::new(stream.try_clone().unwrap())
                 .read_line(&mut request)
@@ -213,6 +225,30 @@ mod tests {
         let event = subscription.next_event(Some(Duration::from_secs(5)));
         assert!(matches!(event, Ok(None)), "{event:?}");
         server.join().unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_close_that_came_before_the_read_is_a_close() {
+        let dir = tempfile_dir("closed");
+        let socket = dir.join("s.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let mut subscription = Subscription::open(&socket, ClientKind::Cli).unwrap();
+        // Set while the peer is open: macOS refuses it after the close.
+        let reader = subscription.reader.get_ref();
+        reader.set_read_timeout(Some(TEST_WAIT)).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(TEST_WAIT)).unwrap();
+        let mut request = String::new();
+        BufReader::new(stream.try_clone().unwrap())
+            .read_line(&mut request)
+            .unwrap();
+        drop(stream);
+        // Reading to the end first makes sure the close has arrived.
+        let mut peek = String::new();
+        subscription.reader.read_line(&mut peek).unwrap();
+        let event = subscription.next_event(Some(Duration::from_secs(5)));
+        assert!(matches!(event, Ok(None)), "{event:?}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
