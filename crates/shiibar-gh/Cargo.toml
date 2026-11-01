@@ -1,0 +1,18 @@
+[package]
+name = "shiibar-gh"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# Lets the black-box tests inject events through the daemon under test.
+dev-ingest = ["shiibar-ghd/dev-ingest"]
+
+[dependencies]
+shiibar-gh-proto = { path = "../shiibar-gh-proto" }
+shiibar-gh-client = { path = "../shiibar-gh-client" }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+shiibar-ghd = { path = "../shiibar-ghd" }
+tempfile = { workspace = true }

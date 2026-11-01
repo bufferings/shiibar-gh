@@ -1,0 +1,10 @@
+[package]
+name = "shiibar-gh-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+shiibar-gh-proto = { path = "../shiibar-gh-proto" }
+serde = { workspace = true }
+serde_json = { workspace = true }

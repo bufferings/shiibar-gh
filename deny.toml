@@ -1,0 +1,14 @@
+# cargo-deny configuration: advisories, licenses, bans and sources.
+# Run locally with `cargo deny check`.
+
+[licenses]
+# A crate licensed "A OR B" passes if either arm is allowed.
+allow = ["MIT", "Apache-2.0", "Unicode-3.0", "Zlib"]
+
+[bans]
+# Duplicate versions are a size concern, not a correctness one.
+multiple-versions = "warn"
+
+[advisories]
+
+[sources]
