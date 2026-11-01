@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>shiibar-gh — Settings</title>
+<style>
+body{margin:0;padding:24px;background:#e9e9ee}
+
+    .sc-placeholder{background:color-mix(in srgb,currentColor 8%,transparent);
+      border:1px solid color-mix(in srgb,currentColor 50%,transparent);
+      border-radius:2px;box-sizing:border-box;overflow:hidden}
+    @keyframes sc-shine{0%{background-position:100% 50%}100%{background-position:0% 50%}}
+    html.sc-dc-streaming .sc-placeholder,
+    html.sc-dc-streaming .sc-interp.sc-missing{position:relative;
+      background:color-mix(in srgb,currentColor 5%,transparent);
+      border-color:transparent}
+    html.sc-dc-streaming .sc-placeholder::before,
+    html.sc-dc-streaming .sc-interp.sc-missing::before{content:'';
+      position:absolute;inset:0;pointer-events:none;
+      background:linear-gradient(90deg,rgba(217,119,87,0) 25%,rgba(247,225,211,.95) 37%,rgba(217,119,87,0) 63%);
+      background-size:400% 100%;animation:sc-shine 1.4s ease infinite}
+    html.sc-dc-streaming .sc-placeholder:nth-child(n+9 of .sc-placeholder)::before,
+    html.sc-dc-streaming .sc-interp.sc-missing:nth-child(n+9 of .sc-interp.sc-missing)::before{animation:none;
+      background:color-mix(in srgb,currentColor 8%,transparent)}
+    .sc-placeholder-error{padding:4px 8px;font:11px/1.4 ui-monospace,monospace;
+      color:color-mix(in srgb,currentColor 70%,transparent);word-break:break-word}
+    .sc-interp.sc-missing{display:inline-block;width:2em;height:1em;overflow:hidden;
+      vertical-align:text-bottom;background:rgba(255,255,255,.3);border:1px solid rgba(0,0,0,.5);
+      border-radius:2px;box-sizing:border-box;color:transparent;
+      user-select:none}
+    .sc-interp.sc-unresolved{font-family:ui-monospace,monospace;font-size:.85em;
+      color:color-mix(in srgb,currentColor 50%,transparent);
+      background:color-mix(in srgb,currentColor 10%,transparent);border-radius:3px;
+      padding:0 3px}
+    .sc-host.sc-has-error{position:relative}
+    .sc-logic-error{position:absolute;top:8px;left:8px;z-index:2147483647;max-width:60ch;
+      padding:6px 10px;background:#b00020;color:#fff;font:12px/1.4 ui-monospace,monospace;
+      border-radius:4px;white-space:pre-wrap;pointer-events:none}
+    /* Mirrors PRINT_BASELINE_CSS in apps/web deck-stage-export.ts — keep both
+       in sync until dc-runtime regains a build step. */
+    @media print {
+      @page { margin: 0.5cm; }
+      figure, table { break-inside: avoid; }
+      #dc-root, #dc-root > .sc-host { height: auto; }
+      *, *::before, *::after {
+        print-color-adjust: exact; -webkit-print-color-adjust: exact;
+        backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+        animation-delay: -99s !important; animation-duration: .001s !important;
+        animation-iteration-count: 1 !important; animation-fill-mode: both !important;
+        animation-play-state: running !important; transition-duration: 0s !important;
+      }
+    }
+  
+x-dc{display:none!important}
+
+body{margin:0}
+a{color:#0A5FC2}a:hover{color:#084A97}
+.tab{display:flex;flex-direction:column;align-items:center;gap:3px;min-width:72px;padding:6px 8px;border:none;border-radius:7px;background:transparent;font:inherit;font-size:11px;color:#3A3A3F;cursor:pointer}
+.tab:hover{background:#E6E6E9}
+.tab-on{background:#DCE7F7;color:#0A4FA6}
+.group{background:#FFFFFF;border:1px solid #E3E3E6;border-radius:10px}
+.item{display:flex;align-items:center;gap:12px;padding:10px 14px;border-top:1px solid #ECECEF;min-height:24px}
+.item:first-child{border-top:none}
+.lbl{flex:1;display:flex;flex-direction:column;gap:2px}
+.sub{font-size:11px;color:#5E5E64}
+.gh{font-size:12px;font-weight:600;color:#3A3A3F;margin:0 0 6px 4px}
+.num{width:64px;padding:4px 6px;border:1px solid #C9C9CE;border-radius:6px;font:inherit;font-size:13px;text-align:right;background:#FFFFFF}
+.unit{font-size:12px;color:#5E5E64;min-width:44px}
+.btn{border:1px solid #C9C9CE;background:#FFFFFF;border-radius:6px;padding:4px 10px;font:inherit;font-size:12px;cursor:pointer;color:#1D1D1F}
+.btn:hover{background:#F2F2F4}
+.ok{color:#1F6E35}
+.warn{color:#8A5A00}
+.bad{color:#A0390A}
+input[type=checkbox]{width:16px;height:16px;accent-color:#0A66D6;margin:0}
+
+</style>
+</head>
+<body>
+<div class="sc-host" data-sc-name="Settings"><div style="width: 720px; height: 640px; box-sizing: border-box; background: rgb(246, 246, 247); font-family: -apple-system, system-ui, &quot;Hiragino Sans&quot;, sans-serif; color: rgb(29, 29, 31); font-size: 13px; display: flex; flex-direction: column; border-radius: 10px; overflow: hidden; border: 1px solid rgb(214, 214, 218);">
+
+  <div style="background: rgb(237, 237, 240); border-bottom: 1px solid rgb(214, 214, 218); padding: 8px 12px 6px; display: flex; flex-direction: column; align-items: center; gap: 4px;">
+    <div style="display: flex; align-items: center; width: 100%;">
+      <div aria-hidden="true" style="display: flex; gap: 7px;">
+        <div style="width: 12px; height: 12px; border-radius: 6px; background: rgb(236, 106, 94);"></div>
+        <div style="width: 12px; height: 12px; border-radius: 6px; background: rgb(244, 191, 79);"></div>
+        <div style="width: 12px; height: 12px; border-radius: 6px; background: rgb(97, 197, 84);"></div>
+      </div>
+      <div style="flex: 1 1 0%; text-align: center; font-weight: 600; font-size: 13px;"><span id="tab-title">General</span></div>
+      <div style="width: 50px;"></div>
+    </div>
+    <div style="display: flex; gap: 4px;">
+      
+        <button class="tab tab-on">
+          <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="8" cy="8" r="2.2"></circle><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"></path></svg>
+          
+          
+          
+          <span><span class="sc-interp">General</span></span>
+        </button>
+      
+        <button class="tab">
+          
+          <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="5.5" cy="8" r="3"></circle><path d="M8.5 8h6M12.5 8v2.5M14.5 8v2"></path></svg>
+          
+          
+          <span><span class="sc-interp">Scopes</span></span>
+        </button>
+      
+        <button class="tab">
+          
+          
+          <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M4 11V7a4 4 0 0 1 8 0v4l1.5 1.5h-11z"></path><path d="M6.5 14h3"></path></svg>
+          
+          <span><span class="sc-interp">Notifications</span></span>
+        </button>
+      
+        <button class="tab">
+          
+          
+          
+          <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5l3.5 3.5"></path></svg>
+          <span><span class="sc-interp">Watching</span></span>
+        </button>
+      
+    </div>
+  </div>
+
+  <div style="flex: 1 1 0%; overflow: auto; padding: 18px 28px 24px; display: flex; flex-direction: column; gap: 18px;">
+<div class="panel" data-tab="general" style="display: flex; flex-direction: column; gap: 18px">
+
+    
+      <div>
+        <div class="gh">Startup</div>
+        <div class="group">
+          <div class="item">
+            <label class="lbl" for="login">Launch at login<span class="sub">Runs in the menu bar after you log in to your Mac</span></label>
+            <input id="login" type="checkbox" checked="">
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="gh">Polling</div>
+        <div class="group">
+          <div class="item">
+            <div class="lbl">Notifications API interval<span class="sub">Follows the interval GitHub specifies</span></div>
+            <div class="unit">60 sec</div>
+          </div>
+          <div class="item">
+            <label class="lbl" for="gql">PR status and reactions interval<span class="sub">Shorter means you notice sooner, but uses more API quota</span></label>
+            <input id="gql" class="num" type="number" min="1" value="3">
+            <div class="unit">min</div>
+          </div>
+          <div class="item">
+            <label class="lbl" for="cap">GraphQL cost cap (last hour)<span class="sub">When close to the cap, polling slows down and the list shows “Throttled”</span></label>
+            <input id="cap" class="num" type="number" min="100" value="1500" style="width: 80px;">
+            <div class="unit">points</div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="gh">API usage</div>
+        <div class="group">
+          <div class="item"><div class="lbl">REST remaining</div><div>4,812 / 5,000</div></div>
+          <div class="item"><div class="lbl">GraphQL remaining<span class="sub">Shared with your other tools</span></div><div>4,630 / 5,000</div></div>
+          <div class="item"><div class="lbl">Cost per poll<span class="sub">Before your changes: 38</span></div><div>42</div></div>
+        </div>
+      </div>
+    
+
+    
+
+    
+
+    
+
+</div>
+<div class="panel" data-tab="account" style="display: none; flex-direction: column; gap: 18px">
+      <div>
+        <div class="gh">Notifications token (classic PAT)</div>
+        <div class="group">
+          <div class="item">
+            <div class="lbl">••••••••••••<span class="sub">Scope: notifications only · Expires 2027-01-20</span></div>
+            <span class="ok" style="font-size: 12px">Verified</span>
+          </div>
+          <div class="item">
+            <div class="lbl">SSO authorization for your org<span class="sub">Can’t be verified until an org notification arrives. Without it, only org notifications are missing</span></div>
+            <a href="https://github.com/settings/tokens" class="warn" style="font-size: 12px">Not verified · Open authorization page</a>
+          </div>
+          <div class="item" style="justify-content: flex-end; gap: 8px">
+            <a href="https://github.com/settings/tokens/new?scopes=notifications&amp;description=shiibar-gh" style="font-size: 12px">Create token</a>
+            <button class="btn">Test again</button>
+            <button class="btn">Replace</button>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="gh">Scopes</div>
+        <div class="group">
+          <div class="item">
+            <div class="lbl"><span style="font-weight: 600">example-org (organization)</span><span class="sub">fine-grained PAT •••••••••••• · Repositories: all · Expires 2026-11-06</span></div>
+            <span class="warn" style="font-size: 12px">Expires in 5 days</span>
+            <label class="sub" style="display: flex; align-items: center; gap: 4px; margin-left: 8px"><input type="checkbox" checked="checked">Icon</label>
+            <label class="sub" style="display: flex; align-items: center; gap: 4px; margin-left: 8px"><input type="checkbox" checked="checked">Notifications</label>
+          </div>
+          <div class="item" style="flex-direction: column; align-items: stretch; gap: 6px">
+            <div class="sub">Test fetch results</div>
+            <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 16px; font-size: 12px">
+              <div><span class="ok">OK</span> · PRs, reviews, comments</div>
+              <div><span class="ok">OK</span> · Checks</div>
+              <div><span class="ok">OK</span> · Behind base</div>
+              <div><span class="ok">OK</span> · Team membership</div>
+              <div><span class="bad">Failed</span> · Merge queue</div>
+              <div class="sub">→ Required permission: [confirm on device]</div>
+            </div>
+          </div>
+          <div class="item" style="justify-content: flex-end; gap: 8px">
+            <button class="btn">Test again</button>
+            <button class="btn">Replace</button>
+          </div>
+          <div class="item">
+            <div class="lbl"><span style="font-weight: 600">Personal (example-person)</span><span class="sub">fine-grained PAT •••••••••••• · All your repositories · Expires 2027-03-01</span></div>
+            <span class="ok" style="font-size: 12px">Verified</span>
+            <label class="sub" style="display: flex; align-items: center; gap: 4px; margin-left: 8px"><input type="checkbox" checked="checked">Icon</label>
+            <label class="sub" style="display: flex; align-items: center; gap: 4px; margin-left: 8px"><input type="checkbox" checked="checked">Notifications</label>
+          </div>
+          <div class="item">
+            <div class="lbl"><span style="font-weight: 600">Public</span><span class="sub">No token needed · PRs you’re involved in on public repositories</span></div>
+            <span class="ok" style="font-size: 12px">—</span>
+            <label class="sub" style="display: flex; align-items: center; gap: 4px; margin-left: 8px"><input type="checkbox" checked="checked">Icon</label>
+            <label class="sub" style="display: flex; align-items: center; gap: 4px; margin-left: 8px"><input type="checkbox" checked="checked">Notifications</label>
+          </div>
+        </div>
+      </div>
+      <div style="display: flex; justify-content: space-between; align-items: center">
+        <div class="sub">In GitHub notification settings, “On GitHub” must be on for conversations you participate in</div>
+        <button class="btn">Add organization</button>
+      </div>
+</div>
+<div class="panel" data-tab="notify" style="display: none; flex-direction: column; gap: 18px">
+      <div>
+        <div class="gh">macOS notifications</div>
+        <div class="group">
+          <div class="item"><label class="lbl" for="n1">Review requests, mentions, comments and replies in PRs I participate in</label><input id="n1" type="checkbox" checked="checked"></div>
+          <div class="item"><label class="lbl" for="n2">State changes on my PRs<span class="sub">Checks failed, conflicts, changes requested, removed from merge queue, mergeable</span></label><input id="n2" type="checkbox" checked="checked"></div>
+          <div class="item"><label class="lbl" for="n3">Reactions to my comments<span class="sub">Reactions on the same comment are grouped into one</span></label><input id="n3" type="checkbox" checked="checked"></div>
+        </div>
+      </div>
+      <div>
+        <div class="gh">Snooze</div>
+        <div class="group">
+          <div class="item">
+            <label class="lbl" for="snz">Return time<span class="sub">All snoozed PRs come back every day at this time</span></label>
+            <input id="snz" class="num" type="time" value="09:00" style="width: 90px">
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="gh">Bot comments</div>
+        <div class="group">
+          <div class="item">
+            <label class="lbl" for="bot">Comments written by bots (CI, coverage, etc.)<span class="sub">“List only” shows them in the list without a notification</span></label>
+            <select id="bot" class="num" style="width: 140px; text-align: left">
+              <option>Notify</option>
+              <option selected="selected">List only</option>
+              <option>Hide</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="sub" style="padding: 0 4px">Types you turn off still appear in the list. macOS settings such as Focus still apply.</div>
+</div>
+<div class="panel" data-tab="scope" style="display: none; flex-direction: column; gap: 18px">
+      <div>
+        <div class="gh">Review requests</div>
+        <div class="group">
+          <div class="item"><label class="lbl" for="team">Include requests to my teams<span class="sub">When off, only requests addressed to me are shown</span></label><input id="team" type="checkbox" checked="checked"></div>
+        </div>
+      </div>
+      <div>
+        <div class="gh">Reaction watching</div>
+        <div class="group">
+          <div class="item">
+            <label class="lbl" for="closed">Days to keep watching after close</label>
+            <input id="closed" class="num" type="number" value="3" min="0">
+            <div class="unit">days</div>
+          </div>
+          <div class="item">
+            <label class="lbl" for="stale">Days without updates before a PR is dropped</label>
+            <input id="stale" class="num" type="number" value="14" min="1">
+            <div class="unit">days</div>
+          </div>
+        </div>
+      </div>
+      <div class="sub" style="padding: 0 4px">Wider ranges miss less but use more API quota. Compare cost before and after in General.</div>
+</div>
+  </div></div></div>
+<script>
+  const tabs = [...document.querySelectorAll('button.tab')];
+  const ids = ['general', 'account', 'notify', 'scope'];
+  const names = ['General', 'Scopes', 'Notifications', 'Watching'];
+  const title = document.getElementById('tab-title');
+  tabs.forEach((tab, i) => tab.addEventListener('click', () => {
+    tabs.forEach((t, j) => t.classList.toggle('tab-on', i === j));
+    document.querySelectorAll('.panel').forEach((p) => {
+      p.style.display = p.dataset.tab === ids[i] ? 'flex' : 'none';
+    });
+    title.textContent = names[i];
+  }));
+</script>
+</body>
+</html>

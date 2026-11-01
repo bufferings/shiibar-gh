@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>shiibar-gh — Menu bar icons</title>
+<style>
+body{margin:0;padding:24px;background:#e9e9ee}
+
+    .sc-placeholder{background:color-mix(in srgb,currentColor 8%,transparent);
+      border:1px solid color-mix(in srgb,currentColor 50%,transparent);
+      border-radius:2px;box-sizing:border-box;overflow:hidden}
+    @keyframes sc-shine{0%{background-position:100% 50%}100%{background-position:0% 50%}}
+    html.sc-dc-streaming .sc-placeholder,
+    html.sc-dc-streaming .sc-interp.sc-missing{position:relative;
+      background:color-mix(in srgb,currentColor 5%,transparent);
+      border-color:transparent}
+    html.sc-dc-streaming .sc-placeholder::before,
+    html.sc-dc-streaming .sc-interp.sc-missing::before{content:'';
+      position:absolute;inset:0;pointer-events:none;
+      background:linear-gradient(90deg,rgba(217,119,87,0) 25%,rgba(247,225,211,.95) 37%,rgba(217,119,87,0) 63%);
+      background-size:400% 100%;animation:sc-shine 1.4s ease infinite}
+    html.sc-dc-streaming .sc-placeholder:nth-child(n+9 of .sc-placeholder)::before,
+    html.sc-dc-streaming .sc-interp.sc-missing:nth-child(n+9 of .sc-interp.sc-missing)::before{animation:none;
+      background:color-mix(in srgb,currentColor 8%,transparent)}
+    .sc-placeholder-error{padding:4px 8px;font:11px/1.4 ui-monospace,monospace;
+      color:color-mix(in srgb,currentColor 70%,transparent);word-break:break-word}
+    .sc-interp.sc-missing{display:inline-block;width:2em;height:1em;overflow:hidden;
+      vertical-align:text-bottom;background:rgba(255,255,255,.3);border:1px solid rgba(0,0,0,.5);
+      border-radius:2px;box-sizing:border-box;color:transparent;
+      user-select:none}
+    .sc-interp.sc-unresolved{font-family:ui-monospace,monospace;font-size:.85em;
+      color:color-mix(in srgb,currentColor 50%,transparent);
+      background:color-mix(in srgb,currentColor 10%,transparent);border-radius:3px;
+      padding:0 3px}
+    .sc-host.sc-has-error{position:relative}
+    .sc-logic-error{position:absolute;top:8px;left:8px;z-index:2147483647;max-width:60ch;
+      padding:6px 10px;background:#b00020;color:#fff;font:12px/1.4 ui-monospace,monospace;
+      border-radius:4px;white-space:pre-wrap;pointer-events:none}
+    /* Mirrors PRINT_BASELINE_CSS in apps/web deck-stage-export.ts — keep both
+       in sync until dc-runtime regains a build step. */
+    @media print {
+      @page { margin: 0.5cm; }
+      figure, table { break-inside: avoid; }
+      #dc-root, #dc-root > .sc-host { height: auto; }
+      *, *::before, *::after {
+        print-color-adjust: exact; -webkit-print-color-adjust: exact;
+        backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+        animation-delay: -99s !important; animation-duration: .001s !important;
+        animation-iteration-count: 1 !important; animation-fill-mode: both !important;
+        animation-play-state: running !important; transition-duration: 0s !important;
+      }
+    }
+  
+x-dc{display:none!important}
+
+body{margin:0}
+.bar{height:26px;border-radius:6px;background:#E9E9EC;display:flex;align-items:center;justify-content:flex-end;gap:14px;padding:0 12px;color:#1D1D1F}
+.slot{position:relative;width:22px;height:22px;display:flex;align-items:center;justify-content:center;flex:0 0 22px}
+.bdg{position:absolute;top:-3px;right:-5px;min-width:14px;height:14px;padding:0 4px;box-sizing:border-box;border-radius:7px;background:#C7420D;color:#FFFFFF;font-size:9px;font-weight:700;line-height:14px;text-align:center;border:1.5px solid #E9E9EC}
+.cap{font-size:12px;font-weight:600}
+.desc{font-size:11px;color:#5E5E64;line-height:16px}
+.sw{display:inline-block;width:10px;height:10px;border-radius:3px;vertical-align:-1px;margin-right:4px}
+
+</style>
+</head>
+<body>
+<div class="sc-host" data-sc-name="MenuBarIcon"><div style="width: 720px; height: 260px; box-sizing: border-box; padding: 24px 32px; background: rgb(255, 255, 255); font-family: -apple-system, system-ui, &quot;Hiragino Sans&quot;, sans-serif; display: flex; flex-direction: column; gap: 16px;">
+  <div style="font-size: 11px; color: rgb(94, 94, 100);">スコープごとにアイコンが1つ。枠は常に 22px 幅で、件数や点は枠の中に重ねる。アイコンの形でスコープを区別し、ポップオーバーの背景色と対応させる</div>
+
+  <div class="bar" style="justify-content: flex-end;">
+    <div class="slot" role="img" aria-label="example-org: 3 need action">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 13.5V5l5.5-2.5L13.5 5v8.5z"></path><path d="M6 13.5V9h4v4.5"></path></svg>
+      <span class="bdg">3</span>
+    </div>
+    <div class="slot" role="img" aria-label="Personal: unread">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="5.5" r="3"></circle><path d="M2.5 14c.8-3 3-4.5 5.5-4.5s4.7 1.5 5.5 4.5"></path></svg>
+      <span style="position: absolute; top: 0px; right: -1px; width: 7px; height: 7px; border-radius: 4px; background: rgb(10, 102, 214); border: 1.5px solid rgb(233, 233, 236);"></span>
+    </div>
+    <div class="slot" role="img" aria-label="Public: nothing">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6.5"></circle><path d="M1.5 8h13M8 1.5c2.2 2 2.2 11 0 13M8 1.5c-2.2 2-2.2 11 0 13"></path></svg>
+    </div>
+    <span style="font-size: 12px;">9:02</span>
+  </div>
+
+  <div style="display: grid; grid-template-columns: repeat(3, minmax(0px, 1fr)); gap: 24px;">
+    <div style="display: flex; flex-direction: column; gap: 6px;">
+      <div class="cap"><span class="sw" style="background: rgb(243, 244, 248); border: 1px solid rgb(214, 214, 218);"></span>example-org (organization)</div>
+      <div class="desc">建物のアイコン。要対応 3 件を赤いバッジで重ねる。既読にしても、済みにするか原因が解消するまで数字は減らない</div>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 6px;">
+      <div class="cap"><span class="sw" style="background: rgb(234, 244, 240); border: 1px solid rgb(201, 221, 212);"></span>Personal</div>
+      <div class="desc">人のアイコン。要対応はなく、未読の出来事だけあるので青い点</div>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 6px;">
+      <div class="cap"><span class="sw" style="background: rgb(247, 241, 227); border: 1px solid rgb(230, 220, 198);"></span>Public</div>
+      <div class="desc">地球のアイコン。何もないので素のまま。使わないスコープは設定でアイコンを消せる</div>
+    </div>
+  </div>
+
+  <div class="desc">注意が必要なとき（トークンの期限、取得の失敗、抑制中）は、そのスコープのアイコンの左下に三角を重ねる。バッジや点と同時に出せる</div></div></div>
+</body>
+</html>
