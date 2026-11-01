@@ -147,8 +147,13 @@ input[type=checkbox]{width:16px;height:16px;accent-color:#0A66D6;margin:0}
             <div class="unit">60 sec</div>
           </div>
           <div class="item">
-            <label class="lbl" for="gql">PR status and reactions interval<span class="sub">Shorter means you notice sooner, but uses more API quota</span></label>
-            <input id="gql" class="num" type="number" min="1" value="3">
+            <label class="lbl" for="gql">PR status interval<span class="sub">Shorter means you notice sooner, but uses more API quota</span></label>
+            <input id="gql" class="num" type="number" min="1" value="1">
+            <div class="unit">min</div>
+          </div>
+          <div class="item">
+            <label class="lbl" for="rct">Reactions interval<span class="sub">Shorter means you notice sooner, but uses more API quota</span></label>
+            <input id="rct" class="num" type="number" min="1" value="3">
             <div class="unit">min</div>
           </div>
           <div class="item">
@@ -200,7 +205,7 @@ input[type=checkbox]{width:16px;height:16px;accent-color:#0A66D6;margin:0}
           <div class="item">
             <div class="lbl"><span style="font-weight: 600">example-org (organization)</span><span class="sub">fine-grained PAT •••••••••••• · Repositories: all · Expires 2026-11-06</span></div>
             <span class="warn" style="font-size: 12px">Expires in 5 days</span>
-            <label class="sub" style="display: flex; align-items: center; gap: 4px; margin-left: 8px"><input type="checkbox" checked="checked">Icon</label>
+            <label class="sub" style="display: flex; align-items: center; gap: 4px; margin-left: 8px"><input type="checkbox" checked="checked">Enabled</label>
             <label class="sub" style="display: flex; align-items: center; gap: 4px; margin-left: 8px"><input type="checkbox" checked="checked">Notifications</label>
           </div>
           <div class="item" style="flex-direction: column; align-items: stretch; gap: 6px">
@@ -219,22 +224,22 @@ input[type=checkbox]{width:16px;height:16px;accent-color:#0A66D6;margin:0}
             <button class="btn">Replace</button>
           </div>
           <div class="item">
-            <div class="lbl"><span style="font-weight: 600">Personal (example-person)</span><span class="sub">fine-grained PAT •••••••••••• · All your repositories · Expires 2027-03-01</span></div>
+            <div class="lbl"><span style="font-weight: 600">example-person</span><span class="sub">fine-grained PAT •••••••••••• · All your repositories · Expires 2027-03-01</span></div>
             <span class="ok" style="font-size: 12px">Verified</span>
-            <label class="sub" style="display: flex; align-items: center; gap: 4px; margin-left: 8px"><input type="checkbox" checked="checked">Icon</label>
+            <label class="sub" style="display: flex; align-items: center; gap: 4px; margin-left: 8px"><input type="checkbox" checked="checked">Enabled</label>
             <label class="sub" style="display: flex; align-items: center; gap: 4px; margin-left: 8px"><input type="checkbox" checked="checked">Notifications</label>
           </div>
           <div class="item">
             <div class="lbl"><span style="font-weight: 600">Public</span><span class="sub">No token needed · PRs you’re involved in on public repositories</span></div>
             <span class="ok" style="font-size: 12px">—</span>
-            <label class="sub" style="display: flex; align-items: center; gap: 4px; margin-left: 8px"><input type="checkbox" checked="checked">Icon</label>
+            <label class="sub" style="display: flex; align-items: center; gap: 4px; margin-left: 8px"><input type="checkbox" checked="checked">Enabled</label>
             <label class="sub" style="display: flex; align-items: center; gap: 4px; margin-left: 8px"><input type="checkbox" checked="checked">Notifications</label>
           </div>
         </div>
       </div>
       <div style="display: flex; justify-content: space-between; align-items: center">
         <div class="sub">In GitHub notification settings, “On GitHub” must be on for conversations you participate in</div>
-        <button class="btn">Add organization</button>
+        <button class="btn">Add scope</button>
       </div>
 </div>
 <div class="panel" data-tab="notify" style="display: none; flex-direction: column; gap: 18px">

@@ -1,11 +1,12 @@
 # shiibar-gh
 
-macOS menu bar app that shows the GitHub pull requests you are involved in, what needs your action, and what happened, per scope (organization / personal / public). Read-only against GitHub.
+macOS menu bar app that shows the GitHub pull requests you are involved in, what needs your action, and what happened, per scope (owners and Public). Read-only against GitHub.
 
 ## Source of truth
 
 - **Behavior spec**: `docs/DESIGN.md`. Japanese. It states the agreed behavior in present tense.
 - **Visual spec**: `docs/design/` (one HTML board per screen). The boards are the reference for layout, labels and colors.
+- **Development process**: `docs/DEVELOPMENT.md`. Work from the brief for your milestone in `docs/tasks/` and stay inside its scope.
 - If the spec is ambiguous, contradictory, or wrong: **stop and report** the issue in your final summary. Do not invent behavior or silently deviate.
 
 ## Rules
@@ -15,6 +16,7 @@ macOS menu bar app that shows the GitHub pull requests you are involved in, what
 - Never write to GitHub (no read-state sync, no comments, no reviews). DESIGN.md lists this as out of scope.
 - Architecture (see the architecture part of the implementation section of DESIGN.md): a Rust daemon owns GitHub polling, local state and the Keychain tokens, and talks NDJSON over a Unix socket; the Rust CLI and the Swift app are both clients of that socket. The app owns the daemon's lifecycle (no launchd). Only the daemon touches the Keychain.
 - The CLI reads tokens from stdin, never from arguments.
+- Never state a version, API shape or external behavior from memory. Verify it against official docs, the GitHub GraphQL schema, or a real response, and record how you checked. If you cannot verify it, say so.
 
 ## CLI
 

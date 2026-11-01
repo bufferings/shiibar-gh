@@ -73,7 +73,7 @@ body{margin:0}
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 13.5V5l5.5-2.5L13.5 5v8.5z"></path><path d="M6 13.5V9h4v4.5"></path></svg>
       <span class="bdg">3</span>
     </div>
-    <div class="slot" role="img" aria-label="Personal: unread">
+    <div class="slot" role="img" aria-label="example-person: unread">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="5.5" r="3"></circle><path d="M2.5 14c.8-3 3-4.5 5.5-4.5s4.7 1.5 5.5 4.5"></path></svg>
       <span style="position: absolute; top: 0px; right: -1px; width: 7px; height: 7px; border-radius: 4px; background: rgb(10, 102, 214); border: 1.5px solid rgb(233, 233, 236);"></span>
     </div>
@@ -86,15 +86,15 @@ body{margin:0}
   <div style="display: grid; grid-template-columns: repeat(3, minmax(0px, 1fr)); gap: 24px;">
     <div style="display: flex; flex-direction: column; gap: 6px;">
       <div class="cap"><span class="sw" style="background: rgb(243, 244, 248); border: 1px solid rgb(214, 214, 218);"></span>example-org (organization)</div>
-      <div class="desc">建物のアイコン。要対応 3 件を赤いバッジで重ねる。既読にしても、済みにするか原因が解消するまで数字は減らない</div>
+      <div class="desc">建物のアイコン。Needs action の 3 件を赤いバッジで重ねる。既読にしても、Done にするか原因が解消するまで数字は減らない</div>
     </div>
     <div style="display: flex; flex-direction: column; gap: 6px;">
-      <div class="cap"><span class="sw" style="background: rgb(234, 244, 240); border: 1px solid rgb(201, 221, 212);"></span>Personal</div>
-      <div class="desc">人のアイコン。要対応はなく、未読の出来事だけあるので青い点</div>
+      <div class="cap"><span class="sw" style="background: rgb(234, 244, 240); border: 1px solid rgb(201, 221, 212);"></span>example-person</div>
+      <div class="desc">人のアイコン。Needs action はなく、未読の出来事だけあるので青い点</div>
     </div>
     <div style="display: flex; flex-direction: column; gap: 6px;">
       <div class="cap"><span class="sw" style="background: rgb(247, 241, 227); border: 1px solid rgb(230, 220, 198);"></span>Public</div>
-      <div class="desc">地球のアイコン。何もないので素のまま。使わないスコープは設定でアイコンを消せる</div>
+      <div class="desc">地球のアイコン。何もないので素のまま。disabled のスコープのアイコンは表示しない</div>
     </div>
   </div>
 
