@@ -157,7 +157,11 @@ impl TestDaemon {
     }
 
     pub fn clock(&self, now: i64) {
-        self.ok(json!({"cmd":"dev_clock_set","now":now,"tz":TZ}));
+        self.clock_in(now, TZ);
+    }
+
+    pub fn clock_in(&self, now: i64, tz: &str) {
+        self.ok(json!({"cmd":"dev_clock_set","now":now,"tz":tz}));
     }
 
     pub fn scopes(&self) -> Vec<Value> {
@@ -317,6 +321,13 @@ pub fn reaction(comment: &str, pr_id: &str, created_at: i64, counts: Value) -> V
         "comment_id": comment, "pr_id": pr_id, "url": format!("https://github.example/{comment}"),
         "text": "my comment", "comment_created_at": created_at, "counts": counts, "watching": true
     })
+}
+
+/// Epoch seconds of `2027-03-14 03:30 -0400`.
+pub fn epoch(text: &str) -> i64 {
+    jiff::Timestamp::strptime("%Y-%m-%d %H:%M %z", text)
+        .unwrap()
+        .as_second()
 }
 
 pub fn mode(path: &Path) -> u32 {

@@ -449,3 +449,149 @@ fn an_unreadable_pr_gets_no_dot_at_release_and_loses_its_summary_record() {
     assert!(h.reconnect().is_empty(), "cleared for good");
     assert!(h.visible("PR_1"));
 }
+
+fn zone(tz: &str, at: i64) -> Now {
+    Now::fixed(at, tz).unwrap()
+}
+
+#[test]
+fn a_clock_moved_back_does_not_release_a_return_time_already_covered() {
+    let mut h = H::new();
+    h.prs(vec![pr("PR_1")]);
+    // The release of NEXT_0900 happened at this later moment.
+    let released_at = NEXT_0900 + HOUR;
+    h.set_time(released_at);
+    h.tick();
+    assert_eq!(h.engine.last_release_at(), released_at);
+
+    h.set_time(NEXT_0900 - 3 * HOUR);
+    h.snooze(&key("PR_1"));
+    h.set_time(NEXT_0900 + 10);
+    h.tick();
+    assert!(
+        h.engine.pr_snoozed("PR_1"),
+        "NEXT_0900 is at or before the record"
+    );
+    h.set_time(released_at);
+    h.tick();
+    assert!(h.engine.pr_snoozed("PR_1"), "the record itself");
+
+    h.set_time(NEXT_0900 + DAY);
+    h.tick();
+    assert!(!h.engine.pr_snoozed("PR_1"), "the next new Return time");
+}
+
+#[test]
+fn a_return_time_exactly_at_the_record_does_not_release_again() {
+    let mut h = H::new();
+    h.prs(vec![pr("PR_1")]);
+    h.set_time(NEXT_0900);
+    h.tick();
+    assert_eq!(h.engine.last_release_at(), NEXT_0900);
+    h.snooze(&key("PR_1"));
+    h.tick();
+    assert!(h.engine.pr_snoozed("PR_1"));
+}
+
+#[test]
+fn time_zone_move_table() {
+    // (zone, seconds from T0 to its next 09:00)
+    let cases = [
+        ("Europe/London", HOUR),
+        ("America/New_York", 6 * HOUR),
+        ("America/Los_Angeles", 9 * HOUR),
+        ("Asia/Kolkata", 19 * HOUR + 1800),
+        ("Pacific/Auckland", 12 * HOUR),
+        ("Pacific/Honolulu", 11 * HOUR),
+        ("Asia/Tokyo", 16 * HOUR),
+    ];
+    for (tz, offset) in cases {
+        let mut h = H::new();
+        h.prs(vec![pr("PR_1")]);
+        h.snooze(&key("PR_1"));
+        h.now = zone(tz, T0 + 10);
+        let card = h.card(&key("PR_1")).unwrap();
+        assert_eq!(card.snoozed_until, Some(T0 + offset), "{tz}: snoozed_until");
+
+        h.now.at = T0 + offset - 1;
+        h.tick();
+        assert!(h.engine.pr_snoozed("PR_1"), "{tz}: before");
+        h.now.at = T0 + offset;
+        h.tick();
+        assert!(!h.engine.pr_snoozed("PR_1"), "{tz}: at the Return time");
+    }
+}
+
+#[test]
+fn moving_west_after_a_release_gives_a_new_return_time_today() {
+    let mut h = H::new();
+    h.prs(vec![pr("PR_1")]);
+    h.set_time(NEXT_0900);
+    h.tick();
+    h.snooze(&key("PR_1"));
+    // 09:00 in London is nine hours after 09:00 in Tokyo.
+    h.now = zone("Europe/London", NEXT_0900 + 8 * HOUR);
+    assert_eq!(
+        h.card(&key("PR_1")).unwrap().snoozed_until,
+        Some(NEXT_0900 + 9 * HOUR)
+    );
+    h.tick();
+    assert!(h.engine.pr_snoozed("PR_1"));
+    h.now.at = NEXT_0900 + 9 * HOUR;
+    h.tick();
+    assert!(!h.engine.pr_snoozed("PR_1"));
+}
+
+#[test]
+fn moving_east_after_a_release_does_not_repeat_it() {
+    let mut h = H::new();
+    h.prs(vec![pr("PR_1")]);
+    h.now = zone("Europe/London", NEXT_0900 + 9 * HOUR);
+    h.tick();
+    h.snooze(&key("PR_1"));
+    // Tokyo's latest 09:00 is older than the release just made.
+    h.now = zone("Asia/Tokyo", NEXT_0900 + 10 * HOUR);
+    h.tick();
+    assert!(h.engine.pr_snoozed("PR_1"));
+    assert_eq!(
+        h.card(&key("PR_1")).unwrap().snoozed_until,
+        Some(NEXT_0900 + DAY)
+    );
+}
+
+/// New York repeats 01:00-02:00 on 2027-11-07: first at -0400, then at -0500.
+#[test]
+fn a_return_time_inside_a_fold_fires_once_at_its_first_occurrence() {
+    let parse = |text| {
+        jiff::Timestamp::strptime("%Y-%m-%d %H:%M %z", text)
+            .unwrap()
+            .as_second()
+    };
+    let first = parse("2027-11-07 01:30 -0400");
+    let second = parse("2027-11-07 01:30 -0500");
+    assert_eq!(second, first + HOUR);
+    let mut h = H::new();
+    h.prs(vec![pr("PR_1")]);
+    h.now = zone("America/New_York", first - HOUR);
+    h.set("snooze_return_time", json!("01:30"));
+    h.snooze(&key("PR_1"));
+    assert_eq!(h.card(&key("PR_1")).unwrap().snoozed_until, Some(first));
+    h.now.at = first - 1;
+    h.tick();
+    assert!(h.engine.pr_snoozed("PR_1"));
+    h.now.at = first;
+    h.tick();
+    assert!(!h.engine.pr_snoozed("PR_1"));
+
+    h.snooze(&key("PR_1"));
+    h.now.at = second;
+    h.tick();
+    assert!(
+        h.engine.pr_snoozed("PR_1"),
+        "the repeated hour is not a new Return time"
+    );
+    assert_eq!(
+        h.card(&key("PR_1")).unwrap().snoozed_until,
+        Some(second + DAY)
+    );
+}

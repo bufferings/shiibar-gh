@@ -107,9 +107,10 @@ fn everything_saved_comes_back_after_a_restart() {
     let mut app = daemon.subscribe("app");
     app.snapshot();
     let first = app.notification();
-    // DONE, SEEN, two Reaction rows and Checks failed; held rows stay out.
+    // SEEN, two Reaction rows and Checks failed. The Done row and the held
+    // rows stay out.
     assert_eq!(
-        first["title"], "org · 5 new events",
+        first["title"], "org · 4 new events",
         "undelivered rows are one summary"
     );
     daemon.clock(NEXT_0900);
@@ -395,7 +396,8 @@ fn a_disconnecting_app_ends_the_open_state_and_seen_pending_survives() {
         vec![event("E_1", "PR_1", "comment", T0 + 1)],
         vec![],
     );
-    let app = daemon.subscribe("app");
+    let mut app = daemon.subscribe("app");
+    app.snapshot();
     daemon.ok(json!({"cmd":"popover_opened","scope":"org"}));
     assert_eq!(daemon.scope("org")["dot"], false);
     daemon.ok(json!({"cmd":"seen","row_ids":["E_1"]}));
@@ -434,6 +436,7 @@ fn a_slow_client_is_disconnected_and_recovers_by_reconnecting() {
     let mut app = daemon.subscribe("app");
     app.snapshot();
     let mut slow = daemon.subscribe("cli");
+    slow.snapshot();
     // The slow client reads nothing while long notifications outgrow both the
     // socket buffer and the 256 line queue. The app keeps up, which also shows
     // one slow client does not hold the others back.
@@ -659,5 +662,255 @@ fn state_change_rows_from_the_same_second_are_told_apart_by_moving_the_clock() {
             .len(),
         2
     );
+    daemon.stop();
+}
+
+const NEW_YORK: &str = "America/New_York";
+
+#[test]
+fn a_return_time_inside_a_dst_gap_lands_after_the_gap() {
+    let (_dir, daemon) = setup();
+    daemon.ingest(vec![pr("PR_1", "me")], vec![], vec![]);
+    let after_gap = epoch("2027-03-14 03:30 -0400");
+    daemon.clock_in(epoch("2027-03-14 00:00 -0500"), NEW_YORK);
+    daemon.ok(json!({"cmd":"config_set","key":"snooze_return_time","value":"02:30"}));
+    daemon.ok(json!({"cmd":"snooze","pr":"org/app#1"}));
+    assert_eq!(daemon.card("PR_1").unwrap()["snoozed_until"], after_gap);
+    daemon.clock_in(after_gap - 1, NEW_YORK);
+    assert_eq!(daemon.card("PR_1").unwrap()["snoozed"], true);
+    daemon.clock_in(after_gap, NEW_YORK);
+    assert_eq!(daemon.card("PR_1").unwrap()["snoozed"], false);
+    daemon.stop();
+}
+
+#[test]
+fn a_return_time_inside_a_dst_fold_fires_once() {
+    let (_dir, daemon) = setup();
+    daemon.ingest(vec![pr("PR_1", "me")], vec![], vec![]);
+    let first = epoch("2027-11-07 01:30 -0400");
+    let second = epoch("2027-11-07 01:30 -0500");
+    daemon.clock_in(first - 3600, NEW_YORK);
+    daemon.ok(json!({"cmd":"config_set","key":"snooze_return_time","value":"01:30"}));
+    daemon.ok(json!({"cmd":"snooze","pr":"org/app#1"}));
+    assert_eq!(daemon.card("PR_1").unwrap()["snoozed_until"], first);
+    daemon.clock_in(first, NEW_YORK);
+    assert_eq!(daemon.card("PR_1").unwrap()["snoozed"], false);
+    daemon.ok(json!({"cmd":"snooze","pr":"org/app#1"}));
+    daemon.clock_in(second, NEW_YORK);
+    assert_eq!(daemon.card("PR_1").unwrap()["snoozed"], true);
+    daemon.stop();
+}
+
+#[test]
+fn a_time_zone_change_moves_snoozed_until_for_a_snoozed_pr() {
+    let (_dir, daemon) = setup();
+    daemon.ingest(vec![pr("PR_1", "me")], vec![], vec![]);
+    daemon.ok(json!({"cmd":"snooze","pr":"org/app#1"}));
+    assert_eq!(daemon.card("PR_1").unwrap()["snoozed_until"], NEXT_0900);
+    daemon.clock_in(T0 + 60, "Europe/London");
+    assert_eq!(daemon.card("PR_1").unwrap()["snoozed_until"], T0 + 3600);
+    daemon.stop();
+}
+
+#[test]
+fn a_startup_release_without_an_app_is_a_new_events_summary() {
+    let (dir, daemon) = setup();
+    daemon.ingest(vec![pr("PR_1", "alice")], vec![], vec![]);
+    daemon.ok(json!({"cmd":"snooze","pr":"org/app#1"}));
+    daemon.ingest(
+        vec![],
+        vec![
+            event("A", "PR_1", "comment", T0 + 1),
+            event("B", "PR_1", "reply", T0 + 2),
+        ],
+        vec![],
+    );
+    let daemon = restart(daemon, dir.path(), NEXT_0900 + 60);
+    assert_eq!(daemon.card("PR_1").unwrap()["snoozed"], false);
+    let mut app = daemon.subscribe("app");
+    app.snapshot();
+    let summary = app.notification();
+    assert_eq!(summary["title"], "org · 2 new events");
+    assert_eq!(summary["body"], "In 1 PR");
+    // A later row proves no `Back from Snooze` follows the summary.
+    daemon.ingest(
+        vec![],
+        vec![event("C", "PR_1", "comment", NEXT_0900 + 61)],
+        vec![],
+    );
+    let next = app.notification();
+    assert_eq!(next["rows"], json!(["C"]));
+    daemon.stop();
+}
+
+#[test]
+fn a_slow_app_loses_no_row_and_gets_none_twice() {
+    let (_dir, daemon) = setup();
+    daemon.ingest(vec![pr("PR_1", "alice")], vec![], vec![]);
+    let mut slow = daemon.subscribe("app");
+    // Registered before the first row, and read nothing more from here on.
+    slow.snapshot();
+    let text = "x".repeat(4096);
+    let total = 400;
+    for n in 0..total {
+        let long = with(
+            event(&format!("E_{n}"), "PR_1", "comment", T0 + 1),
+            json!({"text": text}),
+        );
+        daemon.ingest(vec![], vec![long], vec![]);
+    }
+
+    let mut received: Vec<String> = Vec::new();
+    let mut collect = |notification: &Value| {
+        for row in notification["rows"].as_array().unwrap() {
+            received.push(row.as_str().unwrap().to_string());
+        }
+    };
+    for event in slow.until_closed() {
+        if event["event"] == "notify" {
+            assert_eq!(event["notification"]["type"], "single");
+            collect(&event["notification"]);
+        }
+    }
+    let mut app = daemon.subscribe("app");
+    assert_eq!(app.snapshot()["event"], "snapshot");
+    let summary = app.notification();
+    assert_eq!(summary["type"], "summary");
+    collect(&summary);
+
+    let mut unique = received.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), received.len(), "a row arrived twice");
+    assert_eq!(received.len(), total, "a row was lost");
+    daemon.stop();
+}
+
+/// `scope_changed` for `org` is the very next event after the action.
+#[test]
+fn scope_changed_table() {
+    type Step = fn(&TestDaemon);
+    let cases: [(&str, Step, Step); 7] = [
+        (
+            "release at the Return time",
+            |d| {
+                d.ok(json!({"cmd":"snooze","pr":"org/app#1"}));
+            },
+            |d| d.clock(NEXT_0900),
+        ),
+        (
+            "manual unsnooze",
+            |d| {
+                d.ok(json!({"cmd":"snooze","pr":"org/app#1"}));
+            },
+            |d| {
+                d.ok(json!({"cmd":"unsnooze","pr":"org/app#1"}));
+            },
+        ),
+        (
+            "popover_opened clears the dot",
+            |_| {},
+            |d| {
+                d.ok(json!({"cmd":"popover_opened","scope":"org"}));
+            },
+        ),
+        (
+            "popover_closed reads a row",
+            |d| {
+                d.ok(json!({"cmd":"seen","row_ids":["E_1"]}));
+            },
+            |d| {
+                d.ok(json!({"cmd":"popover_closed","scope":"org"}));
+            },
+        ),
+        (
+            "bot_comments hides a row",
+            |_| {},
+            |d| {
+                d.ok(json!({"cmd":"config_set","key":"bot_comments","value":"hide"}));
+            },
+        ),
+        (
+            "drop_after_days drops a card",
+            |d| d.clock(T0 + 2 * DAY),
+            |d| {
+                d.ok(json!({"cmd":"config_set","key":"drop_after_days","value":1}));
+            },
+        ),
+        (
+            "snooze_return_time moves snoozed_until",
+            |d| {
+                d.ok(json!({"cmd":"snooze","pr":"org/app#1"}));
+            },
+            |d| {
+                d.ok(json!({"cmd":"config_set","key":"snooze_return_time","value":"10:00"}));
+            },
+        ),
+    ];
+    for (name, arrange, act) in cases {
+        let (_dir, daemon) = setup();
+        daemon.ingest(
+            vec![pr("PR_1", "alice"), pr("PR_2", "alice")],
+            vec![event("E_1", "PR_2", "bot_comment", T0 + 1)],
+            vec![],
+        );
+        arrange(&daemon);
+        let mut cli = daemon.subscribe("cli");
+        cli.snapshot();
+        act(&daemon);
+        let event = cli.next().expect(name);
+        assert_eq!(event["event"], "scope_changed", "{name}");
+        assert_eq!(event["scope"]["id"], "org", "{name}");
+        daemon.stop();
+    }
+}
+
+/// Nothing a client shows changed, so the sentinel is the next event.
+#[test]
+fn no_scope_changed_table() {
+    type Step = fn(&TestDaemon);
+    let cases: [(&str, Step); 4] = [
+        ("a read", |d| {
+            d.ok(json!({"cmd":"activity"}));
+        }),
+        ("a setting nothing shows", |d| {
+            d.ok(json!({"cmd":"config_set","key":"notify_state","value":false}));
+        }),
+        ("opening without a dot", |d| {
+            d.ok(json!({"cmd":"popover_opened","scope":"org"}));
+        }),
+        ("closing with nothing seen", |d| {
+            d.ok(json!({"cmd":"popover_closed","scope":"org"}));
+        }),
+    ];
+    for (name, act) in cases {
+        let (_dir, daemon) = setup();
+        daemon.ingest(vec![pr("PR_1", "me")], vec![], vec![]);
+        let mut cli = daemon.subscribe("cli");
+        cli.snapshot();
+        act(&daemon);
+        daemon.ok(json!({"cmd":"scope_notify","scope":"public","on":false}));
+        let event = cli.next().expect(name);
+        assert_eq!(event["scope"]["id"], "public", "{name}");
+        daemon.stop();
+    }
+}
+
+#[test]
+fn a_readable_again_pr_raises_the_dot_through_the_daemon() {
+    let (_dir, daemon) = setup();
+    daemon.ingest(
+        vec![pr("PR_1", "alice")],
+        vec![event("E_1", "PR_1", "merged", T0 + 1)],
+        vec![],
+    );
+    daemon.ok(json!({"cmd":"popover_opened","scope":"org"}));
+    daemon.ok(json!({"cmd":"popover_closed","scope":"org"}));
+    assert_eq!(daemon.scope("org")["dot"], false);
+    daemon.ok(json!({"cmd":"dev_ingest","ingest":{
+        "viewer":"me","missing_pr_ids":["PR_1"],"prs":[],"events":[],"reactions":[]
+    }}));
+    daemon.ingest(vec![pr("PR_1", "alice")], vec![], vec![]);
+    assert_eq!(daemon.scope("org")["dot"], true);
     daemon.stop();
 }

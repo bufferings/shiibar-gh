@@ -234,3 +234,77 @@ fn each_scope_has_its_own_watch_start() {
     assert!(h.has_row("E_1"));
     assert!(!h.has_row("E_2"));
 }
+
+#[test]
+fn the_request_exception_applies_to_a_known_pr_when_the_watch_restarts() {
+    let mut h = H::new();
+    let requested = IngestPr {
+        requested_me: true,
+        ..other("PR_1")
+    };
+    h.prs(vec![requested.clone()]);
+    h.engine.scope_disable(ORG).unwrap();
+    h.advance(100);
+    let asked = h.at();
+    h.advance(100);
+    h.engine.scope_enable(ORG, &h.now).unwrap();
+    let e = h.ev_at("E_1", "PR_1", EventKind::ReviewRequested, asked);
+    h.push(vec![requested], vec![e.clone()], vec![]);
+    assert!(h.has_row("E_1"), "the first fetch after the restart");
+    assert_eq!(h.row("E_1").notify, NotifyState::None);
+    assert_eq!(h.badge(), 1);
+}
+
+#[test]
+fn the_request_exception_needs_the_first_fetch_after_the_restart() {
+    let mut h = H::new();
+    let requested = IngestPr {
+        requested_me: true,
+        ..other("PR_1")
+    };
+    h.engine.scope_disable(ORG).unwrap();
+    h.advance(100);
+    let asked = h.at();
+    h.advance(100);
+    h.engine.scope_enable(ORG, &h.now).unwrap();
+    h.prs(vec![requested.clone()]);
+    let e = h.ev_at("E_1", "PR_1", EventKind::ReviewRequested, asked);
+    h.push(vec![requested], vec![e], vec![]);
+    assert!(!h.has_row("E_1"));
+}
+
+#[test]
+fn the_request_exception_applies_to_a_pr_moved_into_a_new_scope() {
+    let mut h = H::new();
+    let stranger = IngestPr {
+        owner: "later".into(),
+        requested_me: true,
+        ..other("PR_1")
+    };
+    h.prs(vec![stranger.clone()]);
+    assert_eq!(h.card("later/app#1").unwrap().scope, "public");
+    h.advance(100);
+    let asked = h.at();
+    h.advance(100);
+    h.engine.scope_add("later", &h.now).unwrap();
+    let e = h.ev_at("E_1", "PR_1", EventKind::ReviewRequested, asked);
+    h.push(vec![stranger], vec![e], vec![]);
+    assert!(h.has_row("E_1"));
+    assert_eq!(h.row("E_1").notify, NotifyState::None);
+    assert_eq!(h.card("later/app#1").unwrap().scope, "later");
+}
+
+#[test]
+fn a_pr_moved_to_public_keeps_its_previous_values_so_no_exception() {
+    let mut h = H::new();
+    let requested = IngestPr {
+        requested_me: true,
+        ..other("PR_1")
+    };
+    h.prs(vec![requested.clone()]);
+    h.engine.scope_remove(ORG).unwrap();
+    // Older than Public's watch, and not a first fetch.
+    let e = h.ev_at("E_1", "PR_1", EventKind::ReviewRequested, T0 - 1);
+    h.push(vec![requested], vec![e], vec![]);
+    assert!(!h.has_row("E_1"));
+}

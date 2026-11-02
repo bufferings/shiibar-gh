@@ -217,7 +217,11 @@ fn exit_codes_without_injected_events() {
         let result = daemon.cli(args);
         assert_eq!(result.code, code, "{args:?}: {}", result.stderr);
     }
-    let cases: [(&[&str], i32); 5] = [
+    let cases: [(&[&str], i32); 9] = [
+        (&["scope", "add", "Public"], 1),
+        (&["scope", "add", "ORG"], 1),
+        (&["scope", "remove", "PUBLIC"], 1),
+        (&["scope", "disable", "ORG"], 0),
         (&["scope", "remove", "nobody"], 2),
         (&["scope", "remove", "public"], 1),
         (&["scope", "add", "org"], 1),

@@ -444,3 +444,59 @@ fn a_new_row_on_an_unreadable_pr_neither_notifies_nor_raises_the_dot() {
     assert!(!h.dot());
     assert_eq!(h.row("E_1").notify, NotifyState::None);
 }
+
+#[test]
+fn done_rows_stay_out_of_the_reconnect_summary_outside_snooze() {
+    let mut h = H::new();
+    let a = h.ev("E_1", "PR_1", EventKind::Comment);
+    let b = h.ev("E_2", "PR_2", EventKind::Comment);
+    h.push(vec![other("PR_1"), other("PR_2")], vec![a, b], vec![]);
+    h.offline();
+    h.engine.done("E_1").unwrap();
+    let out = h.reconnect();
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].rows, ["E_2"]);
+    assert_eq!(out[0].title, "org · 1 new event");
+    assert_eq!(out[0].body.as_deref(), Some("In 1 PR"));
+    assert_eq!(h.row("E_1").notify, NotifyState::None);
+}
+
+#[test]
+fn only_done_rows_mean_no_summary() {
+    let mut h = H::new();
+    let a = h.ev("E_1", "PR_1", EventKind::Comment);
+    h.push(vec![other("PR_1")], vec![a], vec![]);
+    h.offline();
+    h.engine.done("E_1").unwrap();
+    assert!(h.reconnect().is_empty());
+    h.engine.undone("E_1").unwrap();
+    assert!(
+        h.reconnect().is_empty(),
+        "the record is gone at the summary"
+    );
+}
+
+#[test]
+fn undone_before_the_reconnect_keeps_a_row_in_the_summary() {
+    let mut h = H::new();
+    let a = h.ev("E_1", "PR_1", EventKind::Comment);
+    h.push(vec![other("PR_1")], vec![a], vec![]);
+    h.offline();
+    h.engine.done("E_1").unwrap();
+    h.engine.undone("E_1").unwrap();
+    assert_eq!(h.reconnect().len(), 1);
+}
+
+#[test]
+fn a_row_done_after_a_missed_release_stays_out_of_the_summary() {
+    let mut h = H::new();
+    h.prs(vec![other("PR_1")]);
+    h.snooze(&key("PR_1"));
+    let e = h.ev("E_1", "PR_1", EventKind::Comment);
+    h.events(vec![e]);
+    h.advance(DAY);
+    h.tick();
+    h.offline();
+    h.engine.done("E_1").unwrap();
+    assert!(h.reconnect().is_empty());
+}

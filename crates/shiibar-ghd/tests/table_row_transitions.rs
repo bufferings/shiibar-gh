@@ -519,3 +519,47 @@ fn hide_also_clears_earlier_unread_bot_comments_when_shown_again() {
     assert!(!h.visible("PR_1"), "shown again as read");
     assert!(!h.row("E_1").unread);
 }
+
+#[test]
+fn previous_values_keep_tracking_while_a_pr_is_closed() {
+    let closed = |checks| IngestPr {
+        state: PrState::Closed,
+        checks,
+        ..pr("PR_1")
+    };
+    let open = |checks| IngestPr {
+        checks,
+        ..pr("PR_1")
+    };
+    let kinds = |h: &H| {
+        h.engine
+            .status(&key("PR_1"), &h.now)
+            .unwrap()
+            .rows
+            .iter()
+            .filter(|r| r.kind == Lenient::Known(RowKind::ChecksFailed))
+            .count()
+    };
+
+    // Failed while closed, still failed on reopening: nothing changed.
+    let mut h = H::new();
+    h.prs(vec![open(Checks::Passed)]);
+    h.prs(vec![closed(Checks::Failed)]);
+    h.prs(vec![open(Checks::Failed)]);
+    assert_eq!(kinds(&h), 0);
+
+    // Passed while closed, failing after reopening: a change.
+    let mut h = H::new();
+    h.prs(vec![open(Checks::Failed)]);
+    h.prs(vec![closed(Checks::Passed)]);
+    h.prs(vec![open(Checks::Passed)]);
+    h.prs(vec![open(Checks::Failed)]);
+    assert_eq!(kinds(&h), 1);
+
+    // Passed while closed, failed in the same fetch as the reopening.
+    let mut h = H::new();
+    h.prs(vec![open(Checks::Failed)]);
+    h.prs(vec![closed(Checks::Passed)]);
+    h.prs(vec![open(Checks::Failed)]);
+    assert_eq!(kinds(&h), 1);
+}

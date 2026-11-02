@@ -368,3 +368,223 @@ fn a_disabled_scope_reports_no_badge_or_dot_and_the_dot_returns_on_enable() {
     h.engine.scope_enable(ORG, &h.now).unwrap();
     assert_eq!((h.badge(), h.dot()), (1, true));
 }
+
+#[test]
+fn owners_compare_without_regard_to_case() {
+    let mut h = H::new();
+    assert!(invalid(h.engine.scope_add("ORG", &h.now)), "a duplicate");
+    for public in ["public", "Public", "PUBLIC"] {
+        assert!(invalid(h.engine.scope_add(public, &h.now)), "{public}");
+        assert!(invalid(h.engine.scope_remove(public)), "{public}");
+    }
+
+    h.engine.scope_notify("ORG", false).unwrap();
+    assert!(!h.scope(ORG).notify);
+    h.engine.scope_disable("Org").unwrap();
+    assert!(!h.scope(ORG).enabled);
+    h.engine.scope_enable("oRG", &h.now).unwrap();
+    assert!(h.scope(ORG).enabled);
+    h.engine.scope_disable("PUBLIC").unwrap();
+    assert!(!h.scope("public").enabled);
+    h.engine.scope_enable("Public", &h.now).unwrap();
+    assert_eq!(
+        h.engine.scopes().len(),
+        2,
+        "no scope was added by a spelling"
+    );
+}
+
+#[test]
+fn a_pr_owner_finds_its_scope_in_any_case() {
+    let mut h = H::new();
+    let e = h.ev("E_1", "PR_1", EventKind::Comment);
+    let private = IngestPr {
+        owner: "ORG".into(),
+        is_private: true,
+        ..other("PR_1")
+    };
+    h.push(vec![private], vec![e], vec![]);
+    let card = h.engine.status("org/app#1", &h.now).unwrap();
+    assert_eq!(card.scope, ORG);
+    assert_eq!(card.pr, "ORG/app#1", "the PR keeps GitHub's spelling");
+    assert_eq!(h.badge(), 1);
+    assert_eq!(
+        h.engine.open_pr("Org/app#1").unwrap(),
+        "https://github.example/PR_1"
+    );
+    h.snooze("ORG/app#1");
+    h.unsnooze("oRg/app#1");
+    let wrong_repo = h.engine.status("org/APP#1", &h.now);
+    assert!(not_found(wrong_repo), "only the owner ignores case");
+}
+
+#[test]
+fn scope_filters_and_popovers_find_a_scope_in_any_case() {
+    let mut h = H::new();
+    h.prs(vec![pr("PR_1")]);
+    let filter = Filter {
+        scope: Some("ORG".into()),
+        ..Filter::default()
+    };
+    assert_eq!(h.cards(&filter).len(), 1);
+    assert_eq!(h.engine.activity(&filter, &h.now).unwrap().len(), 0);
+    h.engine.popover_opened("ORG").unwrap();
+    let e = h.ev("E_1", "PR_1", EventKind::Comment);
+    h.events(vec![e]);
+    assert!(!h.dot(), "the open state reached the same scope");
+    h.seen(&["E_1"]);
+    h.engine.popover_closed("Org").unwrap();
+    assert!(!h.row("E_1").unread);
+}
+
+#[test]
+fn adding_an_owner_back_in_another_case_restores_the_same_scope() {
+    let mut h = H::new();
+    h.engine.scope_notify(ORG, false).unwrap();
+    h.engine.scope_remove("ORG").unwrap();
+    assert!(!h.engine.scopes().iter().any(|s| s.id == ORG));
+    h.engine.scope_add("Org", &h.now).unwrap();
+    assert_eq!(h.engine.scopes().len(), 2);
+    let scope = h.scope(ORG);
+    assert_eq!(scope.name, ORG, "the first spelling stays");
+    assert!(!scope.notify, "state restored");
+}
+
+#[test]
+fn a_readable_again_pr_raises_the_dot_for_unread_rows() {
+    // (name, unread row, snoozed, popover open, dot afterwards)
+    let cases = [
+        ("unread row", true, false, false, true),
+        ("nothing unread", false, false, false, false),
+        ("popover open", true, false, true, false),
+        ("still snoozed", true, true, false, false),
+    ];
+    for (name, unread, snoozed, open, want) in cases {
+        let mut h = H::new();
+        let e = h.ev("E_1", "PR_1", EventKind::Comment);
+        h.push(vec![pr("PR_1")], vec![e], vec![]);
+        if !unread {
+            h.seen(&["E_1"]);
+            h.close();
+        }
+        if snoozed {
+            h.snooze(&key("PR_1"));
+        }
+        h.open();
+        h.close();
+        assert!(!h.dot(), "{name}: cleared by opening");
+        h.missing("PR_1");
+        if open {
+            h.open();
+        }
+        h.prs(vec![pr("PR_1")]);
+        assert_eq!(h.dot(), want, "{name}");
+    }
+}
+
+#[test]
+fn an_ordinary_fetch_of_a_readable_pr_does_not_raise_the_dot() {
+    let mut h = H::new();
+    let e = h.ev("E_1", "PR_1", EventKind::Comment);
+    h.push(vec![pr("PR_1")], vec![e], vec![]);
+    h.open();
+    h.close();
+    h.prs(vec![pr("PR_1")]);
+    assert!(!h.dot());
+}
+
+#[test]
+fn a_pr_both_missing_and_fetched_in_one_ingest_stays_readable() {
+    let mut h = H::new();
+    let e = h.ev("E_1", "PR_1", EventKind::Comment);
+    h.push(vec![pr("PR_1")], vec![e], vec![]);
+    h.open();
+    h.close();
+    let ingest = Ingest {
+        viewer: ME.into(),
+        missing_pr_ids: vec!["PR_1".into()],
+        prs: vec![pr("PR_1")],
+        events: vec![],
+        reactions: vec![],
+    };
+    h.engine.ingest(ingest, &h.now).unwrap();
+    assert!(h.visible("PR_1"));
+    assert!(!h.dot(), "it never went away");
+}
+
+mod moved_to_public {
+    use super::*;
+    use shiibar_ghd::model::NotifyState;
+
+    #[test]
+    fn the_reaction_baseline_moves_with_the_pr() {
+        let mut h = H::new();
+        h.prs(vec![pr("PR_1")]);
+        let mut r = h.reaction("C_1", "PR_1", &[("HEART", 2)]);
+        h.push(vec![], vec![], vec![r.clone()]);
+        h.engine.scope_remove(ORG).unwrap();
+        r.counts.insert("HEART".into(), 3);
+        h.push(vec![], vec![], vec![r]);
+        let rows = h.engine.activity(&Filter::default(), &h.now).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0].counts.as_ref().unwrap()["HEART"],
+            1,
+            "only the increase"
+        );
+    }
+
+    #[test]
+    fn undelivered_rows_are_summarized_under_public() {
+        let mut h = H::new();
+        let e = h.ev("E_1", "PR_1", EventKind::Comment);
+        h.push(vec![other("PR_1")], vec![e], vec![]);
+        h.offline();
+        h.engine.scope_remove(ORG).unwrap();
+        let out = h.reconnect();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].scope, "public");
+        assert_eq!(out[0].title, "Public · 1 new event");
+    }
+
+    #[test]
+    fn a_snooze_record_returns_under_public() {
+        let mut h = H::new();
+        h.prs(vec![other("PR_1")]);
+        h.snooze(&key("PR_1"));
+        let e = h.ev("E_1", "PR_1", EventKind::Comment);
+        h.events(vec![e]);
+        h.engine.scope_remove(ORG).unwrap();
+        assert_eq!(h.row("E_1").notify, NotifyState::Held);
+        h.advance(DAY);
+        h.tick();
+        let out = h.delivered();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].title, "Public · Back from Snooze");
+        assert_eq!(out[0].rows, ["E_1"]);
+    }
+
+    #[test]
+    fn delivery_checks_public_settings_not_the_old_scope() {
+        let mut h = H::new();
+        let e = h.ev("E_1", "PR_1", EventKind::Comment);
+        h.push(vec![other("PR_1")], vec![e], vec![]);
+        h.offline();
+        h.engine.scope_remove(ORG).unwrap();
+        h.engine.scope_notify("public", false).unwrap();
+        assert!(h.reconnect().is_empty());
+        assert_eq!(h.row("E_1").notify, NotifyState::None);
+    }
+
+    #[test]
+    fn a_disabled_public_also_clears_the_record() {
+        let mut h = H::new();
+        let e = h.ev("E_1", "PR_1", EventKind::Comment);
+        h.push(vec![other("PR_1")], vec![e], vec![]);
+        h.offline();
+        h.engine.scope_remove(ORG).unwrap();
+        h.engine.scope_disable("public").unwrap();
+        assert!(h.reconnect().is_empty());
+        assert_eq!(h.row("E_1").notify, NotifyState::None);
+    }
+}

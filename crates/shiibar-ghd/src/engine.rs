@@ -141,15 +141,29 @@ impl Engine {
         self.data.rows.get_mut(id)
     }
 
-    fn registered_scope(&self, id: &str) -> Option<&ScopeRec> {
-        self.data.scopes.get(id).filter(|s| !s.removed)
+    /// The stored key of a scope. Owner logins compare without regard to case,
+    /// and a scope keeps the spelling it was first registered with.
+    fn scope_key(&self, name: &str) -> Option<&str> {
+        self.data
+            .scopes
+            .keys()
+            .find(|key| key.eq_ignore_ascii_case(name))
+            .map(String::as_str)
+    }
+
+    fn registered_scope(&self, name: &str) -> Option<&ScopeRec> {
+        self.scope_key(name)
+            .and_then(|key| self.data.scopes.get(key))
+            .filter(|s| !s.removed)
     }
 
     /// DESIGN.md, "Scopes": the owner's scope when registered, else Public for
     /// a public repository, else nothing.
     fn resolve_scope(&self, owner: &str, is_private: bool) -> Option<&str> {
-        if owner != PUBLIC && self.registered_scope(owner).is_some() {
-            return self.data.scopes.get(owner).map(|s| s.id.as_str());
+        if !owner.eq_ignore_ascii_case(PUBLIC)
+            && let Some(scope) = self.registered_scope(owner)
+        {
+            return Some(scope.id.as_str());
         }
         (!is_private).then_some(PUBLIC)
     }
@@ -330,17 +344,17 @@ impl Engine {
                 "mine and others cannot both be set".into(),
             ));
         }
-        if let Some(scope) = &filter.scope
-            && self.registered_scope(scope).is_none()
-        {
-            return Err(not_found(format!("scope {scope}")));
-        }
+        let wanted = filter
+            .scope
+            .as_deref()
+            .map(|scope| self.require_scope(scope))
+            .transpose()?;
         let mut out = Vec::new();
         for pr in self.data.prs.values() {
             let Some(scope) = self.enabled_scope_of(pr) else {
                 continue;
             };
-            if filter.scope.as_ref().is_some_and(|s| *s != scope.id)
+            if wanted.as_ref().is_some_and(|s| *s != scope.id)
                 || !self.shows(pr, filter.snoozed, now)
                 || (filter.mine && !pr.mine)
                 || (filter.others && pr.mine)
@@ -378,7 +392,7 @@ impl Engine {
         self.data
             .prs
             .values()
-            .find(|pr| pr.key() == key)
+            .find(|pr| same_pr(pr, key))
             .filter(|pr| !pr.unreadable && self.enabled_scope_of(pr).is_some())
             .ok_or_else(|| not_found(format!("PR {key}")))
     }
@@ -495,7 +509,7 @@ impl Engine {
                 .get(id)
                 .and_then(|pr| self.enabled_scope_of(pr))
                 .map(|s| s.id.clone());
-            if let Some(scope) = scope {
+            if let Some(scope) = scope.filter(|_| !incoming.contains(id.as_str())) {
                 if let Some(pr) = self.pr_mut(id) {
                     pr.unreadable = true;
                 }
@@ -543,6 +557,7 @@ impl Engine {
         let prev = existing.and_then(|pr| pr.prev);
         let reopened =
             p.state == proto::PrState::Open && existing.is_some_and(|pr| pr.state != PrState::Open);
+        let readable_again = existing.is_some_and(|pr| pr.unreadable);
         let record = PrRec {
             mine: p.author == viewer,
             unreadable: false,
@@ -583,6 +598,9 @@ impl Engine {
         self.data.prs.insert(id.clone(), record);
         if reopened {
             self.restore_review_request(&id);
+        }
+        if readable_again && !self.pr_snoozed(&id) {
+            self.raise_dot_for_unread(&id);
         }
         match prev {
             Some(prev) => {
@@ -836,24 +854,25 @@ impl Engine {
         }
     }
 
-    pub fn require_scope(&self, id: &str) -> Result<()> {
-        self.registered_scope(id)
-            .map(|_| ())
-            .ok_or_else(|| not_found(format!("scope {id}")))
+    /// The stored id of a registered scope.
+    pub fn require_scope(&self, name: &str) -> Result<String> {
+        self.registered_scope(name)
+            .map(|scope| scope.id.clone())
+            .ok_or_else(|| not_found(format!("scope {name}")))
     }
 
     pub fn popover_opened(&mut self, scope: &str) -> Result<()> {
-        self.require_scope(scope)?;
-        self.open.insert(scope.to_string());
-        if let Some(scope) = self.scope_mut(scope) {
+        let scope = self.require_scope(scope)?;
+        self.open.insert(scope.clone());
+        if let Some(scope) = self.scope_mut(&scope) {
             scope.dot = false;
         }
         Ok(())
     }
 
     pub fn popover_closed(&mut self, scope: &str) -> Result<()> {
-        self.require_scope(scope)?;
-        self.open.remove(scope);
+        let scope = self.require_scope(scope)?;
+        self.open.remove(&scope);
         let prs: Vec<String> = self
             .data
             .prs
@@ -989,6 +1008,12 @@ impl Engine {
         if let Some(pr) = self.pr_mut(pr_id) {
             pr.snoozed = false;
         }
+        self.raise_dot_for_unread(pr_id);
+    }
+
+    /// The rule shared by a Snooze ending and a PR becoming readable again:
+    /// unread rows raise the dot unless the popover or window is open.
+    fn raise_dot_for_unread(&mut self, pr_id: &str) {
         let Some(pr) = self.data.prs.get(pr_id).filter(|pr| !pr.unreadable) else {
             return;
         };
@@ -1093,7 +1118,7 @@ impl Engine {
     }
 
     pub fn scope_add(&mut self, owner: &str, now: &Now) -> Result<()> {
-        if owner == PUBLIC {
+        if owner.eq_ignore_ascii_case(PUBLIC) {
             return Err(CmdError::Invalid("public cannot be added".into()));
         }
         if owner.is_empty() {
@@ -1102,13 +1127,14 @@ impl Engine {
         if self.registered_scope(owner).is_some() {
             return Err(CmdError::Invalid(format!("scope {owner} already exists")));
         }
-        self.dirty.scopes.insert(owner.to_string());
+        let id = self.scope_key(owner).unwrap_or(owner).to_string();
+        self.dirty.scopes.insert(id.clone());
         self.data
             .scopes
-            .entry(owner.to_string())
+            .entry(id.clone())
             .and_modify(|scope| scope.removed = false)
             .or_insert_with(|| ScopeRec {
-                id: owner.to_string(),
+                id: id.clone(),
                 removed: false,
                 enabled: true,
                 notify: true,
@@ -1116,7 +1142,7 @@ impl Engine {
                 updated_at: None,
                 dot: false,
             });
-        self.start_watch(owner, now);
+        self.start_watch(&id, now);
         self.settle(now);
         Ok(())
     }
@@ -1153,40 +1179,40 @@ impl Engine {
     }
 
     pub fn scope_remove(&mut self, owner: &str) -> Result<()> {
-        if owner == PUBLIC {
+        if owner.eq_ignore_ascii_case(PUBLIC) {
             return Err(CmdError::Invalid("public cannot be removed".into()));
         }
-        self.require_scope(owner)?;
-        if let Some(scope) = self.scope_mut(owner) {
+        let id = self.require_scope(owner)?;
+        if let Some(scope) = self.scope_mut(&id) {
             scope.removed = true;
         }
-        self.open.remove(owner);
+        self.open.remove(&id);
         Ok(())
     }
 
     pub fn scope_enable(&mut self, scope: &str, now: &Now) -> Result<()> {
-        self.require_scope(scope)?;
-        if !self.data.scopes[scope].enabled {
-            if let Some(record) = self.scope_mut(scope) {
+        let scope = self.require_scope(scope)?;
+        if !self.data.scopes[&scope].enabled {
+            if let Some(record) = self.scope_mut(&scope) {
                 record.enabled = true;
             }
-            self.start_watch(scope, now);
+            self.start_watch(&scope, now);
             self.settle(now);
         }
         Ok(())
     }
 
     pub fn scope_disable(&mut self, scope: &str) -> Result<()> {
-        self.require_scope(scope)?;
-        if let Some(record) = self.scope_mut(scope) {
+        let scope = self.require_scope(scope)?;
+        if let Some(record) = self.scope_mut(&scope) {
             record.enabled = false;
         }
         Ok(())
     }
 
     pub fn scope_notify(&mut self, scope: &str, on: bool) -> Result<()> {
-        self.require_scope(scope)?;
-        if let Some(record) = self.scope_mut(scope) {
+        let scope = self.require_scope(scope)?;
+        if let Some(record) = self.scope_mut(&scope) {
             record.notify = on;
         }
         Ok(())
@@ -1268,18 +1294,25 @@ impl Engine {
 
     /// The summaries an app gets when it connects.
     pub fn pending_summaries(&mut self, now: &Now) -> Vec<proto::Notification> {
-        let pending: Vec<(String, String)> = self
+        let pending: Vec<(String, String, bool)> = self
             .data
             .rows
             .values()
             .filter(|row| row.notify == NotifyState::Pending)
-            .map(|row| (row.id.clone(), row.pr_id.clone()))
+            .map(|row| (row.id.clone(), row.pr_id.clone(), row.done))
             .collect();
         let mut rows = Vec::new();
-        for (id, pr_id) in pending {
-            if self.pr_snoozed(&pr_id) && !self.in_flight.contains(&id) {
+        for (id, pr_id, done) in pending {
+            if self.in_flight.contains(&id) {
+                continue;
+            }
+            if self.pr_snoozed(&pr_id) {
                 if let Some(row) = self.row_mut(&id) {
                     row.notify = NotifyState::HeldUndelivered;
+                }
+            } else if done {
+                if let Some(row) = self.row_mut(&id) {
+                    row.notify = NotifyState::None;
                 }
             } else {
                 rows.push(id);
@@ -1407,6 +1440,13 @@ impl Engine {
 enum Summary {
     NewEvents,
     BackFromSnooze,
+}
+
+/// `<pr>` with the owner compared the way GitHub compares logins.
+fn same_pr(pr: &PrRec, key: &str) -> bool {
+    key.split_once('/').is_some_and(|(owner, rest)| {
+        owner.eq_ignore_ascii_case(&pr.owner) && rest == format!("{}#{}", pr.repo, pr.number)
+    })
 }
 
 fn plural(count: usize, one: &str, many: &str) -> String {
