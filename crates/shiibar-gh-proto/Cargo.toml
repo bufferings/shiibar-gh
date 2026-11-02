@@ -1,0 +1,13 @@
+[package]
+name = "shiibar-gh-proto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# Adds the `dev_ingest` and `dev_clock_set` commands to the wire format.
+dev-ingest = []
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
