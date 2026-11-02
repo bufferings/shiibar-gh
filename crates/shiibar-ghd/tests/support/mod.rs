@@ -15,7 +15,7 @@ pub const HOUR: i64 = 3_600;
 pub const ORG: &str = "org";
 pub const ME: &str = "me";
 
-/// Ten seconds after a watch that started at `T0`.
+/// An open PR in the `org` scope, authored by the viewer, updated at `T0`.
 pub fn pr(id: &str) -> IngestPr {
     let number = id.rsplit('_').next().unwrap().parse().unwrap_or(1);
     IngestPr {
@@ -79,6 +79,7 @@ pub struct H {
 }
 
 impl H {
+    /// Ten seconds after a watch that started at `T0`.
     pub fn new() -> Self {
         let now = Now::fixed(T0, "Asia/Tokyo").unwrap();
         let mut engine = Engine::fresh(&now);
