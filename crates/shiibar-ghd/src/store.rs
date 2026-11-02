@@ -173,12 +173,14 @@ fn immutable_uri(path: &Path) -> String {
 
 /// Let SQLite walk every page, never writing to the main database file.
 ///
-/// A plain read-only open of a WAL database fails on this system's libsqlite3
-/// once `-wal` and `-shm` are gone, so a WAL without content is skipped with
-/// `immutable=1`: the main file then holds everything, and SQLite's warning
-/// about immutable files changing does not apply because only this daemon
-/// writes, under the lock file, and never at the same time as this check.
-/// A WAL with content holds saved state, so it has to be read the normal way.
+/// A plain read-only open of a WAL database failed on the macOS system
+/// libsqlite3 (3.54.0) once `-wal` and `-shm` were gone; the bundled SQLite
+/// opens it, but the check does not depend on that build difference. A WAL
+/// without content is skipped with `immutable=1`: the main file then holds
+/// everything, and SQLite's warning about immutable files changing does not
+/// apply because only this daemon writes, under the lock file, and never at
+/// the same time as this check. A WAL with content holds saved state, so it
+/// has to be read the normal way.
 fn verify(path: &Path) -> rusqlite::Result<bool> {
     let wal_has_content = std::fs::metadata(side_file(path, "-wal")).is_ok_and(|wal| wal.len() > 0);
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;

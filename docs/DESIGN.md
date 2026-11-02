@@ -174,7 +174,7 @@ Snooze は PR 単位。「この PR は翌朝まで確認しない」をアプ�
 
 **レート制限**。GraphQL のコストを rateLimit で毎回確認して、上限に近づいたら間隔を延ばして一覧に Throttled を表示する。残量は設定の General に表示。
 
-**状態の保存**。行の「表示済み」、Done、Snooze、カードの追加時刻、監視開始時刻、PR の前回の値、Reaction の基準値、設定、スコープはデーモンが SQLite に保存する（macOS 同梱の libsqlite3 にリンクする）。チップの選択とウインドウの位置は画面の状態なので、アプリが UserDefaults に保存する。GitHub 側には何も書き込まない。トークンは DB に保存せず Keychain に保存する。
+**状態の保存**。行の「表示済み」、Done、Snooze、カードの追加時刻、監視開始時刻、PR の前回の値、Reaction の基準値、設定、スコープはデーモンが SQLite に保存する（SQLite はデーモンに組み込み、macOS の libsqlite3 は利用しない）。チップの選択とウインドウの位置は画面の状態なので、アプリが UserDefaults に保存する。GitHub 側には何も書き込まない。トークンは DB に保存せず Keychain に保存する。
 
 **DB を読めないとき**。デーモンは起動するが、GitHub の取得をせず、DB に変更を加えない。アイコンに三角を表示し、ポップオーバーに「Couldn't read saved state」と Reset ボタンだけを表示する。Reset を押すと、DB ファイルを別名で退避し（退避したファイルは削除しない）、空の状態で通常の動作を始める。CLI は `shiibar-gh reset` で同じ操作を行い、ほかのコマンドはエラーになる。DB を読めるときの `reset` はエラーにして、何も変更しない。スコープは Keychain のトークンから復元する。
 
