@@ -38,6 +38,10 @@
 
 GitHub の API、クレートのバージョン、Rust と macOS の挙動は、記憶だけで記述しない。公式ドキュメント、GraphQL スキーマ、公開リポジトリの実データ、`cargo search` などで確認し、確認方法を記録する。確認できない事項は DESIGN.md の未決に記載し、推測で実装しない。
 
+## 依存クレートのクールダウン
+
+公開から 7 日たっていないクレートのバージョンは使用しない。この規則は、Cargo.lock に新しく解決されたすべてのクレート（ほかのターゲット向けのクレートを含む）に適用する。依存クレートを追加または更新するときは、crates.io の API でバージョンの公開日を確認し、確認した日付を記録する。Cargo の `min-publish-age`（`[registry] global-min-publish-age`）はこの規則を設定で強制できるが、unstable の機能（`-Z` を指定する nightly だけ）で、安定版の Cargo は無視するので使用しない（doc.rust-lang.org/cargo/reference/unstable.html で確認）。この機能が安定版に含まれたら、Cargo の設定に移す。
+
 ## セットアップ
 
 - Rust は `rust-toolchain.toml` でバージョンを固定する。rustup が自動で取得する
