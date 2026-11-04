@@ -20,7 +20,12 @@ fn queue_one(daemon: &mut Daemon, on: bool) {
 fn a_queue_of_256_stays_and_the_257th_line_cuts_the_client() {
     assert_eq!(SEND_QUEUE, 256);
     let dir = tempfile::tempdir().unwrap();
-    let mut daemon = Daemon::start(StateDir::new(dir.path()), Clock::system()).unwrap();
+    let mut daemon = Daemon::start(
+        StateDir::new(dir.path()),
+        Clock::system(),
+        std::sync::Arc::new(shiibar_ghd::keychain::NoKeychain),
+    )
+    .unwrap();
     let mut subscribed = daemon.subscribe(ClientKind::Cli);
     assert_eq!(subscribed.rx.len(), 1, "the snapshot");
 

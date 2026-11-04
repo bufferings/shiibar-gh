@@ -80,6 +80,11 @@ impl Clock {
         Self::default()
     }
 
+    /// A `dev-ingest` build with a fixed time.
+    pub fn is_fixed(&self) -> bool {
+        self.fixed.is_some()
+    }
+
     pub fn fix(&mut self, now: Now) {
         self.fixed = Some(now);
     }

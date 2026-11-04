@@ -17,6 +17,8 @@ tokio = { workspace = true }
 anyhow = { workspace = true }
 rusqlite = { workspace = true }
 jiff = { workspace = true }
+reqwest = { workspace = true }
+security-framework = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

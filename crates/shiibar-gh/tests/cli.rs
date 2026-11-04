@@ -109,14 +109,23 @@ struct Run {
     stderr: String,
 }
 
+/// Standard input is empty and not a terminal.
 fn run(state_dir: &Path, args: &[&str]) -> Run {
+    run_with_input(state_dir, args, "")
+}
+
+fn run_with_input(state_dir: &Path, args: &[&str], input: &str) -> Run {
     let mut child = Command::new(env!("CARGO_BIN_EXE_shiibar-gh"))
         .args(args)
         .env("SHIIBAR_GH_STATE_DIR", state_dir)
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    stdin.write_all(input.as_bytes()).unwrap();
+    drop(stdin);
     let stdout = read_all(child.stdout.take().unwrap());
     let stderr = read_all(child.stderr.take().unwrap());
     let status = wait_within(&mut child, WAIT, "shiibar-gh");
@@ -130,7 +139,7 @@ fn run(state_dir: &Path, args: &[&str]) -> Run {
 #[test]
 fn every_command_has_help_with_exit_0_and_needs_no_daemon() {
     let dir = tempfile::tempdir().unwrap();
-    let commands: [&[&str]; 20] = [
+    let commands: [&[&str]; 24] = [
         &["--help"],
         &["list", "--help"],
         &["status", "--help"],
@@ -151,6 +160,10 @@ fn every_command_has_help_with_exit_0_and_needs_no_daemon() {
         &["scope", "disable", "--help"],
         &["scope", "notify", "--help"],
         &["scope", "--help"],
+        &["token", "set", "--help"],
+        &["token", "test", "--help"],
+        &["token", "--help"],
+        &["settings", "status", "--help"],
     ];
     for args in commands {
         let result = run(dir.path(), args);
@@ -162,10 +175,15 @@ fn every_command_has_help_with_exit_0_and_needs_no_daemon() {
 #[test]
 fn usage_errors_exit_1() {
     let dir = tempfile::tempdir().unwrap();
-    let cases: [&[&str]; 13] = [
+    let cases: [&[&str]; 17] = [
         &[],
         &["nope"],
+        // No token on standard input.
         &["token", "set", "notifications"],
+        &["token", "set"],
+        &["token"],
+        &["token", "nope", "x"],
+        &["settings", "status", "extra"],
         &["list", "--mine", "--others"],
         &["list", "--bogus"],
         &["list", "extra"],
@@ -283,7 +301,89 @@ fn scope_commands_work_from_the_command_line() {
     assert!(daemon.send(json!({"cmd":"info"}))["ok"] == true);
 }
 
+/// Tokens come from standard input only: an argument is a usage error.
 #[test]
+fn a_token_is_never_an_argument() {
+    let dir = tempfile::tempdir().unwrap();
+    let result = run_with_input(
+        dir.path(),
+        &["token", "set", "notifications", "ghp_x"],
+        "ghp_y\n",
+    );
+    assert_eq!(result.code, 1);
+    assert!(!result.stderr.contains("ghp_y"));
+}
+
+#[cfg(feature = "dev-ingest")]
+#[test]
+fn token_set_reads_the_first_line_of_standard_input() {
+    let dir = tempfile::tempdir().unwrap();
+    let keychain = dir.path().join("keychain.json");
+    let mut child = Command::new(daemon_binary())
+        .arg("--foreground")
+        .env("SHIIBAR_GH_STATE_DIR", dir.path())
+        .env("SHIIBAR_GH_LOG", "error")
+        .env("SHIIBAR_GH_DEV_KEYCHAIN", &keychain)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let socket = dir.path().join("shiibar-ghd.sock");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while UnixStream::connect(&socket).is_err() {
+        assert!(Instant::now() < deadline, "the daemon never accepted");
+        std::thread::yield_now();
+    }
+    let set = run_with_input(
+        dir.path(),
+        &["token", "set", "notifications"],
+        "ghp_first_line\r\nsecond line\n",
+    );
+    assert_eq!(set.code, 0, "{}", set.stderr);
+    let saved: Value = serde_json::from_str(&std::fs::read_to_string(&keychain).unwrap()).unwrap();
+    assert_eq!(saved, json!({"notifications":"ghp_first_line"}));
+    assert_eq!(
+        run_with_input(dir.path(), &["token", "set", "nobody"], "x\n").code,
+        2,
+        "an unregistered owner"
+    );
+    assert_eq!(
+        run(dir.path(), &["token", "set", "public"]).code,
+        1,
+        "empty input"
+    );
+    let status = run(dir.path(), &["settings", "status", "--json"]);
+    assert_eq!(status.code, 0, "{}", status.stderr);
+    let status: Value = serde_json::from_str(&status.stdout).unwrap();
+    assert_eq!(status["tokens"][0]["target"], "notifications");
+    assert_eq!(status["tokens"][0]["registered"], true);
+    assert_eq!(status["tokens"][1]["registered"], false);
+    let text = run(dir.path(), &["settings", "status"]);
+    assert!(
+        text.stdout.contains("notifications registered=true"),
+        "{}",
+        text.stdout
+    );
+    // This build reaches no GitHub, so a test cannot run.
+    let test = run(dir.path(), &["token", "test", "notifications", "--json"]);
+    assert_eq!(test.code, 1);
+    assert!(!test.stderr.contains("ghp_first_line"));
+    // `refresh` prints the scope warnings and succeeds.
+    let refresh = run(dir.path(), &["refresh"]);
+    assert_eq!(refresh.code, 0);
+    assert!(
+        refresh.stderr.contains("warning: no_token [scope token]"),
+        "{}",
+        refresh.stderr
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// The unreadable state restores scopes from the Keychain, so this runs only
+/// in the `dev-ingest` build, which has none (docs/tasks/M2.md).
+#[test]
+#[cfg(feature = "dev-ingest")]
 fn reset_works_from_the_command_line_when_the_database_is_unreadable() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("state.db"), vec![0xAB; 4096]).unwrap();
@@ -419,6 +519,22 @@ mod with_events {
         );
         let status = json_of(daemon.cli(&["status", "org/app#1", "--json"]));
         assert_eq!(status["card"]["checks"], "failed");
+    }
+
+    /// DESIGN.md, "CLI": owner and repository compare without regard to case.
+    #[test]
+    fn a_pr_resolves_whatever_the_case_of_owner_and_repository() {
+        let daemon = seeded();
+        let status = daemon.cli(&["status", "ORG/App#1"]);
+        assert_eq!(status.code, 0, "{}", status.stderr);
+        assert!(status.stdout.starts_with("org/app#1 open"));
+        assert_eq!(
+            daemon.cli(&["open", "Org/APP#2"]).stdout,
+            "https://github.example/PR_2\n"
+        );
+        assert_eq!(daemon.cli(&["snooze", "ORG/APP#2"]).code, 0);
+        assert_eq!(daemon.cli(&["unsnooze", "org/App#2"]).code, 0);
+        assert_eq!(daemon.cli(&["status", "org/other#1"]).code, 2);
     }
 
     #[test]

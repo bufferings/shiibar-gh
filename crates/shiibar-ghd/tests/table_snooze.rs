@@ -361,8 +361,10 @@ fn snoozing_a_pr_with_undelivered_rows_moves_them_to_the_release() {
     assert_eq!(out[0].title, "org · Back from Snooze");
 }
 
+/// DESIGN.md, "Snooze" (M2): a manual Unsnooze also clears what went
+/// undelivered before the Snooze.
 #[test]
-fn undelivered_rows_from_before_the_snooze_survive_a_manual_unsnooze() {
+fn undelivered_rows_from_before_the_snooze_are_cleared_by_a_manual_unsnooze() {
     let mut h = H::new();
     h.prs(vec![other("PR_1")]);
     let before = h.ev("BEFORE", "PR_1", EventKind::Comment);
@@ -376,12 +378,9 @@ fn undelivered_rows_from_before_the_snooze_survive_a_manual_unsnooze() {
     assert!(h.reconnect().is_empty(), "both wait during the Snooze");
 
     h.unsnooze(&key("PR_1"));
-    assert_eq!(h.row("BEFORE").notify, NotifyState::Pending);
+    assert_eq!(h.row("BEFORE").notify, NotifyState::None);
     assert_eq!(h.row("DURING").notify, NotifyState::None);
-    let out = h.reconnect();
-    assert_eq!(out.len(), 1);
-    assert_eq!(out[0].rows, ["BEFORE"]);
-    assert_eq!(out[0].title, "org · 1 new event");
+    assert!(h.reconnect().is_empty());
 }
 
 #[test]
@@ -418,7 +417,7 @@ fn a_row_from_before_the_snooze_marked_done_leaves_the_return_time_summary() {
 }
 
 #[test]
-fn an_undelivered_row_found_on_a_snoozed_pr_at_reconnect_is_also_kept() {
+fn an_undelivered_row_found_on_a_snoozed_pr_at_reconnect_is_also_cleared_by_unsnooze() {
     let mut h = H::new();
     let e = h.ev("E_1", "PR_1", EventKind::Comment);
     h.push(vec![other("PR_1")], vec![e], vec![]);
@@ -428,7 +427,8 @@ fn an_undelivered_row_found_on_a_snoozed_pr_at_reconnect_is_also_kept() {
     assert!(h.reconnect().is_empty());
     assert_eq!(h.row("E_1").notify, NotifyState::HeldUndelivered);
     h.unsnooze(&key("PR_1"));
-    assert_eq!(h.reconnect().len(), 1);
+    assert!(h.reconnect().is_empty());
+    assert_eq!(h.row("E_1").notify, NotifyState::None);
 }
 
 #[test]

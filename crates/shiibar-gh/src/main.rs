@@ -4,8 +4,10 @@
 use shiibar_gh_client::{ClientError, request, request_json, socket_path_from_env};
 use shiibar_gh_proto::{
     AckResponse, ActivityResponse, Card, ConfigResponse, Filter, ListResponse, OpenResponse,
-    Request, Row, Scope, ScopesResponse, StatusResponse,
+    RefreshResponse, Request, Row, Scope, ScopesResponse, SettingsStatusResponse, StatusResponse,
+    TestResult, TokenTestResponse, Warning,
 };
+use std::io::{BufRead, IsTerminal};
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -17,7 +19,7 @@ const FILTER_FLAGS: &str =
     "[--scope <scope>] [--needs-action] [--mine|--others] [--snoozed] [--json]";
 
 /// `(command words, arguments, what it does)`.
-const COMMANDS: [(&str, &str, &str); 18] = [
+const COMMANDS: [(&str, &str, &str); 21] = [
     ("list", FILTER_FLAGS, "Print the PR cards"),
     (
         "status",
@@ -55,6 +57,23 @@ const COMMANDS: [(&str, &str, &str); 18] = [
         "scope notify",
         "<scope> on|off",
         "Turn the notifications of a scope on or off",
+    ),
+    (
+        "token set",
+        "notifications|<scope>",
+        "Save the token read from the first line of standard input",
+    ),
+    (
+        "token test",
+        "notifications|<scope> [--json]",
+        "Test the token piped to standard input, or the saved one. Without a\n      \
+         token to pipe, run it from a terminal or with </dev/null: an open pipe\n      \
+         that never closes is read until it does",
+    ),
+    (
+        "settings status",
+        "[--json]",
+        "Print API usage and the state of each token",
     ),
 ];
 
@@ -161,6 +180,9 @@ fn open_request(target: String) -> Request {
 
 enum Output {
     Nothing,
+    Warnings,
+    Tests,
+    Settings,
     Cards,
     Rows,
     Card,
@@ -220,6 +242,58 @@ fn scope_command(sub: &str, rest: &[String]) -> Result<Command, UsageError> {
             _ => return Err(UsageError("expected <scope> on|off".into())),
         },
         other => return Err(UsageError(format!("unknown command: scope {other}"))),
+    })
+}
+
+/// The first line of standard input, without its line ending. `None` when
+/// nothing came.
+fn stdin_token() -> Option<String> {
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line).ok()?;
+    let token = line.trim_end_matches(['\n', '\r']).trim().to_string();
+    (!token.is_empty()).then_some(token)
+}
+
+/// docs/tasks/M2.md, "CLI": tokens come from standard input, never from
+/// arguments.
+fn token_command(sub: &str, rest: &[String]) -> Result<Command, UsageError> {
+    Ok(match sub {
+        "set" => {
+            let target = one_arg(rest, "target")?;
+            let token = stdin_token()
+                .ok_or_else(|| UsageError("pipe the token to standard input".into()))?;
+            Command::quiet(Request::TokenSet { target, token })
+        }
+        "test" => {
+            let parsed = parse(rest, &["--json"], false)?;
+            let target = parsed.one("target")?;
+            let token = if std::io::stdin().is_terminal() {
+                None
+            } else {
+                stdin_token()
+            };
+            Command {
+                request: Request::TokenTest { target, token },
+                output: Output::Tests,
+                json: parsed.has("--json"),
+            }
+        }
+        other => return Err(UsageError(format!("unknown command: token {other}"))),
+    })
+}
+
+fn settings_command(sub: &str, rest: &[String]) -> Result<Command, UsageError> {
+    Ok(match sub {
+        "status" => {
+            let parsed = parse(rest, &["--json"], false)?;
+            parsed.none()?;
+            Command {
+                request: Request::SettingsStatus,
+                output: Output::Settings,
+                json: parsed.has("--json"),
+            }
+        }
+        other => return Err(UsageError(format!("unknown command: settings {other}"))),
     })
 }
 
@@ -295,9 +369,13 @@ fn command(name: &str, rest: &[String]) -> Result<Command, UsageError> {
         "refresh" => {
             let parsed = parse(rest, &[], true)?;
             parsed.none()?;
-            Command::quiet(Request::Refresh {
-                scope: parsed.scope,
-            })
+            Command {
+                request: Request::Refresh {
+                    scope: parsed.scope,
+                },
+                output: Output::Warnings,
+                json: false,
+            }
         }
         "open" => Command {
             request: open_request(one_arg(rest, "pr or row")?),
@@ -355,6 +433,75 @@ fn print_scope(scope: &Scope) {
     );
 }
 
+fn print_warning(warning: &Warning) {
+    let until = warning
+        .until
+        .map(|at| format!(" (until {at})"))
+        .unwrap_or_default();
+    let token = warning
+        .token
+        .as_ref()
+        .map(|t| format!(" [{} token]", t.as_text()))
+        .unwrap_or_default();
+    eprintln!(
+        "warning: {}{token} {}{until}",
+        warning.kind.as_text(),
+        warning.message
+    );
+}
+
+fn print_test(result: &TestResult) {
+    let outcome = match result.outcome.as_text().as_str() {
+        "ok" => "OK".to_string(),
+        "failed" => format!(
+            "Failed (missing {})",
+            result.missing.as_deref().unwrap_or("a permission")
+        ),
+        "unverifiable" => format!(
+            "Can't verify ({})",
+            result.reason.as_deref().unwrap_or("nothing to check")
+        ),
+        other => other.to_string(),
+    };
+    println!("{}: {outcome}", result.item);
+}
+
+fn optional<T: std::fmt::Display>(value: Option<T>) -> String {
+    value.map_or_else(|| "-".to_string(), |v| v.to_string())
+}
+
+fn print_settings(response: &SettingsStatusResponse) {
+    let usage = &response.api_usage;
+    println!(
+        "REST: {}/{}",
+        optional(usage.rest_remaining),
+        optional(usage.rest_limit)
+    );
+    println!(
+        "GraphQL: {}/{}",
+        optional(usage.graphql_remaining),
+        optional(usage.graphql_limit)
+    );
+    println!("Cost per poll: {}", optional(usage.cost_per_poll));
+    println!(
+        "Notifications poll interval: {}s",
+        optional(usage.notifications_poll_interval)
+    );
+    for token in &response.tokens {
+        println!(
+            "{} registered={} owner={} expires_at={} scopes={}",
+            token.target,
+            token.registered,
+            optional(token.owner.as_deref()),
+            optional(token.expires_at),
+            token
+                .scopes
+                .as_ref()
+                .map_or_else(|| "-".to_string(), |s| s.join(","))
+        );
+    }
+}
+
 fn print_value(value: &serde_json::Value) {
     match value {
         serde_json::Value::String(text) => println!("{text}"),
@@ -370,6 +517,24 @@ fn execute(socket: &Path, command: Command) -> Result<(), ClientError> {
     match command.output {
         Output::Nothing => {
             request::<AckResponse>(socket, &command.request)?;
+        }
+        Output::Warnings => {
+            let response: RefreshResponse = request(socket, &command.request)?;
+            response.warnings.iter().for_each(print_warning);
+        }
+        Output::Tests => {
+            let response: TokenTestResponse = request(socket, &command.request)?;
+            response.results.iter().for_each(print_test);
+            if let Some(owner) = &response.owner {
+                println!("Owner: {owner}");
+            }
+            if response.owner_mismatch {
+                println!("Owner mismatch: not the owner of the notifications token");
+            }
+        }
+        Output::Settings => {
+            let response: SettingsStatusResponse = request(socket, &command.request)?;
+            print_settings(&response);
         }
         Output::Cards => {
             let response: ListResponse = request(socket, &command.request)?;
@@ -417,7 +582,7 @@ fn run(args: &[String]) -> u8 {
         print!("{}", usage(""));
         return OK;
     }
-    let grouped = matches!(first, "config" | "scope");
+    let grouped = matches!(first, "config" | "scope" | "token" | "settings");
     let sub = rest.first().map(String::as_str);
     let help_name = match (grouped, sub) {
         (true, Some(sub)) if sub != "--help" => format!("{first} {sub}"),
@@ -438,7 +603,11 @@ fn run(args: &[String]) -> u8 {
     let parsed = match (first, sub) {
         ("scope", Some(sub)) => scope_command(sub, &rest[1..]),
         ("config", Some(sub)) => config_command(sub, &rest[1..]),
-        ("scope" | "config", None) => Err(UsageError(format!("{first} needs a subcommand"))),
+        ("token", Some(sub)) => token_command(sub, &rest[1..]),
+        ("settings", Some(sub)) => settings_command(sub, &rest[1..]),
+        ("scope" | "config" | "token" | "settings", None) => {
+            Err(UsageError(format!("{first} needs a subcommand")))
+        }
         _ => command(first, rest),
     };
     let command = match parsed {

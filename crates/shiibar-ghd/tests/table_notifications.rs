@@ -273,15 +273,29 @@ fn reactions_of_one_fetch_on_one_comment_are_one_notification() {
     let mut h = H::new();
     h.prs(vec![pr("PR_1")]);
     let a = h.reaction("C_1", "PR_1", &[("THUMBS_UP", 3), ("HOORAY", 1)]);
-    let b = h.reaction("C_2", "PR_1", &[("HEART", 1)]);
-    h.push(vec![], vec![], vec![a, b]);
+    h.push(vec![], vec![], vec![a]);
     let out = h.delivered();
-    assert_eq!(out.len(), 2);
+    assert_eq!(out.len(), 1, "one comment: one individual notification");
     assert_eq!(out[0].rows.len(), 2);
     assert_eq!(out[0].title, "org · Reaction");
     assert_eq!(out[0].body.as_deref(), Some("👍3 🎉1 “comment C_1”"));
     assert_eq!(out[0].url.as_deref(), Some("https://github.example/C_1"));
-    assert_eq!(out[1].body.as_deref(), Some("❤️1 “comment C_2”"));
+}
+
+/// DESIGN.md, "macOS notifications" (M2): the Reactions of two comments are
+/// two would-be notifications, so one delivery sums them up.
+#[test]
+fn reactions_on_two_comments_in_one_fetch_are_a_summary() {
+    let mut h = H::new();
+    h.prs(vec![pr("PR_1")]);
+    let a = h.reaction("C_1", "PR_1", &[("THUMBS_UP", 3), ("HOORAY", 1)]);
+    let b = h.reaction("C_2", "PR_1", &[("HEART", 1)]);
+    h.push(vec![], vec![], vec![a, b]);
+    let out = h.delivered();
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].rows.len(), 3, "N counts the rows");
+    assert_eq!(out[0].title, "org · 3 new events");
+    assert_eq!(out[0].body.as_deref(), Some("In 1 PR"));
 }
 
 #[test]
@@ -349,8 +363,8 @@ fn undelivered_rows_are_one_summary_per_scope_on_reconnect() {
     assert_eq!(out[0].title, "org · 3 new events");
     assert_eq!(out[0].body.as_deref(), Some("In 2 PRs"));
     assert_eq!(out[0].subtitle, None);
-    assert_eq!(out[1].title, "second · 1 new event");
-    assert_eq!(out[1].body.as_deref(), Some("In 1 PR"));
+    assert_eq!(out[1].title, "second · Comment", "one is individual");
+    assert_eq!(out[1].kind, Lenient::Known(NotificationType::Single));
     assert!(h.reconnect().is_empty(), "sent once");
 }
 
@@ -456,8 +470,8 @@ fn done_rows_stay_out_of_the_reconnect_summary_outside_snooze() {
     let out = h.reconnect();
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].rows, ["E_2"]);
-    assert_eq!(out[0].title, "org · 1 new event");
-    assert_eq!(out[0].body.as_deref(), Some("In 1 PR"));
+    assert_eq!(out[0].title, "org · Comment", "one left: individual");
+    assert_eq!(out[0].body.as_deref(), Some("text E_2"));
     assert_eq!(h.row("E_1").notify, NotifyState::None);
 }
 
@@ -499,4 +513,45 @@ fn a_row_done_after_a_missed_release_stays_out_of_the_summary() {
     h.offline();
     h.engine.done("E_1").unwrap();
     assert!(h.reconnect().is_empty());
+}
+
+/// DESIGN.md, "macOS notifications" and "Notification decisions": the
+/// grouping on reconnect is the grouping of any delivery.
+#[test]
+fn a_single_undelivered_row_comes_back_as_an_individual_notification() {
+    let mut h = H::new();
+    let e = h.ev("E_1", "PR_1", EventKind::Mentioned);
+    h.push(vec![other("PR_1")], vec![e], vec![]);
+    h.offline();
+    let out = h.reconnect();
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].kind, Lenient::Known(NotificationType::Single));
+    assert_eq!(out[0].title, "org · Mentioned");
+    assert_eq!(out[0].url.as_deref(), Some("https://github.example/E_1"));
+}
+
+#[test]
+fn reactions_of_one_comment_count_once_on_reconnect() {
+    let mut h = H::new();
+    h.prs(vec![pr("PR_1")]);
+    let a = h.reaction("C_1", "PR_1", &[("THUMBS_UP", 3), ("HOORAY", 1)]);
+    h.push(vec![], vec![], vec![a]);
+    h.offline();
+    let out = h.reconnect();
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].kind, Lenient::Known(NotificationType::Single));
+    assert_eq!(out[0].rows.len(), 2);
+    assert_eq!(out[0].body.as_deref(), Some("👍3 🎉1 “comment C_1”"));
+
+    let mut h = H::new();
+    h.prs(vec![pr("PR_1")]);
+    let a = h.reaction("C_1", "PR_1", &[("THUMBS_UP", 1)]);
+    let b = h.reaction("C_2", "PR_1", &[("HEART", 1)]);
+    h.push(vec![], vec![], vec![a, b]);
+    h.offline();
+    let out = h.reconnect();
+    assert_eq!(
+        out[0].title, "org · 2 new events",
+        "two comments: two notifications"
+    );
 }

@@ -55,7 +55,8 @@ fn owner_scope_fields() {
     let scope = h.scope(ORG);
     assert_eq!(scope.name, "org");
     assert_eq!(scope.kind, None);
-    assert!(scope.warnings.is_empty());
+    let kinds: Vec<String> = scope.warnings.iter().map(|w| w.kind.as_text()).collect();
+    assert_eq!(kinds, ["no_token", "no_token"], "no token registered yet");
     assert_eq!(scope.updated_at, None);
 }
 
@@ -414,8 +415,9 @@ fn a_pr_owner_finds_its_scope_in_any_case() {
     );
     h.snooze("ORG/app#1");
     h.unsnooze("oRg/app#1");
-    let wrong_repo = h.engine.status("org/APP#1", &h.now);
-    assert!(not_found(wrong_repo), "only the owner ignores case");
+    // DESIGN.md, "CLI": the repository name ignores case too.
+    assert_eq!(h.engine.status("org/APP#1", &h.now).unwrap().id, "PR_1");
+    assert!(not_found(h.engine.status("org/other#1", &h.now)));
 }
 
 #[test]
@@ -506,6 +508,7 @@ fn a_pr_both_missing_and_fetched_in_one_ingest_stays_readable() {
         prs: vec![pr("PR_1")],
         events: vec![],
         reactions: vec![],
+        succeeded_scopes: None,
     };
     h.engine.ingest(ingest, &h.now).unwrap();
     assert!(h.visible("PR_1"));
@@ -544,7 +547,7 @@ mod moved_to_public {
         let out = h.reconnect();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].scope, "public");
-        assert_eq!(out[0].title, "Public · 1 new event");
+        assert_eq!(out[0].title, "Public · Comment");
     }
 
     #[test]

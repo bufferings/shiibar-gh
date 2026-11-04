@@ -159,6 +159,41 @@ pub enum ScopeKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum WarningKind {
+    NoToken,
+    TokenInvalid,
+    TokenExpiring,
+    FetchFailed,
+    CostNearCap,
+    RateLimited,
+    SsoRequired,
+    PermissionMissing,
+    TokenOwnerMismatch,
+    EventsFetchFailed,
+}
+
+/// Which token a warning is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenRole {
+    Scope,
+    Notifications,
+}
+
+/// The outcome of one item of `token_test`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TestOutcome {
+    /// Answered without a permission error, with or without data.
+    Ok,
+    /// A permission error. `missing` names the permission.
+    Failed,
+    /// Nothing to check against, such as an owner without repositories.
+    Unverifiable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum NotificationType {
     Single,
     Summary,
@@ -180,9 +215,10 @@ pub struct Links {
     pub base: String,
 }
 
-/// What the fetcher hands to the daemon core. The fetcher owns classification:
-/// `kind` is final, and this type carries nothing that would let the core
-/// decide participation, bots or authorship again.
+/// What the fetcher hands to the daemon core, and what `dev_ingest` takes.
+/// The fetcher owns classification: `kind` is final, and this type carries
+/// nothing that would let the core decide participation, bots or authorship
+/// again.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Ingest {
     pub viewer: String,
@@ -190,6 +226,12 @@ pub struct Ingest {
     pub prs: Vec<IngestPr>,
     pub events: Vec<IngestEvent>,
     pub reactions: Vec<IngestReaction>,
+    /// Scopes whose search and status fetch finished without errors. Their
+    /// `updated_at` moves on even without PRs or events. The fetcher always
+    /// sends it; without it the M1 rule applies (only scopes with PRs or
+    /// events move on). docs/tasks/M2.md, "Fetcher and core".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub succeeded_scopes: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -213,7 +255,12 @@ pub struct IngestPr {
     pub changes_requested_by: Option<String>,
     pub updated_at: i64,
     pub is_private: bool,
+    /// A review is requested from the viewer directly.
     pub requested_me: bool,
+    /// A review is requested from one of the viewer's teams. Include requests
+    /// to my teams is applied by the core.
+    #[serde(default)]
+    pub requested_team: bool,
     pub links: Links,
 }
 
@@ -227,6 +274,9 @@ pub struct IngestEvent {
     pub actor: Option<String>,
     pub text: Option<String>,
     pub comment_id: Option<String>,
+    /// A `review_requested` event addressed to one of the viewer's teams.
+    #[serde(default)]
+    pub team: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -318,6 +368,18 @@ pub enum Request {
     Reset,
     Info,
     Shutdown,
+    /// Never logged: it carries a token.
+    TokenSet {
+        target: String,
+        token: String,
+    },
+    /// Never logged: it may carry a token.
+    TokenTest {
+        target: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token: Option<String>,
+    },
+    SettingsStatus,
     #[cfg(feature = "dev-ingest")]
     DevIngest {
         ingest: Ingest,
@@ -353,10 +415,61 @@ pub struct Scope {
     pub notify: bool,
     pub badge: u32,
     pub dot: bool,
-    pub warnings: Vec<String>,
+    pub warnings: Vec<Warning>,
     pub updated_at: Option<i64>,
 }
 
+/// DESIGN.md, "Wire format": an element of a scope's `warnings` and of the
+/// `refresh` response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Warning {
+    pub kind: Lenient<WarningKind>,
+    /// `null` for a warning about no token, such as a rate limit.
+    pub token: Option<Lenient<TokenRole>>,
+    pub message: String,
+    pub until: Option<i64>,
+}
+
+/// One item of a `token_test` result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TestResult {
+    /// The item as the Settings board names it, such as `Checks`.
+    pub item: String,
+    pub outcome: Lenient<TestOutcome>,
+    /// The missing permission when `outcome` is `failed`.
+    pub missing: Option<String>,
+    /// Why, in a few words, when the outcome is not `ok`.
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LastTest {
+    pub at: i64,
+    pub results: Vec<TestResult>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApiUsage {
+    pub rest_remaining: Option<i64>,
+    pub rest_limit: Option<i64>,
+    pub graphql_remaining: Option<i64>,
+    pub graphql_limit: Option<i64>,
+    pub cost_per_poll: Option<i64>,
+    pub notifications_poll_interval: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenStatus {
+    /// `notifications`, `public` or an owner login.
+    pub target: String,
+    pub registered: bool,
+    pub owner: Option<String>,
+    pub expires_at: Option<i64>,
+    /// The scopes of the classic PAT; `null` for a fine-grained PAT.
+    pub scopes: Option<Vec<String>>,
+    pub last_test: Option<LastTest>,
+    pub sso_urls: Vec<String>,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Card {
     pub id: String,
@@ -489,6 +602,29 @@ pub struct InfoResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefreshResponse {
+    pub ok: bool,
+    pub warnings: Vec<Warning>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenTestResponse {
+    pub ok: bool,
+    pub results: Vec<TestResult>,
+    /// The login the tested token belongs to, when it could be read.
+    pub owner: Option<String>,
+    /// The owner differs from the owner of the notifications token.
+    pub owner_mismatch: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SettingsStatusResponse {
+    pub ok: bool,
+    pub api_usage: ApiUsage,
+    pub tokens: Vec<TokenStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ErrorResponse {
     pub ok: bool,
     pub code: Lenient<ErrorCode>,
@@ -560,5 +696,23 @@ mod tests {
         assert_eq!(ingest.prs[0].checks, Checks::Failed);
         assert_eq!(ingest.events[0].kind, EventKind::Comment);
         assert_eq!(ingest.reactions[0].counts["THUMBS_UP"], 2);
+        assert_eq!(ingest.succeeded_scopes, None);
+        assert!(!ingest.prs[0].requested_team);
+        assert!(!ingest.events[0].team);
+    }
+
+    #[test]
+    fn a_warning_has_the_shape_of_the_wire_format() {
+        let warning = Warning {
+            kind: Lenient::Known(WarningKind::RateLimited),
+            token: None,
+            message: "GraphQL cost cap reached".into(),
+            until: Some(1_800_000_000),
+        };
+        assert_eq!(
+            serde_json::to_value(&warning).unwrap(),
+            serde_json::json!({"kind":"rate_limited","token":null,
+                "message":"GraphQL cost cap reached","until":1800000000})
+        );
     }
 }

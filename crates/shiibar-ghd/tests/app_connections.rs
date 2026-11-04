@@ -45,7 +45,12 @@ fn the_open_state_lasts_until_the_last_app_connection_drops() {
     let dir = tempfile::tempdir().unwrap();
     let mut clock = Clock::system();
     clock.fix(Now::fixed(T0, "Asia/Tokyo").unwrap());
-    let mut daemon = Daemon::start(StateDir::new(dir.path()), clock).unwrap();
+    let mut daemon = Daemon::start(
+        StateDir::new(dir.path()),
+        clock,
+        std::sync::Arc::new(shiibar_ghd::keychain::NoKeychain),
+    )
+    .unwrap();
     let first = daemon.subscribe(ClientKind::App);
     let second = daemon.subscribe(ClientKind::App);
     request(
@@ -67,7 +72,12 @@ fn a_cli_connection_does_not_end_the_open_state() {
     let dir = tempfile::tempdir().unwrap();
     let mut clock = Clock::system();
     clock.fix(Now::fixed(T0, "Asia/Tokyo").unwrap());
-    let mut daemon = Daemon::start(StateDir::new(dir.path()), clock).unwrap();
+    let mut daemon = Daemon::start(
+        StateDir::new(dir.path()),
+        clock,
+        std::sync::Arc::new(shiibar_ghd::keychain::NoKeychain),
+    )
+    .unwrap();
     let cli = daemon.subscribe(ClientKind::Cli);
     let _app = daemon.subscribe(ClientKind::App);
     request(

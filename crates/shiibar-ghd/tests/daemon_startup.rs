@@ -1,10 +1,14 @@
 //! Startup, files and the socket, none of which needs injected events.
+//!
+//! The default build reads the real Keychain when it restores scopes for
+//! `reset` and for the unreadable state, so those tests run only in the
+//! `dev-ingest` build, which has no Keychain unless a test gives it a file
+//! (docs/tasks/M2.md, "How to test").
 
 mod common;
 
 use common::*;
 use serde_json::json;
-use std::io::Write;
 use std::process::{Command, Stdio};
 
 fn start(dir: &std::path::Path) -> TestDaemon {
@@ -200,10 +204,14 @@ fn the_first_snapshot_has_public_only() {
     let snapshot = daemon.subscribe("cli").snapshot();
     assert_eq!(snapshot["db_unreadable"], false);
     assert_eq!(snapshot["scopes"].as_array().unwrap().len(), 1);
+    // No token yet: both the notifications token and Public's are missing.
     assert_eq!(
         snapshot["scopes"][0],
         json!({"id":"public","name":"Public","kind":"public","enabled":true,"notify":true,
-               "badge":0,"dot":false,"warnings":[],"updated_at":null})
+               "badge":0,"dot":false,"warnings":[
+                   {"kind":"no_token","token":"notifications","message":"Add a token in Settings","until":null},
+                   {"kind":"no_token","token":"scope","message":"Add a token in Settings","until":null}
+               ],"updated_at":null})
     );
     daemon.stop();
 }
@@ -249,13 +257,12 @@ fn an_older_database_is_migrated() {
 }
 
 #[test]
+#[cfg(feature = "dev-ingest")]
 fn a_damaged_file_starts_the_waiting_state_without_touching_it() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("state.db");
     let damaged = vec![0xAB; 8192];
-    let mut file = std::fs::File::create(&db).unwrap();
-    file.write_all(&damaged).unwrap();
-    drop(file);
+    std::fs::write(&db, &damaged).unwrap();
     std::fs::write(dir.path().join("state.db-wal"), b"old wal").unwrap();
     std::fs::write(dir.path().join("state.db-shm"), b"old shm").unwrap();
 
@@ -409,6 +416,7 @@ mod side_files {
     }
 
     /// Everything after the first page, so the header still says WAL mode.
+    #[cfg_attr(not(feature = "dev-ingest"), allow(dead_code))]
     fn damage_pages(dir: &Path) -> Vec<u8> {
         let path = dir.join("state.db");
         let mut bytes = std::fs::read(&path).unwrap();
@@ -483,6 +491,7 @@ mod side_files {
     }
 
     #[test]
+    #[cfg(feature = "dev-ingest")]
     fn a_damaged_database_waits_with_its_side_files_gone() {
         let dir = tempfile::tempdir().unwrap();
         saved_database(dir.path());
@@ -499,6 +508,7 @@ mod side_files {
     }
 
     #[test]
+    #[cfg(feature = "dev-ingest")]
     fn a_damaged_database_waits_with_its_side_files_present() {
         let dir = tempfile::tempdir().unwrap();
         saved_database(dir.path());
@@ -569,6 +579,7 @@ mod side_files {
     }
 
     #[test]
+    #[cfg(feature = "dev-ingest")]
     fn a_damaged_database_with_a_full_wal_waits() {
         let source = tempfile::tempdir().unwrap();
         let target = tempfile::tempdir().unwrap();
@@ -583,6 +594,7 @@ mod side_files {
     }
 
     #[test]
+    #[cfg(feature = "dev-ingest")]
     fn a_state_directory_with_uri_characters_works() {
         let dir = tempfile::tempdir().unwrap();
         let state = dir.path().join("a b?c#d%e");
@@ -619,6 +631,7 @@ mod side_files {
     }
 
     #[test]
+    #[cfg(feature = "dev-ingest")]
     fn a_running_daemon_notices_damage_when_side_files_disappear() {
         let dir = tempfile::tempdir().unwrap();
         let daemon = start(dir.path());
@@ -631,6 +644,7 @@ mod side_files {
     }
 
     #[test]
+    #[cfg(feature = "dev-ingest")]
     fn a_running_daemon_notices_damage_with_side_files_present() {
         let dir = tempfile::tempdir().unwrap();
         let daemon = start(dir.path());
