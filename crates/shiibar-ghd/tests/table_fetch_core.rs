@@ -925,3 +925,155 @@ fn a_pr_never_collected_also_sets_its_baseline_again_after_leaving() {
     h.tick();
     assert!(!plan(&h, true).own["C_1"].baseline_done);
 }
+
+// ------------------------------------------------- owner rules (2026-11)
+
+#[test]
+fn refresh_skips_only_the_notifications_check_within_the_poll_interval() {
+    let mut h = H::new();
+    let start = h.at();
+    apply(
+        &mut h,
+        Outcome {
+            due: Due {
+                status: true,
+                reactions: true,
+                notifications: true,
+            },
+            poll_interval: Some(60),
+            notifications_check: Some(None),
+            status_ran: vec![ORG.into(), "public".into()],
+            ..Outcome::default()
+        },
+    );
+    for (offset, notifications) in [(0, false), (30, false), (59, false), (60, true), (90, true)] {
+        let due = h.engine.due(start + offset, true);
+        assert!(
+            due.status && due.reactions,
+            "+{offset}: the PRs are still fetched"
+        );
+        assert_eq!(due.notifications, notifications, "+{offset}");
+    }
+}
+
+fn failed_check(h: &mut H, check: Option<Option<String>>) {
+    apply(
+        h,
+        Outcome {
+            due: Due {
+                notifications: true,
+                ..Due::default()
+            },
+            poll_interval: Some(60),
+            notifications_check: check,
+            ..Outcome::default()
+        },
+    );
+}
+
+#[test]
+fn a_failed_notifications_check_warns_every_scope_until_one_succeeds() {
+    let mut h = H::new();
+    register(&mut h, NOTIFICATIONS);
+    register(&mut h, ORG);
+    register(&mut h, "public");
+    failed_check(
+        &mut h,
+        Some(Some("Couldn't check notifications: network".into())),
+    );
+    for scope in [ORG, "public"] {
+        let w = h.scope(scope).warnings;
+        assert_eq!(w.len(), 1, "{scope}");
+        assert_eq!(w[0].kind, Lenient::Known(WarningKind::FetchFailed));
+        assert_eq!(w[0].token, Some(Lenient::Known(TokenRole::Notifications)));
+        assert_eq!(w[0].until, Some(h.at() + 60), "the next check");
+    }
+    // A run that did not check keeps it; fetching is not stopped.
+    failed_check(&mut h, None);
+    assert_eq!(h.scope(ORG).warnings.len(), 1);
+    assert!(h.engine.stopped_until(h.at()).is_none());
+    assert!(h.engine.due(h.at() + 60, false).status);
+    failed_check(&mut h, Some(None));
+    assert!(h.scope(ORG).warnings.is_empty(), "a later check succeeded");
+}
+
+#[test]
+fn a_401_or_a_new_notifications_token_replaces_the_failed_check_warning() {
+    let mut h = H::new();
+    register(&mut h, NOTIFICATIONS);
+    register(&mut h, ORG);
+    failed_check(&mut h, Some(Some("x".into())));
+    apply(
+        &mut h,
+        Outcome {
+            tokens: BTreeMap::from([(
+                NOTIFICATIONS.to_string(),
+                TokenObs {
+                    invalid: Some(true),
+                    ..TokenObs::default()
+                },
+            )]),
+            ..Outcome::default()
+        },
+    );
+    assert_eq!(
+        kinds(&h, ORG),
+        [("token_invalid".to_string(), "notifications".to_string())]
+    );
+    failed_check(&mut h, Some(Some("x".into())));
+    h.engine.token_saved(NOTIFICATIONS);
+    assert!(kinds(&h, ORG).is_empty());
+}
+
+#[test]
+fn the_failed_check_warning_hides_while_the_notifications_token_is_expired() {
+    let mut h = H::new();
+    register(&mut h, NOTIFICATIONS);
+    register(&mut h, ORG);
+    let expiry = h.at() + DAY;
+    apply(
+        &mut h,
+        Outcome {
+            tokens: BTreeMap::from([(
+                NOTIFICATIONS.to_string(),
+                TokenObs {
+                    expires_at: Some(expiry),
+                    invalid: Some(false),
+                    ..TokenObs::default()
+                },
+            )]),
+            ..Outcome::default()
+        },
+    );
+    failed_check(
+        &mut h,
+        Some(Some("Couldn't check notifications: 502".into())),
+    );
+    assert!(kinds(&h, ORG).contains(&("fetch_failed".to_string(), "notifications".to_string())));
+    // The PAT passes its expiry; no check runs any more.
+    h.set_time(expiry);
+    h.tick();
+    assert_eq!(
+        kinds(&h, ORG),
+        [("token_invalid".to_string(), "notifications".to_string())],
+        "only why nothing is checked"
+    );
+}
+
+#[test]
+fn the_last_notifications_check_survives_a_restart() {
+    let mut h = H::new();
+    let start = h.at();
+    failed_check(&mut h, Some(None));
+    let restored = shiibar_ghd::engine::Engine::restore(h.engine.data().clone());
+    assert_eq!(restored.data().fetch.notif_checked_at, Some(start));
+    assert!(
+        !restored.due(start + 59, true).notifications,
+        "within the interval"
+    );
+    assert!(restored.due(start + 60, true).notifications, "after it");
+    assert!(
+        restored.due(start, false).status,
+        "the PR fetches are due at once"
+    );
+}

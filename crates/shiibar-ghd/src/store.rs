@@ -855,6 +855,10 @@ fn save_fetch(tx: &Transaction<'_>, fetch: &FetchData) -> rusqlite::Result<()> {
             "team_requests_on_at",
             serde_json::json!(fetch.team_requests_on_at),
         ),
+        (
+            "notif_checked_at",
+            serde_json::json!(fetch.notif_checked_at),
+        ),
     ];
     for (key, value) in meta {
         tx.execute(
@@ -988,6 +992,7 @@ fn load_fetch(conn: &Connection) -> anyhow::Result<FetchData> {
                     serde_json::from_value(value).context("stored pending signals")?;
             }
             "team_requests_on_at" => fetch.team_requests_on_at = value.as_i64().unwrap_or(0),
+            "notif_checked_at" => fetch.notif_checked_at = value.as_i64(),
             _ => {}
         }
     }

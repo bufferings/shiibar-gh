@@ -1450,11 +1450,15 @@ fn notifications_are_read_page_by_page_through_the_link_header() {
     daemon.stop();
 }
 
+/// The order is pinned at both ends: the fake GitHub holds the first fetch's
+/// `Viewer` answer until the test releases it, and the test releases it
+/// only after the daemon logged that the second `refresh` is waiting.
 #[test]
 fn a_refresh_during_a_fetch_waits_for_it_and_both_answer_after_one_fetch() {
     use std::sync::{Arc, Condvar, Mutex};
     let github = world();
     seed(&github);
+    // (the fetch reached the gate, the test released it)
     let gate = Arc::new((Mutex::new((false, false)), Condvar::new()));
     let held = gate.clone();
     github.intercept(move |req| {
@@ -1470,9 +1474,17 @@ fn a_refresh_during_a_fetch_waits_for_it_and_both_answer_after_one_fetch() {
         None
     });
     let dir = tempfile::tempdir().unwrap();
-    let daemon = start(dir.path(), &github);
+    let log = dir.path().join("daemon.log");
+    let mut command = command(dir.path());
+    command
+        .env("SHIIBAR_GH_LOG", "debug")
+        .env("SHIIBAR_GH_DEV_NOW", T0.to_string())
+        .env("SHIIBAR_GH_DEV_TZ", TZ)
+        .env("SHIIBAR_GH_DEV_KEYCHAIN", keychain(dir.path()))
+        .env("SHIIBAR_GH_DEV_GITHUB_URL", &github.url)
+        .stderr(Stdio::from(std::fs::File::create(&log).unwrap()));
+    let daemon = TestDaemon::spawn(dir.path(), command);
     set_tokens(&daemon);
-    let socket = daemon.socket();
     let send = |socket: std::path::PathBuf| {
         std::thread::spawn(move || {
             use std::io::{BufRead, BufReader, Write};
@@ -1484,19 +1496,26 @@ fn a_refresh_during_a_fetch_waits_for_it_and_both_answer_after_one_fetch() {
             serde_json::from_str::<Value>(&line).unwrap()
         })
     };
-    let first = send(socket.clone());
+    let first = send(daemon.socket());
     {
         let (lock, cv) = &*gate;
         let mut state = lock.lock().unwrap();
         while !state.0 {
-            state = cv.wait(state).unwrap();
+            state = cv.wait_timeout(state, WAIT).unwrap().0;
         }
     }
-    let second = send(socket);
-    // The second request is read while the first fetch is held at the gate;
-    // round trips on other connections give the daemon time to take it.
-    for _ in 0..50 {
-        daemon.ok(json!({"cmd":"info"}));
+    let second = send(daemon.socket());
+    let waiting = "refresh waits for the running fetch";
+    let deadline = std::time::Instant::now() + WAIT;
+    while !std::fs::read_to_string(&log)
+        .unwrap_or_default()
+        .contains(waiting)
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the second refresh never waited"
+        );
+        std::thread::yield_now();
     }
     {
         let (lock, cv) = &*gate;
@@ -1694,5 +1713,122 @@ fn notifications_of_a_disabled_scope_are_ignored() {
             .iter()
             .any(|r| r.op.as_deref() == Some("Resolve"))
     );
+    daemon.stop();
+}
+
+fn polls(github: &FakeGitHub) -> usize {
+    github
+        .requests()
+        .iter()
+        .filter(|r| r.path.starts_with("/notifications"))
+        .count()
+}
+
+/// Owner rule: `refresh` checks notifications only once X-Poll-Interval has
+/// passed since the last check; the PR fetches run either way.
+#[test]
+fn refresh_skips_the_notifications_check_within_the_poll_interval_only() {
+    let github = world();
+    github.with(|w| w.poll_interval = 60);
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    set_tokens(&daemon);
+    daemon.ok(json!({"cmd":"refresh"}));
+    assert_eq!(polls(&github), 1, "no check before: refresh checks");
+
+    daemon.clock(T0 + 30);
+    github.clear_requests();
+    daemon.ok(json!({"cmd":"refresh"}));
+    assert_eq!(polls(&github), 0, "30 s after the check");
+    let ops = github.ops();
+    assert!(
+        ops.iter().any(|o| o == "Scope"),
+        "the PR search still runs: {ops:?}"
+    );
+
+    // The scheduled check at the interval, then a refresh right after it.
+    daemon.clock(T0 + 60);
+    assert_eq!(polls(&github), 1, "the schedule checks at the interval");
+    github.clear_requests();
+    daemon.ok(json!({"cmd":"refresh"}));
+    assert_eq!(polls(&github), 0, "just checked");
+    assert!(github.ops().iter().any(|o| o == "Scope"));
+    daemon.stop();
+}
+
+/// Owner rule: a failed notifications check warns every scope and fetching
+/// goes on; a later successful check clears it.
+#[test]
+fn a_failing_notifications_check_warns_every_scope_until_a_later_one_succeeds() {
+    let github = world();
+    github.with(|w| w.prs.push(pr_node("PR_1", "org", 1, "me", json!({}))));
+    github.intercept(|req| {
+        req.path
+            .starts_with("/notifications")
+            .then(|| Resp::json(502, json!({})))
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    set_tokens(&daemon);
+    daemon.clock(T0 + 100);
+    for scope in ["org", "public"] {
+        let failed = warning(&daemon, scope, "fetch_failed");
+        assert_eq!(failed["token"], "notifications", "{scope}");
+        assert_eq!(failed["until"], T0 + 160, "the next check");
+        assert_eq!(
+            daemon.scope(scope)["updated_at"],
+            T0 + 100,
+            "fetching went on"
+        );
+    }
+    assert_eq!(daemon.cards().len(), 1);
+    github.clear_overrides();
+    daemon.clock(T0 + 160);
+    for scope in ["org", "public"] {
+        assert!(
+            kinds(&daemon, scope).is_empty(),
+            "{scope}: {:?}",
+            daemon.scope(scope)
+        );
+    }
+    daemon.stop();
+}
+
+fn start_at(dir: &Path, github: &FakeGitHub, now: i64) -> TestDaemon {
+    let mut command = command(dir);
+    command
+        .env("SHIIBAR_GH_DEV_NOW", now.to_string())
+        .env("SHIIBAR_GH_DEV_TZ", TZ)
+        .env("SHIIBAR_GH_DEV_KEYCHAIN", keychain(dir))
+        .env("SHIIBAR_GH_DEV_GITHUB_URL", &github.url);
+    TestDaemon::spawn(dir, command)
+}
+
+/// X-Poll-Interval counts from the last check, across a daemon restart.
+#[test]
+fn the_poll_interval_holds_across_a_restart() {
+    let github = world();
+    github.with(|w| w.poll_interval = 60);
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    set_tokens(&daemon);
+    daemon.ok(json!({"cmd":"refresh"}));
+    assert_eq!(polls(&github), 1);
+    daemon.stop();
+
+    github.clear_requests();
+    let daemon = start_at(dir.path(), &github, T0 + 30);
+    daemon.ok(json!({"cmd":"refresh"}));
+    assert_eq!(polls(&github), 0, "restarted within the interval");
+    assert!(
+        github.ops().iter().any(|o| o == "Scope"),
+        "the PR search still runs"
+    );
+    daemon.stop();
+
+    github.clear_requests();
+    let daemon = start_at(dir.path(), &github, T0 + 60);
+    daemon.ok(json!({"cmd":"refresh"}));
+    assert_eq!(polls(&github), 1, "restarted after the interval");
     daemon.stop();
 }

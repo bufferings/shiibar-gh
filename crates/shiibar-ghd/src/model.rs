@@ -435,6 +435,10 @@ pub struct FetchData {
     pub stop_reason: Option<String>,
     /// The last time Include requests to my teams was turned on.
     pub team_requests_on_at: i64,
+    /// The last run where the notifications check was due, even if it
+    /// stopped before `/notifications`. With `poll_interval` it times the
+    /// next check across restarts.
+    pub notif_checked_at: Option<i64>,
 }
 
 /// Everything that outlives the process.

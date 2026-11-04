@@ -262,6 +262,27 @@ impl Engine {
                 .or(self.data.fetch.poll_interval)
                 .unwrap_or(DEFAULT_POLL_INTERVAL);
             self.timers.notifications = now.at + interval.max(1);
+            self.data.fetch.notif_checked_at = Some(now.at);
+        }
+        match &outcome.notifications_check {
+            Some(None) => self.notifications_failed = None,
+            Some(Some(message)) => {
+                self.notifications_failed = Some(warning(
+                    WarningKind::FetchFailed,
+                    Some(TokenRole::Notifications),
+                    message,
+                    Some(self.timers.notifications),
+                ));
+            }
+            None => {}
+        }
+        // A 401 is the stop-everything rule, not a failed check.
+        if outcome
+            .tokens
+            .get(NOTIFICATIONS)
+            .is_some_and(|t| t.invalid == Some(true))
+        {
+            self.notifications_failed = None;
         }
 
         if let Some(ingest) = outcome.ingest
@@ -421,6 +442,9 @@ impl Engine {
     /// A token was saved to the Keychain: record the registration and
     /// forget everything learned about the token it replaced.
     pub fn token_saved(&mut self, key: &str) {
+        if key == NOTIFICATIONS {
+            self.notifications_failed = None;
+        }
         self.data.fetch.tokens.insert(
             key.to_string(),
             TokenRec {
@@ -628,6 +652,14 @@ impl Engine {
                 &format!("GraphQL cost {cost} of {cap} in the last hour"),
                 None,
             ));
+        }
+        // Not while the notifications token is expired or rejected: then
+        // `token_invalid` says why nothing is checked.
+        let usable = self
+            .token_record(NOTIFICATIONS)
+            .is_some_and(|t| !t.invalid && t.expires_at.is_none_or(|at| at > now));
+        if let Some(failed) = self.notifications_failed.as_ref().filter(|_| usable) {
+            out.push(failed.clone());
         }
         if let Some(fetch) = self.fetch_warnings.get(&scope.id) {
             out.extend(fetch.iter().cloned());

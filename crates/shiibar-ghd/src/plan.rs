@@ -168,6 +168,10 @@ pub struct Outcome {
     pub due: Due,
     /// Scopes whose status fetch was due in this run; their timers restart.
     pub status_ran: Vec<String>,
+    /// The notifications check of this run: `Some(None)` succeeded,
+    /// `Some(Some(message))` failed for a reason other than 401 or a rate
+    /// limit, `None` did not run or ended otherwise.
+    pub notifications_check: Option<Option<String>>,
     pub tokens: BTreeMap<String, TokenObs>,
     pub scopes: BTreeMap<String, ScopeObs>,
     pub pr_ids: Vec<(String, String)>,

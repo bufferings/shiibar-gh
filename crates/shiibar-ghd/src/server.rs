@@ -148,7 +148,10 @@ impl Fetcher {
         if !lock(&self.daemon).stopped() {
             match self.running.try_lock() {
                 Ok(_running) => self.cycle(true, scope.clone()).await,
-                Err(_) => drop(self.running.lock().await),
+                Err(_) => {
+                    logging::debug(format_args!("refresh waits for the running fetch"));
+                    drop(self.running.lock().await);
+                }
             }
         }
         lock(&self.daemon).refresh_answer(scope.as_deref())

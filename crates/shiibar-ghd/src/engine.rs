@@ -60,6 +60,9 @@ pub struct Engine {
     /// Fetch warnings that hold until the scope's next fetch: `fetch_failed`
     /// and `permission_missing`. Never saved.
     fetch_warnings: BTreeMap<String, Vec<proto::Warning>>,
+    /// `fetch_failed` of the last notifications check, shown on every scope
+    /// until a check succeeds. Never saved.
+    notifications_failed: Option<proto::Warning>,
     /// When each kind of fetch is due next. Never saved: a start fetches.
     timers: Timers,
 }
@@ -139,6 +142,18 @@ impl Engine {
     }
 
     pub fn restore(data: Data) -> Self {
+        // The next notifications check survives a restart: X-Poll-Interval
+        // counts from the last check (owner rule, docs/tasks/M2.md).
+        let timers = Timers {
+            notifications: data.fetch.notif_checked_at.map_or(0, |at| {
+                at + data
+                    .fetch
+                    .poll_interval
+                    .unwrap_or(fetch_api::DEFAULT_POLL_INTERVAL)
+                    .max(1)
+            }),
+            ..Timers::default()
+        };
         let mut rows_by_pr: HashMap<String, Vec<String>> = HashMap::new();
         for row in data.rows.values() {
             rows_by_pr
@@ -157,7 +172,8 @@ impl Engine {
             notification_seq: 0,
             clock_at: 0,
             fetch_warnings: BTreeMap::new(),
-            timers: Timers::default(),
+            notifications_failed: None,
+            timers,
         }
     }
 

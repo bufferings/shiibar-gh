@@ -202,6 +202,7 @@ Snooze は PR 単位。「この PR は翌朝まで確認しない」をアプ�
 - 401 は失敗で、トークンを差し替えるまでそのスコープの取得を止める。
 - 上限による停止は失敗である。
 - 失敗はスコープごとに扱い、ほかのスコープの取得を止めない。例外として、通知用のトークンの 401 と期限切れは、すべてのスコープの取得を止める（「トークン」）。
+- 通知の確認が 401、期限切れ、レート制限以外の理由で失敗すると、すべてのスコープに取得の失敗の警告を付ける。取得は止めず、次の確認が成功したら警告を消す。通知用のトークンはすべてのスコープに共通で、警告がないと、メンションなどが反映されない理由が利用者に分からないためである。
 - `refresh` は再試行の時刻を待たずにすぐに取得する。401 で止めたスコープも 1 回だけ取得し、401 が続けば止めたままにする。
 
 **状態の保存**。行の「表示済み」、Done、Snooze、カードの追加時刻、監視開始時刻、スコープごとの最後に取得に成功した時刻、PR の前回の値、Reaction の基準値、設定、スコープはデーモンが SQLite に保存する（SQLite はデーモンに組み込み、macOS の libsqlite3 は利用しない）。チップの選択とウインドウの位置は画面の状態なので、アプリが UserDefaults に保存する。GitHub 側には何も書き込まない。トークンは DB に保存せず Keychain に保存する。
@@ -256,7 +257,7 @@ fine-grained PAT には Checks の権限がなく、statusCheckRollup の個々�
 | カードが 0 件 | 「Nothing needs you」。絞り込みで 0 件なら「Nothing matches」 |
 | Activity が 0 件 | 「No activity」 |
 
-**通知 API の取り方**。If-Modified-Since と X-Poll-Interval に従う。50 件ずつ、since は前回の最新。既読の同期はしない（GitHub 側の未読は触らない）。
+**通知 API の取り方**。If-Modified-Since と X-Poll-Interval に従う。`refresh` でも、前回の通知の確認から X-Poll-Interval の秒数がたっていなければ、通知の確認だけを省き、ほかの取得はする。GitHub のドキュメントが X-Poll-Interval に従うよう求めているためである。50 件ずつ、since は前回の最新。既読の同期はしない（GitHub 側の未読は触らない）。
 
 **CLI（AI 連携）**。`shiibar-gh` コマンドで、ポップオーバーと設定でできる操作をすべて持つ。アプリのローカル状態を読み書きするだけで、GitHub には書き込まない。AI エージェントは Bash から呼ぶ（--help と --json で足りる。CLI の存在と主な使い方は CLAUDE.md に数行記述する）。MCP は作成しない。
 
@@ -317,7 +318,7 @@ DB を読めない状態に移行したとき、およびその状態から `res
 
 スコープを削除したときも、デーモンは `subscribe` の接続をすべて切断する。クライアントは再接続し、`snapshot` で最新のスコープを受け取る。アプリは再接続時に、開いているスコープの `popover_opened` を再送する。
 
-スコープの `warnings` と `refresh` の応答の `warnings` の要素は `{"kind":"...","token":"scope"|"notifications","message":"...","until":<epoch 秒または null>}` である。`kind` は `no_token`、`token_invalid`、`token_expiring`、`fetch_failed`、`cost_near_cap`、`rate_limited`、`sso_required`、`permission_missing`、`token_owner_mismatch`、`events_fetch_failed`（出来事の取得に続けて失敗している PR。`message` に PR を示す）のいずれかで、`until` は `fetch_failed` では次の再試行の時刻、`rate_limited` では再開の時刻、`token_expiring` ではトークンの期限である。
+スコープの `warnings` と `refresh` の応答の `warnings` の要素は `{"kind":"...","token":"scope"|"notifications"|null,"message":"...","until":<epoch 秒または null>}` である。`token` は、トークンによらない警告（`rate_limited` と `cost_near_cap`）では `null` である。`kind` は `no_token`、`token_invalid`、`token_expiring`、`fetch_failed`、`cost_near_cap`、`rate_limited`、`sso_required`、`permission_missing`、`token_owner_mismatch`、`events_fetch_failed`（出来事の取得に続けて失敗している PR。`message` に PR を示す）のいずれかで、`until` は `fetch_failed` では次の再試行の時刻、`rate_limited` では再開の時刻、`token_expiring` ではトークンの期限である。
 
 `settings_status` の `api_usage` は `{"rest_remaining","rest_limit","graphql_remaining","graphql_limit","cost_per_poll","notifications_poll_interval"}` である。`cost_per_poll` は PR status interval ごとの定期取得 1 回で使用した GraphQL のコストの全スコープの合計（Reaction の取得を含めない）、`notifications_poll_interval` は GitHub が最後に指定した X-Poll-Interval の秒数である。`tokens` は登録の対象（`notifications`、`public`、owner）ごとの `{"target","registered","owner","expires_at","scopes","last_test","sso_urls"}` の配列である。`scopes` は classic PAT の付与済みのスコープ（fine-grained PAT は `null`）、`last_test` は保存済みのトークンの最後のテストの `{"at","results"}`（なければ `null`）、`sso_urls` は SSO の承認の URL の配列（なければ空）である。値がまだない項目は `null` とする。
 

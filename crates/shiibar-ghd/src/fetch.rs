@@ -231,12 +231,21 @@ impl Run<'_> {
         let mut signals: BTreeSet<String> = plan.pending_signals.clone();
         if plan.due.notifications {
             match self.poll_notifications(&classic).await {
-                Ok(found) => signals.extend(found),
+                Ok(found) => {
+                    self.out.notifications_check = Some(None);
+                    signals.extend(found);
+                }
                 Err(CallError::Unauthorized | CallError::RateLimited { .. }) => {
                     self.out.pending_signals = Some(signals);
                     return;
                 }
-                Err(e) => logging::info(format_args!("notifications not fetched: {e}")),
+                // Owner rule: a failed check warns every scope and fetching
+                // goes on; a 401 keeps the rule that stops everything.
+                Err(e) => {
+                    logging::info(format_args!("notifications not fetched: {e}"));
+                    self.out.notifications_check =
+                        Some(Some(format!("Couldn't check notifications: {e}")));
+                }
             }
         }
 
