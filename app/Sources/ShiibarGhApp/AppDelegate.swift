@@ -51,18 +51,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             launch = LaunchAtLogin(service: MainAppLoginItem(), api: api, store: store)
         }
         settings = SettingsModel(app: model, launch: launch)
-        // The popover, windows and Settings take the app's appearance; nil
-        // follows the Mac (NSApplication.appearance). The menu bar icons
-        // follow the menu bar itself, which macOS draws for the wallpaper,
-        // and are redrawn so their marks match.
+        // The popover, windows and Settings get their appearance set
+        // explicitly from the Appearance setting and the Mac. Left to
+        // inherit, the popover would take the appearance of the menu bar
+        // button it hangs from, which macOS picks for the wallpaper. The
+        // menu bar icons follow the menu bar and are redrawn.
         appearance = AppearanceFollower(app: model) { [weak self] value in
-            switch value {
-            case .system: NSApp.appearance = nil
-            case .light: NSApp.appearance = NSAppearance(named: .aqua)
-            case .dark: NSApp.appearance = NSAppearance(named: .darkAqua)
-            }
-            self?.surfaces.redrawIcons()
+            NSApp.appearance = value == .system ? nil : NSAppearance(named: value == .dark ? .darkAqua : .aqua)
+            self?.applySurfaceAppearance()
         }
+        appearanceObservation = NSApp.observe(\.effectiveAppearance) { [weak self] _, _ in
+            // System and the Mac switched between light and dark.
+            DispatchQueue.main.async { self?.applySurfaceAppearance() }
+        }
+        applySurfaceAppearance()
         if let launch {
             model.observeConfig { key, value in
                 Task { await launch.configChanged(key: key, value: value) }
@@ -101,6 +103,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private var didApplyLaunch = false
     private var appearance: AppearanceFollower?
+    private var appearanceObservation: NSKeyValueObservation?
+
+    private func applySurfaceAppearance() {
+        let dark = SurfaceAppearance.isDark(
+            setting: appearance?.current ?? .system,
+            systemDark: NSApp.effectiveAppearance.isDark
+        )
+        let name = SurfaceAppearance.named(dark: dark)
+        surfaces?.applyAppearance(name)
+        settingsWindow?.appearance = NSAppearance(named: name)
+    }
 
     func showSettings(_ tab: SettingsTab) {
         surfaces.closePopover()
@@ -112,6 +125,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 backing: .buffered, defer: false
             )
             window.title = "Settings"
+            window.appearance = NSAppearance(named: SurfaceAppearance.named(dark: SurfaceAppearance.isDark(
+                setting: appearance?.current ?? .system, systemDark: NSApp.effectiveAppearance.isDark
+            )))
             window.isReleasedWhenClosed = false
             window.contentViewController = NSHostingController(rootView: SettingsView(model: settings, app: model))
             window.setContentSize(NSSize(width: 720, height: 640))

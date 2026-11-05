@@ -25,6 +25,9 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
     private var panels: [String: NSPanel] = [:]
     private var keyMonitor: Any?
     private var cancellables: Set<AnyCancellable> = []
+    /// The appearance of the popover and the windows, set explicitly (see
+    /// SurfaceAppearance.named).
+    private var surfaceAppearance = NSAppearance(named: .aqua)
     /// Called on ⌘Q while a surface has the focus.
     var onQuit: (() -> Void)?
 
@@ -47,11 +50,17 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         update([])
     }
 
-    // MARK: - Menu bar
-
-    func redrawIcons() {
+    /// Light or dark for the popover and every window, from the
+    /// Appearance setting and the Mac (AppDelegate).
+    func applyAppearance(_ name: NSAppearance.Name) {
+        surfaceAppearance = NSAppearance(named: name)
+        popover.appearance = surfaceAppearance
+        for panel in panels.values { panel.appearance = surfaceAppearance }
         update(app.scopes)
     }
+
+    // MARK: - Menu bar
+
 
     private func update(_ scopes: [Scope]) {
         let shown = scopes.filter(\.enabled)
@@ -148,6 +157,7 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             popover.contentSize = NSSize(width: 300, height: 180)
         }
         popover.contentViewController = NSHostingController(rootView: content)
+        popover.appearance = surfaceAppearance
         NSApp.activate(ignoringOtherApps: true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
@@ -197,6 +207,7 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         panel.isFloatingPanel = true
         panel.becomesKeyOnlyIfNeeded = false
         panel.isReleasedWhenClosed = false
+        panel.appearance = surfaceAppearance
         panel.contentViewController = NSHostingController(rootView: view)
         panel.setContentSize(NSSize(width: 400, height: 620))
         panel.identifier = NSUserInterfaceItemIdentifier(scope)

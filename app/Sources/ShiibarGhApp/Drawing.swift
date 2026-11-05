@@ -4,25 +4,6 @@ import AppKit
 import ShiibarGhCore
 import SwiftUI
 
-extension RGB {
-    var nsColor: NSColor { NSColor(srgbRed: red, green: green, blue: blue, alpha: 1) }
-}
-
-extension NSAppearance {
-    var isDark: Bool { bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
-}
-
-extension Shade {
-    /// A color that follows the light or dark appearance it is drawn in.
-    var nsColor: NSColor {
-        let light = self.light.nsColor
-        let dark = self.dark.nsColor
-        return NSColor(name: nil) { appearance in appearance.isDark ? dark : light }
-    }
-
-    var color: Color { Color(nsColor: nsColor) }
-}
-
 enum IconPath {
     /// The icon's outline on its 16 by 16 grid, scaled into `rect`. The
     /// grid's y axis points down, as in SVG; `flipY` turns it for a y-up
