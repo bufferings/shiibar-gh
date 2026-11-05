@@ -231,12 +231,12 @@ fine-grained PAT には Checks の権限がなく、statusCheckRollup の個々�
 | 行 | 判定 |
 | --- | --- |
 | Review requested | REVIEW_REQUESTED_EVENT の requestedReviewer が自分、または自分が属するチーム。チーム宛ての扱いは Include requests to my teams に従う（「行の種類と状態」） |
-| Mentioned | MENTIONED_EVENT の actor が自分（actor はメンションされた人）。または、コメント、レビューの本文、レビューコメント、PR の本文の bodyHTML に、自分が属するチームへの team-mention のリンクがある |
+| Mentioned | 自分以外が投稿したコメント、レビューの本文、レビューコメント、PR の本文の bodyHTML に、自分への user-mention のリンク、または自分が属するチームへの team-mention のリンクがある |
 | Comment | 自分の PR の ISSUE_COMMENT、レビューの本文、インラインコメントで、author が Bot でも自分でもない |
 | Reply | 記録したスレッド（自分がコメントしたスレッド、自分がメンションされたスレッド）の自分以外のコメント。メンションされたスレッドは、メンションより後のコメントだけ |
 | Merged／Closed | MERGED_EVENT／CLOSED_EVENT（自分の操作かは問わない） |
 
-同じ出来事が Mentioned と Comment の両方に該当するときは Mentioned の行だけを生成する。Bot の投稿は Mentioned と Reply の行にせず、Bot の Comment の行にする。MENTIONED_EVENT は、createdAt が同じ会話のコメント、レビューコメント、レビューの本文と対応させて、同じ出来事と判定する。同じ createdAt のものが複数あれば、bodyHTML に自分への user-mention のリンクを含むものを選び、それでも複数あればタイムラインの順で最初のものを選ぶ。Mentioned の行の投稿者、本文、飛び先は、対応させたコメントまたはレビューから求める。対応するものがなく、PR の本文に自分への user-mention のリンクがあれば、PR の作者と本文を使用する。それもなければ、投稿者と本文を空にし、PR のページを開く。チームへのメンションは、リンクを含むコメントを Mentioned の行にし、投稿者と本文をそのコメントから求める。本文の文字列から `@org/team` を検索する方法は使用しない。チームへのメンションの検知は、取得の契機に関係なく、取得したすべてのタイムラインで行う。
+同じ出来事が Mentioned と Comment の両方に該当するときは Mentioned の行だけを生成する。Bot の投稿は Mentioned と Reply の行にせず、Bot の Comment の行にする。Mentioned の行の投稿者、本文、飛び先は、リンクを含むコメント、レビュー、または PR の本文から求める。MENTIONED_EVENT は使用しない。GitHub はレビューコメントでのメンションに MENTIONED_EVENT を生成せず、会話のコメントでもコメントより数秒遅れて生成するためである（所有者の確認、2026-11-05）。引用の返信の中のメンションは user-mention のリンクにならないので、Mentioned にしない。本文の文字列から `@login` や `@org/team` を検索する方法は使用しない。メンションの検知は、取得の契機に関係なく、取得したすべてのタイムラインで行う。
 
 **行の本文と飛び先**。Review requested の本文は、自分宛てが `for you`、チーム宛てが `for <チームの slug> team` である。Merged と Closed の行は出来事を起こした人を表示し、本文を持たない。Removed from merge queue の行は、取り除いた人（チェックの失敗では github-merge-queue、手動では操作した人）を表示し、本文は理由と PR をキューに追加した人である（`Checks failed · added by alice`）。理由は `failed_checks` を `Checks failed`、`manual` を `Removed manually` と表示し、それ以外の値はそのまま表示する。キューに追加した人は、同じ PR の Added to merge queue の出来事のうち、まだ対応させていない最も古いものの actor とする。理由が `merged` の取り除きは、Merged の行で足りるので行にしない。GitHub が出来事の URL を返さない Review requested とマージキューの行は、PR のページを開く。
 
@@ -368,7 +368,7 @@ DB を読めない状態に移行したとき、およびその状態から `res
 ## 未決
 
 - [ ] 非公開リポジトリのマージキューの取得に fine-grained PAT のどの権限が必要か（公開リポジトリでは実装方針の表の権限で取得できた。非公開リポジトリのマージキューは GitHub Enterprise Cloud の organization だけで使用でき、確認できていない）
-- [ ] チームへのメンションの判定は、bodyHTML の `team-mention` のリンク（`class="team-mention"` と、チームの databaseId を表す `data-id`）に依存する。この HTML の形は API の仕様ではないので、GitHub が変更すると判定できなくなる
+- [ ] メンションの判定は、bodyHTML の `user-mention` のリンク（`class="user-mention"` と、ユーザーのページへの `href`）と `team-mention` のリンク（`class="team-mention"` と、チームの databaseId を表す `data-id`）に依存する。この HTML の形は API の仕様ではないので、GitHub が変更すると判定できなくなる
 - [ ] 1 つの PR が同時にマージキューに 2 回追加されることがあるか、取り除きが追加の順と異なる順に起きることがあるか（Removed from merge queue の行の、キューに追加した人の対応に影響する。ドキュメントに記載がなく、確認していない）
 - [ ] Notifications API（`/notifications`）の応答に X-GitHub-SSO が付くか（ドキュメントは REST の応答一般について記載している。所有者は SSO の organization に属していないので確認できない）
 - [ ] SSO の承認が必要という警告の動作全体（SSO を有効にした organization で確認できていない）

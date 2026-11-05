@@ -488,10 +488,6 @@ fn team_link(id: i64) -> String {
     )
 }
 
-fn mentioned_event(id: &str, at: i64, actor: &str) -> Value {
-    json!({"__typename":"MentionedEvent","id":id,"createdAt":iso(at),"actor":{"login":actor}})
-}
-
 #[test]
 fn comment_kinds_by_author_and_pr() {
     use EventKind::*;
@@ -573,110 +569,6 @@ fn events_before_since_make_no_row() {
 }
 
 #[test]
-fn a_mentioned_event_takes_the_comment_of_the_same_time() {
-    let mut pr = Pr::mine();
-    pr.timeline = vec![
-        comment("C_1", user("alice"), T0 + 10, &mention_link(ME)),
-        mentioned_event("M_1", T0 + 10, ME),
-    ];
-    let out = pr.run();
-    assert_eq!(out.events.len(), 1, "Mentioned only, no Comment");
-    let e = &out.events[0];
-    assert_eq!((e.id.as_str(), e.kind), ("C_1", EventKind::Mentioned));
-    assert_eq!(e.actor.as_deref(), Some("alice"));
-    assert_eq!(e.text.as_deref(), Some("text C_1"));
-    assert_eq!(e.url, "https://c/C_1");
-    assert_eq!(e.comment_id.as_deref(), Some("C_1"));
-}
-
-#[test]
-fn among_comments_of_the_same_time_the_one_with_the_link_wins() {
-    let mut pr = Pr::others();
-    pr.timeline = vec![
-        comment("C_1", user("alice"), T0 + 10, "<p>no link</p>"),
-        comment("C_2", user("bob"), T0 + 10, &mention_link(ME)),
-        mentioned_event("M_1", T0 + 10, ME),
-    ];
-    assert_eq!(pr.kinds(), [("C_2".to_string(), EventKind::Mentioned)]);
-}
-
-#[test]
-fn without_a_link_the_first_in_timeline_order_wins() {
-    let mut pr = Pr::others();
-    pr.timeline = vec![
-        comment("C_1", user("alice"), T0 + 10, ""),
-        comment("C_2", user("bob"), T0 + 10, ""),
-        mentioned_event("M_1", T0 + 10, ME),
-    ];
-    assert_eq!(pr.kinds(), [("C_1".to_string(), EventKind::Mentioned)]);
-}
-
-#[test]
-fn a_mention_in_a_review_body_or_an_inline_comment_matches_too() {
-    let mut pr = Pr::others();
-    pr.timeline = vec![
-        review("R_1", user("alice"), T0 + 10, "COMMENTED", "see"),
-        mentioned_event("M_1", T0 + 10, ME),
-        mentioned_event("M_2", T0 + 20, ME),
-    ];
-    pr.threads = vec![thread("T_1", vec![inline("I_1", user("bob"), T0 + 20, "")])];
-    assert_eq!(
-        pr.kinds(),
-        [
-            ("R_1".to_string(), EventKind::Mentioned),
-            ("I_1".to_string(), EventKind::Mentioned)
-        ]
-    );
-}
-
-#[test]
-fn a_mention_without_a_comment_uses_the_pr_body_or_nothing() {
-    let mut pr = Pr::others();
-    pr.timeline = vec![mentioned_event("M_1", T0 + 10, ME)];
-    let e = pr.run().events.remove(0);
-    assert_eq!((e.id.as_str(), e.kind), ("M_1", EventKind::Mentioned));
-    assert_eq!((e.actor, e.text), (None, None));
-    assert_eq!(e.url, "https://github.com/o/r/pull/1");
-
-    pr.node["bodyHTML"] = json!(mention_link(ME));
-    pr.node["bodyText"] = json!("ping @me");
-    let e = pr.run().events.remove(0);
-    assert_eq!(e.actor.as_deref(), Some("alice"));
-    assert_eq!(e.text.as_deref(), Some("ping @me"));
-}
-
-#[test]
-fn a_mention_of_someone_else_is_not_mine() {
-    let mut pr = Pr::others();
-    pr.timeline = vec![
-        comment("C_1", user("alice"), T0 + 10, &mention_link("bob")),
-        mentioned_event("M_1", T0 + 10, "bob"),
-    ];
-    assert!(pr.kinds().is_empty());
-}
-
-#[test]
-fn bots_never_mention_or_reply() {
-    let mut pr = Pr::others();
-    pr.timeline = vec![
-        comment("C_1", bot("ci[bot]"), T0 + 10, &mention_link(ME)),
-        mentioned_event("M_1", T0 + 10, ME),
-    ];
-    pr.recorded.insert("T_1".into(), T0);
-    pr.threads = vec![thread(
-        "T_1",
-        vec![inline("I_1", bot("ci[bot]"), T0 + 20, "")],
-    )];
-    assert_eq!(
-        pr.kinds(),
-        [
-            ("C_1".to_string(), EventKind::BotComment),
-            ("I_1".to_string(), EventKind::BotComment)
-        ]
-    );
-}
-
-#[test]
 fn a_team_mention_link_of_my_team_is_a_mention() {
     let mut pr = Pr::others();
     pr.timeline = vec![
@@ -709,7 +601,7 @@ fn a_team_mention_in_the_body_of_a_new_pr_is_a_mention() {
     pr.node["bodyHTML"] = json!(team_link(42));
     pr.node["bodyText"] = json!("cc team");
     let e = pr.run().events.remove(0);
-    assert_eq!(e.id, "PR_1:team-mention");
+    assert_eq!(e.id, "PR_1:mention");
     assert_eq!(e.kind, EventKind::Mentioned);
     assert_eq!(e.text.as_deref(), Some("cc team"));
     pr.node["createdAt"] = json!(iso(T0 - 5));
@@ -761,7 +653,6 @@ fn replies_count_in_recorded_threads_after_their_start() {
 fn a_mention_and_a_reply_at_once_is_a_mention() {
     let mut pr = Pr::others();
     pr.recorded.insert("T_1".into(), T0 - 100);
-    pr.timeline = vec![mentioned_event("M_1", T0 + 10, ME)];
     pr.threads = vec![thread(
         "T_1",
         vec![inline("I_1", user("alice"), T0 + 10, &mention_link(ME))],
@@ -790,7 +681,6 @@ fn threads_are_recorded_when_i_comment_or_am_mentioned() {
         ),
         thread("T_OTHER", vec![inline("F", user("bob"), T0 + 50, "")]),
     ];
-    pr.timeline = vec![mentioned_event("M_D", T0 + 30, ME)];
     let out = pr.run();
     let recorded: BTreeMap<&str, i64> = out
         .threads
@@ -1125,4 +1015,137 @@ fn public_search_leaves_out_registered_owners() {
         convert::search_ids(&connection, &BTreeSet::new()),
         ["A", "B"]
     );
+}
+
+// ------------------------------------------- mentions from bodyHTML links
+
+/// The quote of a mention, as GitHub rendered it in a Quote reply on
+/// bufferings-hello/hello-merge-queue#10 (2026-11-05): no class.
+fn quoted_link(login: &str) -> String {
+    format!(
+        "<blockquote><p><a href=\"https://github.com/{login}\">@{login}</a> test</p></blockquote>"
+    )
+}
+
+#[test]
+fn a_link_to_me_in_any_post_is_one_mentioned_row() {
+    let mut pr = Pr::others();
+    let mut body = review("R_1", user("carol"), T0 + 20, "COMMENTED", "see");
+    body["bodyHTML"] = json!(mention_link(ME));
+    pr.timeline = vec![
+        comment("C_1", user("alice"), T0 + 10, &mention_link(ME)),
+        body,
+    ];
+    pr.threads = vec![thread(
+        "T_1",
+        vec![inline("I_1", user("bob"), T0 + 30, &mention_link(ME))],
+    )];
+    let out = pr.run();
+    let got: Vec<(&str, EventKind, Option<&str>)> = out
+        .events
+        .iter()
+        .map(|e| (e.id.as_str(), e.kind, e.actor.as_deref()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("C_1", EventKind::Mentioned, Some("alice")),
+            ("R_1", EventKind::Mentioned, Some("carol")),
+            ("I_1", EventKind::Mentioned, Some("bob"))
+        ]
+    );
+    assert_eq!(out.events[0].url, "https://c/C_1");
+    assert_eq!(out.events[0].text.as_deref(), Some("text C_1"));
+    assert_eq!(out.events[0].comment_id.as_deref(), Some("C_1"));
+}
+
+#[test]
+fn a_mention_on_my_pr_is_mentioned_not_comment_or_reply() {
+    let mut pr = Pr::mine();
+    pr.recorded.insert("T_1".into(), T0 - 100);
+    pr.timeline = vec![comment("C_1", user("alice"), T0 + 10, &mention_link(ME))];
+    pr.threads = vec![thread(
+        "T_1",
+        vec![inline("I_1", user("bob"), T0 + 20, &mention_link(ME))],
+    )];
+    assert_eq!(
+        pr.kinds(),
+        [
+            ("C_1".to_string(), EventKind::Mentioned),
+            ("I_1".to_string(), EventKind::Mentioned)
+        ]
+    );
+}
+
+#[test]
+fn a_link_to_me_in_the_body_of_a_new_pr_is_a_mention() {
+    let mut pr = Pr::others();
+    pr.node["createdAt"] = json!(iso(T0 + 5));
+    pr.node["bodyHTML"] = json!(mention_link(ME));
+    pr.node["bodyText"] = json!("ping @me");
+    let e = pr.run().events.remove(0);
+    assert_eq!(
+        (e.id.as_str(), e.kind),
+        ("PR_1:mention", EventKind::Mentioned)
+    );
+    assert_eq!(e.actor.as_deref(), Some("alice"));
+    assert_eq!(e.text.as_deref(), Some("ping @me"));
+    assert_eq!(e.url, "https://github.com/o/r/pull/1");
+    let mut mine = Pr::mine();
+    mine.node["createdAt"] = json!(iso(T0 + 5));
+    mine.node["bodyHTML"] = json!(mention_link(ME));
+    assert!(mine.run().events.is_empty(), "my own PR body");
+}
+
+#[test]
+fn what_is_not_a_mention_of_me() {
+    use EventKind::*;
+    // (author, bodyHTML, PR is mine, row)
+    let cases = [
+        // A quote reply keeps the link but loses the class.
+        (user("bob"), quoted_link(ME), false, None),
+        (user("bob"), quoted_link(ME), true, Some(Comment)),
+        // My own post linking to me.
+        (user(ME), mention_link(ME), false, None),
+        // A link to someone else.
+        (user("bob"), mention_link("someone"), false, None),
+        (user("bob"), mention_link("meme"), false, None),
+        // The login compares without case.
+        (user("bob"), mention_link("ME"), false, Some(Mentioned)),
+        // A bot post is always a bot comment.
+        (bot("ci[bot]"), mention_link(ME), false, Some(BotComment)),
+        (bot("ci[bot]"), mention_link(ME), true, Some(BotComment)),
+        // Plain text `@me` is no link.
+        (user("bob"), "<p>@me</p>".to_string(), false, None),
+    ];
+    for (author, html, mine, expect) in cases {
+        let mut pr = if mine { Pr::mine() } else { Pr::others() };
+        pr.timeline = vec![comment("C_1", author.clone(), T0 + 10, &html)];
+        let got: Vec<EventKind> = pr.kinds().into_iter().map(|(_, k)| k).collect();
+        assert_eq!(
+            got,
+            expect.into_iter().collect::<Vec<_>>(),
+            "{author} {html} {mine}"
+        );
+    }
+}
+
+#[test]
+fn a_user_mention_link_points_at_the_user_page() {
+    let link = |href: &str| format!("<a class=\"user-mention notranslate\" href=\"{href}\">@x</a>");
+    assert!(convert::mentions_user(&link("https://github.com/me"), "me"));
+    assert!(convert::mentions_user(
+        &link("https://github.com/Me/"),
+        "ME"
+    ));
+    assert!(convert::mentions_user(&link("/me"), "me"));
+    assert!(!convert::mentions_user(
+        &link("https://github.com/me/repo"),
+        "me"
+    ));
+    assert!(!convert::mentions_user(
+        &link("https://github.com/someone"),
+        "me"
+    ));
+    assert!(!convert::mentions_user(&quoted_link("me"), "me"));
 }

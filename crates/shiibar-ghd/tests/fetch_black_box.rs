@@ -92,7 +92,6 @@ fn seed(github: &FakeGitHub) {
                        "actor":{"login":"alice"},"requestedReviewer":{"__typename":"User","login":"me"}}),
                 issue_comment("C_1", "bob", T0 + 20, ""),
                 issue_comment("C_2", "carol", T0 + 30, &mention_link("me")),
-                json!({"__typename":"MentionedEvent","id":"M_1","createdAt":iso(T0 + 30),"actor":{"login":"me"}}),
             ],
         );
         w.timeline
@@ -1944,5 +1943,81 @@ fn the_public_token_test_falls_back_to_my_own_repository_with_a_commit() {
             .any(|p| p == "/repos/org/dotfiles/commits/beef/status"),
         "{paths:?}"
     );
+    daemon.stop();
+}
+
+/// The shapes seen on bufferings-hello/hello-merge-queue#10 (2026-11-05):
+/// a conversation comment and an inline comment that mention the viewer
+/// with a `user-mention` link, and a Quote reply whose quoted mention lost
+/// the class. No MENTIONED_EVENT is read.
+#[test]
+fn mentions_come_from_the_links_in_the_posts() {
+    let github = world();
+    let author = json!({"__typename":"User","login":"bufferings-test"});
+    let mention = "<p><a class=\"user-mention notranslate\" data-hovercard-type=\"user\" href=\"https://github.com/me\">@me</a> test</p>";
+    let quote = "<blockquote><p><a href=\"https://github.com/me\">@me</a> inline test</p></blockquote><p>ok</p>";
+    github.with(|w| {
+        w.prs.push(pr_node("PR_10", "org", 10, "me", json!({})));
+        w.timeline.insert(
+            "PR_10".into(),
+            vec![issue_comment("IC_1", "bufferings-test", T0 + 15, mention)],
+        );
+        let inline = |id: &str, at: i64, html: &str| {
+            json!({"id":id,"url":format!("https://github.com/r/{id}"),"createdAt":iso(at),
+                   "bodyText":format!("text {id}"),"bodyHTML":html,"author":author})
+        };
+        w.threads.insert(
+            "PR_10".into(),
+            vec![json!({"id":"T_1","comments":[
+                inline("RC_1", T0 + 20, mention),
+                inline("RC_2", T0 + 30, quote)
+            ]})],
+        );
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    set_tokens(&daemon);
+    daemon.clock(T0 + 100);
+    let mut rows: Vec<(String, String, String)> = daemon
+        .ok(json!({"cmd":"activity","snoozed":true}))["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            (
+                r["id"].as_str().unwrap().into(),
+                r["kind"].as_str().unwrap().into(),
+                r["actor"].as_str().unwrap_or_default().into(),
+            )
+        })
+        .collect();
+    rows.sort();
+    assert_eq!(
+        rows,
+        [
+            (
+                "IC_1".to_string(),
+                "mentioned".to_string(),
+                "bufferings-test".to_string()
+            ),
+            (
+                "RC_1".to_string(),
+                "mentioned".to_string(),
+                "bufferings-test".to_string()
+            ),
+            (
+                "RC_2".to_string(),
+                "reply".to_string(),
+                "bufferings-test".to_string()
+            ),
+        ],
+        "the quote reply is a Reply in the thread the mention started"
+    );
+    let events = github
+        .requests()
+        .into_iter()
+        .find(|r| r.op.as_deref() == Some("Events"))
+        .unwrap();
+    assert!(!events.query().contains("MENTIONED_EVENT"));
     daemon.stop();
 }

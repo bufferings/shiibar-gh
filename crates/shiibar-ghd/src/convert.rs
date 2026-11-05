@@ -275,10 +275,9 @@ pub fn runs_to_read(runs: &Value) -> Vec<i64> {
 
 // ------------------------------------------------------------- bodyHTML
 
-/// One `<a ...>text</a>` of rendered HTML.
+/// The attributes of one `<a ...>` of rendered HTML.
 struct Anchor<'a> {
     attrs: &'a str,
-    inner: &'a str,
 }
 
 fn anchors(html: &str) -> Vec<Anchor<'_>> {
@@ -287,14 +286,10 @@ fn anchors(html: &str) -> Vec<Anchor<'_>> {
     while let Some(start) = rest.find("<a ") {
         let after = &rest[start + 3..];
         let Some(close) = after.find('>') else { break };
-        let attrs = &after[..close];
-        let body = &after[close + 1..];
-        let end = body.find("</a>").unwrap_or(body.len());
         out.push(Anchor {
-            attrs,
-            inner: &body[..end],
+            attrs: &after[..close],
         });
-        rest = &body[end..];
+        rest = &after[close + 1..];
     }
     out
 }
@@ -310,26 +305,30 @@ fn has_class(attrs: &str, class: &str) -> bool {
     attr(attrs, "class").is_some_and(|c| c.split_whitespace().any(|c| c == class))
 }
 
-/// A `user-mention` link to `login`: the link text is `@login`, or the link
-/// points at the user's page. DESIGN.md names the link; its exact markup is
-/// not an API contract.
+/// A `user-mention` link to `login`: an `a` element with `user-mention` in
+/// its class and an href pointing at the user's page, the login compared
+/// without case. A quote of a mention renders without the class and does
+/// not count (DESIGN.md, "Needs action decisions"; checked on
+/// bufferings-hello/hello-merge-queue#10, 2026-11-05). The markup is not an
+/// API contract (DESIGN.md, open questions).
 pub fn mentions_user(html: &str, login: &str) -> bool {
     if login.is_empty() {
         return false;
     }
     anchors(html).iter().any(|a| {
         has_class(a.attrs, "user-mention")
-            && (a
-                .inner
-                .trim()
-                .strip_prefix('@')
-                .is_some_and(|name| name.eq_ignore_ascii_case(login))
-                || attr(a.attrs, "href").is_some_and(|href| {
-                    href.rsplit('/')
-                        .next()
-                        .is_some_and(|name| name.eq_ignore_ascii_case(login))
-                }))
+            && attr(a.attrs, "href").is_some_and(|href| user_page_of(href, login))
     })
+}
+
+/// `https://github.com/<login>` or `/<login>`, with nothing after the login.
+fn user_page_of(href: &str, login: &str) -> bool {
+    let path = match href.split_once("://") {
+        Some((_, rest)) => rest.split_once('/').map_or("", |(_, path)| path),
+        None => href.trim_start_matches('/'),
+    };
+    let path = path.trim_end_matches('/');
+    !path.contains(['/', '?', '#']) && path.eq_ignore_ascii_case(login)
 }
 
 /// The `data-id` of every `team-mention` link: the team's databaseId
@@ -382,11 +381,6 @@ impl<'a> Post<'a> {
             review,
         }
     }
-
-    /// The times a MENTIONED_EVENT may carry for this post.
-    fn matches_time(&self, node_times: &[i64], at: i64) -> bool {
-        self.at == at || node_times.contains(&at)
-    }
 }
 
 /// What the events of one PR fetch need besides GitHub's answer.
@@ -427,13 +421,12 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
     let mut out = EventOutput::default();
 
     // Posts in timeline order, review comments after the timeline.
-    let mut posts: Vec<(Post<'_>, Vec<i64>)> = Vec::new();
+    let mut posts: Vec<Post<'_>> = Vec::new();
     for item in input.timeline {
         match item["__typename"].as_str() {
-            Some("IssueComment") => posts.push((Post::from(item, None, false), vec![])),
+            Some("IssueComment") => posts.push(Post::from(item, None, false)),
             Some("PullRequestReview") if item["state"] != "PENDING" => {
-                let created = time(&item["createdAt"]);
-                posts.push((Post::from(item, None, true), vec![created]));
+                posts.push(Post::from(item, None, true));
             }
             _ => {}
         }
@@ -441,48 +434,18 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
     for thread in input.threads {
         let thread_id = text(&thread["id"]);
         for comment in nodes(&thread["comments"]) {
-            posts.push((Post::from(comment, Some(thread_id), false), vec![]));
+            posts.push(Post::from(comment, Some(thread_id), false));
         }
     }
-
-    // MENTIONED_EVENT to posts: the same time, then a link to the viewer,
-    // then timeline order.
-    let mut mention_of: BTreeMap<&str, &str> = BTreeMap::new();
-    let mut unmatched: Vec<&Value> = Vec::new();
-    for item in input.timeline {
-        if item["__typename"] != "MentionedEvent" || !ctx.is_me(login(&item["actor"])) {
-            continue;
-        }
-        let at = time(&item["createdAt"]);
-        if at < input.since {
-            continue;
-        }
-        let same: Vec<&Post<'_>> = posts
-            .iter()
-            .filter(|(p, times)| p.matches_time(times, at) && !mention_of.contains_key(p.id))
-            .map(|(p, _)| p)
-            .collect();
-        let linked: Vec<&Post<'_>> = same
-            .iter()
-            .copied()
-            .filter(|p| mentions_user(p.html, ctx.viewer))
-            .collect();
-        match linked.first().or(same.first()) {
-            Some(post) => {
-                mention_of.insert(post.id, text(&item["id"]));
-            }
-            None => unmatched.push(item),
-        }
-    }
+    // DESIGN.md, "Needs action decisions": a mention is a link to the viewer
+    // in the post itself, or to one of the viewer's teams.
+    let mentions_me = |html: &str| mentions_user(html, ctx.viewer) || ctx.mentions_my_team(html);
 
     // Threads: the viewer's own, and those the viewer is mentioned in.
     let mut recorded: BTreeMap<String, i64> = input.recorded.clone();
-    for (post, _) in &posts {
+    for post in &posts {
         let Some(thread) = post.thread else { continue };
-        let counts = ctx.is_me(post.author)
-            || mention_of.contains_key(post.id)
-            || mentions_user(post.html, ctx.viewer)
-            || ctx.mentions_my_team(post.html);
+        let counts = ctx.is_me(post.author) || mentions_me(post.html);
         if counts {
             let entry = recorded.entry(thread.to_string()).or_insert(post.at);
             *entry = (*entry).min(post.at);
@@ -499,7 +462,7 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
     }
 
     let mut seen: BTreeSet<String> = BTreeSet::new();
-    for (post, _) in &posts {
+    for post in &posts {
         if post.id.is_empty() || !seen.insert(post.id.to_string()) {
             continue;
         }
@@ -519,7 +482,7 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
         if post.at < input.since || (post.review && post.body.trim().is_empty()) {
             continue;
         }
-        let mentioned = mention_of.contains_key(post.id) || ctx.mentions_my_team(post.html);
+        let mentioned = mentions_me(post.html);
         let reply = post
             .thread
             .and_then(|t| recorded.get(t))
@@ -550,29 +513,11 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
         }
     }
 
-    // Mentions without a matching post: the PR body, else nothing to show.
-    for item in unmatched {
-        let in_body = mentions_user(text(&pr["bodyHTML"]), ctx.viewer);
-        out.events.push(IngestEvent {
-            id: text(&item["id"]).to_string(),
-            pr_id: pr_id.clone(),
-            kind: EventKind::Mentioned,
-            occurred_at: time(&item["createdAt"]),
-            url: pr_url.clone(),
-            actor: in_body
-                .then(|| login(&pr["author"]).to_string())
-                .filter(|a| !a.is_empty()),
-            text: in_body.then(|| text(&pr["bodyText"]).to_string()),
-            comment_id: None,
-            team: false,
-        });
-    }
-
-    // A team mention in the PR body of a PR opened in the window.
+    // A mention in the body of a PR opened in the window.
     let opened = time(&pr["createdAt"]);
-    if opened >= input.since && !mine && ctx.mentions_my_team(text(&pr["bodyHTML"])) {
+    if opened >= input.since && !mine && mentions_me(text(&pr["bodyHTML"])) {
         out.events.push(IngestEvent {
-            id: format!("{pr_id}:team-mention"),
+            id: format!("{pr_id}:mention"),
             pr_id: pr_id.clone(),
             kind: if is_bot(&pr["author"]) {
                 EventKind::BotComment

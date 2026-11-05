@@ -27,8 +27,7 @@ const REVIEWER: &str =
 const COMMENT: &str = "id url createdAt bodyText bodyHTML author { __typename login }";
 const SEARCH_NODES: &str = "pageInfo { hasNextPage endCursor } nodes { ... on PullRequest { id repository { owner { login } } } }";
 const ITEM_TYPES: &str = "[ISSUE_COMMENT, PULL_REQUEST_REVIEW, REVIEW_REQUESTED_EVENT, \
-    MENTIONED_EVENT, MERGED_EVENT, CLOSED_EVENT, ADDED_TO_MERGE_QUEUE_EVENT, \
-    REMOVED_FROM_MERGE_QUEUE_EVENT]";
+    MERGED_EVENT, CLOSED_EVENT, ADDED_TO_MERGE_QUEUE_EVENT, REMOVED_FROM_MERGE_QUEUE_EVENT]";
 
 fn timeline_nodes() -> String {
     format!(
@@ -36,7 +35,6 @@ fn timeline_nodes() -> String {
          ... on IssueComment {{ {COMMENT} }} \
          ... on PullRequestReview {{ id url createdAt submittedAt state bodyText bodyHTML author {ACTOR} }} \
          ... on ReviewRequestedEvent {{ id createdAt actor {{ login }} {REVIEWER} }} \
-         ... on MentionedEvent {{ id createdAt actor {{ login }} }} \
          ... on MergedEvent {{ id createdAt url actor {{ login }} }} \
          ... on ClosedEvent {{ id createdAt url actor {{ login }} }} \
          ... on AddedToMergeQueueEvent {{ id createdAt actor {{ login }} }} \
