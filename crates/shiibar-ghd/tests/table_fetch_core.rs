@@ -458,6 +458,10 @@ fn token_states_become_warnings() {
             .map(|(k, t)| (k.to_string(), t.to_string()))
             .collect();
         assert_eq!(kinds(&h, ORG), expect, "{obs:?}");
+        // settings_status carries the same warnings on the token itself.
+        let (_, tokens) = h.engine.settings_status();
+        let org = tokens.iter().find(|t| t.target == ORG).unwrap();
+        assert_eq!(token_kinds(&org.warnings), expect, "{obs:?}");
         if obs.invalid == Some(true) || obs.expires_at == Some(h.at()) {
             assert!(
                 plan(&h, false)
@@ -1076,4 +1080,63 @@ fn the_last_notifications_check_survives_a_restart() {
         restored.due(start, false).status,
         "the PR fetches are due at once"
     );
+}
+
+fn token_kinds(warnings: &[Warning]) -> Vec<(String, String)> {
+    warnings
+        .iter()
+        .map(|w| {
+            (
+                w.kind.as_text(),
+                w.token.as_ref().map(|t| t.as_text()).unwrap_or_default(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn settings_status_gives_each_token_its_own_warnings_even_without_scopes() {
+    let mut h = H::new();
+    register(&mut h, NOTIFICATIONS);
+    register(&mut h, ORG);
+    let obs = |owner: &str, expires: Option<i64>, sso: bool| TokenObs {
+        owner: Some(owner.into()),
+        expires_at: expires,
+        invalid: Some(false),
+        sso,
+        ..TokenObs::default()
+    };
+    let expires = h.at() + 2 * DAY;
+    apply(
+        &mut h,
+        Outcome {
+            tokens: BTreeMap::from([
+                (NOTIFICATIONS.to_string(), obs(ME, Some(expires), true)),
+                (ORG.to_string(), obs("someone-else", None, false)),
+            ]),
+            ..Outcome::default()
+        },
+    );
+    let (_, tokens) = h.engine.settings_status();
+    let org = tokens.iter().find(|t| t.target == ORG).unwrap();
+    assert_eq!(
+        token_kinds(&org.warnings),
+        [("token_owner_mismatch".to_string(), "scope".to_string())]
+    );
+    let public = tokens.iter().find(|t| t.target == "public").unwrap();
+    assert!(public.warnings.is_empty(), "not registered");
+
+    h.engine.scope_remove(ORG).unwrap();
+    h.engine.scope_remove("public").unwrap();
+    assert!(h.engine.scopes().is_empty());
+    let (_, tokens) = h.engine.settings_status();
+    assert_eq!(tokens.len(), 1);
+    assert_eq!(
+        token_kinds(&tokens[0].warnings),
+        [
+            ("token_expiring".to_string(), "notifications".to_string()),
+            ("sso_required".to_string(), "notifications".to_string()),
+        ]
+    );
+    assert_eq!(tokens[0].warnings[0].until, Some(h.at() + 2 * DAY));
 }

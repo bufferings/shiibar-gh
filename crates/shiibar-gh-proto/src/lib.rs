@@ -490,6 +490,11 @@ pub struct TokenStatus {
     pub scopes: Option<Vec<String>>,
     pub last_test: Option<LastTest>,
     pub sso_urls: Vec<String>,
+    /// The warnings about this token itself: `token_invalid`,
+    /// `token_expiring`, `sso_required` and, for a scope's token,
+    /// `token_owner_mismatch`. Empty for a token not registered.
+    #[serde(default)]
+    pub warnings: Vec<Warning>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Card {
@@ -558,6 +563,12 @@ pub enum SubscribeEvent {
     },
     Notify {
         notification: Notification,
+    },
+    /// A setting changed through `config_set`, by any client. `value` is
+    /// what `config_get` now answers.
+    ConfigChanged {
+        key: String,
+        value: serde_json::Value,
     },
     /// An event this build does not know. Clients ignore it.
     #[serde(other)]

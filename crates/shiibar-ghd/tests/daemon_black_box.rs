@@ -921,7 +921,12 @@ fn no_scope_changed_table() {
         cli.snapshot();
         act(&daemon);
         daemon.ok(json!({"cmd":"scope_notify","scope":"public","on":false}));
-        let event = cli.next().expect(name);
+        let mut event = cli.next().expect(name);
+        // A setting is announced as config_changed, never as scope_changed.
+        if event["event"] == "config_changed" {
+            assert_eq!(event["key"], "notify_state", "{name}");
+            event = cli.next().expect(name);
+        }
         assert_eq!(event["scope"]["id"], "public", "{name}");
         daemon.stop();
     }
@@ -961,6 +966,36 @@ fn a_pr_key_ignores_the_case_of_owner_and_repository() {
     assert_eq!(
         daemon.code(json!({"cmd":"status","pr":"org/app#2"})),
         "not_found"
+    );
+    daemon.stop();
+}
+
+#[test]
+fn a_changed_setting_goes_to_every_subscriber_once_saved() {
+    let (_dir, daemon) = setup();
+    let mut app = daemon.subscribe("app");
+    app.snapshot();
+    let mut cli = daemon.subscribe("cli");
+    cli.snapshot();
+    daemon.ok(json!({"cmd":"config_set","key":"launch_at_login","value":false}));
+    for subscriber in [&mut app, &mut cli] {
+        assert_eq!(
+            subscriber.next().unwrap(),
+            json!({"event":"config_changed","key":"launch_at_login","value":false})
+        );
+    }
+    // The same value again changes nothing and sends nothing; the next
+    // event is the next change.
+    daemon.ok(json!({"cmd":"config_set","key":"launch_at_login","value":false}));
+    daemon.code(json!({"cmd":"config_set","key":"launch_at_login","value":"maybe"}));
+    daemon.ok(json!({"cmd":"config_set","key":"drop_after_days","value":20}));
+    assert_eq!(
+        cli.next().unwrap(),
+        json!({"event":"config_changed","key":"drop_after_days","value":20})
+    );
+    assert_eq!(
+        daemon.ok(json!({"cmd":"config_get","key":"launch_at_login"}))["value"],
+        false
     );
     daemon.stop();
 }

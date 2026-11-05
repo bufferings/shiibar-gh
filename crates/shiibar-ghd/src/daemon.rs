@@ -70,6 +70,8 @@ pub struct Daemon {
     /// Tokens read from the Keychain, by account. A Keychain read may ask
     /// the user, so each token is read once.
     tokens: HashMap<String, String>,
+    /// Settings changed by the request being handled, sent once saved.
+    config_events: Vec<(String, serde_json::Value)>,
 }
 
 fn error_line(error: &CmdError) -> String {
@@ -119,6 +121,7 @@ impl Daemon {
             digest,
             keychain,
             tokens: HashMap::new(),
+            config_events: Vec::new(),
         };
         if daemon.store.is_some() {
             daemon.engine.tick(&now);
@@ -151,7 +154,13 @@ impl Daemon {
         let now = self.clock.now();
         self.engine.set_clock(&now);
         let result = self.apply(request, &now);
-        self.commit(&now, false)?;
+        let saved = self.commit(&now, false);
+        // A changed setting goes to the subscribers once it is saved.
+        let events = std::mem::take(&mut self.config_events);
+        saved?;
+        for (key, value) in events {
+            self.publish_config(key, value);
+        }
         result
     }
 
@@ -221,10 +230,14 @@ impl Daemon {
                 ok: true,
                 value: engine.config_get(&key)?,
             }),
-            Request::ConfigSet { key, value } => line(&proto::ConfigResponse {
-                ok: true,
-                value: engine.config_set(&key, &value, now)?,
-            }),
+            Request::ConfigSet { key, value } => {
+                let before = engine.config_get(&key).ok();
+                let value = engine.config_set(&key, &value, now)?;
+                if before.as_ref() != Some(&value) {
+                    self.config_events.push((key, value.clone()));
+                }
+                line(&proto::ConfigResponse { ok: true, value })
+            }
             Request::ScopeList => line(&proto::ScopesResponse {
                 ok: true,
                 scopes: engine.scopes(),
@@ -399,6 +412,16 @@ impl Daemon {
             for id in ids {
                 self.enqueue(id, text.clone(), None);
             }
+        }
+    }
+
+    /// `config_changed` to every subscriber (DESIGN.md, "Launch at login
+    /// sync": the app follows a setting changed elsewhere).
+    fn publish_config(&mut self, key: String, value: serde_json::Value) {
+        let text = line(&SubscribeEvent::ConfigChanged { key, value });
+        let ids: Vec<u64> = self.subscribers.keys().copied().collect();
+        for id in ids {
+            self.enqueue(id, text.clone(), None);
         }
     }
 
