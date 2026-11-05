@@ -21,13 +21,13 @@ shiibar-gh は、自分が関わっている GitHub の PR について「自分
 
 ## 画面構成
 
-**メニューバー**。スコープごとにアイコン 1 つ（幅固定）。右上のバッジ＝Needs action の PR の数、青い点＝新しい出来事あり、三角＝注意（トークンの期限、取得の失敗、上限による取得の停止）。disabled のスコープのアイコンは表示しない。表示するスコープのアイコンが 1 つもないときは、shiibar-gh のアイコンを 1 つだけ表示する。押すと「No scopes yet」「Add a scope in Settings」と Settings ボタン、⌄ のメニューを表示する。
+**メニューバー**。スコープごとにアイコン 1 つ（幅固定）。右上のバッジ＝Needs action の PR の数、青い点＝新しい出来事あり、三角＝注意（トークンの期限、取得の失敗、上限による取得の停止）。バッジと青い点の両方に該当するときは両方を表示し、青い点は右下に表示する。disabled のスコープのアイコンは表示しない。表示するスコープのアイコンが 1 つもないときは、shiibar-gh のアイコンを 1 つだけ表示する。押すと「No scopes yet」「Add a scope in Settings」と Settings ボタン、⌄ のメニューを表示する。
 
 **ポップオーバー**。押したスコープだけを表示する。上から：
 
-1. 見出し：スコープ名、Updated … ago、Open in window、Refresh、Settings、⌄ のメニュー（About shiibar-gh、Settings…、Quit shiibar-gh）。警告があるときだけ黄色い帯（「警告の表示」）。ポップオーバーを開いている間は ⌘Q でも終了する。終了するとデーモンも止まる。
+1. 見出し：スコープ名、Updated … ago、Open in window、Refresh、Settings、⌄ のメニュー（About shiibar-gh、Settings…、Quit shiibar-gh）。警告があるときだけ黄色い帯（「警告の表示」）。ポップオーバーを開いている間と、常時表示ウインドウにフォーカスがある間は ⌘Q でも終了する。終了するとデーモンも止まる。
 2. タブ：**PRs**（PR ごとのカード。追加が新しい順で位置固定、出来事で動かさない）と **Activity**（全 PR の行を新しい順に 1 本で。各行に PR 名を小さく添える）。並び替えはない。
-3. チップ：**Needs action**（オンで絞る）、**My PRs｜Others' PRs**（どちらか一方、両方オフ＝すべて）、右端に **Show snoozed**（オンで Snooze 中の PR も表示する）。件数は表示しない。どれも前回の選択を記憶。
+3. チップ：**Needs action**（オンで絞る）、**My PRs｜Others' PRs**（どちらか一方、両方オフ＝すべて）、右端に **Show snoozed**（オンで Snooze 中の PR も表示する）。件数は表示しない。どれもスコープごとに前回の選択を記憶する。
 4. カードの列。
 5. キーのヒント 1 行。
 
@@ -126,7 +126,7 @@ Snooze は PR 単位。「この PR は翌朝まで確認しない」をアプ�
 - 個別の通知の文面は、タイトルが「スコープ名 · 行の種類」（`example-org · Mentioned`。Bot の Comment は `example-org · Comment`）、サブタイトルが `owner/repo #番号` と PR のタイトル、本文が行の本文である。Reaction の本文は種類ごとの件数とコメント（`👍3 🎉1 “...”`）とする。
 - 通知はスコープごとにまとめる。1 回の配信で、スコープの個別の通知になるはずのものが 2 件以上なら 1 件のまとめ通知にし、1 件なら個別の通知にする。同じコメントの Reaction をまとめた通知は 1 件と数える。通常の取得、アプリの停止のあと、再接続のすべてに適用し、スコープをまたいでまとめない。Snooze の解除は、件数に関係なく `Back from Snooze` の 1 件とする。
 - まとめ通知の文面は、Snooze の解除以外が `example-org · 5 new events` と `In 3 PRs`、Snooze の解除が `example-org · Back from Snooze` と `3 PRs had new events` である。N は行の数で、件数が 1 のときは `1 new event`、`In 1 PR`、`1 PR had new events` と単数形にする。
-- アプリは、デーモンから受け取った通知を保持せずにすぐ表示する。まとめ通知を押すとポップオーバーを開く。
+- アプリは、デーモンから受け取った通知を保持せずにすぐ表示し、macOS の既定の通知音を鳴らす。まとめ通知を押すとポップオーバーを開く。
 - 個別の通知を押すと、その場所を Web で直接開く（ポップオーバーを経由しない。青い点の状態は変更しない）。通知にボタンは付けない。Done と Snooze は、ポップオーバーと CLI で行う。
 - Web を開く操作は「出来事を押す」の 1 種類（カードの行、Activity、macOS の通知、すべて同じ）。「押すとカードを選ぶ」操作は設けない。
 
@@ -168,7 +168,9 @@ Snooze は PR 単位。「この PR は翌朝まで確認しない」をアプ�
 
 **配布と署名**。リリース版は GitHub Actions で Developer ID Application の証明書で署名し（hardened runtime）、Apple の公証を受けて GitHub Releases で公開する。利用者は Homebrew の cask（`bufferings/tap`）でインストールする。デーモンと CLI は `.app` の中に同梱し、cask が CLI のリンクを作成する。開発版は、ローカルで作成した固定の署名の ID で署名して `~/Applications` に配置する。アプリは `Shiibar GH.app`、bundle identifier は `shiibar.gh`、同梱するデーモンと CLI の署名の識別子は `shiibar.gh.daemon` と `shiibar.gh.cli` で、変更しない（Keychain と通知の許可が識別子に結び付くため）。対応する macOS は 14 以上で、Apple Silicon だけを対象とする。Keychain の項目の許可は、保存したプログラムの designated requirement（DR）に結び付く。Developer ID の DR は Team ID と識別子で決まり、版を更新しても満たされるので、更新で許可のダイアログを表示しない。ad hoc の署名の DR は、その版のコードに結び付く（Apple TN3127 で確認。2026-11-05）。開発版とリリース版を切り替えたときは、DR が異なるので 1 回ダイアログを表示する。
 
-**UI**。SwiftUI。メニューバーのアイコンとポップオーバーの枠はまず MenuBarExtra で試し、バッジ付きアイコンとキーボード操作が足りなければ AppKit（NSStatusItem + NSPopover）。常時表示は NSPanel。ログイン時起動は SMAppService。
+**UI**。SwiftUI。メニューバーのアイコンとポップオーバーの枠はまず MenuBarExtra で試し、バッジ付きアイコンとキーボード操作が足りなければ AppKit（NSStatusItem + NSPopover）。常時表示は NSPanel。ログイン時起動は SMAppService。外観は macOS のライトとダークの設定に従う。ボードはライトだけなので、ダークの色（スコープの背景色の 6 色を含む）は M3 の実装で決め、所有者が実機で確認する。
+
+**Launch at login の同期**。設定の値（`launch_at_login`）と macOS のログイン項目の登録は、後から変更したほうに合わせる。CLI などで設定を変更すると、デーモンはアプリに設定の変更を知らせ、アプリはログイン項目を登録または解除する。システム設定でログイン項目を変更した場合は、アプリが次に起動したとき、または設定画面を開いたときに、その状態を設定に反映する。
 
 **トークン**。通知用 classic PAT 1 つ（notifications と read:org のスコープ。組織は SSO 承認が必要）、owner のスコープごとの fine-grained PAT 1 つ、Public 用の fine-grained PAT 1 つ（Repository access は Public repositories で、権限を付けない）。classic PAT は、通知の取得と、Public のチームの所属とチーム宛てのレビュー依頼の読み直しにだけ使用する。すべて読み取りだけ。
 
@@ -176,7 +178,7 @@ Snooze は PR 単位。「この PR は翌朝まで確認しない」をアプ�
 - スコープと Public のトークンの持ち主は、通知用のトークンの持ち主と同じでなければならない。取得のたびに持ち主を確かめ、異なればそのスコープの取得を止めて警告する。トークンを差し替えると、次の定期取得で自動で再開する。
 - トークンの期限の 7 日前から警告を付ける。スコープと Public のトークンはそのスコープに、通知用のトークンはすべてのスコープに付ける。期限のないトークンは警告しない。期限を過ぎたスコープと Public のトークンは、無効なトークン（401）として扱う。
 - 通知用のトークンが 401 を返すか期限を過ぎると、すべてのスコープの取得を止めてエラーを表示する。
-- 応答に X-GitHub-SSO が付いたら、SSO の承認が必要という警告を付ける。ヘッダーは organization の名前ではなく id を返すので、警告は organization を名指ししない。応答に承認の URL があればそのリンクを、なければ GitHub のトークンの設定ページへのリンクを示す。設定画面は、SSO の承認の状態を常には表示せず、この警告があるときだけ表示する。
+- 応答に X-GitHub-SSO が付いたら、SSO の承認が必要という警告を付ける。ヘッダーは organization の名前ではなく id を返すので、警告は organization を名指ししない。応答に承認の URL があればそのリンクを、なければ GitHub のトークンの設定ページへのリンクを示す。設定画面は、SSO の承認の状態を常には表示せず、この警告があるときだけ、警告を受けたトークン（通知用のトークン、またはスコープのトークン）の行に表示する。
 
 **API の使い分け**
 
@@ -304,7 +306,7 @@ fine-grained PAT には Checks の権限がなく、statusCheckRollup の個々�
 - トークンが Repository access のどちらで作成されたかは、GitHub の API で読めない（docs.github.com/en/rest/orgs/personal-access-tokens の取得の API は「Only GitHub Apps can use this endpoint」である。2026-11-05 に確認）。設定画面は owner のスコープの Repository access を表示しない。Public の行の `Public repositories` は、Public というスコープの説明として表示する
 - 各スコープの行に Remove を配置する。押すと確認（`Remove example-org?` と、トークンを Keychain から削除し、再び追加すると Done と Snooze が戻ること）を表示し、了承すると `scope remove` を実行する
 - 各スコープの行で、背景色を 6 色から選ぶ（`scope color`）。追加した直後は、6 色を追加の順に巡回して割り当てる。Public の初期値はベージュである。削除して再び追加したスコープは、Public を含めて元の色に戻る（「ワイヤ形式」）
-- トークンの行の右には、次の状態のうち最も上のものを 1 つ表示する：`Invalid`（赤、`token_invalid`）、`Belongs to another account`（赤、`token_owner_mismatch`）、`Expires in N days`（黄、`token_expiring`。1 日未満は切り上げて `Expires in 1 day`）、`Missing permission`（黄、最後のテストに Failed がある）、`Verified`（緑、最後のテストがすべて OK）、`Not tested`（灰、テストの記録がない）、`No token`（灰、未登録。Create token と貼り付ける欄を表示する）。期限のないトークンは期限を表示しない
+- トークンの行の右には、次の状態のうち最も上のものを 1 つ表示する：`Invalid`（赤、`token_invalid`）、`Belongs to another account`（赤、`token_owner_mismatch`）、`Expires in N days`（黄、`token_expiring`。1 日未満は切り上げて `Expires in 1 day`）、`Missing permission`（黄、最後のテストに Failed がある）、`Verified`（緑、最後のテストに Failed がない。`Can't check` の項目は含んでよい）、`Not tested`（灰、テストの記録がない）、`No token`（灰、未登録。Create token と貼り付ける欄を表示する）。期限のないトークンは期限を表示しない
 - テストの結果は項目ごとに `OK · Checks`、`Failed (Actions) · Checks`（括弧に足りない権限の名前）、`Can't check · Merge queue`（確かめる対象がない）の形で表示する
 - 登録済みのトークンは `••••••••••••`（12 文字の固定）で表示し、トークンの一部も表示しない。アプリはトークンを保持せず、Save で `token set` に渡したあとは破棄する
 
