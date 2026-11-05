@@ -16,7 +16,7 @@ shiibar-gh は、自分が関わっている GitHub の PR について「自分
 
 - GitHub への書き込み（既読の同期も含めて一切しない）。
 - トークン未登録の owner の非公開リポジトリ。
-- 複数の GitHub アカウント。トークンの持ち主はすべて通知用のトークンの持ち主と同じである（「トークン」）。M4 で対応し、最初のリリースは M4 の後に行う。GitHub Enterprise Server は対応しない。
+- 複数の GitHub アカウント。トークンの持ち主はすべて通知用のトークンの持ち主と同じである（「トークン」）。0.1 は 1 つのアカウントだけに対応して公開し、M4 で複数のアカウントに対応する。GitHub Enterprise Server は対応しない。
 - 他の人の PR の会話のコメント。ただし、自分へのメンションと、Reply の対象のスレッドへの返信は対象にする（「行の種類と状態」）。
 
 ## 画面構成
@@ -27,7 +27,7 @@ shiibar-gh は、自分が関わっている GitHub の PR について「自分
 
 1. 見出し：スコープ名、Updated … ago、Open in window、Refresh、Settings、⌄ のメニュー（About shiibar-gh、Settings…、Quit shiibar-gh）。警告があるときだけ黄色い帯（「警告の表示」）。ポップオーバーを開いている間と、常時表示ウインドウにフォーカスがある間は ⌘Q でも終了する。終了するとデーモンも止まる。
 2. タブ：**PRs**（PR ごとのカード。追加が新しい順で位置固定、出来事で動かさない）と **Activity**（全 PR の行を新しい順に 1 本で。各行に PR 名を小さく添える）。並び替えはない。
-3. チップ：**Needs action**（オンで絞る）、**My PRs｜Others' PRs**（どちらか一方、両方オフ＝すべて）、右端に **Show snoozed**（オンで Snooze 中の PR も表示する）。件数は表示しない。どれもスコープごとに前回の選択を記憶する。
+3. チップ：**Needs action**（オンで絞る）、**My PRs｜Others' PRs**（どちらか一方、両方オフ＝すべて）、右端に **Show snoozed**（オンで Snooze 中の PR も表示する）。件数は表示しない。どれもスコープごとに前回の選択を記憶する。オフのチップはすべて灰色の枠と文字にし、オンのチップは塗りつぶして先頭に ✓ を付ける（色だけにしない）。
 4. カードの列。
 5. キーのヒント 1 行。
 
@@ -141,6 +141,7 @@ Snooze は PR 単位。「この PR は翌朝まで確認しない」をアプ�
 | タブ | 項目 | 既定 |
 | --- | --- | --- |
 | General | Launch at login | on |
+| General | Appearance：System／Light／Dark（System は Mac の外観の設定に従う） | System |
 | General | PR status interval | 1 min |
 | General | Reactions interval | 3 min |
 | General | GraphQL cost cap (last hour)。80% を超えると警告し、達すると取得を止める（「レート制限」） | 1500 points |
@@ -168,7 +169,7 @@ Snooze は PR 単位。「この PR は翌朝まで確認しない」をアプ�
 
 **配布と署名**。リリース版は GitHub Actions で Developer ID Application の証明書で署名し（hardened runtime）、Apple の公証を受けて GitHub Releases で公開する。利用者は Homebrew の cask（`bufferings/tap`）でインストールする。デーモンと CLI は `.app` の中に同梱し、cask が CLI のリンクを作成する。開発版は、ローカルで作成した固定の署名の ID で署名して `~/Applications` に配置する。アプリは `Shiibar GH.app`、bundle identifier は `shiibar.gh`、同梱するデーモンと CLI の署名の識別子は `shiibar.gh.daemon` と `shiibar.gh.cli` で、変更しない（Keychain と通知の許可が識別子に結び付くため）。対応する macOS は 14 以上で、Apple Silicon だけを対象とする。Keychain の項目の許可は、保存したプログラムの designated requirement（DR）に結び付く。Developer ID の DR は Team ID と識別子で決まり、版を更新しても満たされるので、更新で許可のダイアログを表示しない。ad hoc の署名の DR は、その版のコードに結び付く（Apple TN3127 で確認。2026-11-05）。開発版とリリース版を切り替えたときは、DR が異なるので 1 回ダイアログを表示する。
 
-**UI**。SwiftUI。メニューバーのアイコンとポップオーバーの枠はまず MenuBarExtra で試し、バッジ付きアイコンとキーボード操作が足りなければ AppKit（NSStatusItem + NSPopover）。常時表示は NSPanel。ログイン時起動は SMAppService。外観は macOS のライトとダークの設定に従う。ボードはライトだけなので、ダークの色（スコープの背景色の 6 色を含む）は M3 の実装で決め、所有者が実機で確認する。
+**UI**。SwiftUI。メニューバーのアイコンとポップオーバーの枠はまず MenuBarExtra で試し、バッジ付きアイコンとキーボード操作が足りなければ AppKit（NSStatusItem + NSPopover）。常時表示は NSPanel。ログイン時起動は SMAppService。外観は設定の Appearance に従い、System なら macOS のライトとダークの設定に従う。ボードはライトだけなので、ダークの色（スコープの背景色の 6 色を含む）は M3 の実装で決め、所有者が実機で確認する。
 
 **Launch at login の同期**。設定の値（`launch_at_login`）と macOS のログイン項目の登録は、後から変更したほうに合わせる。CLI などで設定を変更すると、デーモンはアプリに設定の変更を知らせ、アプリはログイン項目を登録または解除する。システム設定でログイン項目を変更した場合は、アプリが次に起動したとき、または設定画面を開いたときに、その状態を設定に反映する。
 
