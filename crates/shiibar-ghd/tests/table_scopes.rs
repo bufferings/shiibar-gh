@@ -38,15 +38,91 @@ fn membership_table() {
 }
 
 #[test]
-fn public_exists_from_the_start_and_cannot_go() {
-    let h = H::new();
-    let public = h.scope("public");
-    assert_eq!(public.name, "Public");
+fn public_is_added_and_removed_like_an_owner() {
+    // A database without saved state has no scope at all.
+    let now = shiibar_ghd::clock::Now::fixed(T0, "Asia/Tokyo").unwrap();
+    let mut engine = shiibar_ghd::engine::Engine::fresh(&now);
+    assert!(engine.scopes().is_empty());
+    assert!(not_found(engine.scope_remove("public")));
+    engine.scope_add("Public", &now).unwrap();
+    let scopes = engine.scopes();
+    assert_eq!(scopes.len(), 1);
+    let public = &scopes[0];
+    assert_eq!(
+        (public.id.as_str(), public.name.as_str()),
+        ("public", "Public")
+    );
     assert_eq!(public.kind, Some(Lenient::Known(ScopeKind::Public)));
+    assert_eq!(public.color, Lenient::Known(ScopeColor::Beige));
     assert!(public.enabled && public.notify);
-    let mut h = h;
-    assert!(invalid(h.engine.scope_add("public", &h.now)));
-    assert!(invalid(h.engine.scope_remove("public")));
+    for spelling in ["public", "PUBLIC"] {
+        assert!(invalid(engine.scope_add(spelling, &now)), "{spelling}");
+    }
+    for spelling in ["notifications", "Notifications"] {
+        assert!(invalid(engine.scope_add(spelling, &now)), "{spelling}");
+    }
+    assert_eq!(engine.scope_remove("PUBLIC"), Ok(None), "no token recorded");
+    assert!(engine.scopes().is_empty());
+    assert!(not_found(engine.token_key("public")));
+    engine.scope_add("public", &now).unwrap();
+    assert_eq!(engine.token_key("public"), Ok("public".into()));
+}
+
+#[test]
+fn without_public_its_prs_stay_hidden_and_come_back_with_their_state() {
+    let mut h = H::new();
+    let stranger = IngestPr {
+        owner: "stranger".into(),
+        ..other("PR_1")
+    };
+    let e1 = h.ev("E_1", "PR_1", EventKind::Comment);
+    let e2 = h.ev("E_2", "PR_2", EventKind::Comment);
+    h.push(vec![stranger, other("PR_2")], vec![e1, e2], vec![]);
+    h.engine.done("E_1").unwrap();
+    h.snooze("stranger/app#1");
+    assert_eq!(h.scope("public").badge, 0, "snoozed");
+
+    h.engine.scope_remove("public").unwrap();
+    h.engine.scope_remove(ORG).unwrap();
+    // org's PR would move to Public, which is gone too.
+    assert!(h.engine.scopes().is_empty());
+    assert!(h.cards(&show_snoozed()).is_empty());
+    assert!(not_found(h.engine.done("E_2")));
+
+    h.engine.scope_add("public", &h.now).unwrap();
+    let cards = h.cards(&show_snoozed());
+    let scopes: Vec<&str> = cards.iter().map(|c| c.scope.as_str()).collect();
+    assert_eq!(scopes, ["public", "public"], "both PRs show under Public");
+    assert!(h.card("stranger/app#1").unwrap().snoozed);
+    assert!(h.row("E_1").done);
+    assert!(h.row("E_2").unread && !h.row("E_2").done);
+    assert_eq!(h.scope("public").badge, 1);
+}
+
+#[test]
+fn scope_colors_cycle_in_the_order_scopes_are_added() {
+    let mut h = H::new();
+    assert_eq!(h.scope(ORG).color, Lenient::Known(ScopeColor::Gray));
+    assert_eq!(h.scope("public").color, Lenient::Known(ScopeColor::Beige));
+    let names = ["b", "c", "d", "e", "f", "g"];
+    for name in names {
+        h.engine.scope_add(name, &h.now).unwrap();
+    }
+    let colors: Vec<Lenient<ScopeColor>> = names.iter().map(|n| h.scope(n).color).collect();
+    use ScopeColor::*;
+    let want = [Green, Blue, Purple, Pink, Beige, Gray];
+    assert_eq!(colors, want.map(Lenient::Known));
+
+    h.engine.scope_color("B", ScopeColor::Purple).unwrap();
+    assert_eq!(h.scope("b").color, Lenient::Known(ScopeColor::Purple));
+    h.engine.scope_remove("b").unwrap();
+    h.engine.scope_add("b", &h.now).unwrap();
+    assert_eq!(
+        h.scope("b").color,
+        Lenient::Known(ScopeColor::Purple),
+        "adding again keeps the color"
+    );
+    assert!(not_found(h.engine.scope_color("nobody", ScopeColor::Blue)));
 }
 
 #[test]
@@ -376,7 +452,6 @@ fn owners_compare_without_regard_to_case() {
     assert!(invalid(h.engine.scope_add("ORG", &h.now)), "a duplicate");
     for public in ["public", "Public", "PUBLIC"] {
         assert!(invalid(h.engine.scope_add(public, &h.now)), "{public}");
-        assert!(invalid(h.engine.scope_remove(public)), "{public}");
     }
 
     h.engine.scope_notify("ORG", false).unwrap();

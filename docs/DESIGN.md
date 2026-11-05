@@ -338,6 +338,8 @@ Unix ソケットの NDJSON。1 接続 1 要求 1 応答。`subscribe` だけは
 | `info` | — | `version`、`started_at` |
 | `shutdown` | — | 応答後に終了 |
 
+スコープの値は `color`（背景色）を持つ。値は `gray`（#F3F4F8）、`green`（#EAF4F0）、`blue`（#EAF0F9）、`purple`（#F1EEF8）、`pink`（#F8EEF0）、`beige`（#F7F1E3）のいずれかで、`scope_color` の不正な値は `invalid` になる。Public を追加すると `beige` になる。owner のスコープは、追加した順に上の並びで巡回して割り当てる。削除して再び追加したスコープは、削除する前の色に戻る。カードの値は `author_avatar_url`（GraphQL の `author.avatarUrl(size: 32)`。`author` が `null` なら `null`）を持つ。
+
 `subscribe` は最初に `{"event":"snapshot","scopes":[...],"db_unreadable":false}` を送る。DB を読めない間も `subscribe` と `info` は使用でき、`db_unreadable` が真になる。以降は `{"event":"scope_changed","scope":{...}}` と `{"event":"notify","notification":{...}}` を送る。
 
 DB を読めない状態に移行したとき、およびその状態から `reset` で戻ったとき、デーモンは `subscribe` の接続をすべて切断する。クライアントは再接続し、`snapshot` で新しい状態を受け取る。DB を読めない間の `scopes` は `reset` のあとと同じ内容で、バッジは 0、青い点はなしとする。

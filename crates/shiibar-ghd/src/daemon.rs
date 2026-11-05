@@ -268,6 +268,10 @@ impl Daemon {
                 engine.scope_notify(&scope, on)?;
                 ack()
             }
+            Request::ScopeColor { scope, color } => {
+                engine.scope_color(&scope, color)?;
+                ack()
+            }
             Request::TokenSet { target, token } => {
                 let token = token.trim();
                 if token.is_empty() {

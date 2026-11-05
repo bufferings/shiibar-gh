@@ -202,6 +202,7 @@ pub fn pr_values(node: &Value, extra: &StatusExtra, ctx: Ctx<'_>) -> Option<Inge
         number: node["number"].as_u64().unwrap_or(0),
         title: text(&node["title"]).to_string(),
         author: login(&node["author"]).to_string(),
+        author_avatar_url: node["author"]["avatarUrl"].as_str().map(str::to_string),
         base: text(&node["baseRefName"]).to_string(),
         head: text(&node["headRefName"]).to_string(),
         state,

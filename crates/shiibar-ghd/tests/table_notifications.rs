@@ -262,7 +262,11 @@ fn the_row_kind_labels() {
     h.set("bot_comments", json!("notify"));
     let e = h.ev("E_1", "PR_1", EventKind::BotComment);
     h.push(vec![other("PR_1")], vec![e], vec![]);
-    assert_eq!(h.delivered()[0].title, "org · Bot comment");
+    assert_eq!(
+        h.delivered()[0].title,
+        "org · Comment",
+        "a bot comment is titled Comment; the row stays bot_comment"
+    );
     let e = h.ev("E_2", "PR_2", EventKind::RemovedFromMergeQueue);
     h.push(vec![pr("PR_2")], vec![e], vec![]);
     assert_eq!(h.delivered()[0].title, "org · Removed from merge queue");

@@ -189,6 +189,12 @@ fn refresh_succeeds_without_fetching() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = start(dir.path());
     daemon.ok(json!({"cmd":"refresh"}));
+    assert_eq!(
+        daemon.code(json!({"cmd":"refresh","scope":"public"})),
+        "not_found",
+        "Public is not there until it is added"
+    );
+    daemon.ok(json!({"cmd":"scope_add","owner":"public"}));
     daemon.ok(json!({"cmd":"refresh","scope":"public"}));
     assert_eq!(
         daemon.code(json!({"cmd":"refresh","scope":"nobody"})),
@@ -198,20 +204,87 @@ fn refresh_succeeds_without_fetching() {
 }
 
 #[test]
-fn the_first_snapshot_has_public_only() {
+fn the_first_snapshot_has_no_scope_and_public_is_added_beige() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = start(dir.path());
     let snapshot = daemon.subscribe("cli").snapshot();
     assert_eq!(snapshot["db_unreadable"], false);
-    assert_eq!(snapshot["scopes"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        snapshot["scopes"],
+        json!([]),
+        "Public does not exist at first"
+    );
+
+    daemon.ok(json!({"cmd":"scope_add","owner":"Public"}));
+    let snapshot = daemon.subscribe("cli").snapshot();
     // No token yet: both the notifications token and Public's are missing.
     assert_eq!(
-        snapshot["scopes"][0],
-        json!({"id":"public","name":"Public","kind":"public","enabled":true,"notify":true,
-               "badge":0,"dot":false,"warnings":[
+        snapshot["scopes"],
+        json!([{"id":"public","name":"Public","kind":"public","enabled":true,"notify":true,
+               "color":"beige","badge":0,"dot":false,"warnings":[
                    {"kind":"no_token","token":"notifications","message":"Add a token in Settings","until":null},
                    {"kind":"no_token","token":"scope","message":"Add a token in Settings","until":null}
-               ],"updated_at":null})
+               ],"updated_at":null}])
+    );
+    daemon.stop();
+}
+
+#[test]
+fn new_scopes_take_the_six_colors_in_turn_and_keep_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path());
+    daemon.ok(json!({"cmd":"scope_add","owner":"public"}));
+    for n in 0..7 {
+        daemon.ok(json!({"cmd":"scope_add","owner":format!("o{n}")}));
+    }
+    let colors = |daemon: &TestDaemon| -> Vec<(String, String)> {
+        daemon
+            .scopes()
+            .iter()
+            .map(|s| {
+                (
+                    s["id"].as_str().unwrap().to_string(),
+                    s["color"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    };
+    let expected: Vec<(String, String)> = [
+        ("o0", "gray"),
+        ("o1", "green"),
+        ("o2", "blue"),
+        ("o3", "purple"),
+        ("o4", "pink"),
+        ("o5", "beige"),
+        ("o6", "gray"),
+        ("public", "beige"),
+    ]
+    .iter()
+    .map(|(id, color)| (id.to_string(), color.to_string()))
+    .collect();
+    assert_eq!(colors(&daemon), expected, "Public does not take a turn");
+
+    // Removing and adding again restores the color; a new scope continues
+    // the cycle.
+    daemon.ok(json!({"cmd":"scope_color","scope":"O1","color":"pink"}));
+    daemon.ok(json!({"cmd":"scope_remove","owner":"o1"}));
+    daemon.ok(json!({"cmd":"scope_remove","owner":"public"}));
+    assert!(colors(&daemon).iter().all(|(id, _)| id != "public"));
+    daemon.ok(json!({"cmd":"scope_add","owner":"o1"}));
+    daemon.ok(json!({"cmd":"scope_add","owner":"public"}));
+    daemon.stop();
+    let daemon = start(dir.path());
+    daemon.ok(json!({"cmd":"scope_add","owner":"o7"}));
+    let after = colors(&daemon);
+    assert!(after.contains(&("o1".into(), "pink".into())), "{after:?}");
+    assert!(
+        after.contains(&("public".into(), "beige".into())),
+        "{after:?}"
+    );
+    assert!(after.contains(&("o7".into(), "green".into())), "{after:?}");
+    assert_eq!(
+        daemon.code(json!({"cmd":"scope_color","scope":"o7","color":"Red"})),
+        "invalid"
     );
     daemon.stop();
 }
@@ -247,7 +320,7 @@ fn an_older_database_is_migrated() {
         .unwrap();
     drop(conn);
     let daemon = start(dir.path());
-    assert_eq!(daemon.scopes().len(), 1);
+    assert!(daemon.scopes().is_empty());
     daemon.stop();
     let conn = rusqlite::Connection::open(&db).unwrap();
     let version: i64 = conn
@@ -270,10 +343,7 @@ fn a_damaged_file_starts_the_waiting_state_without_touching_it() {
     daemon.ok(json!({"cmd":"info"}));
     let snapshot = daemon.subscribe("cli").snapshot();
     assert_eq!(snapshot["db_unreadable"], true);
-    assert_eq!(snapshot["scopes"][0]["id"], "public");
-    assert_eq!(snapshot["scopes"][0]["badge"], 0);
-    assert_eq!(snapshot["scopes"][0]["dot"], false);
-    assert_eq!(snapshot["scopes"].as_array().unwrap().len(), 1);
+    assert_eq!(snapshot["scopes"], json!([]), "no token restores no scope");
 
     for request in [
         json!({"cmd":"list"}),

@@ -418,13 +418,11 @@ impl Engine {
     }
 
     /// `notifications`, `public` or a registered owner, as the key of its
-    /// token record. An unregistered owner is `not_found`.
+    /// token record. An unregistered owner, and Public while it is not added,
+    /// is `not_found`.
     pub fn token_key(&self, target: &str) -> Result<String> {
         if target.eq_ignore_ascii_case(NOTIFICATIONS) {
             return Ok(NOTIFICATIONS.into());
-        }
-        if target.eq_ignore_ascii_case(PUBLIC) {
-            return Ok(PUBLIC.into());
         }
         self.registered_scope(target)
             .map(|scope| scope.id.to_lowercase())
@@ -514,10 +512,10 @@ impl Engine {
             cost_per_poll: fetch.usage.cost_per_poll,
             notifications_poll_interval: fetch.poll_interval,
         };
-        let mut targets = vec![
-            (NOTIFICATIONS.to_string(), NOTIFICATIONS.to_string()),
-            (PUBLIC.to_string(), PUBLIC.to_string()),
-        ];
+        let mut targets = vec![(NOTIFICATIONS.to_string(), NOTIFICATIONS.to_string())];
+        if self.registered_scope(PUBLIC).is_some() {
+            targets.push((PUBLIC.to_string(), PUBLIC.to_string()));
+        }
         for scope in self.data.scopes.values() {
             if !scope.removed && scope.id != PUBLIC {
                 targets.push((self.display_name(&scope.id), scope.id.to_lowercase()));

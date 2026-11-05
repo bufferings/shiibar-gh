@@ -44,6 +44,7 @@ fn world() -> FakeGitHub {
 
 fn set_tokens(daemon: &TestDaemon) {
     daemon.ok(json!({"cmd":"scope_add","owner":"org"}));
+    daemon.ok(json!({"cmd":"scope_add","owner":"public"}));
     daemon.ok(json!({"cmd":"token_set","target":"notifications","token":CLASSIC}));
     daemon.ok(json!({"cmd":"token_set","target":"org","token":ORG_TOKEN}));
     daemon.ok(json!({"cmd":"token_set","target":"public","token":PUBLIC_TOKEN}));
@@ -76,7 +77,9 @@ fn seed(github: &FakeGitHub) {
             "org",
             1,
             "alice",
-            json!({"reviewRequests":{"nodes":[{"requestedReviewer":{"__typename":"User","login":"me"}}]}}),
+            json!({"reviewRequests":{"nodes":[{"requestedReviewer":{"__typename":"User","login":"me"}}]},
+                   "author":{"__typename":"User","login":"alice",
+                             "avatarUrl":"https://avatars.example/alice?s=32"}}),
         ));
         w.prs.push(pr_node(
             "PR_2",
@@ -121,7 +124,8 @@ fn seed_ingest() -> Value {
     json!({
         "viewer":"me","missing_pr_ids":[],
         "prs":[
-            pr("PR_1", 1, "alice", json!({"requested_me":true})),
+            pr("PR_1", 1, "alice", json!({"requested_me":true,
+                "author_avatar_url":"https://avatars.example/alice?s=32"})),
             pr("PR_2", 2, "me", json!({"checks":"passed","mergeable":true}))
         ],
         "events":[
@@ -161,6 +165,24 @@ fn from_token_set_to_list_the_rows_match_a_dev_ingest() {
     let injected_note = app2.notification();
 
     assert_eq!(fetched_cards.len(), 2);
+    let avatar = |id: &str| {
+        fetched_cards.iter().find(|c| c["id"] == id).unwrap()["author_avatar_url"].clone()
+    };
+    assert_eq!(avatar("PR_1"), "https://avatars.example/alice?s=32");
+    assert_eq!(avatar("PR_2"), Value::Null, "no avatarUrl in the answer");
+    let status = github
+        .requests()
+        .into_iter()
+        .find(|r| r.op.as_deref() == Some("Status"))
+        .unwrap();
+    assert!(
+        status.body["query"]
+            .as_str()
+            .unwrap()
+            .contains("author { __typename login avatarUrl(size: 32) }"),
+        "{}",
+        status.body["query"]
+    );
     assert_eq!(
         fetched_cards, injected_cards,
         "the same rows, unread and done"
@@ -555,6 +577,7 @@ fn without_the_notifications_token_nothing_is_fetched() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = start(dir.path(), &github);
     daemon.ok(json!({"cmd":"scope_add","owner":"org"}));
+    daemon.ok(json!({"cmd":"scope_add","owner":"public"}));
     daemon.ok(json!({"cmd":"token_set","target":"org","token":ORG_TOKEN}));
     daemon.clock(T0 + 100);
     daemon.ok(json!({"cmd":"refresh"}));
@@ -820,6 +843,9 @@ fn a_scope_without_a_recorded_token_is_removed_without_the_keychain() {
     let daemon = TestDaemon::start(dir.path());
     daemon.ok(json!({"cmd":"scope_add","owner":"acme"}));
     daemon.ok(json!({"cmd":"scope_remove","owner":"acme"}));
+    daemon.ok(json!({"cmd":"scope_add","owner":"public"}));
+    daemon.ok(json!({"cmd":"scope_remove","owner":"public"}));
+    daemon.ok(json!({"cmd":"scope_add","owner":"public"}));
     assert_eq!(
         daemon.code(json!({"cmd":"token_set","target":"public","token":"x"})),
         "internal"
@@ -924,6 +950,13 @@ fn a_version_1_database_migrates_and_its_fetch_state_survives_a_restart() {
         true,
         "v1 rows survive"
     );
+    // Version 3 colors the saved scopes: Public beige, owners in turn.
+    assert_eq!(daemon.scope("public")["color"], "beige");
+    assert_eq!(daemon.scope("org")["color"], "gray");
+    assert_eq!(
+        daemon.card("PR_1").unwrap()["author_avatar_url"],
+        Value::Null
+    );
     daemon.ok(json!({"cmd":"token_set","target":"notifications","token":CLASSIC}));
     daemon.ok(json!({"cmd":"token_set","target":"org","token":ORG_TOKEN}));
     daemon.ok(json!({"cmd":"config_set","key":"include_team_requests","value":false}));
@@ -937,7 +970,7 @@ fn a_version_1_database_migrates_and_its_fetch_state_survives_a_restart() {
         .unwrap()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
 
     let daemon = start(dir.path(), &github);
     assert_eq!(
@@ -948,6 +981,12 @@ fn a_version_1_database_migrates_and_its_fetch_state_survives_a_restart() {
     let scope = daemon.scope("org");
     assert_eq!(scope["kind"], "org");
     assert_eq!(scope["updated_at"], scope_before["updated_at"]);
+    daemon.ok(json!({"cmd":"scope_add","owner":"next"}));
+    assert_eq!(
+        daemon.scope("next")["color"],
+        "green",
+        "the cycle goes on after the colors the migration gave"
+    );
     github.clear_requests();
     daemon.clock(T0 + 200);
     let events: Vec<fake_github::Req> = github
@@ -2019,5 +2058,39 @@ fn mentions_come_from_the_links_in_the_posts() {
         .find(|r| r.op.as_deref() == Some("Events"))
         .unwrap();
     assert!(!events.query().contains("MENTIONED_EVENT"));
+    daemon.stop();
+}
+
+#[test]
+fn without_public_nothing_is_searched_or_shown_for_unregistered_owners() {
+    let github = world();
+    github.with(|w| {
+        w.prs.push(pr_node("PR_9", "stranger", 9, "me", json!({})));
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    daemon.ok(json!({"cmd":"scope_add","owner":"org"}));
+    daemon.ok(json!({"cmd":"token_set","target":"notifications","token":CLASSIC}));
+    daemon.ok(json!({"cmd":"token_set","target":"org","token":ORG_TOKEN}));
+    assert_eq!(
+        daemon.code(json!({"cmd":"token_set","target":"public","token":PUBLIC_TOKEN})),
+        "not_found"
+    );
+    daemon.clock(T0 + 100);
+    let requests = github.requests();
+    assert!(!requests.is_empty());
+    assert!(
+        requests
+            .iter()
+            .all(|r| !r.body.to_string().contains("is:public")),
+        "no Public search"
+    );
+    assert!(daemon.cards().is_empty());
+    let ids: Vec<String> = daemon
+        .scopes()
+        .iter()
+        .map(|s| s["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(ids, ["org"]);
     daemon.stop();
 }

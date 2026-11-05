@@ -157,6 +157,19 @@ pub enum ScopeKind {
     Public,
 }
 
+/// The background color of a scope, one of the six fixed colors of the
+/// Settings window. DESIGN.md, "Overview and scope".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScopeColor {
+    Gray,
+    Green,
+    Blue,
+    Purple,
+    Pink,
+    Beige,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WarningKind {
@@ -243,6 +256,9 @@ pub struct IngestPr {
     pub url: String,
     pub title: String,
     pub author: String,
+    /// `author.avatarUrl`; `null` when `author` is `null`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_avatar_url: Option<String>,
     pub base: String,
     pub head: String,
     pub state: PrState,
@@ -362,6 +378,10 @@ pub enum Request {
         scope: String,
         on: bool,
     },
+    ScopeColor {
+        scope: String,
+        color: ScopeColor,
+    },
     Subscribe {
         client: ClientKind,
     },
@@ -413,6 +433,7 @@ pub struct Scope {
     pub kind: Option<Lenient<ScopeKind>>,
     pub enabled: bool,
     pub notify: bool,
+    pub color: Lenient<ScopeColor>,
     pub badge: u32,
     pub dot: bool,
     pub warnings: Vec<Warning>,
@@ -478,6 +499,8 @@ pub struct Card {
     pub title: String,
     pub url: String,
     pub author: String,
+    /// `author.avatarUrl`; `null` when the author is unknown.
+    pub author_avatar_url: Option<String>,
     pub mine: bool,
     pub state_label: Lenient<StateLabel>,
     pub review: Lenient<Review>,
@@ -666,6 +689,10 @@ mod tests {
             serde_json::from_str::<Request>(r#"{"cmd":"subscribe","client":"other"}"#).is_err()
         );
         assert!(serde_json::from_str::<EventKind>("\"nope\"").is_err());
+        assert!(
+            serde_json::from_str::<Request>(r#"{"cmd":"scope_color","scope":"a","color":"red"}"#)
+                .is_err()
+        );
     }
 
     #[test]

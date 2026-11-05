@@ -19,7 +19,7 @@ const FILTER_FLAGS: &str =
     "[--scope <scope>] [--needs-action] [--mine|--others] [--snoozed] [--json]";
 
 /// `(command words, arguments, what it does)`.
-const COMMANDS: [(&str, &str, &str); 21] = [
+const COMMANDS: [(&str, &str, &str); 22] = [
     ("list", FILTER_FLAGS, "Print the PR cards"),
     (
         "status",
@@ -45,11 +45,15 @@ const COMMANDS: [(&str, &str, &str); 21] = [
         "Set aside an unreadable database and start empty",
     ),
     ("scope list", "[--json]", "Print the scopes"),
-    ("scope add", "<owner>", "Register an owner"),
+    (
+        "scope add",
+        "<owner>|public",
+        "Register an owner, or Public",
+    ),
     (
         "scope remove",
-        "<owner>",
-        "Remove an owner, keeping its state",
+        "<owner>|public",
+        "Remove an owner or Public, keeping its state",
     ),
     ("scope enable", "<scope>", "Enable a scope"),
     ("scope disable", "<scope>", "Disable a scope"),
@@ -57,6 +61,11 @@ const COMMANDS: [(&str, &str, &str); 21] = [
         "scope notify",
         "<scope> on|off",
         "Turn the notifications of a scope on or off",
+    ),
+    (
+        "scope color",
+        "<scope> gray|green|blue|purple|pink|beige",
+        "Set the background color of a scope",
     ),
     (
         "token set",
@@ -240,6 +249,18 @@ fn scope_command(sub: &str, rest: &[String]) -> Result<Command, UsageError> {
                 on: on == "on",
             }),
             _ => return Err(UsageError("expected <scope> on|off".into())),
+        },
+        "color" => match rest {
+            [scope, color] => {
+                // An unknown color is an invalid value: exit 1 like `invalid`.
+                let color = serde_json::from_value(serde_json::Value::String(color.clone()))
+                    .map_err(|_| UsageError(format!("unknown color: {color}")))?;
+                Command::quiet(Request::ScopeColor {
+                    scope: scope.clone(),
+                    color,
+                })
+            }
+            _ => return Err(UsageError("expected <scope> <color>".into())),
         },
         other => return Err(UsageError(format!("unknown command: scope {other}"))),
     })
@@ -428,8 +449,14 @@ fn print_card(card: &Card) {
 
 fn print_scope(scope: &Scope) {
     println!(
-        "{} name={} enabled={} notify={} badge={} dot={}",
-        scope.id, scope.name, scope.enabled, scope.notify, scope.badge, scope.dot
+        "{} name={} enabled={} notify={} color={} badge={} dot={}",
+        scope.id,
+        scope.name,
+        scope.enabled,
+        scope.notify,
+        scope.color.as_text(),
+        scope.badge,
+        scope.dot
     );
 }
 

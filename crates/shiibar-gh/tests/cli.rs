@@ -215,7 +215,7 @@ fn no_daemon_exits_1() {
 #[test]
 fn exit_codes_without_injected_events() {
     let daemon = Daemon::start();
-    let cases: [(&[&str], i32); 14] = [
+    let cases: [(&[&str], i32); 15] = [
         (&["list"], 0),
         (&["activity"], 0),
         (&["refresh"], 0),
@@ -227,7 +227,8 @@ fn exit_codes_without_injected_events() {
         (&["status", "a/b#1"], 2),
         (&["open", "a/b#1"], 2),
         (&["list", "--scope", "nobody"], 2),
-        (&["scope", "add", "public"], 1),
+        (&["scope", "add", "public"], 0),
+        (&["scope", "add", "notifications"], 1),
         (&["config", "set", "notify_state", "maybe"], 1),
         (&["reset"], 1),
     ];
@@ -235,13 +236,17 @@ fn exit_codes_without_injected_events() {
         let result = daemon.cli(args);
         assert_eq!(result.code, code, "{args:?}: {}", result.stderr);
     }
-    let cases: [(&[&str], i32); 9] = [
+    let cases: [(&[&str], i32); 13] = [
         (&["scope", "add", "Public"], 1),
         (&["scope", "add", "ORG"], 1),
-        (&["scope", "remove", "PUBLIC"], 1),
+        (&["scope", "color", "ORG", "blue"], 0),
+        (&["scope", "color", "org", "red"], 1),
+        (&["scope", "color", "org"], 1),
+        (&["scope", "color", "nobody", "blue"], 2),
+        (&["scope", "remove", "PUBLIC"], 0),
         (&["scope", "disable", "ORG"], 0),
         (&["scope", "remove", "nobody"], 2),
-        (&["scope", "remove", "public"], 1),
+        (&["scope", "remove", "public"], 2),
         (&["scope", "add", "org"], 1),
         (&["config", "get", "nope"], 1),
         (&["scope", "enable", "nobody"], 2),
@@ -295,6 +300,23 @@ fn scope_commands_work_from_the_command_line() {
         .unwrap();
     assert_eq!(org["notify"], false);
     assert_eq!(org["enabled"], false);
+    assert_eq!(org["color"], "gray", "the first color of the cycle");
+    assert_eq!(daemon.cli(&["scope", "color", "org", "pink"]).code, 0);
+    assert!(
+        daemon
+            .cli(&["scope", "list"])
+            .stdout
+            .contains("org name=org enabled=false notify=false color=pink"),
+    );
+    assert_eq!(daemon.cli(&["scope", "add", "public"]).code, 0);
+    assert!(
+        daemon
+            .cli(&["scope", "list"])
+            .stdout
+            .contains("public name=Public")
+    );
+    assert_eq!(daemon.cli(&["scope", "remove", "public"]).code, 0);
+    assert!(!daemon.cli(&["scope", "list"]).stdout.contains("public"));
     assert_eq!(daemon.cli(&["scope", "enable", "org"]).code, 0);
     assert_eq!(daemon.cli(&["scope", "remove", "org"]).code, 0);
     assert!(!daemon.cli(&["scope", "list"]).stdout.contains("org"));
@@ -352,11 +374,18 @@ fn token_set_reads_the_first_line_of_standard_input() {
         1,
         "empty input"
     );
+    assert_eq!(
+        run_with_input(dir.path(), &["token", "set", "public"], "x\n").code,
+        2,
+        "Public is not added yet"
+    );
+    assert_eq!(run(dir.path(), &["scope", "add", "public"]).code, 0);
     let status = run(dir.path(), &["settings", "status", "--json"]);
     assert_eq!(status.code, 0, "{}", status.stderr);
     let status: Value = serde_json::from_str(&status.stdout).unwrap();
     assert_eq!(status["tokens"][0]["target"], "notifications");
     assert_eq!(status["tokens"][0]["registered"], true);
+    assert_eq!(status["tokens"][1]["target"], "public");
     assert_eq!(status["tokens"][1]["registered"], false);
     let text = run(dir.path(), &["settings", "status"]);
     assert!(
