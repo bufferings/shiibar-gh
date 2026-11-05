@@ -161,9 +161,42 @@ public final class SettingsModel: ObservableObject {
         }
     }
 
-    public func addScope(owner: String, type: OwnerType, done: @escaping (String?) -> Void) {
+    /// The message under the owner field when GitHub has no such owner.
+    public static let ownerNotFound = "Owner not found"
+
+    /// Add an owner: `scope_lookup` asks GitHub whether it is an
+    /// organization or a personal account, then `scope_add` registers it
+    /// (DESIGN.md, "Adding a scope and registering a token in Settings").
+    /// The type only builds the Create token URL; the scope's kind still
+    /// comes from fetching. Not found adds nothing; another failure shows
+    /// its reason and the user can try again.
+    public func addOwner(_ owner: String, done: @escaping (String?) -> Void) {
+        let name = owner.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return done(nil) }
         let api = app.api
-        let name = type == .public ? "public" : owner.trimmingCharacters(in: .whitespaces)
+        Task {
+            let found: ScopeLookup
+            do {
+                found = try await api.scopeLookup(name)
+            } catch let error as DaemonError where error.code?.value == .notFound {
+                errors["add"] = Self.ownerNotFound
+                return done(nil)
+            } catch {
+                errors["add"] = "\(error)"
+                return done(nil)
+            }
+            let type: OwnerType = found.kind.value == .org ? .organization : .personal
+            add(found.owner.isEmpty ? name : found.owner, type: type, done: done)
+        }
+    }
+
+    /// Add Public.
+    public func addPublic(done: @escaping (String?) -> Void) {
+        add("public", type: .public, done: done)
+    }
+
+    private func add(_ name: String, type: OwnerType, done: @escaping (String?) -> Void) {
+        let api = app.api
         let before = Set(app.scopes.map(\.id))
         Task {
             do {

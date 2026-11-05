@@ -79,6 +79,16 @@ final class RealDaemonTests: XCTestCase {
         } catch let error as DaemonError {
             XCTAssertEqual(error.code, .known(.invalid))
         }
+        // scope_lookup reaches the daemon; this build has no GitHub, so the
+        // answer is a reason, and a login GitHub cannot have is invalid.
+        for (owner, code) in [("a/b", ErrorCode.invalid), ("rust-lang", .internal)] {
+            do {
+                _ = try await api.scopeLookup(owner)
+                XCTFail("expected \(code)")
+            } catch let error as DaemonError {
+                XCTAssertEqual(error.code, .known(code), owner)
+            }
+        }
         let status = try await api.settingsStatus()
         XCTAssertEqual(status.tokens.map(\.target), ["notifications", "public"])
         let cards = try await api.list(ListFilter(scope: "public"))

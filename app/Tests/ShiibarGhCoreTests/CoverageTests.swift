@@ -426,3 +426,86 @@ final class AppearanceTests: XCTestCase {
         XCTAssertEqual(AppAppearance(.string("dark")), .dark)
     }
 }
+
+@MainActor
+final class AddScopeTests: XCTestCase {
+    var defaults: UserDefaults!
+    var suite = ""
+    var api: FakeAPI!
+    var settings: SettingsModel!
+
+    override func setUp() async throws {
+        (defaults, suite) = testDefaults()
+        api = FakeAPI()
+        let app = AppModel(api: api, store: UIStateStore(defaults: defaults), opener: FakeOpener(), notifier: FakeNotifier(), clock: { T0 })
+        settings = SettingsModel(app: app, launch: nil)
+    }
+
+    override func tearDown() async throws {
+        defaults.removePersistentDomain(forName: suite)
+    }
+
+    func add(_ owner: String) async -> String? {
+        await withCheckedContinuation { continuation in
+            settings.addOwner(owner) { continuation.resume(returning: $0) }
+        }
+    }
+
+    func testAnOrganizationIsLookedUpThenAddedWithMembersRead() async throws {
+        api.owners = ["Example-Org": .org]
+        api.scopesAfterAdd = [Scope(id: "opaque-1", name: "Example-Org")]
+        let added = await add(" example-org ")
+        XCTAssertEqual(added, "opaque-1")
+        XCTAssertEqual(api.calls.filter { $0.hasPrefix("scope_") }, ["scope_lookup example-org", "scope_add Example-Org"])
+        XCTAssertEqual(settings.addedTypes["opaque-1"], .organization)
+        XCTAssertTrue(settings.entering.contains("opaque-1"), "the token entry follows")
+        let url = URLComponents(string: CreateTokenURL.fineGrained(owner: "Example-Org", type: settings.addedTypes["opaque-1"]!))!
+        XCTAssertTrue(url.queryItems!.contains(URLQueryItem(name: "members", value: "read")))
+        XCTAssertNil(settings.errors["add"])
+    }
+
+    func testAPersonalAccountGetsNoMembersPermission() async {
+        api.owners = ["someone": .user]
+        api.scopesAfterAdd = [Scope(id: "opaque-2", name: "someone")]
+        _ = await add("someone")
+        XCTAssertEqual(settings.addedTypes["opaque-2"], .personal)
+        let url = URLComponents(string: CreateTokenURL.fineGrained(owner: "someone", type: .personal))!
+        XCTAssertFalse(url.queryItems!.contains { $0.name == "members" })
+    }
+
+    func testAnUnknownOwnerAddsNothing() async {
+        let added = await add("nobody")
+        XCTAssertNil(added)
+        XCTAssertEqual(settings.errors["add"], "Owner not found")
+        XCTAssertFalse(api.calls.contains { $0.hasPrefix("scope_add") })
+    }
+
+    func testAnotherFailureShowsItsReasonAndCanBeRetried() async {
+        api.lookupFailure = DaemonError(code: .internal, message: "cannot look the owner up: GitHub answered 502")
+        let failed = await add("org")
+        XCTAssertNil(failed)
+        XCTAssertEqual(settings.errors["add"], "cannot look the owner up: GitHub answered 502")
+        XCTAssertFalse(api.calls.contains { $0.hasPrefix("scope_add") })
+        api.lookupFailure = nil
+        api.owners = ["org": .org]
+        api.scopesAfterAdd = [Scope(id: "o", name: "org")]
+        let retried = await add("org")
+        XCTAssertEqual(retried, "o")
+        XCTAssertNil(settings.errors["add"])
+    }
+
+    func testPublicHasItsOwnButtonWithoutALookup() async {
+        api.scopesAfterAdd = [Scope(id: "p", name: "Public", kind: .public)]
+        let added: String? = await withCheckedContinuation { continuation in
+            settings.addPublic { continuation.resume(returning: $0) }
+        }
+        XCTAssertEqual(added, "p")
+        XCTAssertEqual(api.calls.filter { $0.hasPrefix("scope_") }, ["scope_add public"])
+        XCTAssertEqual(settings.addedTypes["p"], .public)
+    }
+
+    func testTheLookupAnswerDecodes() throws {
+        let line = #"{"ok":true,"owner":"rust-lang","kind":"org"}"#
+        XCTAssertEqual(try JSONDecoder().decode(ScopeLookup.self, from: Data(line.utf8)), ScopeLookup(owner: "rust-lang", kind: .org))
+    }
+}

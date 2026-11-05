@@ -27,7 +27,10 @@ struct ScopesTab: View {
             }
         }
         if adding {
-            AddScopeSection(model: model) { adding = false }
+            AddScopeSection(model: model, app: app) {
+                adding = false
+                model.errors["add"] = nil
+            }
         }
         HStack {
             Text("In GitHub notification settings, \u{201C}On GitHub\u{201D} must be on for conversations you participate in")
@@ -298,43 +301,46 @@ struct ColorChoice: View {
     }
 }
 
+/// Add scope: the owner's login, looked up on GitHub when added, and a
+/// separate button for Public (DESIGN.md, "Adding a scope and registering a
+/// token in Settings").
 struct AddScopeSection: View {
     @ObservedObject var model: SettingsModel
+    @ObservedObject var app: AppModel
     var finished: () -> Void
     @State private var owner = ""
-    @State private var type: OwnerType = .organization
+    @State private var busy = false
+
+    var hasPublic: Bool { app.scopes.contains(where: \.isPublic) }
 
     var body: some View {
         Section2(title: "Add scope") {
             Item(first: true) {
-                Picker("", selection: $type) {
-                    ForEach(OwnerType.allCases, id: \.self) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 330)
-                Spacer()
-            }
-            Item {
-                if type == .public {
-                    Label2(title: "Public", sub: "PRs you\u{2019}re involved in on public repositories of owners you have not added")
-                } else {
-                    TextField(type == .organization ? "Organization login" : "Account login", text: $owner)
+                VStack(alignment: .leading, spacing: 4) {
+                    TextField("Organization or account login", text: $owner)
                         .textFieldStyle(.roundedBorder)
                         .onSubmit(add)
+                    ErrorText(text: model.errors["add"])
                 }
                 SettingsButton(title: "Cancel", action: finished)
-                SettingsButton(title: "Add", action: add)
+                SettingsButton(title: busy ? "Adding…" : "Add", action: add)
             }
-            if let error = model.errors["add"] {
-                Item { ErrorText(text: error) }
+            if !hasPublic {
+                Item {
+                    Label2(title: "Public", sub: "PRs you\u{2019}re involved in on public repositories of owners you have not added")
+                    SettingsButton(title: "Add Public") {
+                        model.addPublic { added in if added != nil { finished() } }
+                    }
+                }
             }
         }
     }
 
     func add() {
-        guard type == .public || !owner.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        model.addScope(owner: owner, type: type) { added in
+        guard !busy, !owner.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        busy = true
+        model.addOwner(owner) { added in
+            busy = false
             if added != nil { finished() }
         }
     }

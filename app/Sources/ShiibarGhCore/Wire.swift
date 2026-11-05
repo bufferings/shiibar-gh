@@ -454,6 +454,17 @@ struct ScopesResponse: Decodable { var scopes: [Scope] }
 struct RefreshResponse: Decodable { var warnings: [Warning] }
 struct OpenResponse: Decodable { var url: String }
 
+/// `scope_lookup`: the owner's login as GitHub spells it and its type.
+public struct ScopeLookup: Equatable, Decodable {
+    public var owner: String
+    public var kind: Lenient<ScopeKind>
+
+    public init(owner: String, kind: ScopeKind) {
+        self.owner = owner
+        self.kind = .known(kind)
+    }
+}
+
 public struct InfoResponse: Equatable, Decodable {
     public var version: String
     public var startedAt: Int64

@@ -267,12 +267,26 @@ final class FakeAPI: DaemonAPI, @unchecked Sendable {
         return value
     }
     func scopeList() async throws -> [Scope] { try record("scope_list"); return [] }
-    func scopeAdd(_ owner: String) async throws -> [Scope] { try record("scope_add \(owner)"); return [] }
+    func scopeAdd(_ owner: String) async throws -> [Scope] { try record("scope_add \(owner)"); return scopesAfterAdd }
     func scopeRemove(_ owner: String) async throws -> [Scope] { try record("scope_remove \(owner)"); return [] }
     func scopeEnable(_ scope: String) async throws { try record("scope_enable \(scope)") }
     func scopeDisable(_ scope: String) async throws { try record("scope_disable \(scope)") }
     func scopeNotify(_ scope: String, on: Bool) async throws { try record("scope_notify \(scope) \(on)") }
     func scopeColor(_ scope: String, _ color: ScopeColor) async throws { try record("scope_color \(scope) \(color.rawValue)") }
+    /// Owners `scope_lookup` finds; others are not found. `lookupFailure`
+    /// fails every lookup instead.
+    var owners: [String: ScopeKind] = [:]
+    var lookupFailure: DaemonError?
+    /// What `scope_add` answers.
+    var scopesAfterAdd: [Scope] = []
+    func scopeLookup(_ owner: String) async throws -> ScopeLookup {
+        try record("scope_lookup \(owner)")
+        if let lookupFailure { throw lookupFailure }
+        guard let (name, kind) = owners.first(where: { $0.key.lowercased() == owner.lowercased() }) else {
+            throw DaemonError(code: .notFound, message: "not found: no such owner on GitHub")
+        }
+        return ScopeLookup(owner: name, kind: kind)
+    }
     func tokenSet(_ target: String, token: String) async throws { try record("token_set \(target)") }
     func tokenTest(_ target: String) async throws -> TokenTestResponse { try record("token_test \(target)"); return TokenTestResponse(results: []) }
     func settingsStatus() async throws -> SettingsStatus { try record("settings_status"); return SettingsStatus() }

@@ -70,6 +70,7 @@ public protocol DaemonAPI: AnyObject, Sendable {
     func scopeDisable(_ scope: String) async throws
     func scopeNotify(_ scope: String, on: Bool) async throws
     func scopeColor(_ scope: String, _ color: ScopeColor) async throws
+    func scopeLookup(_ owner: String) async throws -> ScopeLookup
     func tokenSet(_ target: String, token: String) async throws
     func tokenTest(_ target: String) async throws -> TokenTestResponse
     func settingsStatus() async throws -> SettingsStatus
@@ -226,6 +227,10 @@ public final class SocketDaemonAPI: DaemonAPI, @unchecked Sendable {
 
     public func scopeColor(_ scope: String, _ color: ScopeColor) async throws {
         _ = try await call(["cmd": "scope_color", "scope": scope, "color": color.rawValue])
+    }
+
+    public func scopeLookup(_ owner: String) async throws -> ScopeLookup {
+        try decode(ScopeLookup.self, try await call(["cmd": "scope_lookup", "owner": owner], slow: true))
     }
 
     public func tokenSet(_ target: String, token: String) async throws {
