@@ -28,6 +28,10 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
     /// The appearance of the popover and the windows, set explicitly (see
     /// SurfaceAppearance.named).
     private var surfaceAppearance = NSAppearance(named: .aqua)
+    /// A scope's window opened or closed: the app is a regular app while one
+    /// exists.
+    var onWindowOpened: ((String) -> Void)?
+    var onWindowClosed: ((String) -> Void)?
     /// Called on ⌘Q while a surface has the focus.
     var onQuit: (() -> Void)?
 
@@ -57,6 +61,11 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         popover.appearance = surfaceAppearance
         for panel in panels.values { panel.appearance = surfaceAppearance }
         update(app.scopes)
+    }
+
+    /// The Dock icon or ⌘Tab: the open windows come to the front.
+    func bringWindowsToFront() {
+        for panel in panels.values { panel.orderFront(nil) }
     }
 
     // MARK: - Menu bar
@@ -218,6 +227,7 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             panel.center()
         }
         panels[scope] = panel
+        onWindowOpened?(scope)
         app.surfaceDisplayed(.window, scope: scope, true)
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
@@ -262,6 +272,7 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             app.surfaceClosed(.window, scope: scope)
             app.surfaceDisplayed(.window, scope: scope, false)
             panels[scope] = nil
+            onWindowClosed?(scope)
         }
     }
 

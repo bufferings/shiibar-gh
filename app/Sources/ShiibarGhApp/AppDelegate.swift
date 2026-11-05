@@ -21,7 +21,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // The Edit menu's key equivalents make ⌘V and the other text
         // shortcuts work in every text field (see MainMenu).
-        NSApp.mainMenu = MainMenu.make()
+        NSApp.mainMenu = MainMenu.make(MainMenu.Actions(
+            about: { [weak self] in self?.about() },
+            settings: { [weak self] in self?.showSettings(.general) }
+        ))
         let bundled = Bundle.main.bundleURL.pathExtension == "app"
         let root = StateDirectory.root() ?? NSTemporaryDirectory()
         let socket = StateDirectory.socket(root: root)
@@ -47,6 +50,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             )
         }
         surfaces.onQuit = { [weak self] in self?.quit() }
+        surfaces.onWindowOpened = { [weak self] scope in self?.regularWindowOpened("window:" + scope) }
+        surfaces.onWindowClosed = { [weak self] scope in self?.regularWindowClosed("window:" + scope) }
         if bundled {
             launch = LaunchAtLogin(service: MainAppLoginItem(), api: api, store: store)
         }
@@ -104,6 +109,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var didApplyLaunch = false
     private var appearance: AppearanceFollower?
     private var appearanceObservation: NSKeyValueObservation?
+    private var regularWindows = RegularWindows()
+
+    // MARK: - Regular app while a window is open
+
+    /// DESIGN.md, "Switching to a regular app": a Dock icon, ⌘Tab and the
+    /// menu bar while a pinned window or Settings exists.
+    private func regularWindowOpened(_ id: String) {
+        guard regularWindows.opened(id) else { return }
+        NSApp.setActivationPolicy(.regular)
+        // Measured in shiibar-cc (AppState.switchToRegularApp, macOS 14):
+        // an app already active keeps the previous app's menu bar after the
+        // switch until activation leaves and comes back, so it bounces
+        // through the Dock, which has no menu bar of its own.
+        if let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first {
+            dock.activate(options: [])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+
+    private func regularWindowClosed(_ id: String) {
+        guard regularWindows.closed(id) else { return }
+        NSApp.setActivationPolicy(.accessory)
+    }
+
+    /// The Dock icon: bring the open windows forward.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        bringWindowsToFront()
+        return true
+    }
+
+    /// ⌘Tab and other activations while regular.
+    func applicationDidBecomeActive(_ notification: Notification) {
+        if regularWindows.isRegular { bringWindowsToFront() }
+    }
+
+    private func bringWindowsToFront() {
+        surfaces?.bringWindowsToFront()
+        if let window = settingsWindow, window.isVisible { window.orderFront(nil) }
+    }
 
     private func applySurfaceAppearance() {
         let dark = SurfaceAppearance.isDark(
@@ -136,6 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             settingsWindow = window
         }
         settings.windowOpened()
+        regularWindowOpened("settings")
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
     }
@@ -144,6 +193,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         MainActor.assumeIsolated {
             if (notification.object as? NSWindow) === settingsWindow {
                 settings.windowClosed()
+                regularWindowClosed("settings")
             }
         }
     }

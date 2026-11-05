@@ -79,6 +79,12 @@ final class RealDaemonTests: XCTestCase {
         } catch let error as DaemonError {
             XCTAssertEqual(error.code, .known(.invalid))
         }
+        // Only a dev-ingest build without a test GitHub may get a lookup: a
+        // default build would ask the real GitHub. Its log says which it is.
+        let log = (try? String(contentsOfFile: StateDirectory.daemonLog(root: dir), encoding: .utf8)) ?? ""
+        guard log.contains("dev-ingest: no GitHub") else {
+            return XCTFail("SHIIBAR_GH_TEST_DAEMON must be a dev-ingest build (cargo build -p shiibar-ghd --features dev-ingest)")
+        }
         // scope_lookup reaches the daemon; this build has no GitHub, so the
         // answer is a reason, and a login GitHub cannot have is invalid.
         for (owner, code) in [("a/b", ErrorCode.invalid), ("rust-lang", .internal)] {

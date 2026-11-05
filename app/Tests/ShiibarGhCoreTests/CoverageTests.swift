@@ -351,6 +351,7 @@ final class RefusingLoginItem: LoginItemService {
     func openSystemSettings() {}
 }
 
+@MainActor
 final class MainMenuTests: XCTestCase {
     /// ⌘V reaches a text field only through a menu item with that key
     /// equivalent and no target, so the first responder gets `paste:`.
@@ -363,8 +364,35 @@ final class MainMenuTests: XCTestCase {
         }
         XCTAssertEqual(found, ["⌘z undo:", "⇧⌘z redo:", "⌘x cut:", "⌘c copy:", "⌘v paste:", "⌘a selectAll:"])
         XCTAssertTrue(items.allSatisfy { $0.target == nil })
-        let quit = menu.items.compactMap(\.submenu).flatMap(\.items).contains { $0.keyEquivalent == "q" }
-        XCTAssertFalse(quit, "⌘Q stays with the popover and the focused window")
+        XCTAssertEqual(menu.items.count, 2, "the app menu and Edit only")
+    }
+
+    @MainActor
+    func testTheAppMenuHasAboutSettingsCloseWindowAndQuit() throws {
+        var ran: [String] = []
+        let menu = MainMenu.make(MainMenu.Actions(about: { ran.append("about") }, settings: { ran.append("settings") }))
+        let app = try XCTUnwrap(menu.items.first?.submenu)
+        let items = app.items.filter { !$0.isSeparatorItem }
+        XCTAssertEqual(items.map(\.title), ["About shiibar-gh", "Settings…", "Close Window", "Quit shiibar-gh"])
+        XCTAssertEqual(items.map(\.keyEquivalent), ["", ",", "w", "q"])
+        XCTAssertEqual(items[2].action, #selector(NSWindow.performClose(_:)))
+        XCTAssertNil(items[2].target, "the key window closes; none, and it is disabled")
+        XCTAssertEqual(items[3].action, #selector(NSApplication.terminate(_:)), "the same path as the ⌄ Quit")
+        app.performActionForItem(at: app.index(of: items[1]))
+        app.performActionForItem(at: app.index(of: items[0]))
+        XCTAssertEqual(ran, ["settings", "about"])
+    }
+
+    func testTheAppIsRegularWhileAWindowOrSettingsIsOpen() {
+        var windows = RegularWindows()
+        XCTAssertTrue(windows.opened("window:org"), "regular")
+        XCTAssertFalse(windows.opened("settings"))
+        XCTAssertFalse(windows.opened("window:org"))
+        XCTAssertFalse(windows.closed("window:org"), "Settings is still open")
+        XCTAssertTrue(windows.isRegular)
+        XCTAssertTrue(windows.closed("settings"), "back to the accessory app")
+        XCTAssertFalse(windows.closed("settings"))
+        XCTAssertFalse(windows.isRegular)
     }
 
     /// A text field handles the selector the ⌘V item sends.
