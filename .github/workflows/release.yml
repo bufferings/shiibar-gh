@@ -7,9 +7,9 @@
 # workflow_dispatch is a dry run: the same steps with the real secrets
 # (certificate import, signing, notarization, stapling, zip), but no release
 # is created; the zip is kept as a workflow artifact instead. Only the
-# publish job, which a dry run skips, may write to the repository. The owner runs
-# only this dry run in M3 (docs/tasks/M3.md); the first real release comes
-# after M4.
+# publish job, which a dry run skips, may write to the repository. The first
+# real release is 0.1, single account, after the M3 owner checks
+# (docs/tasks/M3.md).
 #
 # Secrets: DEVELOPER_ID_CERT_P12 (base64 of the .p12),
 # DEVELOPER_ID_CERT_PASSWORD, APPLE_API_KEY_P8, APPLE_API_KEY_ID,
