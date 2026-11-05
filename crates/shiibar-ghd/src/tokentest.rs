@@ -92,7 +92,25 @@ fn probe_of(repo: &Value) -> Option<Probe> {
     })
 }
 
-const REPO_FIELDS: &str = "name owner { login } defaultBranchRef { name target { oid } }";
+/// The newest repository with a commit on its default branch, else the
+/// newest one: an empty repository can still answer for PRs, while the
+/// commit items are then unverifiable. docs/tasks/M2.md, "Token test
+/// procedure": "can't verify" only without a repository or a commit.
+fn pick(repos: &[Value]) -> Option<Probe> {
+    let usable = |repo: &&Value| {
+        repo["isEmpty"] != true && repo["defaultBranchRef"]["target"]["oid"].is_string()
+    };
+    repos
+        .iter()
+        .find(usable)
+        .or(repos.first())
+        .and_then(probe_of)
+}
+
+/// How many repositories a probe looks through for one with a commit.
+const PROBE_REPOS: usize = 10;
+
+const REPO_FIELDS: &str = "name isEmpty owner { login } defaultBranchRef { name target { oid } }";
 
 pub struct Tester<'a> {
     pub api: &'a Api,
@@ -203,7 +221,7 @@ impl Tester<'_> {
     async fn public(&mut self) -> Result<Report, CallError> {
         let items = [PRS, CHECKS, BEHIND, TEAMS, MERGE_QUEUE];
         let query = format!(
-            "query Probe {{ viewer {{ login repositories(first: 1, privacy: PUBLIC, ownerAffiliations: [OWNER]) {{ nodes {{ {REPO_FIELDS} }} }} }} \
+            "query Probe {{ viewer {{ login repositories(first: {PROBE_REPOS}, privacy: PUBLIC, ownerAffiliations: [OWNER], orderBy: {{field: PUSHED_AT, direction: DESC}}) {{ nodes {{ {REPO_FIELDS} }} }} }} \
              involved: search(type: ISSUE, query: \"is:pr is:public involves:@me\", first: 1) {{ nodes {{ ... on PullRequest {{ repository {{ {REPO_FIELDS} }} }} }} }} }}"
         );
         let answer = match self.gql(&query, json!({})).await {
@@ -212,17 +230,21 @@ impl Tester<'_> {
             Err(e) => return Err(e),
         };
         let owner = answer.data["viewer"]["login"].as_str().map(str::to_string);
-        let repo = answer.data["involved"]["nodes"][0]["repository"].clone();
-        let repo = if repo.is_object() {
-            repo
+        let involved = answer.data["involved"]["nodes"][0]["repository"].clone();
+        let own: Vec<Value> = answer.data["viewer"]["repositories"]["nodes"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let probe = if involved.is_object() {
+            probe_of(&involved)
         } else {
-            answer.data["viewer"]["repositories"]["nodes"][0].clone()
+            pick(&own)
         };
         let mut report = Report {
             owner,
             ..Report::default()
         };
-        match probe_of(&repo) {
+        match probe {
             None => {
                 for item in [PRS, CHECKS, BEHIND, MERGE_QUEUE] {
                     report
@@ -261,7 +283,7 @@ impl Tester<'_> {
     async fn owner_scope(&mut self, owner: &str) -> Result<Report, CallError> {
         let query = format!(
             "query Probe($owner: String!) {{ viewer {{ login }} owner: repositoryOwner(login: $owner) {{ __typename login \
-             repositories(first: 1, orderBy: {{field: PUSHED_AT, direction: DESC}}) {{ nodes {{ {REPO_FIELDS} }} }} }} }}"
+             repositories(first: {PROBE_REPOS}, orderBy: {{field: PUSHED_AT, direction: DESC}}) {{ nodes {{ {REPO_FIELDS} }} }} }} }}"
         );
         let answer = match self.gql(&query, json!({"owner": owner})).await {
             Ok(answer) => answer,
@@ -283,7 +305,11 @@ impl Tester<'_> {
             }
             return Ok(report);
         };
-        match probe_of(&answer.data["owner"]["repositories"]["nodes"][0]) {
+        let repos: Vec<Value> = answer.data["owner"]["repositories"]["nodes"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        match pick(&repos) {
             None => {
                 for item in [PRS, CHECKS, BEHIND, MERGE_QUEUE] {
                     report

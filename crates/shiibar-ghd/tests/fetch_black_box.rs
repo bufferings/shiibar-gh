@@ -1832,3 +1832,117 @@ fn the_poll_interval_holds_across_a_restart() {
     assert_eq!(polls(&github), 1, "restarted after the interval");
     daemon.stop();
 }
+
+fn repo(name: &str, oid: Option<&str>) -> Value {
+    json!({"name":name,"isEmpty":oid.is_none(),"owner":{"login":"org"},
+           "defaultBranchRef": oid.map(|oid| json!({"name":"main","target":{"oid":oid}}))})
+}
+
+fn probe_answer(owner_repos: Vec<Value>, own: Vec<Value>) -> Resp {
+    Resp::json(
+        200,
+        json!({"data":{
+        "rateLimit":{"cost":1,"limit":5000,"remaining":4999,"resetAt":iso(T0 + 3600)},
+        "viewer":{"login":"me","repositories":{"nodes":own}},
+        "owner":{"__typename":"Organization","login":"org","repositories":{"nodes":owner_repos}},
+        "involved":{"nodes":[]}}}),
+    )
+}
+
+fn outcomes(answer: &Value) -> Vec<(String, String)> {
+    answer["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            (
+                r["item"].as_str().unwrap().into(),
+                r["outcome"].as_str().unwrap().into(),
+            )
+        })
+        .collect()
+}
+
+/// docs/tasks/M2.md, "Token test procedure": the newest repository with a
+/// commit, not just the newest one (an empty `hello` came first in the
+/// owner's run, 2026-11-05).
+#[test]
+fn a_token_test_skips_empty_repositories() {
+    let github = world();
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    set_tokens(&daemon);
+    github.intercept(|req| {
+        (req.op.as_deref() == Some("Probe")).then(|| {
+            probe_answer(
+                vec![
+                    repo("hello", None),
+                    repo("hello-merge-queue", Some("c0ffee")),
+                ],
+                vec![],
+            )
+        })
+    });
+    let answer = daemon.ok(json!({"cmd":"token_test","target":"org"}));
+    assert!(outcomes(&answer).iter().all(|(_, o)| o == "ok"), "{answer}");
+    let paths: Vec<String> = github.requests().into_iter().map(|r| r.path).collect();
+    assert!(
+        paths
+            .iter()
+            .any(|p| p == "/repos/org/hello-merge-queue/commits/c0ffee/status"),
+        "{paths:?}"
+    );
+    let probe = github
+        .requests()
+        .into_iter()
+        .find(|r| r.op.as_deref() == Some("Probe"))
+        .unwrap();
+    assert!(probe.query().contains("repositories(first: 10"));
+    assert!(probe.query().contains("isEmpty"));
+
+    // Only empty repositories: PRs can still be asked, commits cannot.
+    github.clear_overrides();
+    github.intercept(|req| {
+        (req.op.as_deref() == Some("Probe"))
+            .then(|| probe_answer(vec![repo("hello", None)], vec![]))
+    });
+    let answer = daemon.ok(json!({"cmd":"token_test","target":"org"}));
+    assert_eq!(
+        outcomes(&answer),
+        [
+            ("PRs, reviews, comments".to_string(), "ok".to_string()),
+            ("Checks".to_string(), "unverifiable".to_string()),
+            ("Behind base".to_string(), "unverifiable".to_string()),
+            ("Team membership".to_string(), "ok".to_string()),
+            ("Merge queue".to_string(), "unverifiable".to_string()),
+        ]
+    );
+    assert_eq!(answer["results"][1]["reason"], "no commit to check against");
+    daemon.stop();
+}
+
+#[test]
+fn the_public_token_test_falls_back_to_my_own_repository_with_a_commit() {
+    let github = world();
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    set_tokens(&daemon);
+    github.intercept(|req| {
+        (req.op.as_deref() == Some("Probe")).then(|| {
+            probe_answer(
+                vec![],
+                vec![repo("empty", None), repo("dotfiles", Some("beef"))],
+            )
+        })
+    });
+    let answer = daemon.ok(json!({"cmd":"token_test","target":"public"}));
+    assert!(outcomes(&answer).iter().all(|(_, o)| o == "ok"), "{answer}");
+    let paths: Vec<String> = github.requests().into_iter().map(|r| r.path).collect();
+    assert!(
+        paths
+            .iter()
+            .any(|p| p == "/repos/org/dotfiles/commits/beef/status"),
+        "{paths:?}"
+    );
+    daemon.stop();
+}

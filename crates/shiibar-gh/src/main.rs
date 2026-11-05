@@ -450,20 +450,28 @@ fn print_warning(warning: &Warning) {
     );
 }
 
-fn print_test(result: &TestResult) {
+/// One `token test` line.
+fn test_line(result: &TestResult) -> String {
     let outcome = match result.outcome.as_text().as_str() {
         "ok" => "OK".to_string(),
-        "failed" => format!(
-            "Failed (missing {})",
-            result.missing.as_deref().unwrap_or("a permission")
-        ),
+        // A permission when one is missing, else why it failed, such as a
+        // rejected token.
+        "failed" => match (&result.missing, &result.reason) {
+            (Some(missing), _) => format!("Failed (missing {missing})"),
+            (None, Some(reason)) => format!("Failed ({reason})"),
+            (None, None) => "Failed".to_string(),
+        },
         "unverifiable" => format!(
             "Can't verify ({})",
             result.reason.as_deref().unwrap_or("nothing to check")
         ),
         other => other.to_string(),
     };
-    println!("{}: {outcome}", result.item);
+    format!("{}: {outcome}", result.item)
+}
+
+fn print_test(result: &TestResult) {
+    println!("{}", test_line(result));
 }
 
 fn optional<T: std::fmt::Display>(value: Option<T>) -> String {
@@ -634,4 +642,50 @@ fn run(args: &[String]) -> u8 {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     ExitCode::from(run(&args))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shiibar_gh_proto::{Lenient, TestOutcome};
+
+    fn result(outcome: TestOutcome, missing: Option<&str>, reason: Option<&str>) -> TestResult {
+        TestResult {
+            item: "Checks".into(),
+            outcome: Lenient::Known(outcome),
+            missing: missing.map(str::to_string),
+            reason: reason.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn a_failed_test_names_the_missing_permission_or_else_the_reason() {
+        let cases = [
+            (
+                result(
+                    TestOutcome::Failed,
+                    Some("actions=read"),
+                    Some("permission error"),
+                ),
+                "Checks: Failed (missing actions=read)",
+            ),
+            (
+                result(TestOutcome::Failed, None, Some("the token was rejected")),
+                "Checks: Failed (the token was rejected)",
+            ),
+            (result(TestOutcome::Failed, None, None), "Checks: Failed"),
+            (result(TestOutcome::Ok, None, None), "Checks: OK"),
+            (
+                result(
+                    TestOutcome::Unverifiable,
+                    None,
+                    Some("no commit to check against"),
+                ),
+                "Checks: Can't verify (no commit to check against)",
+            ),
+        ];
+        for (result, line) in cases {
+            assert_eq!(test_line(&result), line);
+        }
+    }
 }
