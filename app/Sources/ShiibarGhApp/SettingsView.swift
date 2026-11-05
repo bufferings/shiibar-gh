@@ -249,6 +249,22 @@ struct GeneralTab: View {
                     .labelsHidden()
             }
         }
+        Section2(title: "Appearance") {
+            Item(first: true) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Label2(title: "Appearance", sub: "\u{201C}System\u{201D} follows the appearance setting of your Mac")
+                    ErrorText(text: model.errors[AppAppearance.configKey])
+                }
+                Picker("", selection: Binding(
+                    get: { AppAppearance(model.config[AppAppearance.configKey]).rawValue },
+                    set: { model.set(AppAppearance.configKey, .string($0)) }
+                )) {
+                    ForEach(AppAppearance.allCases, id: \.self) { Text($0.title).tag($0.rawValue) }
+                }
+                .labelsHidden()
+                .frame(width: 140)
+            }
+        }
         Section2(title: "Polling") {
             Item(first: true) {
                 Label2(title: "Notifications API interval", sub: "Follows the interval GitHub specifies")

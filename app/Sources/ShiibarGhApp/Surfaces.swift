@@ -49,6 +49,10 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
 
     // MARK: - Menu bar
 
+    func redrawIcons() {
+        update(app.scopes)
+    }
+
     private func update(_ scopes: [Scope]) {
         let shown = scopes.filter(\.enabled)
         let ids = shown.map(\.id)

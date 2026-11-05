@@ -193,3 +193,51 @@ public final class AvatarStore: ObservableObject {
         }
     }
 }
+
+/// Appearance in Settings (DESIGN.md, "Settings" and "UI"): System follows
+/// the Mac, Light and Dark fix it. Kept by the daemon as `appearance`.
+public enum AppAppearance: String, Equatable, CaseIterable {
+    case system, light, dark
+
+    public static let configKey = "appearance"
+
+    public var title: String {
+        switch self {
+        case .system: return "System"
+        case .light: return "Light"
+        case .dark: return "Dark"
+        }
+    }
+
+    /// An unknown or missing value follows the Mac.
+    public init(_ value: ConfigValue?) {
+        self = value?.stringValue.flatMap(AppAppearance.init(rawValue:)) ?? .system
+    }
+}
+
+/// Applies the appearance at connection and on every `config_changed`.
+@MainActor
+public final class AppearanceFollower {
+    private let api: DaemonAPI
+    private let apply: (AppAppearance) -> Void
+    public private(set) var current: AppAppearance = .system
+
+    public init(app: AppModel, apply: @escaping (AppAppearance) -> Void) {
+        self.api = app.api
+        self.apply = apply
+        app.observeConfig { [weak self] key, value in
+            guard key == AppAppearance.configKey else { return }
+            self?.set(AppAppearance(value))
+        }
+    }
+
+    /// Read the saved value, at start and after a reconnect.
+    public func load() async {
+        set(AppAppearance(try? await api.configGet(AppAppearance.configKey)))
+    }
+
+    private func set(_ appearance: AppAppearance) {
+        current = appearance
+        apply(appearance)
+    }
+}

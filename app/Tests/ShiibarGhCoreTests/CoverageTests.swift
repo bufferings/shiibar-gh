@@ -350,3 +350,79 @@ final class RefusingLoginItem: LoginItemService {
     func unregister() throws { throw Refused() }
     func openSystemSettings() {}
 }
+
+final class MainMenuTests: XCTestCase {
+    /// ⌘V reaches a text field only through a menu item with that key
+    /// equivalent and no target, so the first responder gets `paste:`.
+    func testTheEditMenuCarriesTheTextShortcutsForTheFirstResponder() throws {
+        let menu = MainMenu.make()
+        let edit = try XCTUnwrap(menu.items.compactMap(\.submenu).first { $0.title == "Edit" })
+        let items = edit.items.filter { !$0.isSeparatorItem }
+        let found = items.map { item in
+            "\(item.keyEquivalentModifierMask.contains(.shift) ? "⇧" : "")⌘\(item.keyEquivalent) \(item.action.map(NSStringFromSelector) ?? "-")"
+        }
+        XCTAssertEqual(found, ["⌘z undo:", "⇧⌘z redo:", "⌘x cut:", "⌘c copy:", "⌘v paste:", "⌘a selectAll:"])
+        XCTAssertTrue(items.allSatisfy { $0.target == nil })
+        let quit = menu.items.compactMap(\.submenu).flatMap(\.items).contains { $0.keyEquivalent == "q" }
+        XCTAssertFalse(quit, "⌘Q stays with the popover and the focused window")
+    }
+
+    /// A text field handles the selector the ⌘V item sends.
+    @MainActor
+    func testATextFieldEditorAnswersTheEditActions() {
+        let editor = NSTextView()
+        for item in MainMenu.editItems where item.action != "redo:" && item.action != "undo:" {
+            XCTAssertTrue(editor.responds(to: NSSelectorFromString(item.action)), item.action)
+        }
+    }
+}
+
+final class ChipLookTests: XCTestCase {
+    func testOffChipsAreAllGrayAndOnChipsAreFilledWithACheck() {
+        for action in [false, true] {
+            let off = ChipLook(on: false, action: action)
+            XCTAssertEqual(off.border, Palette.controlBorder, "\(action)")
+            XCTAssertEqual(off.text, Palette.strongText, "Needs action is not orange when off")
+            XCTAssertEqual(off.fill, Palette.surface)
+            XCTAssertEqual(off.label("Needs action"), "Needs action")
+        }
+        let needs = ChipLook(on: true, action: true)
+        XCTAssertEqual(needs.fill, Palette.badge)
+        XCTAssertEqual(needs.border, Palette.badge)
+        XCTAssertEqual(needs.text, Palette.onColor)
+        XCTAssertEqual(needs.label("Needs action"), "✓ Needs action")
+        let mine = ChipLook(on: true, action: false)
+        XCTAssertEqual(mine.fill, Palette.text)
+        XCTAssertEqual(mine.text, Palette.surface)
+        XCTAssertEqual(mine.label("My PRs"), "✓ My PRs")
+        // In the dark appearance the black chip turns light with dark text.
+        XCTAssertEqual(mine.fill.resolve(dark: true), RGB(hex: 0xECECEE))
+        XCTAssertEqual(mine.text.resolve(dark: true), RGB(hex: 0x2B2B2F))
+    }
+}
+
+@MainActor
+final class AppearanceTests: XCTestCase {
+    func testTheAppearanceIsLoadedAndFollowsConfigChanged() async {
+        let (defaults, suite) = testDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let api = FakeAPI()
+        api.config["appearance"] = .string("dark")
+        let app = AppModel(api: api, store: UIStateStore(defaults: defaults), opener: FakeOpener(), notifier: FakeNotifier(), clock: { T0 })
+        var applied: [AppAppearance] = []
+        let follower = AppearanceFollower(app: app) { applied.append($0) }
+        await follower.load()
+        XCTAssertEqual(applied, [.dark])
+        app.handle(.configChanged(key: "appearance", value: .string("light")))
+        app.handle(.configChanged(key: "drop_after_days", value: .int(3)))
+        app.handle(.configChanged(key: "appearance", value: .string("sepia")))
+        XCTAssertEqual(applied, [.dark, .light, .system], "an unknown value follows the Mac")
+        XCTAssertEqual(follower.current, .system)
+    }
+
+    func testTitlesAndDefault() {
+        XCTAssertEqual(AppAppearance.allCases.map(\.title), ["System", "Light", "Dark"])
+        XCTAssertEqual(AppAppearance(nil), .system)
+        XCTAssertEqual(AppAppearance(.string("dark")), .dark)
+    }
+}

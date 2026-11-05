@@ -33,7 +33,7 @@ public final class SettingsModel: ObservableObject {
     public static let keys = [
         "launch_at_login", "status_interval_minutes", "reactions_interval_minutes", "graphql_cost_cap",
         "notify_activity", "notify_state", "notify_reactions", "snooze_return_time", "bot_comments",
-        "include_team_requests", "keep_watching_days", "drop_after_days",
+        "include_team_requests", "keep_watching_days", "drop_after_days", "appearance",
     ]
 
     public init(app: AppModel, launch: LaunchAtLogin?) {

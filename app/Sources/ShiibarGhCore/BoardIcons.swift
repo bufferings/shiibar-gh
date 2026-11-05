@@ -63,6 +63,16 @@ public enum BoardIcons {
         [.rect(x: 2, y: 3, width: 12, height: 10, radius: 1.5), .path("M2 6h12")],
         lineWidth: 1.5, roundJoins: true
     )
+    /// The header's Settings button: a gear (Main.html since the owner's
+    /// stage 6 review).
+    public static let settings = BoardIcon(
+        [
+            .path("M8.00 1.40 L9.29 1.53 L9.88 3.47 L10.72 3.93 L12.67 3.33 L13.49 4.33 L12.53 6.12 L12.81 7.04 L14.60 8.00 L14.47 9.29 L12.53 9.88 L12.07 10.72 L12.67 12.67 L11.67 13.49 L9.88 12.53 L8.96 12.81 L8.00 14.60 L6.71 14.47 L6.12 12.53 L5.28 12.07 L3.33 12.67 L2.51 11.67 L3.47 9.88 L3.19 8.96 L1.40 8.00 L1.53 6.71 L3.47 6.12 L3.93 5.28 L3.33 3.33 L4.33 2.51 L6.12 3.47 L7.04 3.19Z"),
+            .circle(cx: 8, cy: 8, r: 2.2, dash: nil),
+        ],
+        lineWidth: 1.3, roundJoins: true
+    )
+    /// The General tab of Settings (Settings.html).
     public static let gear = BoardIcon(
         [.circle(cx: 8, cy: 8, r: 2.2, dash: nil), .path("M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4")],
         lineWidth: 1.5

@@ -272,3 +272,32 @@ public enum SurfaceRules {
         "Snoozed until " + RelativeTime.weekdayClock(at, timeZone: timeZone)
     }
 }
+
+/// How a chip looks (docs/design/Main.html `.chip`; DESIGN.md, "Screens"):
+/// every chip off has the gray border and text; a chip on is filled, orange
+/// for Needs action and black (light text in the dark appearance) for the
+/// others, and starts with ✓ so the state is not shown by color alone.
+public struct ChipLook: Equatable {
+    public var on: Bool
+    public var fill: Shade
+    public var border: Shade
+    public var text: Shade
+
+    public init(on: Bool, action: Bool) {
+        self.on = on
+        if on {
+            let color = action ? Palette.badge : Palette.text
+            fill = color
+            border = color
+            text = action ? Palette.onColor : Palette.surface
+        } else {
+            fill = Palette.surface
+            border = Palette.controlBorder
+            text = Palette.strongText
+        }
+    }
+
+    public func label(_ title: String) -> String {
+        on ? "\u{2713} " + title : title
+    }
+}

@@ -19,6 +19,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var quitting = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // The Edit menu's key equivalents make ⌘V and the other text
+        // shortcuts work in every text field (see MainMenu).
+        NSApp.mainMenu = MainMenu.make()
         let bundled = Bundle.main.bundleURL.pathExtension == "app"
         let root = StateDirectory.root() ?? NSTemporaryDirectory()
         let socket = StateDirectory.socket(root: root)
@@ -48,6 +51,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             launch = LaunchAtLogin(service: MainAppLoginItem(), api: api, store: store)
         }
         settings = SettingsModel(app: model, launch: launch)
+        // The popover, windows and Settings take the app's appearance; nil
+        // follows the Mac (NSApplication.appearance). The menu bar icons
+        // follow the menu bar itself, which macOS draws for the wallpaper,
+        // and are redrawn so their marks match.
+        appearance = AppearanceFollower(app: model) { [weak self] value in
+            switch value {
+            case .system: NSApp.appearance = nil
+            case .light: NSApp.appearance = NSAppearance(named: .aqua)
+            case .dark: NSApp.appearance = NSAppearance(named: .darkAqua)
+            }
+            self?.surfaces.redrawIcons()
+        }
         if let launch {
             model.observeConfig { key, value in
                 Task { await launch.configChanged(key: key, value: value) }
@@ -69,6 +84,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         supervisor.onConnectionChange = { [weak self] connected in
             guard let self else { return }
             self.model.connectionChanged(connected)
+            if connected, let appearance = self.appearance {
+                Task { await appearance.load() }
+            }
             if connected, let launch = self.launch, !self.didApplyLaunch {
                 self.didApplyLaunch = true
                 Task { await launch.applyAtLaunch(runningFromBundle: true) }
@@ -82,6 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private var didApplyLaunch = false
+    private var appearance: AppearanceFollower?
 
     func showSettings(_ tab: SettingsTab) {
         surfaces.closePopover()

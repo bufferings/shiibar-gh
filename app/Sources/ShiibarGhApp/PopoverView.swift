@@ -95,7 +95,7 @@ struct Header: View {
                 HeaderButton(icon: BoardIcons.window, size: 15, label: "Open in window", theme: theme, action: openWindow)
             }
             HeaderButton(icon: BoardIcons.refresh, size: 16, label: "Refresh", theme: theme, action: refresh)
-            HeaderButton(icon: BoardIcons.gear, size: 16, label: "Settings", theme: theme) { actions.openSettings(SurfaceRules.headerSettings) }
+            HeaderButton(icon: BoardIcons.settings, size: 16, label: "Settings", theme: theme) { actions.openSettings(SurfaceRules.headerSettings) }
             Menu {
                 Button("About shiibar-gh", action: actions.about)
                 Button("Settings…") { actions.openSettings(SurfaceRules.headerSettings) }
@@ -248,15 +248,16 @@ struct Chip: View {
     var tap: () -> Void
 
     var body: some View {
-        let fill: Color = on ? (action ? Palette.badge.color : Palette.text.color) : Palette.surface.color
-        let border: Color = action ? Palette.badge.color : (on ? Palette.text.color : Palette.controlBorder.color)
-        let text: Color = on ? (action ? Palette.onColor.color : Palette.surface.color) : (action ? Palette.orangeText.color : Palette.strongText.color)
+        let look = ChipLook(on: on, action: action)
+        let fill = look.fill.color
+        let border = look.border.color
+        let text = look.text.color
         let shape = UnevenRoundedRectangle(
             topLeadingRadius: corners == .right ? 0 : 12, bottomLeadingRadius: corners == .right ? 0 : 12,
             bottomTrailingRadius: corners == .left ? 0 : 12, topTrailingRadius: corners == .left ? 0 : 12
         )
         Button(action: tap) {
-            Text(title)
+            Text(look.label(title))
                 .font(.system(size: 11))
                 .foregroundColor(text)
                 .padding(EdgeInsets(top: 3, leading: 9, bottom: 3, trailing: 9))
