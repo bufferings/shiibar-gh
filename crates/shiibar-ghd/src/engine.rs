@@ -13,6 +13,12 @@ mod fetch_api;
 pub use fetch_api::*;
 
 const DAY_SECS: i64 = 86_400;
+/// DESIGN.md, "Row kinds and states": line breaks and runs of white space
+/// become one space, in notification bodies as on screen.
+pub fn collapse_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Rows kept per PR among read events and done rows.
 const KEEP_ROWS: usize = 3;
 
@@ -1632,10 +1638,10 @@ impl Engine {
                     *counts.entry(content.clone()).or_default() += count;
                 }
             }
-            let text = row.text.as_deref().unwrap_or_default();
+            let text = collapse_whitespace(row.text.as_deref().unwrap_or_default());
             Some(format!("{} “{text}”", reaction_summary(&counts)))
         } else {
-            row.text.clone()
+            row.text.as_deref().map(collapse_whitespace)
         };
         let title = format!("{} · {}", self.display_name(scope), row.kind.label());
         let subtitle = format!("{}/{} #{} · {}", pr.owner, pr.repo, pr.number, pr.title);

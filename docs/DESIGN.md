@@ -303,7 +303,7 @@ fine-grained PAT には Checks の権限がなく、statusCheckRollup の個々�
 - Repository access は URL で指定できない（同ページ）。案内には、owner のスコープでは All repositories、Public では Public repositories を選ぶことを示す
 - トークンが Repository access のどちらで作成されたかは、GitHub の API で読めない（docs.github.com/en/rest/orgs/personal-access-tokens の取得の API は「Only GitHub Apps can use this endpoint」である。2026-11-05 に確認）。設定画面は owner のスコープの Repository access を表示しない。Public の行の `Public repositories` は、Public というスコープの説明として表示する
 - 各スコープの行に Remove を配置する。押すと確認（`Remove example-org?` と、トークンを Keychain から削除し、再び追加すると Done と Snooze が戻ること）を表示し、了承すると `scope remove` を実行する
-- 各スコープの行で、背景色を 6 色から選ぶ（`scope color`）。追加した直後は、6 色を追加の順に巡回して割り当てる。Public の初期値はベージュである
+- 各スコープの行で、背景色を 6 色から選ぶ（`scope color`）。追加した直後は、6 色を追加の順に巡回して割り当てる。Public の初期値はベージュである。削除して再び追加したスコープは、Public を含めて元の色に戻る（「ワイヤ形式」）
 - トークンの行の右には、次の状態のうち最も上のものを 1 つ表示する：`Invalid`（赤、`token_invalid`）、`Belongs to another account`（赤、`token_owner_mismatch`）、`Expires in N days`（黄、`token_expiring`。1 日未満は切り上げて `Expires in 1 day`）、`Missing permission`（黄、最後のテストに Failed がある）、`Verified`（緑、最後のテストがすべて OK）、`Not tested`（灰、テストの記録がない）、`No token`（灰、未登録。Create token と貼り付ける欄を表示する）。期限のないトークンは期限を表示しない
 - テストの結果は項目ごとに `OK · Checks`、`Failed (Actions) · Checks`（括弧に足りない権限の名前）、`Can't check · Merge queue`（確かめる対象がない）の形で表示する
 - 登録済みのトークンは `••••••••••••`（12 文字の固定）で表示し、トークンの一部も表示しない。アプリはトークンを保持せず、Save で `token set` に渡したあとは破棄する
@@ -339,7 +339,7 @@ Unix ソケットの NDJSON。1 接続 1 要求 1 応答。`subscribe` だけは
 | `info` | — | `version`、`started_at` |
 | `shutdown` | — | 応答後に終了 |
 
-スコープの値は `color`（背景色）を持つ。値は `gray`（#F3F4F8）、`green`（#EAF4F0）、`blue`（#EAF0F9）、`purple`（#F1EEF8）、`pink`（#F8EEF0）、`beige`（#F7F1E3）のいずれかで、`scope_color` の不正な値は `invalid` になる。Public を追加すると `beige` になる。owner のスコープは、追加した順に上の並びで巡回して割り当てる。削除して再び追加したスコープは、削除する前の色に戻る。カードの値は `author_avatar_url`（GraphQL の `author.avatarUrl(size: 32)`。`author` が `null` なら `null`）を持つ。
+スコープの値は `color`（背景色）を持つ。値は `gray`（#F3F4F8）、`green`（#EAF4F0）、`blue`（#EAF0F9）、`purple`（#F1EEF8）、`pink`（#F8EEF0）、`beige`（#F7F1E3）のいずれかで、`scope_color` の不正な値は `invalid` になる。Public を初めて追加すると `beige` になる。owner のスコープは、初めて追加した順に上の並びで巡回して割り当てる。Public は巡回の順番を使用しない。削除して再び追加したスコープは、Public を含めて、削除する前の色に戻る。スキーマ v2 の DB から移行したスコープは、Public を `beige` にし、owner のスコープに id の順で巡回して割り当てる。カードの値は `author_avatar_url`（GraphQL の `author.avatarUrl(size: 32)`。`author` が `null` なら `null`）を持つ。
 
 `subscribe` は最初に `{"event":"snapshot","scopes":[...],"db_unreadable":false}` を送る。DB を読めない間も `subscribe` と `info` は使用でき、`db_unreadable` が真になる。以降は `{"event":"scope_changed","scope":{...}}` と `{"event":"notify","notification":{...}}` を送る。
 
