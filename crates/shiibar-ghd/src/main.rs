@@ -13,7 +13,7 @@ use std::sync::Arc;
 fn services(_: &StateDir) -> Result<(Arc<dyn Keychain>, Option<Api>), String> {
     let api = Api::new(shiibar_ghd::github::DEFAULT_BASE, false)
         .map_err(|e| format!("cannot set up the HTTP client: {e}"))?;
-    Ok((Arc::new(shiibar_ghd::keychain::SystemKeychain), Some(api)))
+    Ok((Arc::new(shiibar_ghd::keychain::system()), Some(api)))
 }
 
 /// A `dev-ingest` build never reaches the real Keychain or GitHub: a JSON
@@ -22,7 +22,7 @@ fn services(_: &StateDir) -> Result<(Arc<dyn Keychain>, Option<Api>), String> {
 /// nothing. docs/tasks/M2.md, "How to test".
 #[cfg(feature = "dev-ingest")]
 fn services(dir: &StateDir) -> Result<(Arc<dyn Keychain>, Option<Api>), String> {
-    use shiibar_ghd::keychain::{FileKeychain, NoKeychain};
+    use shiibar_ghd::keychain::{FileItem, NoKeychain, TokenStore};
     let keychain: Arc<dyn Keychain> = match std::env::var_os("SHIIBAR_GH_DEV_KEYCHAIN") {
         Some(path) => {
             let path = std::path::PathBuf::from(path);
@@ -39,7 +39,7 @@ fn services(dir: &StateDir) -> Result<(Arc<dyn Keychain>, Option<Api>), String> 
                 "dev-ingest: test Keychain at {}",
                 path.display()
             ));
-            Arc::new(FileKeychain::new(path))
+            Arc::new(TokenStore::new(FileItem::new(path)))
         }
         None => {
             logging::info(format_args!("dev-ingest: no Keychain"));

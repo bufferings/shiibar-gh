@@ -26,6 +26,7 @@ pub fn pr(id: &str) -> IngestPr {
         url: format!("https://github.example/{id}"),
         title: format!("Title {id}"),
         author: ME.into(),
+        author_avatar_url: None,
         base: "main".into(),
         head: "topic".into(),
         state: PrState::Open,
@@ -73,7 +74,8 @@ pub fn show_snoozed() -> Filter {
     }
 }
 
-/// A core at a fixed time, with the `org` scope registered at `T0`.
+/// A core at a fixed time, with the `org` scope and Public registered at
+/// `T0`.
 pub struct H {
     pub engine: Engine,
     pub now: Now,
@@ -85,6 +87,7 @@ impl H {
         let now = Now::fixed(T0, "Asia/Tokyo").unwrap();
         let mut engine = Engine::fresh(&now);
         engine.scope_add(ORG, &now).unwrap();
+        engine.scope_add("public", &now).unwrap();
         let mut h = Self { engine, now };
         h.advance(10);
         h

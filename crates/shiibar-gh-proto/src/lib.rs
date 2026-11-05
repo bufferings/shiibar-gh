@@ -157,6 +157,19 @@ pub enum ScopeKind {
     Public,
 }
 
+/// The background color of a scope, one of the six fixed colors of the
+/// Settings window. DESIGN.md, "Overview and scope".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScopeColor {
+    Gray,
+    Green,
+    Blue,
+    Purple,
+    Pink,
+    Beige,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WarningKind {
@@ -243,6 +256,9 @@ pub struct IngestPr {
     pub url: String,
     pub title: String,
     pub author: String,
+    /// `author.avatarUrl`; `null` when `author` is `null`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_avatar_url: Option<String>,
     pub base: String,
     pub head: String,
     pub state: PrState,
@@ -362,6 +378,14 @@ pub enum Request {
         scope: String,
         on: bool,
     },
+    ScopeColor {
+        scope: String,
+        color: ScopeColor,
+    },
+    /// The type of an owner on GitHub, without registering anything.
+    ScopeLookup {
+        owner: String,
+    },
     Subscribe {
         client: ClientKind,
     },
@@ -413,6 +437,7 @@ pub struct Scope {
     pub kind: Option<Lenient<ScopeKind>>,
     pub enabled: bool,
     pub notify: bool,
+    pub color: Lenient<ScopeColor>,
     pub badge: u32,
     pub dot: bool,
     pub warnings: Vec<Warning>,
@@ -469,6 +494,11 @@ pub struct TokenStatus {
     pub scopes: Option<Vec<String>>,
     pub last_test: Option<LastTest>,
     pub sso_urls: Vec<String>,
+    /// The warnings about this token itself: `token_invalid`,
+    /// `token_expiring`, `sso_required` and, for a scope's token,
+    /// `token_owner_mismatch`. Empty for a token not registered.
+    #[serde(default)]
+    pub warnings: Vec<Warning>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Card {
@@ -478,6 +508,8 @@ pub struct Card {
     pub title: String,
     pub url: String,
     pub author: String,
+    /// `author.avatarUrl`; `null` when the author is unknown.
+    pub author_avatar_url: Option<String>,
     pub mine: bool,
     pub state_label: Lenient<StateLabel>,
     pub review: Lenient<Review>,
@@ -536,6 +568,12 @@ pub enum SubscribeEvent {
     Notify {
         notification: Notification,
     },
+    /// A setting changed through `config_set`, by any client. `value` is
+    /// what `config_get` now answers.
+    ConfigChanged {
+        key: String,
+        value: serde_json::Value,
+    },
     /// An event this build does not know. Clients ignore it.
     #[serde(other)]
     Unknown,
@@ -592,6 +630,15 @@ pub struct ConfigResponse {
 pub struct ScopesResponse {
     pub ok: bool,
     pub scopes: Vec<Scope>,
+}
+
+/// `scope_lookup`: the owner's login as GitHub spells it and its type,
+/// `org` or `user`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScopeLookupResponse {
+    pub ok: bool,
+    pub owner: String,
+    pub kind: Lenient<ScopeKind>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -666,6 +713,10 @@ mod tests {
             serde_json::from_str::<Request>(r#"{"cmd":"subscribe","client":"other"}"#).is_err()
         );
         assert!(serde_json::from_str::<EventKind>("\"nope\"").is_err());
+        assert!(
+            serde_json::from_str::<Request>(r#"{"cmd":"scope_color","scope":"a","color":"red"}"#)
+                .is_err()
+        );
     }
 
     #[test]

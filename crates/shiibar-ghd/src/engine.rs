@@ -13,6 +13,12 @@ mod fetch_api;
 pub use fetch_api::*;
 
 const DAY_SECS: i64 = 86_400;
+/// DESIGN.md, "Row kinds and states": line breaks and runs of white space
+/// become one space, in notification bodies as on screen.
+pub fn collapse_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Rows kept per PR among read events and done rows.
 const KEEP_ROWS: usize = 3;
 
@@ -77,31 +83,16 @@ pub struct Timers {
 }
 
 impl Engine {
-    /// A database without saved state: only Public, watching from now.
+    /// A database without saved state: no scopes, not even Public, which the
+    /// user adds when wanted. DESIGN.md, "Scopes".
     pub fn fresh(now: &Now) -> Self {
-        let mut data = Data {
+        let data = Data {
             last_release_at: now.at,
             ..Data::default()
         };
-        data.scopes.insert(
-            PUBLIC.into(),
-            ScopeRec {
-                id: PUBLIC.into(),
-                removed: false,
-                enabled: true,
-                notify: true,
-                watch_started_at: now.at,
-                updated_at: None,
-                dot: false,
-                kind: None,
-                name: None,
-                fetched_at: None,
-            },
-        );
         let mut engine = Self::restore(data);
         engine.clock_at = now.at;
         engine.dirty = Dirty {
-            scopes: engine.data.scopes.keys().cloned().collect(),
             config: true,
             meta: true,
             fetch: true,
@@ -116,7 +107,14 @@ impl Engine {
         let mut engine = Self::fresh(now);
         for account in accounts {
             let target = match account.as_str() {
-                NOTIFICATIONS | PUBLIC => account.clone(),
+                NOTIFICATIONS => account.clone(),
+                // A Public token brings Public back (docs/tasks/M3.md).
+                PUBLIC => {
+                    if engine.scope_add(PUBLIC, now).is_err() {
+                        continue;
+                    }
+                    account.clone()
+                }
                 other => match other.strip_prefix(SCOPE_ACCOUNT_PREFIX) {
                     Some(owner) if !owner.is_empty() => {
                         let owner = owner.to_lowercase();
@@ -238,14 +236,17 @@ impl Engine {
     }
 
     /// DESIGN.md, "Scopes": the owner's scope when registered, else Public for
-    /// a public repository, else nothing.
+    /// a public repository while Public is registered, else nothing.
     fn resolve_scope(&self, owner: &str, is_private: bool) -> Option<&str> {
         if !owner.eq_ignore_ascii_case(PUBLIC)
             && let Some(scope) = self.registered_scope(owner)
         {
             return Some(scope.id.as_str());
         }
-        (!is_private).then_some(PUBLIC)
+        (!is_private)
+            .then(|| self.registered_scope(PUBLIC))
+            .flatten()
+            .map(|scope| scope.id.as_str())
     }
 
     fn scope_of(&self, pr: &PrRec) -> Option<&ScopeRec> {
@@ -403,6 +404,7 @@ impl Engine {
             title: pr.title.clone(),
             url: pr.url.clone(),
             author: pr.author.clone(),
+            author_avatar_url: pr.author_avatar_url.clone(),
             mine: pr.mine,
             state_label: Lenient::Known(label),
             review: Lenient::Known(pr.review.into()),
@@ -538,6 +540,7 @@ impl Engine {
             kind: kind.map(Lenient::Known),
             enabled: scope.enabled,
             notify: scope.notify,
+            color: Lenient::Known(scope.color.into()),
             badge: self.badge(scope),
             dot: scope.enabled && scope.dot,
             warnings: self.warnings(scope),
@@ -695,6 +698,7 @@ impl Engine {
             url: p.url,
             title: p.title,
             author: p.author,
+            author_avatar_url: p.author_avatar_url,
             base: p.base,
             head: p.head,
         };
@@ -1257,10 +1261,9 @@ impl Engine {
         }
     }
 
+    /// Register an owner, or Public with `public`. A scope removed before
+    /// comes back with its state and color.
     pub fn scope_add(&mut self, owner: &str, now: &Now) -> Result<()> {
-        if owner.eq_ignore_ascii_case(PUBLIC) {
-            return Err(CmdError::Invalid("public cannot be added".into()));
-        }
         if owner.eq_ignore_ascii_case(NOTIFICATIONS) {
             return Err(CmdError::Invalid("notifications cannot be added".into()));
         }
@@ -1270,26 +1273,53 @@ impl Engine {
         if self.registered_scope(owner).is_some() {
             return Err(CmdError::Invalid(format!("scope {owner} already exists")));
         }
-        let id = self.scope_key(owner).unwrap_or(owner).to_string();
+        let public = owner.eq_ignore_ascii_case(PUBLIC);
+        let id = if public {
+            PUBLIC.to_string()
+        } else {
+            self.scope_key(owner).unwrap_or(owner).to_string()
+        };
         self.dirty.scopes.insert(id.clone());
-        self.data
-            .scopes
-            .entry(id.clone())
-            .and_modify(|scope| scope.removed = false)
-            .or_insert_with(|| ScopeRec {
-                id: id.clone(),
-                removed: false,
-                enabled: true,
-                notify: true,
-                watch_started_at: now.at,
-                updated_at: None,
-                dot: false,
-                kind: None,
-                name: None,
-                fetched_at: None,
-            });
+        if let Some(scope) = self.data.scopes.get_mut(&id) {
+            scope.removed = false;
+        } else {
+            let color = if public {
+                ScopeColor::PUBLIC
+            } else {
+                let color = ScopeColor::nth(self.data.color_seq);
+                self.data.color_seq += 1;
+                self.dirty.meta = true;
+                color
+            };
+            self.data.scopes.insert(
+                id.clone(),
+                ScopeRec {
+                    id: id.clone(),
+                    removed: false,
+                    enabled: true,
+                    notify: true,
+                    watch_started_at: now.at,
+                    updated_at: None,
+                    dot: false,
+                    kind: None,
+                    name: None,
+                    fetched_at: None,
+                    color,
+                },
+            );
+        }
         self.start_watch(&id, now);
         self.settle(now);
+        Ok(())
+    }
+
+    /// `scope_color`. DESIGN.md, "Adding a scope and registering a token in
+    /// Settings".
+    pub fn scope_color(&mut self, scope: &str, color: proto::ScopeColor) -> Result<()> {
+        let scope = self.require_scope(scope)?;
+        if let Some(record) = self.scope_mut(&scope) {
+            record.color = color.into();
+        }
         Ok(())
     }
 
@@ -1333,9 +1363,6 @@ impl Engine {
 
     /// The Keychain account `scope_remove` would delete, without removing.
     pub fn scope_token_account(&self, owner: &str) -> Result<Option<String>> {
-        if owner.eq_ignore_ascii_case(PUBLIC) {
-            return Err(CmdError::Invalid("public cannot be removed".into()));
-        }
         let key = self.require_scope(owner)?.to_lowercase();
         let registered = self
             .data
@@ -1349,9 +1376,6 @@ impl Engine {
     /// Returns the Keychain account to delete: only a scope with a recorded
     /// token registration has one. docs/tasks/M2.md, "Token registration".
     pub fn scope_remove(&mut self, owner: &str) -> Result<Option<String>> {
-        if owner.eq_ignore_ascii_case(PUBLIC) {
-            return Err(CmdError::Invalid("public cannot be removed".into()));
-        }
         let id = self.require_scope(owner)?;
         if let Some(scope) = self.scope_mut(&id) {
             scope.removed = true;
@@ -1614,10 +1638,10 @@ impl Engine {
                     *counts.entry(content.clone()).or_default() += count;
                 }
             }
-            let text = row.text.as_deref().unwrap_or_default();
+            let text = collapse_whitespace(row.text.as_deref().unwrap_or_default());
             Some(format!("{} “{text}”", reaction_summary(&counts)))
         } else {
-            row.text.clone()
+            row.text.as_deref().map(collapse_whitespace)
         };
         let title = format!("{} · {}", self.display_name(scope), row.kind.label());
         let subtitle = format!("{}/{} #{} · {}", pr.owner, pr.repo, pr.number, pr.title);
@@ -1720,7 +1744,7 @@ fn reaction_summary(counts: &BTreeMap<String, u32>) -> String {
     known.chain(unknown).collect::<Vec<_>>().join(" ")
 }
 
-pub const CONFIG_KEYS: [&str; 12] = [
+pub const CONFIG_KEYS: [&str; 13] = [
     "launch_at_login",
     "status_interval_minutes",
     "reactions_interval_minutes",
@@ -1733,6 +1757,7 @@ pub const CONFIG_KEYS: [&str; 12] = [
     "include_team_requests",
     "keep_watching_days",
     "drop_after_days",
+    "appearance",
 ];
 
 pub fn read_config(config: &Config, key: &str) -> Option<Value> {
@@ -1749,6 +1774,7 @@ pub fn read_config(config: &Config, key: &str) -> Option<Value> {
             json!(format!("{hour:02}:{minute:02}"))
         }
         "bot_comments" => json!(config.bot_comments.as_str()),
+        "appearance" => json!(config.appearance.as_str()),
         "include_team_requests" => json!(config.include_team_requests),
         "keep_watching_days" => json!(config.keep_watching_days),
         "drop_after_days" => json!(config.drop_after_days),
@@ -1782,6 +1808,12 @@ pub fn write_config(
                 .as_str()
                 .and_then(BotComments::parse)
                 .ok_or_else(|| format!("{key} must be notify, list_only or hide"))?;
+        }
+        "appearance" => {
+            config.appearance = value
+                .as_str()
+                .and_then(Appearance::parse)
+                .ok_or_else(|| format!("{key} must be system, light or dark"))?;
         }
         "include_team_requests" => config.include_team_requests = boolean(key, value)?,
         "keep_watching_days" => config.keep_watching_days = integer(key, value, 0)?,

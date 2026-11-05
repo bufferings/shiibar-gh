@@ -56,4 +56,28 @@ cargo clippy --all-targets -- -D warnings
 
 # Run the daemon in a sandboxed state directory
 SHIIBAR_GH_STATE_DIR=$(mktemp -d) SHIIBAR_GH_LOG=debug cargo run -p shiibar-ghd -- --foreground
+
+# App tests, with the real daemon of the dev-ingest build
+cargo build -p shiibar-ghd --features dev-ingest
+SHIIBAR_GH_TEST_DAEMON=$PWD/target/debug/shiibar-ghd swift test --package-path app
 ```
+
+`SHIIBAR_GH_TEST_DAEMON` を指定しないと、実際のデーモンを使用するテストは省略される。
+
+## 開発版のインストール
+
+`scripts/dev-install.sh` は、デーモン、CLI、アプリをリリースモードでビルドし、`~/Applications/Shiibar GH.app` を組み立てて、ローカルの固定の署名の ID（`shiibar-gh-local-signing`。初回にログインキーチェーンに作成する）で hardened runtime を付けて署名し、`~/.local/bin/shiibar-gh` を同梱の CLI へのリンクにして、アプリを起動する。実行中のアプリとデーモンは先に止める。`CFBundleVersion` は実行の時刻にする。アイコンのキャッシュが版で区別されるためである。
+
+`scripts/dev-uninstall.sh` は、ログイン項目の登録、アプリ、CLI のリンク、残ったデーモン、署名の ID を削除する。`--purge` を付けると、状態ディレクトリ、アプリの UserDefaults、スコープのトークンも削除する。通知の許可は、システム設定の通知から利用者が削除する。
+
+どちらも `~/Applications`、ログイン項目、キーチェーンを変更するので、エージェントは実行しない。
+
+アプリが起動したデーモンの標準エラー出力は、状態ディレクトリの `shiibar-ghd.log` に出力する。デーモンを再び起動すると、前のログを `shiibar-ghd.previous.log` に移す。
+
+## リリース
+
+1. Cargo.toml の `[workspace.package] version` を上げてコミットする
+2. `vX.Y.Z` のタグを push する。`.github/workflows/release.yml` が、タグと版の一致を確かめ、Developer ID で署名し、公証、staple、zip をして、下書きの GitHub Release を作成する
+3. 下書きの zip を実機で確かめてから公開する。公開すると `.github/workflows/bump-cask.yml` が `bufferings/homebrew-tap` の cask を更新する
+
+`release.yml` を手動（workflow_dispatch）で実行すると、リリースを作成しない試走になる。署名、公証、staple、zip までを行い、zip をワークフローの成果物に残す。必要な Secrets は `DEVELOPER_ID_CERT_P12`、`DEVELOPER_ID_CERT_PASSWORD`、`APPLE_API_KEY_P8`、`APPLE_API_KEY_ID`、`APPLE_API_ISSUER_ID`、cask の更新には `TAP_PUSH_TOKEN` である。

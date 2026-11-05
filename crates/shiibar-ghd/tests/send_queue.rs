@@ -26,6 +26,8 @@ fn a_queue_of_256_stays_and_the_257th_line_cuts_the_client() {
         std::sync::Arc::new(shiibar_ghd::keychain::NoKeychain),
     )
     .unwrap();
+    let add: Request = serde_json::from_value(json!({"cmd":"scope_add","owner":"public"})).unwrap();
+    daemon.handle(add);
     let mut subscribed = daemon.subscribe(ClientKind::Cli);
     assert_eq!(subscribed.rx.len(), 1, "the snapshot");
 

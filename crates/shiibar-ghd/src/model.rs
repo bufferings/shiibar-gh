@@ -164,7 +164,9 @@ impl RowKind {
             Self::RemovedFromMergeQueue => "Removed from merge queue",
             Self::Merged => "Merged",
             Self::Closed => "Closed",
-            Self::BotComment => "Bot comment",
+            // DESIGN.md, "macOS notifications": a bot's comment is titled
+            // like any other comment; the row kind stays `bot_comment`.
+            Self::BotComment => "Comment",
             Self::ChecksFailed => "Checks failed",
             Self::Conflicts => "Conflicts",
             Self::ChangesRequested => "Changes requested",
@@ -192,6 +194,50 @@ stored_enum!(ScopeKind {
     User = "user",
 });
 
+stored_enum!(ScopeColor {
+    Gray = "gray",
+    Green = "green",
+    Blue = "blue",
+    Purple = "purple",
+    Pink = "pink",
+    Beige = "beige",
+});
+both_ways!(ScopeColor {
+    Gray,
+    Green,
+    Blue,
+    Purple,
+    Pink,
+    Beige
+});
+
+impl ScopeColor {
+    /// The order new scopes take colors in. DESIGN.md, "Adding a scope and
+    /// registering a token in Settings": each newly added scope takes the next
+    /// color, cycling through all six.
+    pub const CYCLE: [ScopeColor; 6] = [
+        ScopeColor::Gray,
+        ScopeColor::Green,
+        ScopeColor::Blue,
+        ScopeColor::Purple,
+        ScopeColor::Pink,
+        ScopeColor::Beige,
+    ];
+    /// Public starts beige (DESIGN.md, "Overview and scope").
+    pub const PUBLIC: ScopeColor = ScopeColor::Beige;
+
+    /// The color of the `seq`-th owner scope ever added.
+    pub fn nth(seq: u32) -> ScopeColor {
+        Self::CYCLE[seq as usize % Self::CYCLE.len()]
+    }
+}
+
+stored_enum!(Appearance {
+    System = "system",
+    Light = "light",
+    Dark = "dark",
+});
+
 stored_enum!(BotComments {
     Notify = "notify",
     ListOnly = "list_only",
@@ -214,6 +260,7 @@ pub struct ScopeRec {
     pub name: Option<String>,
     /// The last time the search and status fetch of this scope succeeded.
     pub fetched_at: Option<i64>,
+    pub color: ScopeColor,
 }
 
 /// The values a state change row compares against.
@@ -234,6 +281,7 @@ pub struct PrRec {
     pub url: String,
     pub title: String,
     pub author: String,
+    pub author_avatar_url: Option<String>,
     pub base: String,
     pub head: String,
     pub state: PrState,
@@ -313,6 +361,9 @@ pub struct Config {
     pub include_team_requests: bool,
     pub keep_watching_days: i64,
     pub drop_after_days: i64,
+    /// The app's appearance (DESIGN.md, "Settings" and "UI"). Only the app
+    /// reads it.
+    pub appearance: Appearance,
 }
 
 impl Default for Config {
@@ -330,6 +381,7 @@ impl Default for Config {
             include_team_requests: true,
             keep_watching_days: 3,
             drop_after_days: 14,
+            appearance: Appearance::System,
         }
     }
 }
@@ -450,6 +502,9 @@ pub struct Data {
     pub baselines: BTreeMap<String, Baseline>,
     pub config: Config,
     pub last_release_at: i64,
+    /// How many owner scopes were ever added, for the color cycle. Saved
+    /// with the meta values.
+    pub color_seq: u32,
     pub fetch: FetchData,
 }
 

@@ -418,13 +418,11 @@ impl Engine {
     }
 
     /// `notifications`, `public` or a registered owner, as the key of its
-    /// token record. An unregistered owner is `not_found`.
+    /// token record. An unregistered owner, and Public while it is not added,
+    /// is `not_found`.
     pub fn token_key(&self, target: &str) -> Result<String> {
         if target.eq_ignore_ascii_case(NOTIFICATIONS) {
             return Ok(NOTIFICATIONS.into());
-        }
-        if target.eq_ignore_ascii_case(PUBLIC) {
-            return Ok(PUBLIC.into());
         }
         self.registered_scope(target)
             .map(|scope| scope.id.to_lowercase())
@@ -514,10 +512,10 @@ impl Engine {
             cost_per_poll: fetch.usage.cost_per_poll,
             notifications_poll_interval: fetch.poll_interval,
         };
-        let mut targets = vec![
-            (NOTIFICATIONS.to_string(), NOTIFICATIONS.to_string()),
-            (PUBLIC.to_string(), PUBLIC.to_string()),
-        ];
+        let mut targets = vec![(NOTIFICATIONS.to_string(), NOTIFICATIONS.to_string())];
+        if self.registered_scope(PUBLIC).is_some() {
+            targets.push((PUBLIC.to_string(), PUBLIC.to_string()));
+        }
         for scope in self.data.scopes.values() {
             if !scope.removed && scope.id != PUBLIC {
                 targets.push((self.display_name(&scope.id), scope.id.to_lowercase()));
@@ -543,6 +541,15 @@ impl Engine {
                         }
                     }),
                     sso_urls: record.map(|t| t.sso_urls.clone()).unwrap_or_default(),
+                    warnings: if key == NOTIFICATIONS {
+                        self.token_state_warnings(&key, TokenRole::Notifications)
+                    } else {
+                        let mut warnings = self.token_state_warnings(&key, TokenRole::Scope);
+                        if let Some(scope) = self.scope_key(&key) {
+                            warnings.extend(self.owner_mismatch_warning(scope));
+                        }
+                        warnings
+                    },
                 }
             })
             .collect();
@@ -567,61 +574,79 @@ impl Engine {
 
     /// DESIGN.md, "Wire format" and "First run, failures and empty states":
     /// the warnings of one scope, from the saved fetch state and the last run.
+    /// The warnings about one registered token itself, for its scope and for
+    /// `settings_status`. A scope token's owner mismatch is added by the
+    /// caller, which knows the scope.
+    fn token_state_warnings(&self, key: &str, role: TokenRole) -> Vec<proto::Warning> {
+        let now = self.clock_at;
+        let role = Some(role);
+        let mut out = Vec::new();
+        let Some(token) = self.token_record(key) else {
+            return out;
+        };
+        let expired = token.expires_at.is_some_and(|at| at <= now);
+        if token.invalid || expired {
+            let message = if expired {
+                "The token has expired"
+            } else {
+                "The token was rejected"
+            };
+            out.push(warning(WarningKind::TokenInvalid, role, message, None));
+        } else if let Some(at) = token.expires_at.filter(|at| at - now <= EXPIRY_WARNING) {
+            out.push(warning(
+                WarningKind::TokenExpiring,
+                role,
+                "The token expires soon",
+                Some(at),
+            ));
+        }
+        if token.sso {
+            out.push(warning(
+                WarningKind::SsoRequired,
+                role,
+                "SSO authorization required",
+                None,
+            ));
+        }
+        out
+    }
+
+    fn owner_mismatch_warning(&self, scope: &str) -> Option<proto::Warning> {
+        if !self.owner_mismatch(scope) {
+            return None;
+        }
+        let viewer = self.viewer().unwrap_or_default();
+        let owner = self
+            .token_record(&scope.to_lowercase())
+            .and_then(|t| t.owner.clone())
+            .unwrap_or_default();
+        Some(warning(
+            WarningKind::TokenOwnerMismatch,
+            Some(TokenRole::Scope),
+            &format!("The token belongs to {owner}, not {viewer}"),
+            None,
+        ))
+    }
+
     pub(super) fn warnings(&self, scope: &ScopeRec) -> Vec<proto::Warning> {
         use TokenRole::{Notifications, Scope};
         let now = self.clock_at;
         let mut out = Vec::new();
         let token_warnings = |key: &str, role: TokenRole, out: &mut Vec<proto::Warning>| {
-            let role = Some(role);
-            let Some(token) = self.token_record(key) else {
+            if self.token_record(key).is_none() {
                 out.push(warning(
                     WarningKind::NoToken,
-                    role,
+                    Some(role),
                     "Add a token in Settings",
                     None,
                 ));
                 return;
-            };
-            let expired = token.expires_at.is_some_and(|at| at <= now);
-            if token.invalid || expired {
-                let message = if expired {
-                    "The token has expired"
-                } else {
-                    "The token was rejected"
-                };
-                out.push(warning(WarningKind::TokenInvalid, role, message, None));
-            } else if let Some(at) = token.expires_at.filter(|at| at - now <= EXPIRY_WARNING) {
-                out.push(warning(
-                    WarningKind::TokenExpiring,
-                    role,
-                    "The token expires soon",
-                    Some(at),
-                ));
             }
-            if token.sso {
-                out.push(warning(
-                    WarningKind::SsoRequired,
-                    role,
-                    "SSO authorization required",
-                    None,
-                ));
-            }
+            out.extend(self.token_state_warnings(key, role));
         };
         token_warnings(NOTIFICATIONS, Notifications, &mut out);
         token_warnings(&scope.id.to_lowercase(), Scope, &mut out);
-        if self.owner_mismatch(&scope.id) {
-            let viewer = self.viewer().unwrap_or_default();
-            let owner = self
-                .token_record(&scope.id.to_lowercase())
-                .and_then(|t| t.owner.clone())
-                .unwrap_or_default();
-            out.push(warning(
-                WarningKind::TokenOwnerMismatch,
-                Some(Scope),
-                &format!("The token belongs to {owner}, not {viewer}"),
-                None,
-            ));
-        }
+        out.extend(self.owner_mismatch_warning(&scope.id));
         if let Some(until) = self.stopped_until(now) {
             let reason = self
                 .data

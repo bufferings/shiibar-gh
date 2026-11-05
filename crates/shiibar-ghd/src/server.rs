@@ -157,6 +157,30 @@ impl Fetcher {
         lock(&self.daemon).refresh_answer(scope.as_deref())
     }
 
+    /// `scope_lookup`: `GET /users/{owner}` with the notifications token when
+    /// one is registered, else without a token (docs/DESIGN.md, "CLI").
+    /// Nothing is registered and nothing the answer says is stored.
+    async fn scope_lookup(&self, owner: String) -> String {
+        let token = match lock(&self.daemon).lookup_token(&owner) {
+            Ok(token) => token,
+            Err(line) => return line,
+        };
+        let Some(api) = &self.api else {
+            return daemon::lookup_failed("this build does not reach GitHub");
+        };
+        let _running = self.running.lock().await;
+        let now = lock(&self.daemon).now().at;
+        let mut rec = Recorder::new(now, i64::MAX, Vec::new());
+        let path = format!("/users/{owner}");
+        let key = if token.is_empty() {
+            ""
+        } else {
+            crate::model::NOTIFICATIONS
+        };
+        let answer = api.rest(&mut rec, key, &token, &path, None).await;
+        daemon::lookup_answer(answer)
+    }
+
     /// `token_test`: never logged, and the token never leaves this call.
     async fn token_test(&self, target: String, token: Option<String>) -> String {
         let mut target = match lock(&self.daemon).test_target(&target, token) {
@@ -297,6 +321,7 @@ async fn handle_connection(
         Err(e) => daemon::invalid_line(e),
         Ok(Request::Refresh { scope }) => fetcher.refresh(scope).await,
         Ok(Request::TokenTest { target, token }) => fetcher.token_test(target, token).await,
+        Ok(Request::ScopeLookup { owner }) => fetcher.scope_lookup(owner).await,
         #[cfg(feature = "dev-ingest")]
         Ok(request @ Request::DevClockSet { .. }) => {
             // The fetches due at the new time run before the answer.

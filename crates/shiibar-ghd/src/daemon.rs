@@ -70,6 +70,8 @@ pub struct Daemon {
     /// Tokens read from the Keychain, by account. A Keychain read may ask
     /// the user, so each token is read once.
     tokens: HashMap<String, String>,
+    /// Settings changed by the request being handled, sent once saved.
+    config_events: Vec<(String, serde_json::Value)>,
 }
 
 fn error_line(error: &CmdError) -> String {
@@ -119,6 +121,7 @@ impl Daemon {
             digest,
             keychain,
             tokens: HashMap::new(),
+            config_events: Vec::new(),
         };
         if daemon.store.is_some() {
             daemon.engine.tick(&now);
@@ -151,7 +154,13 @@ impl Daemon {
         let now = self.clock.now();
         self.engine.set_clock(&now);
         let result = self.apply(request, &now);
-        self.commit(&now, false)?;
+        let saved = self.commit(&now, false);
+        // A changed setting goes to the subscribers once it is saved.
+        let events = std::mem::take(&mut self.config_events);
+        saved?;
+        for (key, value) in events {
+            self.publish_config(key, value);
+        }
         result
     }
 
@@ -221,10 +230,14 @@ impl Daemon {
                 ok: true,
                 value: engine.config_get(&key)?,
             }),
-            Request::ConfigSet { key, value } => line(&proto::ConfigResponse {
-                ok: true,
-                value: engine.config_set(&key, &value, now)?,
-            }),
+            Request::ConfigSet { key, value } => {
+                let before = engine.config_get(&key).ok();
+                let value = engine.config_set(&key, &value, now)?;
+                if before.as_ref() != Some(&value) {
+                    self.config_events.push((key, value.clone()));
+                }
+                line(&proto::ConfigResponse { ok: true, value })
+            }
             Request::ScopeList => line(&proto::ScopesResponse {
                 ok: true,
                 scopes: engine.scopes(),
@@ -268,6 +281,10 @@ impl Daemon {
                 engine.scope_notify(&scope, on)?;
                 ack()
             }
+            Request::ScopeColor { scope, color } => {
+                engine.scope_color(&scope, color)?;
+                ack()
+            }
             Request::TokenSet { target, token } => {
                 let token = token.trim();
                 if token.is_empty() {
@@ -307,7 +324,8 @@ impl Daemon {
             | Request::Reset
             | Request::Info
             | Request::Shutdown
-            | Request::TokenTest { .. } => {
+            | Request::TokenTest { .. }
+            | Request::ScopeLookup { .. } => {
                 return Err(CmdError::Internal("handled elsewhere".into()));
             }
         })
@@ -395,6 +413,16 @@ impl Daemon {
             for id in ids {
                 self.enqueue(id, text.clone(), None);
             }
+        }
+    }
+
+    /// `config_changed` to every subscriber (DESIGN.md, "Launch at login
+    /// sync": the app follows a setting changed elsewhere).
+    fn publish_config(&mut self, key: String, value: serde_json::Value) {
+        let text = line(&SubscribeEvent::ConfigChanged { key, value });
+        let ids: Vec<u64> = self.subscribers.keys().copied().collect();
+        for id in ids {
+            self.enqueue(id, text.clone(), None);
         }
     }
 
@@ -698,6 +726,30 @@ impl Daemon {
 
     /// What `token_test` needs: the record key, the token to test (given, or
     /// the saved one), whether it is the saved one, and the reference owner.
+    /// The token `scope_lookup` asks with: the notifications token when it
+    /// is registered, else none (an empty string).
+    pub fn lookup_token(&mut self, owner: &str) -> Result<String, String> {
+        self.check_db().map_err(|e| error_line(&e))?;
+        if !valid_login(owner) {
+            return Err(error_line(&CmdError::Invalid(format!(
+                "not a GitHub login: {owner}"
+            ))));
+        }
+        if self
+            .engine
+            .token_record(crate::model::NOTIFICATIONS)
+            .is_none()
+        {
+            return Ok(String::new());
+        }
+        Ok(Self::read_token(
+            self.keychain.as_ref(),
+            &mut self.tokens,
+            crate::model::NOTIFICATIONS,
+        )
+        .unwrap_or_default())
+    }
+
     pub fn test_target(
         &mut self,
         target: &str,
@@ -870,6 +922,53 @@ pub struct TestTarget {
 }
 
 /// The line for a failed `token_test`.
+/// A GitHub login: letters, digits and single hyphens, not at either end,
+/// at most 39 characters. Anything else is refused before it becomes part of
+/// a URL path.
+pub fn valid_login(owner: &str) -> bool {
+    !owner.is_empty()
+        && owner.len() <= 39
+        && !owner.starts_with('-')
+        && !owner.ends_with('-')
+        && owner.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+pub fn lookup_failed(reason: impl std::fmt::Display) -> String {
+    error_line(&CmdError::Internal(format!(
+        "cannot look the owner up: {reason}"
+    )))
+}
+
+/// The answer of `GET /users/{owner}`: `type` Organization is `org`, User
+/// is `user`; 404 is `not_found`.
+pub fn lookup_answer(answer: Result<crate::github::Rest, crate::github::CallError>) -> String {
+    use crate::github::CallError;
+    match answer {
+        Ok(rest) => {
+            let kind = match rest.body["type"].as_str() {
+                Some("Organization") => proto::ScopeKind::Org,
+                Some("User") => proto::ScopeKind::User,
+                other => {
+                    return lookup_failed(format!(
+                        "GitHub gave the type {}",
+                        other.unwrap_or("nothing")
+                    ));
+                }
+            };
+            line(&proto::ScopeLookupResponse {
+                ok: true,
+                owner: rest.body["login"].as_str().unwrap_or_default().to_string(),
+                kind: proto::Lenient::Known(kind),
+            })
+        }
+        Err(CallError::NotFound) => error_line(&CmdError::NotFound(
+            "not found: no such owner on GitHub".into(),
+        )),
+        Err(CallError::Unauthorized) => lookup_failed("GitHub rejected the notifications token"),
+        Err(e) => lookup_failed(e),
+    }
+}
+
 pub fn test_failed(error: impl std::fmt::Display) -> String {
     error_line(&CmdError::Internal(format!(
         "the test could not run: {error}"

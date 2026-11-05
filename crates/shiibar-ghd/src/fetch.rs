@@ -22,6 +22,10 @@ const EVENT_BATCH: usize = 5;
 
 const RATE: &str = "rateLimit { cost limit remaining resetAt }";
 const ACTOR: &str = "{ __typename login }";
+/// The PR author with the avatar the card shows. `size` is the pixel width of
+/// the square image (`Actor.avatarUrl(size:)` in the public schema): the card
+/// draws it at 16 points, 32 pixels on a Retina display.
+const AUTHOR: &str = "{ __typename login avatarUrl(size: 32) }";
 const REVIEWER: &str =
     "requestedReviewer { __typename ... on User { login } ... on Team { databaseId slug } }";
 const COMMENT: &str = "id url createdAt bodyText bodyHTML author { __typename login }";
@@ -45,7 +49,7 @@ fn timeline_nodes() -> String {
 fn pr_status_fields() -> String {
     format!(
         "id number url title state isDraft updatedAt isCrossRepository \
-         author {ACTOR} repository {{ name isPrivate owner {{ login }} }} \
+         author {AUTHOR} repository {{ name isPrivate owner {{ login }} }} \
          baseRefName headRefName headRefOid reviewDecision \
          latestOpinionatedReviews(first: 100) {{ nodes {{ state author {{ login }} }} }} \
          statusCheckRollup {{ state }} mergeable mergeStateStatus \

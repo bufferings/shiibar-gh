@@ -10,6 +10,7 @@ fn setup() -> (tempfile::TempDir, TestDaemon) {
     let dir = tempfile::tempdir().unwrap();
     let daemon = TestDaemon::start(dir.path());
     daemon.ok(json!({"cmd":"scope_add","owner":"org"}));
+    daemon.ok(json!({"cmd":"scope_add","owner":"public"}));
     (dir, daemon)
 }
 
@@ -35,7 +36,10 @@ fn everything_saved_comes_back_after_a_restart() {
     daemon.ingest(
         vec![
             with(pr("PR_1", "me"), json!({"checks":"passed"})),
-            pr("PR_2", "alice"),
+            with(
+                pr("PR_2", "alice"),
+                json!({"author_avatar_url":"https://avatars.example/alice"}),
+            ),
             pr("PR_3", "alice"),
         ],
         vec![
@@ -48,6 +52,7 @@ fn everything_saved_comes_back_after_a_restart() {
     daemon.ok(json!({"cmd":"done","row":"DONE"}));
     daemon.ok(json!({"cmd":"seen","row_ids":["SEEN"]}));
     daemon.ok(json!({"cmd":"snooze","pr":"org/app#3"}));
+    daemon.ok(json!({"cmd":"scope_color","scope":"org","color":"purple"}));
     daemon.ingest(
         vec![],
         vec![event("HELD2", "PR_3", "mentioned", t + 3)],
@@ -64,6 +69,17 @@ fn everything_saved_comes_back_after_a_restart() {
     assert_eq!(daemon.row("SEEN").unwrap()["unread"], true);
     assert_eq!(daemon.scope("org")["dot"], true);
     assert_eq!(daemon.card("PR_2").unwrap()["added_at"], added);
+
+    // The scope color and the author's avatar.
+    assert_eq!(daemon.scope("org")["color"], "purple");
+    assert_eq!(
+        daemon.card("PR_2").unwrap()["author_avatar_url"],
+        "https://avatars.example/alice"
+    );
+    assert_eq!(
+        daemon.card("PR_1").unwrap()["author_avatar_url"],
+        Value::Null
+    );
 
     // seen_pending: closing now clears the row that was shown before.
     daemon.ok(json!({"cmd":"popover_closed","scope":"org"}));
@@ -486,10 +502,11 @@ fn damage_under_a_running_daemon_moves_it_to_the_waiting_state() {
     let mut waiting = daemon.subscribe("app");
     let snapshot = waiting.snapshot();
     assert_eq!(snapshot["db_unreadable"], true);
-    assert_eq!(snapshot["scopes"].as_array().unwrap().len(), 1);
-    assert_eq!(snapshot["scopes"][0]["id"], "public");
-    assert_eq!(snapshot["scopes"][0]["badge"], 0);
-    assert_eq!(snapshot["scopes"][0]["dot"], false);
+    assert_eq!(
+        snapshot["scopes"],
+        json!([]),
+        "no token in the Keychain restores no scope, not even Public"
+    );
     daemon.ok(json!({"cmd":"info"}));
 
     daemon.ok(json!({"cmd":"reset"}));
@@ -501,8 +518,9 @@ fn damage_under_a_running_daemon_moves_it_to_the_waiting_state() {
     assert_eq!(mode(&retired), 0o600);
 
     // Normal operation, from an empty state.
-    assert!(daemon.scopes().iter().all(|s| s["id"] == "public"));
+    assert!(daemon.scopes().is_empty());
     assert!(daemon.cards().is_empty());
+    daemon.ok(json!({"cmd":"scope_add","owner":"public"}));
     let public = with(pr("PR_2", "alice"), json!({"owner":"stranger"}));
     daemon.ingest(
         vec![public],
@@ -610,8 +628,20 @@ fn error_codes_table() {
             "invalid",
         ),
         (json!({"cmd":"scope_add","owner":"public"}), "invalid"),
+        (json!({"cmd":"scope_add","owner":"PUBLIC"}), "invalid"),
         (json!({"cmd":"scope_add","owner":"org"}), "invalid"),
-        (json!({"cmd":"scope_remove","owner":"public"}), "invalid"),
+        (
+            json!({"cmd":"scope_add","owner":"Notifications"}),
+            "invalid",
+        ),
+        (
+            json!({"cmd":"scope_color","scope":"org","color":"red"}),
+            "invalid",
+        ),
+        (
+            json!({"cmd":"scope_color","scope":"nobody","color":"blue"}),
+            "not_found",
+        ),
     ];
     for (request, code) in cases {
         assert_eq!(daemon.code(request.clone()), code, "{request}");
@@ -891,7 +921,12 @@ fn no_scope_changed_table() {
         cli.snapshot();
         act(&daemon);
         daemon.ok(json!({"cmd":"scope_notify","scope":"public","on":false}));
-        let event = cli.next().expect(name);
+        let mut event = cli.next().expect(name);
+        // A setting is announced as config_changed, never as scope_changed.
+        if event["event"] == "config_changed" {
+            assert_eq!(event["key"], "notify_state", "{name}");
+            event = cli.next().expect(name);
+        }
         assert_eq!(event["scope"]["id"], "public", "{name}");
         daemon.stop();
     }
@@ -931,6 +966,36 @@ fn a_pr_key_ignores_the_case_of_owner_and_repository() {
     assert_eq!(
         daemon.code(json!({"cmd":"status","pr":"org/app#2"})),
         "not_found"
+    );
+    daemon.stop();
+}
+
+#[test]
+fn a_changed_setting_goes_to_every_subscriber_once_saved() {
+    let (_dir, daemon) = setup();
+    let mut app = daemon.subscribe("app");
+    app.snapshot();
+    let mut cli = daemon.subscribe("cli");
+    cli.snapshot();
+    daemon.ok(json!({"cmd":"config_set","key":"launch_at_login","value":false}));
+    for subscriber in [&mut app, &mut cli] {
+        assert_eq!(
+            subscriber.next().unwrap(),
+            json!({"event":"config_changed","key":"launch_at_login","value":false})
+        );
+    }
+    // The same value again changes nothing and sends nothing; the next
+    // event is the next change.
+    daemon.ok(json!({"cmd":"config_set","key":"launch_at_login","value":false}));
+    daemon.code(json!({"cmd":"config_set","key":"launch_at_login","value":"maybe"}));
+    daemon.ok(json!({"cmd":"config_set","key":"drop_after_days","value":20}));
+    assert_eq!(
+        cli.next().unwrap(),
+        json!({"event":"config_changed","key":"drop_after_days","value":20})
+    );
+    assert_eq!(
+        daemon.ok(json!({"cmd":"config_get","key":"launch_at_login"}))["value"],
+        false
     );
     daemon.stop();
 }

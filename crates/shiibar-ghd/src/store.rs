@@ -14,7 +14,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 const FILE_MODE: u32 = 0o600;
 const SIDE_FILES: [&str; 2] = ["-wal", "-shm"];
@@ -127,8 +127,45 @@ CREATE TABLE retries (pr_id TEXT PRIMARY KEY, since INTEGER NOT NULL, failures I
 CREATE TABLE fetch_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ";
 
+/// M3: the scope background color and the author's avatar. Scopes saved
+/// before get their colors in `assign_colors`. docs/tasks/M3.md, "Daemon and
+/// CLI changes".
+const SCHEMA_V3: &str = "
+ALTER TABLE scopes ADD COLUMN color TEXT;
+ALTER TABLE prs ADD COLUMN author_avatar_url TEXT;
+";
+
 /// Migrations by the version they produce.
-const MIGRATIONS: [(i64, &str); 2] = [(1, SCHEMA_V1), (2, SCHEMA_V2)];
+const MIGRATIONS: [(i64, &str); 3] = [(1, SCHEMA_V1), (2, SCHEMA_V2), (3, SCHEMA_V3)];
+
+/// Give the scopes of an older database their colors: Public beige, owners
+/// through the cycle in the order of their ids, which is the closest record
+/// of the order they were added in.
+fn assign_colors(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    let ids: Vec<String> = tx
+        .prepare("SELECT id FROM scopes WHERE color IS NULL ORDER BY id")?
+        .query_map([], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut seq = 0u32;
+    for id in ids {
+        let color = if id == PUBLIC {
+            ScopeColor::PUBLIC
+        } else {
+            let color = ScopeColor::nth(seq);
+            seq += 1;
+            color
+        };
+        tx.execute(
+            "UPDATE scopes SET color = ?1 WHERE id = ?2",
+            params![color.as_str(), id],
+        )?;
+    }
+    tx.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES ('color_seq', ?1)",
+        params![seq.to_string()],
+    )?;
+    Ok(())
+}
 
 #[derive(Debug)]
 pub enum OpenOutcome {
@@ -289,6 +326,9 @@ impl Store {
         for (target, sql) in MIGRATIONS {
             if target > version {
                 tx.execute_batch(sql)?;
+                if target == 3 && version > 0 {
+                    assign_colors(&tx)?;
+                }
                 tx.pragma_update(None, "user_version", target)?;
             }
         }
@@ -341,6 +381,10 @@ impl Store {
             tx.execute(
                 "INSERT OR REPLACE INTO meta (key, value) VALUES ('last_release_at', ?1)",
                 params![data.last_release_at.to_string()],
+            )?;
+            tx.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('color_seq', ?1)",
+                params![data.color_seq.to_string()],
             )?;
         }
         if dirty.config {
@@ -448,8 +492,9 @@ fn parse_counts(text: &str) -> rusqlite::Result<BTreeMap<String, u32>> {
 fn save_scope(tx: &Transaction<'_>, scope: &ScopeRec) -> rusqlite::Result<usize> {
     tx.execute(
         "INSERT OR REPLACE INTO scopes
-         (id, removed, enabled, notify, watch_started_at, updated_at, dot, kind, name, fetched_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+         (id, removed, enabled, notify, watch_started_at, updated_at, dot, kind, name, fetched_at,
+          color)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             scope.id,
             scope.removed,
@@ -460,7 +505,8 @@ fn save_scope(tx: &Transaction<'_>, scope: &ScopeRec) -> rusqlite::Result<usize>
             scope.dot,
             scope.kind.map(ScopeKind::as_str),
             scope.name,
-            scope.fetched_at
+            scope.fetched_at,
+            scope.color.as_str()
         ],
     )
 }
@@ -472,10 +518,10 @@ fn save_pr(tx: &Transaction<'_>, pr: &PrRec) -> rusqlite::Result<usize> {
           checks, base_status, mergeable, failed_check, changes_requested_by, updated_at,
           is_private, requested_me, link_review, link_checks, link_base, mine, unreadable,
           snoozed, added_at, prev_review, prev_checks, prev_base_status, prev_mergeable,
-          requested_team, gone_at, collected)
+          requested_team, gone_at, collected, author_avatar_url)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
                  ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32,
-                 ?33, ?34)",
+                 ?33, ?34, ?35)",
         params![
             pr.id,
             pr.owner,
@@ -511,6 +557,7 @@ fn save_pr(tx: &Transaction<'_>, pr: &PrRec) -> rusqlite::Result<usize> {
             pr.requested_team,
             pr.gone_at,
             pr.collected,
+            pr.author_avatar_url,
         ],
     )
 }
@@ -562,10 +609,22 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
     let Some(last_release_at) = last_release_at else {
         return Ok(None);
     };
+    let color_seq: Option<String> = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'color_seq'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
     let mut data = Data {
         last_release_at: last_release_at
             .parse()
             .context("stored last_release_at is not a number")?,
+        color_seq: color_seq
+            .map(|text| text.parse())
+            .transpose()
+            .context("stored color_seq is not a number")?
+            .unwrap_or(0),
         ..Data::default()
     };
 
@@ -584,7 +643,7 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
 
     let mut statement = conn.prepare(
         "SELECT id, removed, enabled, notify, watch_started_at, updated_at, dot, kind, name,
-                fetched_at
+                fetched_at, color
          FROM scopes",
     )?;
     let scopes = statement.query_map([], |row| {
@@ -595,6 +654,7 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
                 .transpose()?,
             name: row.get(8)?,
             fetched_at: row.get(9)?,
+            color: stored(10, &row.get::<_, String>(10)?, ScopeColor::parse)?,
             id: row.get(0)?,
             removed: row.get(1)?,
             enabled: row.get(2)?,
@@ -614,7 +674,7 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
                 checks, base_status, mergeable, failed_check, changes_requested_by, updated_at,
                 is_private, requested_me, link_review, link_checks, link_base, mine, unreadable,
                 snoozed, added_at, prev_review, prev_checks, prev_base_status, prev_mergeable,
-                requested_team, gone_at, collected
+                requested_team, gone_at, collected, author_avatar_url
          FROM prs",
     )?;
     let prs = statement.query_map([], |row| {
@@ -663,6 +723,7 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
             requested_team: row.get(31)?,
             gone_at: row.get(32)?,
             collected: row.get(33)?,
+            author_avatar_url: row.get(34)?,
         })
     })?;
     for pr in prs {

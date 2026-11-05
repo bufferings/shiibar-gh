@@ -1,0 +1,163 @@
+# Release of "Shiibar GH.app" (docs/DESIGN.md, "Distribution and signing").
+# On a vX.Y.Z tag it checks the tag against Cargo.toml, builds the arm64
+# app, signs every executable with the Developer ID Application identity
+# under the hardened runtime, notarizes, staples, zips, and opens a DRAFT
+# GitHub Release; the owner publishes it after checking the notarized build.
+#
+# workflow_dispatch is a dry run: the same steps with the real secrets
+# (certificate import, signing, notarization, stapling, zip), but no release
+# is created; the zip is kept as a workflow artifact instead. Only the
+# publish job, which a dry run skips, may write to the repository. The owner runs
+# only this dry run in M3 (docs/tasks/M3.md); the first real release comes
+# after M4.
+#
+# Secrets: DEVELOPER_ID_CERT_P12 (base64 of the .p12),
+# DEVELOPER_ID_CERT_PASSWORD, APPLE_API_KEY_P8, APPLE_API_KEY_ID,
+# APPLE_API_ISSUER_ID (an App Store Connect API key for notarytool).
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    # Notarization usually takes minutes but can take hours; this is a
+    # ceiling for a hung run.
+    timeout-minutes: 240
+    outputs:
+      zip: ${{ steps.package.outputs.name }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Resolve the version
+        id: version
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            # shellcheck source=scripts/lib/bundle.sh
+            source scripts/lib/bundle.sh
+            version="$(read_workspace_version Cargo.toml)"
+          else
+            scripts/release/check-version.sh "$GITHUB_REF_NAME"
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Import the Developer ID certificate
+        env:
+          DEVELOPER_ID_CERT_P12: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
+          DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password="$(uuidgen)"
+          echo "SIGNING_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          cert_path="$RUNNER_TEMP/developer_id.p12"
+          echo "$DEVELOPER_ID_CERT_P12" | base64 --decode > "$cert_path"
+          security import "$cert_path" -P "$DEVELOPER_ID_CERT_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$keychain_password" "$keychain" >/dev/null
+          rm -f "$cert_path"
+          # shellcheck disable=SC2046 # the keychain list is split on purpose
+          security list-keychains -d user -s "$keychain" \
+            $(security list-keychains -d user | sed 's/"//g')
+
+      - name: Build and sign the app
+        run: scripts/release/build-release-app.sh "${{ steps.version.outputs.version }}" dist
+
+      - name: Notarize
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          key_path="$RUNNER_TEMP/AuthKey.p8"
+          printf '%s' "$APPLE_API_KEY_P8" > "$key_path"
+          # This zip is only for the submission; the distributed zip is
+          # made after stapling.
+          ditto -c -k --keepParent "dist/Shiibar GH.app" dist/notarize.zip
+          set +e
+          xcrun notarytool submit dist/notarize.zip \
+            --key "$key_path" --key-id "$APPLE_API_KEY_ID" \
+            --issuer "$APPLE_API_ISSUER_ID" \
+            --wait --timeout 220m 2>&1 | tee "$RUNNER_TEMP/notarize.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          # A submission that was not accepted has no ticket, so the staple
+          # step below fails even if notarytool exited 0.
+          if [ "$status" -ne 0 ]; then
+            submission_id="$(awk '/id:/ { print $2; exit }' "$RUNNER_TEMP/notarize.log")"
+            if [ -n "$submission_id" ]; then
+              xcrun notarytool log "$submission_id" \
+                --key "$key_path" --key-id "$APPLE_API_KEY_ID" \
+                --issuer "$APPLE_API_ISSUER_ID" || true
+            fi
+            exit 1
+          fi
+
+      - name: Staple and verify
+        run: |
+          xcrun stapler staple "dist/Shiibar GH.app"
+          xcrun stapler validate "dist/Shiibar GH.app"
+          spctl -a -vv "dist/Shiibar GH.app"
+          codesign -dv --verbose=2 "dist/Shiibar GH.app/Contents/Helpers/shiibar-ghd" 2>&1 | grep -E 'Identifier|flags'
+
+      - name: Zip the stapled app
+        id: package
+        run: |
+          name="shiibar-gh-${{ steps.version.outputs.version }}-arm64.zip"
+          ditto -c -k --keepParent "dist/Shiibar GH.app" "dist/$name"
+          shasum -a 256 "dist/$name"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      # The dry run's result, and what the publish job uploads.
+      - name: Keep the zip
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: shiibar-gh-zip
+          path: dist/${{ steps.package.outputs.name }}
+
+      - name: Clean up the secrets
+        if: always()
+        run: |
+          if [ -n "${SIGNING_KEYCHAIN:-}" ]; then
+            security delete-keychain "$SIGNING_KEYCHAIN" || true
+          fi
+          rm -f "$RUNNER_TEMP/AuthKey.p8"
+
+  publish:
+    # Only a tag creates the draft release; a dry run stops after build.
+    if: github.event_name != 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Get the zip
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: shiibar-gh-zip
+          path: dist
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZIP: dist/${{ needs.build.outputs.zip }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            "$ZIP"

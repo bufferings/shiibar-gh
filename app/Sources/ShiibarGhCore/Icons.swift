@@ -1,0 +1,216 @@
+// The boards' icons as SwiftUI views, and the header's icon buttons.
+
+import AppKit
+import SwiftUI
+
+public enum IconPath {
+    /// The icon's outline on its 16 by 16 grid, scaled into `rect`. The
+    /// grid's y axis points down, as in SVG; `flipY` turns it for a y-up
+    /// AppKit context.
+    public static func cgPath(_ icon: BoardIcon, in rect: CGRect, flipY: Bool) -> CGPath {
+        let scale = min(rect.width, rect.height) / 16
+        func point(_ p: ShiibarGhCore.Point) -> CGPoint {
+            let y = flipY ? 16 - p.y : p.y
+            return CGPoint(x: rect.minX + p.x * scale, y: rect.minY + y * scale)
+        }
+        let path = CGMutablePath()
+        for element in icon.elements {
+            switch element {
+            case .circle(let cx, let cy, let r, let dash):
+                let center = point(ShiibarGhCore.Point(cx, cy))
+                let circle = CGPath(
+                    ellipseIn: CGRect(x: center.x - r * scale, y: center.y - r * scale, width: 2 * r * scale, height: 2 * r * scale),
+                    transform: nil
+                )
+                if let dash {
+                    path.addPath(circle.copy(dashingWithPhase: 0, lengths: dash.map { $0 * scale }))
+                } else {
+                    path.addPath(circle)
+                }
+            case .rect(let x, let y, let width, let height, let radius):
+                let origin = point(ShiibarGhCore.Point(x, flipY ? y + height : y))
+                path.addRoundedRect(
+                    in: CGRect(x: origin.x, y: origin.y, width: width * scale, height: height * scale),
+                    cornerWidth: radius * scale, cornerHeight: radius * scale
+                )
+            case .arc(let cx, let cy, let r, let start, let end):
+                // Points along the arc, so the same code serves y-down
+                // (SwiftUI) and y-up (menu bar) drawing.
+                let steps = 48
+                for step in 0...steps {
+                    let angle = (start + (end - start) * Double(step) / Double(steps)) * .pi / 180
+                    let p = point(ShiibarGhCore.Point(cx + r * cos(angle), cy + r * sin(angle)))
+                    if step == 0 { path.move(to: p) } else { path.addLine(to: p) }
+                }
+            case .path(let d):
+                for segment in SVGPath.parse(d) {
+                    switch segment {
+                    case .move(let p): path.move(to: point(p))
+                    case .line(let p): path.addLine(to: point(p))
+                    case .curve(let c1, let c2, let p): path.addCurve(to: point(p), control1: point(c1), control2: point(c2))
+                    case .close: path.closeSubpath()
+                    }
+                }
+            }
+        }
+        return path
+    }
+
+    public static func stroke(_ icon: BoardIcon, scale: CGFloat) -> StrokeStyle {
+        StrokeStyle(
+            lineWidth: icon.lineWidth * scale,
+            lineCap: icon.roundCaps ? .round : .butt,
+            lineJoin: icon.roundJoins ? .round : .miter
+        )
+    }
+}
+
+/// A board icon stroked in the current foreground color.
+public struct IconShape: Shape {
+    public var icon: BoardIcon
+
+    public init(icon: BoardIcon) {
+        self.icon = icon
+    }
+
+    public func path(in rect: CGRect) -> Path {
+        Path(IconPath.cgPath(icon, in: rect, flipY: false))
+    }
+}
+
+public struct IconView: View {
+    public var icon: BoardIcon
+    public var size: CGFloat
+    public var color: Color
+
+    public init(icon: BoardIcon, size: CGFloat, color: Color) {
+        self.icon = icon
+        self.size = size
+        self.color = color
+    }
+
+    public var body: some View {
+        IconShape(icon: icon)
+            .stroke(color, style: IconPath.stroke(icon, scale: size / 16))
+            .frame(width: size, height: size)
+    }
+}
+
+public struct HeaderButton: View {
+    public var icon: BoardIcon
+    public var size: CGFloat
+    public var label: String
+    public var theme: ScopeTheme
+    public var action: () -> Void
+
+    public init(icon: BoardIcon, size: CGFloat, label: String, theme: ScopeTheme, action: @escaping () -> Void) {
+        self.icon = icon
+        self.size = size
+        self.label = label
+        self.theme = theme
+        self.action = action
+    }
+
+    public var body: some View {
+        Button(action: action) {
+            IconView(icon: icon, size: size, color: Palette.botIcon.color)
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(HoverButtonStyle(theme: theme))
+        .help(label)
+        .accessibilityLabel(label)
+    }
+}
+
+public struct HoverButtonStyle: ButtonStyle {
+    public var theme: ScopeTheme
+    @State private var hovering = false
+
+    public init(theme: ScopeTheme) {
+        self.theme = theme
+    }
+
+    public func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundColor(Palette.botIcon.color)
+            .background(RoundedRectangle(cornerRadius: 6).fill(hovering || configuration.isPressed ? theme.tint.color : .clear))
+            .onHover { hovering = $0 }
+    }
+}
+
+
+/// One item of an icon button's menu. In a list of items, nil is a
+/// separator.
+public struct IconMenuItem {
+    public var title: String
+    public var action: () -> Void
+
+    public init(_ title: String, action: @escaping () -> Void) {
+        self.title = title
+        self.action = action
+    }
+}
+
+/// The ⌄ menu: a header icon button that opens an AppKit menu below the
+/// pointer. Not a SwiftUI `Menu`: with `.menuStyle(.borderlessButton)` a
+/// Menu draws its label through a pop-up button, which shows Text and Image
+/// labels but drops a Shape (a test renders both), so the board's chevron
+/// never appeared.
+public struct MenuIconButton: View {
+    public var icon: BoardIcon
+    public var label: String
+    public var theme: ScopeTheme
+    public var items: [IconMenuItem?]
+
+    public init(icon: BoardIcon, label: String, theme: ScopeTheme, items: [IconMenuItem?]) {
+        self.icon = icon
+        self.label = label
+        self.theme = theme
+        self.items = items
+    }
+
+    public var body: some View {
+        HeaderButton(icon: icon, size: 14, label: label, theme: theme) {
+            IconMenu.popUp(items)
+        }
+    }
+}
+
+/// Builds and shows the menu; each item calls its closure.
+@MainActor
+public enum IconMenu {
+    public static func make(_ items: [IconMenuItem?]) -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        for item in items {
+            guard let item else {
+                menu.addItem(.separator())
+                continue
+            }
+            let entry = NSMenuItem(title: item.title, action: #selector(Target.run(_:)), keyEquivalent: "")
+            let target = Target(item.action)
+            entry.target = target
+            entry.representedObject = target
+            menu.addItem(entry)
+        }
+        return menu
+    }
+
+    static func popUp(_ items: [IconMenuItem?]) {
+        // Positioned at the pointer, in screen coordinates (view nil).
+        make(items).popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+    }
+
+    final class Target: NSObject {
+        let action: () -> Void
+
+        init(_ action: @escaping () -> Void) {
+            self.action = action
+        }
+
+        @objc func run(_ sender: Any?) {
+            action()
+        }
+    }
+}

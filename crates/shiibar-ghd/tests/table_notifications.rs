@@ -262,7 +262,11 @@ fn the_row_kind_labels() {
     h.set("bot_comments", json!("notify"));
     let e = h.ev("E_1", "PR_1", EventKind::BotComment);
     h.push(vec![other("PR_1")], vec![e], vec![]);
-    assert_eq!(h.delivered()[0].title, "org · Bot comment");
+    assert_eq!(
+        h.delivered()[0].title,
+        "org · Comment",
+        "a bot comment is titled Comment; the row stays bot_comment"
+    );
     let e = h.ev("E_2", "PR_2", EventKind::RemovedFromMergeQueue);
     h.push(vec![pr("PR_2")], vec![e], vec![]);
     assert_eq!(h.delivered()[0].title, "org · Removed from merge queue");
@@ -554,4 +558,21 @@ fn reactions_of_one_comment_count_once_on_reconnect() {
         out[0].title, "org · 2 new events",
         "two comments: two notifications"
     );
+}
+
+#[test]
+fn notification_bodies_collapse_line_breaks_and_runs_of_spaces() {
+    // DESIGN.md, "Row kinds and states": the same rule as the rows on screen.
+    let cases = [
+        ("one\nline", "one line"),
+        ("  a \t b\r\n\n  c  ", "a b c"),
+        ("plain", "plain"),
+    ];
+    for (text, want) in cases {
+        let mut h = H::new();
+        let mut e = h.ev("E_1", "PR_1", EventKind::Comment);
+        e.text = Some(text.into());
+        h.push(vec![other("PR_1")], vec![e], vec![]);
+        assert_eq!(h.delivered()[0].body.as_deref(), Some(want), "{text:?}");
+    }
 }

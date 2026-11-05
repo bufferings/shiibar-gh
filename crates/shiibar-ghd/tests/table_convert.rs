@@ -229,6 +229,7 @@ fn a_status_node_becomes_an_ingest_pr() {
         ("Org", "app", 7)
     );
     assert_eq!(pr.author, "me");
+    assert_eq!(pr.author_avatar_url, None, "no avatarUrl in the answer");
     assert_eq!((pr.base.as_str(), pr.head.as_str()), ("main", "fix"));
     assert_eq!(pr.state, shiibar_gh_proto::PrState::Open);
     assert_eq!(pr.checks, Checks::Failed);
@@ -252,6 +253,24 @@ fn a_deleted_author_is_an_empty_login() {
     )
     .unwrap();
     assert_eq!(pr.author, "");
+    assert_eq!(pr.author_avatar_url, None);
+}
+
+#[test]
+fn the_author_avatar_comes_from_avatar_url() {
+    let t = teams();
+    let author = json!({"__typename":"User","login":"alice",
+        "avatarUrl":"https://avatars.githubusercontent.com/u/1?s=32&v=4"});
+    let pr = convert::pr_values(
+        &status_node(json!({ "author": author })),
+        &StatusExtra::default(),
+        ctx(&t),
+    )
+    .unwrap();
+    assert_eq!(
+        pr.author_avatar_url.as_deref(),
+        Some("https://avatars.githubusercontent.com/u/1?s=32&v=4")
+    );
 }
 
 #[test]
