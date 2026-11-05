@@ -11,6 +11,16 @@ struct SurfaceActions {
     var openSettings: (SettingsDestination) -> Void
     var about: () -> Void
     var quit: () -> Void
+
+    /// The ⌄ menu (DESIGN.md, "Screens"); nil is a separator.
+    var menuItems: [IconMenuItem?] {
+        [
+            IconMenuItem("About shiibar-gh", action: about),
+            IconMenuItem("Settings…") { openSettings(SurfaceRules.headerSettings) },
+            nil,
+            IconMenuItem("Quit shiibar-gh", action: quit),
+        ]
+    }
 }
 
 struct PopoverView: View {
@@ -96,51 +106,9 @@ struct Header: View {
             }
             HeaderButton(icon: BoardIcons.refresh, size: 16, label: "Refresh", theme: theme, action: refresh)
             HeaderButton(icon: BoardIcons.settings, size: 16, label: "Settings", theme: theme) { actions.openSettings(SurfaceRules.headerSettings) }
-            Menu {
-                Button("About shiibar-gh", action: actions.about)
-                Button("Settings…") { actions.openSettings(SurfaceRules.headerSettings) }
-                Divider()
-                Button("Quit shiibar-gh", action: actions.quit)
-            } label: {
-                IconView(icon: BoardIcons.chevron, size: 14, color: Palette.botIcon.color)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .frame(width: 24, height: 24)
+            MenuIconButton(icon: BoardIcons.chevron, label: "More", theme: theme, items: actions.menuItems)
         }
         .padding(EdgeInsets(top: 12, leading: 16, bottom: 0, trailing: 10))
-    }
-}
-
-struct HeaderButton: View {
-    var icon: BoardIcon
-    var size: CGFloat
-    var label: String
-    var theme: ScopeTheme
-    var action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            IconView(icon: icon, size: size, color: Palette.botIcon.color)
-                .frame(width: 24, height: 24)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(HoverButtonStyle(theme: theme))
-        .help(label)
-        .accessibilityLabel(label)
-    }
-}
-
-struct HoverButtonStyle: ButtonStyle {
-    var theme: ScopeTheme
-    @State private var hovering = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundColor(Palette.botIcon.color)
-            .background(RoundedRectangle(cornerRadius: 6).fill(hovering || configuration.isPressed ? theme.tint.color : .clear))
-            .onHover { hovering = $0 }
     }
 }
 
@@ -745,17 +713,7 @@ struct NoScopesView: View {
             HStack {
                 Text("shiibar-gh").font(.system(size: 14, weight: .semibold))
                 Spacer()
-                Menu {
-                    Button("About shiibar-gh", action: actions.about)
-                    Button("Settings…") { actions.openSettings(SurfaceRules.headerSettings) }
-                    Divider()
-                    Button("Quit shiibar-gh", action: actions.quit)
-                } label: {
-                    IconView(icon: BoardIcons.chevron, size: 14, color: Palette.botIcon.color)
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
+                MenuIconButton(icon: BoardIcons.chevron, label: "More", theme: Palette.theme(.gray), items: actions.menuItems)
             }
             .padding(EdgeInsets(top: 12, leading: 16, bottom: 0, trailing: 10))
             switch SurfaceRules.noScopeContent(dbUnreadable: app.dbUnreadable) {
