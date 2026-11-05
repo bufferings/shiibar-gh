@@ -38,7 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         surfaces = SurfaceController(app: model, avatars: avatars) { [weak self] scope in
             SurfaceActions(
                 openWindow: scope.map { id in { self?.surfaces.openWindow(scope: id) } },
-                openSettings: { scopesTab in self?.showSettings(scopesTab ? .scopes : .general) },
+                openSettings: { destination in self?.showSettings(destination == .scopes ? .scopes : .general) },
                 about: { self?.about() },
                 quit: { self?.quit() }
             )
@@ -50,10 +50,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         settings = SettingsModel(app: model, launch: launch)
         model.onOpenPopover = { [weak self] scope in self?.surfaces.showPopover(scope: scope) }
         model.onOpenSettings = { [weak self] in self?.showSettings(.scopes) }
-        model.onScopesChanged = { [weak self] in
-            guard let settings = self?.settings, settings.isOpen else { return }
-            settings.reloadStatus()
-        }
         presenter?.onClick = { [weak self] type, scope, url in
             self?.model.notificationClicked(type: type, scope: scope, url: url)
         }

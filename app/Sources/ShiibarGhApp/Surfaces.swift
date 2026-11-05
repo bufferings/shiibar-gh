@@ -59,7 +59,8 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             }
             if popoverScope == id { popover.performClose(nil) }
         }
-        for id in panels.keys where !scopes.contains(where: { $0.id == id }) {
+        // A removed or disabled scope has no window either.
+        for id in panels.keys where !ids.contains(id) {
             panels[id]?.close()
         }
         if ids != order {
@@ -76,7 +77,7 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             item.button?.setAccessibilityLabel(accessibility(scope))
             item.button?.toolTip = scope.name
         }
-        if shown.isEmpty {
+        if SurfaceRules.showsAppIcon(scopes) {
             if fallback == nil {
                 let item = NSStatusBar.system.statusItem(withLength: MenuBarImage.width)
                 item.button?.target = self
@@ -135,12 +136,12 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         popoverScope = scope
         let content: AnyView
         if let scope {
-            content = AnyView(PopoverView(app: app, model: app.viewModel(scope), avatars: avatars, actions: actions(scope)))
+            content = AnyView(PopoverView(app: app, model: app.viewModel(scope), avatars: avatars, actions: actions(scope), surface: .popover))
             popover.contentSize = NSSize(width: 400, height: 620)
         } else {
             var noScope = actions(nil)
             noScope.openWindow = nil
-            content = AnyView(NoScopesView(actions: noScope))
+            content = AnyView(NoScopesView(app: app, actions: noScope))
             popover.contentSize = NSSize(width: 300, height: 180)
         }
         popover.contentViewController = NSHostingController(rootView: content)
@@ -179,7 +180,7 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         }
         var surface = actions(scope)
         surface.openWindow = nil
-        let view = PopoverView(app: app, model: app.viewModel(scope), avatars: avatars, actions: surface)
+        let view = PopoverView(app: app, model: app.viewModel(scope), avatars: avatars, actions: surface, surface: .window)
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 400, height: 620),
             styleMask: [.titled, .closable, .resizable, .utilityWindow, .fullSizeContentView],

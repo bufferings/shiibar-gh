@@ -201,8 +201,74 @@ public struct OpenSurfaces: Equatable {
         !(open[scope]?.isEmpty ?? true)
     }
 
+    public func isOpen(_ surface: Surface, scope: String) -> Bool {
+        open[scope]?.contains(surface) ?? false
+    }
+
+    /// The scope is gone (removed): nothing is sent for it any more.
+    public mutating func forget(_ scope: String) {
+        open[scope] = nil
+    }
+
     /// The scopes to send `popover_opened` for again after a reconnect.
     public var openScopes: [String] {
         open.keys.sorted()
+    }
+}
+
+// MARK: - What a surface shows
+
+/// The body of a scope's popover and window (DESIGN.md, "First run, failure
+/// and empty" and "When the database cannot be read").
+public enum PopoverContent: Equatable {
+    /// "Couldn't read saved state" and Reset only.
+    case unreadable
+    /// "Add a token in Settings" and Settings only.
+    case noToken
+    /// The banner, tabs, chips, list and key hints.
+    case list
+}
+
+/// The popover of the shiibar-gh icon shown while no scope icon is.
+public enum NoScopeContent: Equatable {
+    case unreadable
+    case noScopes
+}
+
+/// Where a Settings button goes.
+public enum SettingsDestination: Equatable {
+    case general
+    case scopes
+}
+
+public enum SurfaceRules {
+    public static func content(scope: Scope?, dbUnreadable: Bool) -> PopoverContent {
+        if dbUnreadable { return .unreadable }
+        if let scope, Warnings.needsToken(scope) { return .noToken }
+        return .list
+    }
+
+    public static func noScopeContent(dbUnreadable: Bool) -> NoScopeContent {
+        dbUnreadable ? .unreadable : .noScopes
+    }
+
+    /// The shiibar-gh icon shows when no scope icon does: no scope, or every
+    /// scope disabled (DESIGN.md, "Screens").
+    public static func showsAppIcon(_ scopes: [Scope]) -> Bool {
+        !scopes.contains(where: \.enabled)
+    }
+
+    /// The header's Settings and the ⌄ menu open General; the banner's
+    /// Settings, the no-token state and the no-scope popover open Scopes
+    /// (docs/tasks/M3.md, "Menu bar and popover"; DESIGN.md, "First run,
+    /// failure and empty").
+    public static let headerSettings = SettingsDestination.general
+    public static let bannerSettings = SettingsDestination.scopes
+    public static let noTokenSettings = SettingsDestination.scopes
+    public static let noScopesSettings = SettingsDestination.scopes
+
+    /// "Snoozed until Mon 09:00", from the card's `snoozed_until`.
+    public static func snoozedUntil(_ at: Int64, timeZone: TimeZone = .current) -> String {
+        "Snoozed until " + RelativeTime.weekdayClock(at, timeZone: timeZone)
     }
 }

@@ -126,17 +126,22 @@ public final class LaunchAtLogin {
     }
 }
 
-/// Author avatars, loaded once per URL and kept in memory. A failed or
-/// pending load shows the empty circle.
+/// Author avatars, loaded once per URL and kept in memory. A pending load
+/// shows the empty circle; a failed one too, and is tried again once
+/// `retryAfter` seconds have passed.
 @MainActor
 public final class AvatarStore: ObservableObject {
     @Published public private(set) var images: [String: Data] = [:]
     private var loading: Set<String> = []
-    private var failed: Set<String> = []
+    private var failedAt: [String: Date] = [:]
     private let loader: ImageLoading
+    private let clock: () -> Date
+    public let retryAfter: TimeInterval
 
-    public init(loader: ImageLoading) {
+    public init(loader: ImageLoading, retryAfter: TimeInterval = 300, clock: @escaping () -> Date = Date.init) {
         self.loader = loader
+        self.retryAfter = retryAfter
+        self.clock = clock
     }
 
     public func image(for url: String?) -> Data? {
@@ -145,16 +150,18 @@ public final class AvatarStore: ObservableObject {
     }
 
     public func request(_ url: String?) {
-        guard let url, images[url] == nil, !loading.contains(url), !failed.contains(url),
+        guard let url, images[url] == nil, !loading.contains(url),
               let parsed = URL(string: url), parsed.scheme == "https" || parsed.scheme == "http"
         else { return }
+        if let failed = failedAt[url], clock().timeIntervalSince(failed) < retryAfter { return }
         loading.insert(url)
         Task {
             do {
                 let data = try await loader.load(parsed)
                 images[url] = data
+                failedAt[url] = nil
             } catch {
-                failed.insert(url)
+                failedAt[url] = clock()
             }
             loading.remove(url)
         }

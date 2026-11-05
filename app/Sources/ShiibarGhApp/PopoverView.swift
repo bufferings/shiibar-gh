@@ -8,7 +8,7 @@ import SwiftUI
 /// What the surface around the list does for it.
 struct SurfaceActions {
     var openWindow: (() -> Void)?
-    var openSettings: (_ scopesTab: Bool) -> Void
+    var openSettings: (SettingsDestination) -> Void
     var about: () -> Void
     var quit: () -> Void
 }
@@ -18,6 +18,7 @@ struct PopoverView: View {
     @ObservedObject var model: ScopeViewModel
     @ObservedObject var avatars: AvatarStore
     var actions: SurfaceActions
+    var surface: Surface
 
     var scope: Scope? { app.scope(model.scope) }
 
@@ -43,20 +44,23 @@ struct PopoverView: View {
                 updated: app.dbUnreadable ? nil : RelativeTime.updated(scope?.updatedAt, now: now),
                 theme: theme, actions: actions, refresh: { app.refresh(model.scope) }
             )
-            if app.dbUnreadable {
+            switch SurfaceRules.content(scope: scope, dbUnreadable: app.dbUnreadable) {
+            case .unreadable:
                 CenteredMessage(title: EmptyState.unreadable, button: "Reset") { app.reset() }
-            } else if let scope, Warnings.needsToken(scope) {
-                CenteredMessage(title: EmptyState.noToken, button: "Settings") { actions.openSettings(true) }
-            } else {
+            case .noToken:
+                CenteredMessage(title: EmptyState.noToken, button: "Settings") {
+                    actions.openSettings(SurfaceRules.noTokenSettings)
+                }
+            case .list:
                 if let scope {
                     let lines = Warnings.banner(scope, now: now)
                     if !lines.isEmpty {
-                        Banner(lines: lines.map(\.text)) { actions.openSettings(true) }
+                        Banner(lines: lines.map(\.text)) { actions.openSettings(SurfaceRules.bannerSettings) }
                     }
                 }
                 Tabs(tab: $model.tab, theme: theme)
                 ChipBar(chips: $model.chips)
-                ListArea(app: app, model: model, avatars: avatars, theme: theme, now: now)
+                ListArea(app: app, model: model, avatars: avatars, theme: theme, now: now, surface: surface)
                 KeyHints(theme: theme)
             }
         }
@@ -98,10 +102,10 @@ struct Header: View {
             }
             .buttonStyle(HoverButtonStyle(theme: theme))
             .help("Refresh")
-            HeaderButton(icon: BoardIcons.gear, size: 16, label: "Settings", theme: theme) { actions.openSettings(false) }
+            HeaderButton(icon: BoardIcons.gear, size: 16, label: "Settings", theme: theme) { actions.openSettings(SurfaceRules.headerSettings) }
             Menu {
                 Button("About shiibar-gh", action: actions.about)
-                Button("Settings…") { actions.openSettings(false) }
+                Button("Settings…") { actions.openSettings(SurfaceRules.headerSettings) }
                 Divider()
                 Button("Quit shiibar-gh", action: actions.quit)
             } label: {
@@ -317,6 +321,7 @@ struct ListArea: View {
     @ObservedObject var avatars: AvatarStore
     var theme: ScopeTheme
     var now: Int64
+    var surface: Surface
 
     var body: some View {
         GeometryReader { outer in
@@ -352,7 +357,7 @@ struct ListArea: View {
                 }
                 .coordinateSpace(name: "list")
                 .onPreferenceChange(RowFrames.self) { frames in
-                    model.rowsShown(Visibility.shown(frames: frames, viewport: 0 ... Double(outer.size.height)))
+                    model.rowsShown(Visibility.shown(frames: frames, viewport: 0 ... Double(outer.size.height)), surface: surface)
                 }
                 .onChange(of: model.selection) { _, selection in
                     if let selection {
@@ -397,6 +402,10 @@ struct CardView: View {
         card.stateLabel.value == .merged || card.stateLabel.value == .closed
     }
 
+    /// docs/design/MainSnoozed.html: a snoozed card is faded except "Snoozed
+    /// until …" and Unsnooze.
+    var faded: Double { card.snoozed ? 0.55 : 1 }
+
     var body: some View {
         let selected = model.selection == .header(card: card.id)
         VStack(spacing: 0) {
@@ -410,6 +419,7 @@ struct CardView: View {
                     }
                 }
                 .padding(.horizontal, 4)
+                .opacity(faded)
                 Button { model.perform(.open(card.url)) } label: {
                     HStack(spacing: 7) {
                         Avatar(data: avatars.image(for: card.authorAvatarUrl))
@@ -425,15 +435,17 @@ struct CardView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .opacity(faded)
                 HStack(spacing: 6) {
                     LinkText(text: "\(card.base) ← \(card.head)", url: card.url, model: model)
-                        .opacity(card.snoozed ? 0.55 : 1)
+                        .opacity(faded)
                     Spacer(minLength: 0)
                     if card.snoozed {
                         HStack(spacing: 4) {
                             if let until = card.snoozedUntil {
-                                Text("Snoozed until \(RelativeTime.weekdayClock(until))")
+                                Text(SurfaceRules.snoozedUntil(until))
                                     .font(.system(size: 11))
+                                    .foregroundColor(Palette.text.color)
                             }
                             Button("Unsnooze") { model.perform(.unsnooze(pr: card.pr)) }
                                 .buttonStyle(.plain)
@@ -456,17 +468,16 @@ struct CardView: View {
             .padding(EdgeInsets(top: 5, leading: 10, bottom: 4, trailing: 10))
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(selected ? Palette.blueDot.color : .clear, lineWidth: 1.5).padding(2))
             .id(SelectionItem.header(card: card.id).id)
-            .opacity(card.snoozed ? 0.85 : 1)
             VStack(spacing: 0) {
                 ForEach(card.rows) { row in
                     RowView(row: row, model: model, theme: theme, now: now, showsPR: false, card: card.id)
                 }
             }
-            .opacity(card.snoozed ? 0.55 : 1)
+            .opacity(faded)
         }
         .background(Color.white)
         .overlay(alignment: .leading) {
-            if let stateBar { Rectangle().fill(stateBar).frame(width: 4) }
+            if let stateBar { Rectangle().fill(stateBar).frame(width: 4).opacity(faded) }
         }
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(theme.border.color, lineWidth: 1))
@@ -729,8 +740,10 @@ struct SettingsButton: View {
     }
 }
 
-/// The popover while no scope icon shows (DESIGN.md, "Screens").
+/// The popover while no scope icon shows (DESIGN.md, "Screens"), or the
+/// unreadable state when the database cannot be read.
 struct NoScopesView: View {
+    @ObservedObject var app: AppModel
     var actions: SurfaceActions
 
     var body: some View {
@@ -740,7 +753,7 @@ struct NoScopesView: View {
                 Spacer()
                 Menu {
                     Button("About shiibar-gh", action: actions.about)
-                    Button("Settings…") { actions.openSettings(false) }
+                    Button("Settings…") { actions.openSettings(SurfaceRules.headerSettings) }
                     Divider()
                     Button("Quit shiibar-gh", action: actions.quit)
                 } label: {
@@ -751,8 +764,13 @@ struct NoScopesView: View {
                 .fixedSize()
             }
             .padding(EdgeInsets(top: 12, leading: 16, bottom: 0, trailing: 10))
-            CenteredMessage(title: EmptyState.noScopesTitle, detail: EmptyState.noScopesDetail, button: "Settings") {
-                actions.openSettings(true)
+            switch SurfaceRules.noScopeContent(dbUnreadable: app.dbUnreadable) {
+            case .unreadable:
+                CenteredMessage(title: EmptyState.unreadable, button: "Reset") { app.reset() }
+            case .noScopes:
+                CenteredMessage(title: EmptyState.noScopesTitle, detail: EmptyState.noScopesDetail, button: "Settings") {
+                    actions.openSettings(SurfaceRules.noScopesSettings)
+                }
             }
         }
         .frame(width: 300, height: 180)

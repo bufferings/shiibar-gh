@@ -6,7 +6,8 @@
 #
 # workflow_dispatch is a dry run: the same steps with the real secrets
 # (certificate import, signing, notarization, stapling, zip), but no release
-# is created; the zip is kept as a workflow artifact instead. The owner runs
+# is created; the zip is kept as a workflow artifact instead. Only the
+# publish job, which a dry run skips, may write to the repository. The owner runs
 # only this dry run in M3 (docs/tasks/M3.md); the first real release comes
 # after M4.
 #
@@ -22,14 +23,16 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
+  build:
     runs-on: macos-15
     # Notarization usually takes minutes but can take hours; this is a
     # ceiling for a hung run.
     timeout-minutes: 240
+    outputs:
+      zip: ${{ steps.package.outputs.name }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
@@ -111,29 +114,17 @@ jobs:
       - name: Zip the stapled app
         id: package
         run: |
-          zip="dist/shiibar-gh-${{ steps.version.outputs.version }}-arm64.zip"
-          ditto -c -k --keepParent "dist/Shiibar GH.app" "$zip"
-          shasum -a 256 "$zip"
-          echo "zip=$zip" >> "$GITHUB_OUTPUT"
+          name="shiibar-gh-${{ steps.version.outputs.version }}-arm64.zip"
+          ditto -c -k --keepParent "dist/Shiibar GH.app" "dist/$name"
+          shasum -a 256 "dist/$name"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
 
-      - name: Create the draft release
-        if: github.event_name != 'workflow_dispatch'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --draft \
-            --verify-tag \
-            --title "$GITHUB_REF_NAME" \
-            --generate-notes \
-            "${{ steps.package.outputs.zip }}"
-
-      - name: Keep the dry-run zip
-        if: github.event_name == 'workflow_dispatch'
+      # The dry run's result, and what the publish job uploads.
+      - name: Keep the zip
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: shiibar-gh-dry-run
-          path: ${{ steps.package.outputs.zip }}
+          name: shiibar-gh-zip
+          path: dist/${{ steps.package.outputs.name }}
 
       - name: Clean up the secrets
         if: always()
@@ -142,3 +133,31 @@ jobs:
             security delete-keychain "$SIGNING_KEYCHAIN" || true
           fi
           rm -f "$RUNNER_TEMP/AuthKey.p8"
+
+  publish:
+    # Only a tag creates the draft release; a dry run stops after build.
+    if: github.event_name != 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Get the zip
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: shiibar-gh-zip
+          path: dist
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZIP: dist/${{ needs.build.outputs.zip }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            "$ZIP"

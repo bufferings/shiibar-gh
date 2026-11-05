@@ -69,7 +69,8 @@ struct NotificationsTokenSection: View {
         let registered = status?.registered ?? false
         Section2(title: "Notifications token (classic PAT)") {
             Item(first: true) {
-                Label2(title: registered ? TokenState.masked : "No token", sub: classicSub(status))
+                // Unregistered: the label on the right already says No token.
+                Label2(title: registered ? TokenState.masked : "classic PAT", sub: classicSub(status))
                 TokenLabelView(label: label)
             }
             if registered, showsSSO(status, warnings) {
@@ -98,7 +99,7 @@ struct NotificationsTokenSection: View {
     }
 
     func classicSub(_ status: TokenStatus?) -> String? {
-        guard let status, status.registered else { return "classic PAT with notifications and read:org" }
+        guard let status, status.registered else { return "Scopes: notifications, read:org" }
         var parts: [String] = []
         if let scopes = status.scopes { parts.append("Scopes: " + scopes.joined(separator: ", ")) }
         if let expires = status.expiresAt { parts.append("Expires " + RelativeTime.date(expires)) }
@@ -164,8 +165,8 @@ struct ScopeItems: View {
         }
         if confirmingRemove {
             Item(vertical: true) {
-                Text("Remove \(scope.name)?").font(.system(size: 13, weight: .semibold))
-                Text("Its token is deleted from the Keychain. Add \(scope.name) again to get its Done and Snooze back.")
+                Text(ScopeText.removeTitle(scope.name)).font(.system(size: 13, weight: .semibold))
+                Text(ScopeText.removeDetail(scope.name))
                     .font(.system(size: 11)).foregroundColor(Palette.secondary.color)
                 HStack {
                     Spacer()

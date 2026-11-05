@@ -64,6 +64,12 @@ public final class AppModel: ObservableObject {
     public func handle(_ event: SubscribeEvent) {
         switch event {
         case .snapshot(let scopes, let unreadable):
+            // A removed scope's popover and window close with it; no
+            // `popover_closed` goes out for a scope the daemon no longer has.
+            let ids = Set(scopes.map(\.id))
+            for scope in surfaces.openScopes where !ids.contains(scope) {
+                surfaces.forget(scope)
+            }
             self.scopes = scopes
             dbUnreadable = unreadable
             onScopesChanged?()
@@ -101,6 +107,7 @@ public final class AppModel: ObservableObject {
     /// A surface shows the scope's list, open or not (the window keeps
     /// showing while another app has the focus).
     public func surfaceDisplayed(_ surface: Surface, scope: String, _ shown: Bool) {
+        if !shown { viewModels[scope]?.clearShown(surface) }
         if shown {
             let first = displayed[scope] == nil
             displayed[scope, default: []].insert(surface)
@@ -111,18 +118,27 @@ public final class AppModel: ObservableObject {
         }
     }
 
-    /// The popover opened, or the window got the focus.
+    /// The popover opened, or the window got the focus. `seen` goes only
+    /// for rows laid out in this surface: a new popover reports its rows
+    /// once laid out; the window already shows its rows, so the ones it
+    /// reported last count right away.
     public func surfaceOpened(_ surface: Surface, scope: String) {
+        if surfaces.isOpen(surface, scope: scope) { return }
         if surfaces.opened(surface, scope: scope) {
             send { try await $0.popoverOpened(scope) }
-            let model = viewModel(scope)
-            model.reload()
-            model.rowsShown(model.shownNow)
+        }
+        let model = viewModel(scope)
+        model.reload()
+        if surface == .popover {
+            model.clearShown(.popover)
+        } else {
+            model.rowsShown(model.shown(.window), surface: .window)
         }
     }
 
     /// The popover closed, or the window closed or lost the focus.
     public func surfaceClosed(_ surface: Surface, scope: String) {
+        if surface == .popover { viewModels[scope]?.clearShown(.popover) }
         if surfaces.closed(surface, scope: scope) {
             viewModels[scope]?.seen.reset()
             send { try await $0.popoverClosed(scope) }
@@ -131,6 +147,10 @@ public final class AppModel: ObservableObject {
 
     public func isOpen(_ scope: String) -> Bool {
         surfaces.isOpen(scope)
+    }
+
+    public func isOpen(_ surface: Surface, scope: String) -> Bool {
+        surfaces.isOpen(surface, scope: scope)
     }
 
     // MARK: - Actions
@@ -232,8 +252,8 @@ public final class ScopeViewModel: ObservableObject {
     }
     @Published public var selection: SelectionItem?
     var seen = SeenTracker()
-    /// The rows the view last reported inside the visible area.
-    public private(set) var shownNow: Set<String> = []
+    /// Per surface, the rows its view last reported inside the visible area.
+    private var shownBySurface: [Surface: Set<String>] = [:]
     private var reloads = 0
 
     init(scope: String, app: AppModel) {
@@ -284,12 +304,22 @@ public final class ScopeViewModel: ObservableObject {
         app.perform(action, scope: scope)
     }
 
-    /// The rows now inside the visible part of the list. Unread ones not
-    /// sent in this open period go out as `seen`, only while the scope is
-    /// open.
-    public func rowsShown(_ shown: Set<String>) {
-        shownNow = shown
-        guard app.isOpen(scope) else { return }
+    /// The rows a surface last reported as shown.
+    public func shown(_ surface: Surface) -> Set<String> {
+        shownBySurface[surface] ?? []
+    }
+
+    func clearShown(_ surface: Surface) {
+        shownBySurface[surface] = nil
+    }
+
+    /// The rows now inside the visible part of one surface's list. Unread
+    /// ones not sent in this open period go out as `seen`, only while that
+    /// surface is open. Rows the chips hide are not laid out, so they never
+    /// arrive here.
+    public func rowsShown(_ shown: Set<String>, surface: Surface) {
+        shownBySurface[surface] = shown
+        guard app.isOpen(surface, scope: scope) else { return }
         let rows = tab == .prs ? cards.flatMap(\.rows) : activity
         let unread = Set(rows.filter(\.unread).map(\.id))
         app.seen(seen.newlySeen(shown: shown, unread: unread))

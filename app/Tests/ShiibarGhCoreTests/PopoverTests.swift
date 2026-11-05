@@ -160,7 +160,7 @@ final class AppModelTests: XCTestCase {
         let view = model.viewModel("org")
         model.surfaceDisplayed(.window, scope: "org", true)
         await settle()
-        view.rowsShown(["A", "B", "C"])
+        view.rowsShown(["A", "B", "C"], surface: .window)
         await settle()
         XCTAssertFalse(api.calls.contains { $0.hasPrefix("seen") }, "the window without the focus is closed")
 
@@ -168,13 +168,60 @@ final class AppModelTests: XCTestCase {
         await settle()
         XCTAssertTrue(api.calls.contains("seen A,B,C"), "\(api.calls)")
         api.clearCalls()
-        view.rowsShown(["A", "B"])
+        view.rowsShown(["A", "B"], surface: .window)
         await settle()
         XCTAssertFalse(api.calls.contains { $0.hasPrefix("seen") }, "sent once per open period")
         model.surfaceClosed(.window, scope: "org")
         model.surfaceOpened(.window, scope: "org")
         await settle()
         XCTAssertTrue(api.calls.contains("seen A,B"), "\(api.calls)")
+    }
+
+    func testSeenComesOnlyFromTheSurfaceThatIsOpenAndFromItsNewLayout() async {
+        api.cards = sampleCards()
+        let view = model.viewModel("org")
+        // The popover of an earlier open reported rows; a new popover has not
+        // laid out yet.
+        model.surfaceDisplayed(.popover, scope: "org", true)
+        view.rowsShown(["A"], surface: .popover)
+        model.surfaceDisplayed(.popover, scope: "org", false)
+        model.surfaceDisplayed(.window, scope: "org", true)
+        view.rowsShown(["B"], surface: .window)
+        await settle()
+        model.surfaceOpened(.popover, scope: "org")
+        await settle()
+        XCTAssertFalse(api.calls.contains { $0.hasPrefix("seen") }, "nothing before the new layout: \(api.calls)")
+        view.rowsShown(["B"], surface: .window)
+        await settle()
+        XCTAssertFalse(api.calls.contains { $0.hasPrefix("seen") }, "the window has no focus")
+        view.rowsShown(["C"], surface: .popover)
+        await settle()
+        XCTAssertTrue(api.calls.contains("seen C"), "\(api.calls)")
+    }
+
+    func testRowsHiddenByTheChipsAreNeverSentAsSeen() async {
+        // With Needs action on, the daemon returns only PR_1: the rows of
+        // PR_2 are not laid out, and a stale report of them sends nothing.
+        api.cards = [sampleCards()[0]]
+        let view = model.viewModel("org")
+        view.chips.needsAction = true
+        model.surfaceDisplayed(.popover, scope: "org", true)
+        model.surfaceOpened(.popover, scope: "org")
+        await settle()
+        view.rowsShown(["A", "C"], surface: .popover)
+        await settle()
+        XCTAssertTrue(api.calls.contains("seen A"), "\(api.calls)")
+        XCTAssertFalse(api.calls.contains { $0.hasPrefix("seen") && $0.contains("C") })
+    }
+
+    func testARemovedScopeGetsNoPopoverClosed() async {
+        model.handle(.snapshot(scopes: [Scope(id: "org")], dbUnreadable: false))
+        model.surfaceOpened(.popover, scope: "org")
+        await settle()
+        model.handle(.snapshot(scopes: [], dbUnreadable: false))
+        model.surfaceClosed(.popover, scope: "org")
+        await settle()
+        XCTAssertEqual(api.calls.filter { $0.hasPrefix("popover_") }, ["popover_opened org"])
     }
 
     func testChipsReachTheDaemonAndAreKept() async {
@@ -270,6 +317,21 @@ final class AppModelTests: XCTestCase {
         avatars.request("https://avatars.example/fail")
         await settle()
         XCTAssertEqual(loader.loads.sorted(), ["https://avatars.example/a", "https://avatars.example/fail"])
+    }
+
+    func testAFailedAvatarIsTriedAgainLater() async {
+        let loader = FakeImages()
+        var now = Date(timeIntervalSince1970: 0)
+        let avatars = AvatarStore(loader: loader, retryAfter: 300, clock: { now })
+        avatars.request("https://avatars.example/fail")
+        await settle()
+        avatars.request("https://avatars.example/fail")
+        await settle()
+        XCTAssertEqual(loader.loads.count, 1, "not right away")
+        now = now.addingTimeInterval(301)
+        avatars.request("https://avatars.example/fail")
+        await settle()
+        XCTAssertEqual(loader.loads.count, 2)
     }
 }
 

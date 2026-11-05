@@ -284,8 +284,7 @@ public enum TokenState {
         let kinds = warnings.compactMap { $0.kind.value }
         if kinds.contains(.tokenInvalid) { return TokenLabel("Invalid", .bad) }
         if kinds.contains(.tokenOwnerMismatch) { return TokenLabel("Belongs to another account", .bad) }
-        if let expiring = warnings.first(where: { $0.kind.value == .tokenExpiring }),
-           let until = expiring.until ?? status.expiresAt {
+        if let until = expiring(status: status, warnings: warnings, now: now) {
             return TokenLabel("Expires in \(RelativeTime.days(RelativeTime.daysUntil(until, now: now)))", .caution)
         }
         guard let test = status.lastTest else { return TokenLabel("Not tested", .neutral) }
@@ -293,6 +292,19 @@ public enum TokenState {
             return TokenLabel("Missing permission", .caution)
         }
         return TokenLabel("Verified", .good)
+    }
+
+    /// When the token expires, if that is within the 7 days of DESIGN.md,
+    /// "Tokens": from a `token_expiring` warning, else from the token's own
+    /// `expires_at`, so the notifications token shows it without any scope.
+    static func expiring(status: TokenStatus, warnings: [Warning], now: Int64) -> Int64? {
+        if let warning = warnings.first(where: { $0.kind.value == .tokenExpiring }) {
+            return warning.until ?? status.expiresAt ?? now
+        }
+        if let at = status.expiresAt, at > now, at - now <= 7 * 86_400 {
+            return at
+        }
+        return nil
     }
 
     /// The warnings about the notifications token, from any scope.
@@ -321,6 +333,11 @@ public enum TokenState {
         return tokens.first { $0.target.caseInsensitiveCompare(target) == .orderedSame }
     }
 
+    /// The whole line of one test result: "OK · Checks".
+    public static func resultLine(_ result: TestResult) -> String {
+        resultText(result).status + " · " + result.item
+    }
+
     /// "OK", "Failed (Actions)" or "Can't check", before " · <item>".
     public static func resultText(_ result: TestResult) -> (status: String, tone: TokenLabelTone) {
         switch result.outcome.value {
@@ -332,6 +349,59 @@ public enum TokenState {
 
     /// The masked token: always 12 bullets, never a part of the token.
     public static let masked = String(repeating: "\u{2022}", count: 12)
+}
+
+// MARK: - Settings: scopes
+
+public enum ScopeText {
+    /// The Remove confirmation (DESIGN.md, "Adding a scope and registering a
+    /// token in Settings").
+    public static func removeTitle(_ name: String) -> String {
+        "Remove \(name)?"
+    }
+
+    public static func removeDetail(_ name: String) -> String {
+        "Its token is deleted from the Keychain. Add \(name) again to get its Done and Snooze back."
+    }
+}
+
+/// Return time: the daemon's `HH:MM` and the hour and minute a time picker
+/// edits.
+public enum ReturnTime {
+    /// Hour and minute of `HH:MM`; nil for anything else.
+    public static func parse(_ text: String?) -> (hour: Int, minute: Int)? {
+        guard let text else { return nil }
+        let parts = text.split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count == 2, parts.allSatisfy({ $0.count == 2 }),
+              let hour = Int(parts[0]), let minute = Int(parts[1]),
+              (0..<24).contains(hour), (0..<60).contains(minute)
+        else { return nil }
+        return (hour, minute)
+    }
+
+    public static func format(hour: Int, minute: Int) -> String {
+        String(format: "%02d:%02d", hour, minute)
+    }
+
+    /// A date carrying the time in `calendar`, for a picker that uses the
+    /// same calendar: a fixed day, so no daylight saving gap moves it.
+    public static func date(_ text: String?, calendar: Calendar) -> Date {
+        let (hour, minute) = parse(text) ?? (9, 0)
+        let components = DateComponents(year: 2001, month: 1, day: 1, hour: hour, minute: minute)
+        return calendar.date(from: components) ?? Date(timeIntervalSinceReferenceDate: 0)
+    }
+
+    public static func text(_ date: Date, calendar: Calendar) -> String {
+        let components = calendar.dateComponents([.hour, .minute], from: date)
+        return format(hour: components.hour ?? 0, minute: components.minute ?? 0)
+    }
+
+    /// The calendar both sides use: Gregorian in UTC.
+    public static var calendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        return calendar
+    }
 }
 
 // MARK: - Settings: Create token
