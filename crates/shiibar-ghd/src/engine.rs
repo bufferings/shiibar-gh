@@ -1744,7 +1744,7 @@ fn reaction_summary(counts: &BTreeMap<String, u32>) -> String {
     known.chain(unknown).collect::<Vec<_>>().join(" ")
 }
 
-pub const CONFIG_KEYS: [&str; 12] = [
+pub const CONFIG_KEYS: [&str; 13] = [
     "launch_at_login",
     "status_interval_minutes",
     "reactions_interval_minutes",
@@ -1757,6 +1757,7 @@ pub const CONFIG_KEYS: [&str; 12] = [
     "include_team_requests",
     "keep_watching_days",
     "drop_after_days",
+    "appearance",
 ];
 
 pub fn read_config(config: &Config, key: &str) -> Option<Value> {
@@ -1773,6 +1774,7 @@ pub fn read_config(config: &Config, key: &str) -> Option<Value> {
             json!(format!("{hour:02}:{minute:02}"))
         }
         "bot_comments" => json!(config.bot_comments.as_str()),
+        "appearance" => json!(config.appearance.as_str()),
         "include_team_requests" => json!(config.include_team_requests),
         "keep_watching_days" => json!(config.keep_watching_days),
         "drop_after_days" => json!(config.drop_after_days),
@@ -1806,6 +1808,12 @@ pub fn write_config(
                 .as_str()
                 .and_then(BotComments::parse)
                 .ok_or_else(|| format!("{key} must be notify, list_only or hide"))?;
+        }
+        "appearance" => {
+            config.appearance = value
+                .as_str()
+                .and_then(Appearance::parse)
+                .ok_or_else(|| format!("{key} must be system, light or dark"))?;
         }
         "include_team_requests" => config.include_team_requests = boolean(key, value)?,
         "keep_watching_days" => config.keep_watching_days = integer(key, value, 0)?,

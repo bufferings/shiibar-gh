@@ -232,6 +232,12 @@ impl ScopeColor {
     }
 }
 
+stored_enum!(Appearance {
+    System = "system",
+    Light = "light",
+    Dark = "dark",
+});
+
 stored_enum!(BotComments {
     Notify = "notify",
     ListOnly = "list_only",
@@ -355,6 +361,9 @@ pub struct Config {
     pub include_team_requests: bool,
     pub keep_watching_days: i64,
     pub drop_after_days: i64,
+    /// The app's appearance (DESIGN.md, "Settings" and "UI"). Only the app
+    /// reads it.
+    pub appearance: Appearance,
 }
 
 impl Default for Config {
@@ -372,6 +381,7 @@ impl Default for Config {
             include_team_requests: true,
             keep_watching_days: 3,
             drop_after_days: 14,
+            appearance: Appearance::System,
         }
     }
 }

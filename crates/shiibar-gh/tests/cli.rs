@@ -282,6 +282,23 @@ fn values_print_as_set() {
     )
     .unwrap();
     assert_eq!(json["value"], 7);
+    assert_eq!(
+        daemon.cli(&["config", "get", "appearance"]).stdout,
+        "system\n"
+    );
+    assert_eq!(daemon.cli(&["config", "set", "appearance", "dark"]).code, 0);
+    assert_eq!(
+        daemon.cli(&["config", "get", "appearance"]).stdout,
+        "dark\n"
+    );
+    assert_eq!(
+        daemon.cli(&["config", "set", "appearance", "sepia"]).code,
+        1
+    );
+    assert_eq!(
+        daemon.cli(&["config", "get", "appearance"]).stdout,
+        "dark\n"
+    );
 }
 
 #[test]

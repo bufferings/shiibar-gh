@@ -442,6 +442,7 @@ fn settings_survive_a_restart() {
         ("snooze_return_time", json!("07:45")),
         ("bot_comments", json!("notify")),
         ("drop_after_days", json!(2)),
+        ("appearance", json!("dark")),
     ] {
         daemon.ok(json!({"cmd":"config_set","key":key,"value":value}));
     }
@@ -466,6 +467,37 @@ fn settings_survive_a_restart() {
     assert_eq!(
         daemon.ok(json!({"cmd":"config_get","key":"drop_after_days"}))["value"],
         2
+    );
+    assert_eq!(
+        daemon.ok(json!({"cmd":"config_get","key":"appearance"}))["value"],
+        "dark"
+    );
+    daemon.stop();
+}
+
+#[test]
+fn appearance_is_system_light_or_dark() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path());
+    assert_eq!(
+        daemon.ok(json!({"cmd":"config_get","key":"appearance"}))["value"],
+        "system",
+        "the default follows the Mac"
+    );
+    for value in ["light", "dark", "system"] {
+        daemon.ok(json!({"cmd":"config_set","key":"appearance","value":value}));
+    }
+    for bad in [json!("Dark"), json!("auto"), json!(true), json!(1)] {
+        assert_eq!(
+            daemon.code(json!({"cmd":"config_set","key":"appearance","value":bad})),
+            "invalid",
+            "{bad}"
+        );
+    }
+    assert_eq!(
+        daemon.ok(json!({"cmd":"config_get","key":"appearance"}))["value"],
+        "system",
+        "a refused value is not saved"
     );
     daemon.stop();
 }
