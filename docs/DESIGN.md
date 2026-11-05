@@ -9,7 +9,7 @@ shiibar-gh は、自分が関わっている GitHub の PR について「自分
 **対象**
 
 - 自分が関わっている PR（作者、レビュアー、メンションされた、コメントした）。Issue は扱わない。
-- スコープごとに扱う：登録した owner（組織または個人）ごとと Public。1 つの一覧に混ぜない。スコープごとにメニューバーのアイコン、バッジ、背景色、通知のオン・オフを持つ。背景色は、設定画面で決まった 6 色から選ぶ（「設定項目」）。
+- スコープごとに扱う：登録した owner（組織または個人）ごとと Public。1 つの一覧に混ぜない。スコープごとにメニューバーのアイコン、バッジ、背景色、通知のオン・オフを持つ。背景色は、設定画面で決まった 6 色から選ぶ（「設定項目」）。6 色はボードの 3 色（#F3F4F8、#EAF4F0、#F7F1E3）を含む薄い色で、Public の初期値はベージュ（#F7F1E3）である。残りの 3 色は M3 の実装で決め、所有者が実機で確認する。
 - 画面の表記は英語だけ。GitHub にある用語は GitHub の表記のまま使用する。
 
 **対象外**
@@ -163,7 +163,7 @@ Snooze は PR 単位。「この PR は翌朝まで確認しない」をアプ�
 
 - デーモン（Rust）：GitHub の取得、状態（表示済み、Done、Snooze、カードの追加時刻、設定、スコープ）の保持と保存、トークン（Keychain の読み書きはデーモンだけ）。Unix ソケットで NDJSON を話し、状態の変化を接続中のクライアントに push する。
 - CLI（Rust）：ソケット経由でデーモンを叩くだけのクライアント。
-- アプリ（Swift）：UI（メニューバー、ポップオーバー、設定画面）と macOS 通知。CLI と同じソケットでデーモンと話す。デーモンの起動・停止・更新時の入れ替えはアプリが行う（launchd は使用しない）。
+- アプリ（Swift）：UI（メニューバー、ポップオーバー、設定画面）と macOS 通知。作者のアバターの画像は、デーモンが渡す URL からアプリが読み込む。CLI と同じソケットでデーモンと話す。デーモンの起動・停止・更新時の入れ替えはアプリが行う（launchd は使用しない）。
 
 **配布と署名**。リリース版は GitHub Actions で Developer ID Application の証明書で署名し（hardened runtime）、Apple の公証を受けて GitHub Releases で公開する。利用者は Homebrew の cask（`bufferings/tap`）でインストールする。デーモンと CLI は `.app` の中に同梱し、cask が CLI のリンクを作成する。開発版は、ローカルで作成した固定の署名の ID で署名して `~/Applications` に配置する。アプリは `Shiibar GH.app`、bundle identifier は `shiibar.gh`、同梱するデーモンと CLI の署名の識別子は `shiibar.gh.daemon` と `shiibar.gh.cli` で、変更しない（Keychain と通知の許可が識別子に結び付くため）。対応する macOS は 14 以上で、Apple Silicon だけを対象とする。Keychain の項目の許可は、保存したプログラムの designated requirement（DR）に結び付く。Developer ID の DR は Team ID と識別子で決まり、版を更新しても満たされるので、更新で許可のダイアログを表示しない。ad hoc の署名の DR は、その版のコードに結び付く（Apple TN3127 で確認。2026-11-05）。開発版とリリース版を切り替えたときは、DR が異なるので 1 回ダイアログを表示する。
 
@@ -292,7 +292,7 @@ fine-grained PAT には Checks の権限がなく、statusCheckRollup の個々�
 | token set notifications / token set \<scope\> / token test notifications / token test \<scope\> | トークンの登録とテスト取得。トークンは標準入力から読み取り、引数には渡さない |
 | settings status [--json] | 設定画面の値（API の残量、定期取得 1 回のコスト、トークンごとの状態）を出力する |
 
-`<pr>` は owner/repo#number、`<row>` は list／activity が出力する id、`<scope>` は owner のログイン名または `public`。owner とリポジトリ名の比較は大文字と小文字を区別しない（GitHub の API はログイン名とリポジトリ名を大文字と小文字の違いを問わず解決する。`gh api users/BUFFERINGS` と、GraphQL の `repository(owner:"RUST-LANG",name:"RUST")` が rust-lang/rust を返すことで確認）。`scope add public` は Public を追加する。`notifications` という owner は、大文字と小文字の違いを含めて `scope add` でエラーにする。
+`<pr>` は owner/repo#number、`<row>` は list／activity が出力する id、`<scope>` は owner のログイン名または `public`。owner とリポジトリ名の比較は大文字と小文字を区別しない（GitHub の API はログイン名とリポジトリ名を大文字と小文字の違いを問わず解決する。`gh api users/BUFFERINGS` と、GraphQL の `repository(owner:"RUST-LANG",name:"RUST")` が rust-lang/rust を返すことで確認）。`scope add public` は Public を追加する。`public` は Public を指すので、`public` という owner は登録できない。`notifications` という owner は、大文字と小文字の違いを含めて `scope add` でエラーにする。
 
 **トークンの登録とテスト**。`token set` はトークンを保存するだけで、テスト取得をしない。未登録の owner への `token set` は `not_found` にする。`token test` は、標準入力にトークンがあればそのトークンを保存せずに検証し、なければ保存済みのトークンを検証する（設定画面の Test again）。テストは権限の有無だけを確かめ、項目ごとに 1 回問い合わせる。権限のエラーなら Failed と足りない権限の名前を、データがなくてもエラーでなければ OK を、確かめる対象がなければ確認できないことを返す。スコープと Public のトークンの項目は設定画面のテスト結果と同じ（PRs, reviews, comments、Checks、Behind base、Team membership、Merge queue）で、Team membership は org のスコープだけを対象とする（Public は classic PAT で確かめる）。classic PAT（`notifications`）の項目は Notifications、Team membership（read:org）、Scopes（notifications と read:org）の 3 つである。通知用のトークンと持ち主が異なることも結果に示す。`public` は Public の fine-grained PAT、`notifications` は classic PAT を対象とする。
 
