@@ -507,6 +507,18 @@ fn answer(world: &World, req: &Req) -> Resp {
         }
         "/user" => rest(json!({"login":login})).header("X-OAuth-Scopes", "notifications, read:org"),
         "/user/teams" => rest(json!([])),
+        // GET /users/{login}: `type` from the owners the world knows.
+        p if p.starts_with("/users/") => {
+            let name = &p["/users/".len()..];
+            match world
+                .owners
+                .iter()
+                .find(|(owner, _)| owner.eq_ignore_ascii_case(name))
+            {
+                Some((owner, kind)) => rest(json!({"login":owner,"type":kind})),
+                None => Resp::json(404, json!({"message":"Not Found","status":"404"})),
+            }
+        }
         p if p.ends_with("/jobs") => rest(json!({"jobs":[]})),
         p if p.ends_with("/actions/runs") => rest(json!({"workflow_runs":[]})),
         p if p.ends_with("/status") => rest(json!({"state":"success"})),

@@ -382,6 +382,10 @@ pub enum Request {
         scope: String,
         color: ScopeColor,
     },
+    /// The type of an owner on GitHub, without registering anything.
+    ScopeLookup {
+        owner: String,
+    },
     Subscribe {
         client: ClientKind,
     },
@@ -626,6 +630,15 @@ pub struct ConfigResponse {
 pub struct ScopesResponse {
     pub ok: bool,
     pub scopes: Vec<Scope>,
+}
+
+/// `scope_lookup`: the owner's login as GitHub spells it and its type,
+/// `org` or `user`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScopeLookupResponse {
+    pub ok: bool,
+    pub owner: String,
+    pub kind: Lenient<ScopeKind>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

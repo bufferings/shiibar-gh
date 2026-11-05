@@ -2094,3 +2094,71 @@ fn without_public_nothing_is_searched_or_shown_for_unregistered_owners() {
     assert_eq!(ids, ["org"]);
     daemon.stop();
 }
+
+#[test]
+fn scope_lookup_reads_the_owner_type_without_registering_anything() {
+    let github = world();
+    github.with(|w| {
+        w.owners.insert("someone".into(), "User".into());
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+
+    // No notifications token yet: the lookup goes without authentication.
+    let found = daemon.ok(json!({"cmd":"scope_lookup","owner":"ORG"}));
+    assert_eq!(
+        (found["owner"].as_str(), found["kind"].as_str()),
+        (Some("org"), Some("org"))
+    );
+    let lookup = github
+        .requests()
+        .into_iter()
+        .find(|r| r.path == "/users/ORG")
+        .expect("asked GitHub");
+    assert_eq!(lookup.method, "GET");
+    assert_eq!(lookup.token, "", "no token before one is registered");
+    assert_eq!(
+        daemon.ok(json!({"cmd":"scope_lookup","owner":"someone"}))["kind"],
+        "user"
+    );
+    assert_eq!(
+        daemon.code(json!({"cmd":"scope_lookup","owner":"nobody"})),
+        "not_found"
+    );
+    for bad in ["", "a/b", "-x", "x y", "../user"] {
+        assert_eq!(
+            daemon.code(json!({"cmd":"scope_lookup","owner":bad})),
+            "invalid",
+            "{bad:?}"
+        );
+    }
+    assert!(daemon.scopes().is_empty(), "nothing is registered");
+
+    // With the notifications token, the lookup uses it.
+    daemon.ok(json!({"cmd":"token_set","target":"notifications","token":CLASSIC}));
+    github.clear_requests();
+    daemon.ok(json!({"cmd":"scope_lookup","owner":"org"}));
+    let lookup = github
+        .requests()
+        .into_iter()
+        .find(|r| r.path == "/users/org")
+        .unwrap();
+    assert_eq!(lookup.token, CLASSIC);
+
+    // A failure other than not found names its reason.
+    github.intercept(|req| {
+        req.path
+            .starts_with("/users/")
+            .then(|| Resp::json(502, json!({})))
+    });
+    let response = daemon.request(json!({"cmd":"scope_lookup","owner":"org"}));
+    assert_eq!(response["code"], "internal");
+    assert!(
+        response["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("cannot look the owner up"),
+        "{response}"
+    );
+    daemon.stop();
+}

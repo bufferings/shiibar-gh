@@ -236,13 +236,16 @@ fn exit_codes_without_injected_events() {
         let result = daemon.cli(args);
         assert_eq!(result.code, code, "{args:?}: {}", result.stderr);
     }
-    let cases: [(&[&str], i32); 13] = [
+    let cases: [(&[&str], i32); 15] = [
         (&["scope", "add", "Public"], 1),
         (&["scope", "add", "ORG"], 1),
         (&["scope", "color", "ORG", "blue"], 0),
         (&["scope", "color", "org", "red"], 1),
         (&["scope", "color", "org"], 1),
         (&["scope", "color", "nobody", "blue"], 2),
+        // Refused before any request: never reaches GitHub in a test.
+        (&["scope", "lookup", "a/b"], 1),
+        (&["scope", "lookup"], 1),
         (&["scope", "remove", "PUBLIC"], 0),
         (&["scope", "disable", "ORG"], 0),
         (&["scope", "remove", "nobody"], 2),

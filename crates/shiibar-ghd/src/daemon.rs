@@ -324,7 +324,8 @@ impl Daemon {
             | Request::Reset
             | Request::Info
             | Request::Shutdown
-            | Request::TokenTest { .. } => {
+            | Request::TokenTest { .. }
+            | Request::ScopeLookup { .. } => {
                 return Err(CmdError::Internal("handled elsewhere".into()));
             }
         })
@@ -725,6 +726,30 @@ impl Daemon {
 
     /// What `token_test` needs: the record key, the token to test (given, or
     /// the saved one), whether it is the saved one, and the reference owner.
+    /// The token `scope_lookup` asks with: the notifications token when it
+    /// is registered, else none (an empty string).
+    pub fn lookup_token(&mut self, owner: &str) -> Result<String, String> {
+        self.check_db().map_err(|e| error_line(&e))?;
+        if !valid_login(owner) {
+            return Err(error_line(&CmdError::Invalid(format!(
+                "not a GitHub login: {owner}"
+            ))));
+        }
+        if self
+            .engine
+            .token_record(crate::model::NOTIFICATIONS)
+            .is_none()
+        {
+            return Ok(String::new());
+        }
+        Ok(Self::read_token(
+            self.keychain.as_ref(),
+            &mut self.tokens,
+            crate::model::NOTIFICATIONS,
+        )
+        .unwrap_or_default())
+    }
+
     pub fn test_target(
         &mut self,
         target: &str,
@@ -897,6 +922,53 @@ pub struct TestTarget {
 }
 
 /// The line for a failed `token_test`.
+/// A GitHub login: letters, digits and single hyphens, not at either end,
+/// at most 39 characters. Anything else is refused before it becomes part of
+/// a URL path.
+pub fn valid_login(owner: &str) -> bool {
+    !owner.is_empty()
+        && owner.len() <= 39
+        && !owner.starts_with('-')
+        && !owner.ends_with('-')
+        && owner.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+pub fn lookup_failed(reason: impl std::fmt::Display) -> String {
+    error_line(&CmdError::Internal(format!(
+        "cannot look the owner up: {reason}"
+    )))
+}
+
+/// The answer of `GET /users/{owner}`: `type` Organization is `org`, User
+/// is `user`; 404 is `not_found`.
+pub fn lookup_answer(answer: Result<crate::github::Rest, crate::github::CallError>) -> String {
+    use crate::github::CallError;
+    match answer {
+        Ok(rest) => {
+            let kind = match rest.body["type"].as_str() {
+                Some("Organization") => proto::ScopeKind::Org,
+                Some("User") => proto::ScopeKind::User,
+                other => {
+                    return lookup_failed(format!(
+                        "GitHub gave the type {}",
+                        other.unwrap_or("nothing")
+                    ));
+                }
+            };
+            line(&proto::ScopeLookupResponse {
+                ok: true,
+                owner: rest.body["login"].as_str().unwrap_or_default().to_string(),
+                kind: proto::Lenient::Known(kind),
+            })
+        }
+        Err(CallError::NotFound) => error_line(&CmdError::NotFound(
+            "not found: no such owner on GitHub".into(),
+        )),
+        Err(CallError::Unauthorized) => lookup_failed("GitHub rejected the notifications token"),
+        Err(e) => lookup_failed(e),
+    }
+}
+
 pub fn test_failed(error: impl std::fmt::Display) -> String {
     error_line(&CmdError::Internal(format!(
         "the test could not run: {error}"

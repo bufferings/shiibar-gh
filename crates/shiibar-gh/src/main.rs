@@ -4,8 +4,8 @@
 use shiibar_gh_client::{ClientError, request, request_json, socket_path_from_env};
 use shiibar_gh_proto::{
     AckResponse, ActivityResponse, Card, ConfigResponse, Filter, ListResponse, OpenResponse,
-    RefreshResponse, Request, Row, Scope, ScopesResponse, SettingsStatusResponse, StatusResponse,
-    TestResult, TokenTestResponse, Warning,
+    RefreshResponse, Request, Row, Scope, ScopeLookupResponse, ScopesResponse,
+    SettingsStatusResponse, StatusResponse, TestResult, TokenTestResponse, Warning,
 };
 use std::io::{BufRead, IsTerminal};
 use std::path::Path;
@@ -19,7 +19,7 @@ const FILTER_FLAGS: &str =
     "[--scope <scope>] [--needs-action] [--mine|--others] [--snoozed] [--json]";
 
 /// `(command words, arguments, what it does)`.
-const COMMANDS: [(&str, &str, &str); 22] = [
+const COMMANDS: [(&str, &str, &str); 23] = [
     ("list", FILTER_FLAGS, "Print the PR cards"),
     (
         "status",
@@ -61,6 +61,11 @@ const COMMANDS: [(&str, &str, &str); 22] = [
         "scope notify",
         "<scope> on|off",
         "Turn the notifications of a scope on or off",
+    ),
+    (
+        "scope lookup",
+        "<owner> [--json]",
+        "Print whether an owner is an organization (org) or a user, without adding it",
     ),
     (
         "scope color",
@@ -198,6 +203,7 @@ enum Output {
     Url,
     Value,
     Scopes,
+    Lookup,
 }
 
 struct Command {
@@ -250,6 +256,16 @@ fn scope_command(sub: &str, rest: &[String]) -> Result<Command, UsageError> {
             }),
             _ => return Err(UsageError("expected <scope> on|off".into())),
         },
+        "lookup" => {
+            let parsed = parse(rest, &["--json"], false)?;
+            Command {
+                request: Request::ScopeLookup {
+                    owner: parsed.one("owner")?,
+                },
+                output: Output::Lookup,
+                json: parsed.has("--json"),
+            }
+        }
         "color" => match rest {
             [scope, color] => {
                 // An unknown color is an invalid value: exit 1 like `invalid`.
@@ -600,6 +616,10 @@ fn execute(socket: &Path, command: Command) -> Result<(), ClientError> {
         Output::Scopes => {
             let response: ScopesResponse = request(socket, &command.request)?;
             response.scopes.iter().for_each(print_scope);
+        }
+        Output::Lookup => {
+            let response: ScopeLookupResponse = request(socket, &command.request)?;
+            println!("{} {}", response.owner, response.kind.as_text());
         }
     }
     Ok(())

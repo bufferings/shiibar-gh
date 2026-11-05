@@ -333,6 +333,7 @@ Unix ソケットの NDJSON。1 接続 1 要求 1 応答。`subscribe` だけは
 | `config_get`／`config_set` | key、value | `value` |
 | `scope_list`／`scope_add`／`scope_remove` | owner（Public は `public`） | `scopes` |
 | `scope_color` | scope、color | — |
+| `scope_lookup` | owner | `owner`（GitHub の表記のログイン名）、`kind`（`org` または `user`） |
 | `scope_enable`／`scope_disable` | scope | — |
 | `scope_notify` | scope、on | — |
 | `token_set` | target、token | — |
@@ -344,6 +345,8 @@ Unix ソケットの NDJSON。1 接続 1 要求 1 応答。`subscribe` だけは
 | `shutdown` | — | 応答後に終了 |
 
 スコープの値は `color`（背景色）を持つ。値は `gray`（#F3F4F8）、`green`（#EAF4F0）、`blue`（#EAF0F9）、`purple`（#F1EEF8）、`pink`（#F8EEF0）、`beige`（#F7F1E3）のいずれかで、`scope_color` の不正な値は `invalid` になる。Public を初めて追加すると `beige` になる。owner のスコープは、初めて追加した順に上の並びで巡回して割り当てる。Public は巡回の順番を使用しない。削除して再び追加したスコープは、Public を含めて、削除する前の色に戻る。スキーマ v2 の DB から移行したスコープは、Public を `beige` にし、owner のスコープに id の順で巡回して割り当てる。カードの値は `author_avatar_url`（GraphQL の `author.avatarUrl(size: 32)`。`author` が `null` なら `null`）を持つ。
+
+`scope_lookup` は CLI の `scope lookup` と同じく `GET /users/{owner}` で owner の種類を求め、スコープを登録しない。GitHub のログイン名として不正な owner（英数字とハイフン以外を含む、ハイフンで始まるか終わる、40 文字以上）は問い合わせずに `invalid`、見つからなければ `not_found`、ほかの失敗は理由を付けた `internal` にする。
 
 `subscribe` は最初に `{"event":"snapshot","scopes":[...],"db_unreadable":false}` を送る。DB を読めない間も `subscribe` と `info` は使用でき、`db_unreadable` が真になる。以降は `{"event":"scope_changed","scope":{...}}`、`{"event":"notify","notification":{...}}`、`{"event":"config_changed","key":"...","value":...}` を送る。`config_changed` は、`config_set` で設定の値が変化したときに、保存してからすべての購読者に送る。`value` は `config_get` が返す値である。同じ値の `config_set` と、拒否した値では送らない。アプリはこれで `launch_at_login` の変更を知り、ログイン項目を登録または解除する（「Launch at login の同期」）。また `appearance`（`system`、`light`、`dark`。設定画面の Appearance）の変更を、ポップオーバー、常時表示ウインドウ、設定画面、メニューバーのアイコンにすぐ反映する。設定のキーの一覧は docs/tasks/M1.md の「設定のキー」にある。
 

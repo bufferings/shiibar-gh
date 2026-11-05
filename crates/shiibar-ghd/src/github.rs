@@ -373,9 +373,13 @@ impl Api {
         let mut request = self
             .client
             .get(url)
-            .bearer_auth(token)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", REST_VERSION);
+        // An empty token asks without authentication (`scope_lookup`
+        // before the notifications token is registered).
+        if !token.is_empty() {
+            request = request.bearer_auth(token);
+        }
         if let Some(since) = if_modified_since {
             request = request.header("If-Modified-Since", since);
         }
