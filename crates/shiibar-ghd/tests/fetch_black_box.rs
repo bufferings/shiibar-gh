@@ -777,7 +777,9 @@ fn reset_restores_scopes_from_the_keychain_and_remove_deletes_the_token() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
         keychain(dir.path()),
-        json!({"notifications":"a","public":"b","scope:acme":"c"}).to_string(),
+        // One item holds every token (DESIGN.md, "Saved state").
+        json!({"version":1,"tokens":{"notifications":"a","public":"b","scope:acme":"c"}})
+            .to_string(),
     )
     .unwrap();
     std::fs::write(dir.path().join("state.db"), vec![0xAB; 8192]).unwrap();
@@ -822,7 +824,11 @@ fn reset_restores_scopes_from_the_keychain_and_remove_deletes_the_token() {
     daemon.ok(json!({"cmd":"scope_remove","owner":"acme"}));
     let saved: Value =
         serde_json::from_str(&std::fs::read_to_string(keychain(dir.path())).unwrap()).unwrap();
-    assert_eq!(saved, json!({"notifications":"a","public":"b"}));
+    assert_eq!(
+        saved,
+        json!({"version":1,"tokens":{"notifications":"a","public":"b"}}),
+        "only acme's token left the one item"
+    );
     daemon.ok(json!({"cmd":"scope_add","owner":"acme"}));
     assert_eq!(
         kinds(&daemon, "acme"),
@@ -832,7 +838,8 @@ fn reset_restores_scopes_from_the_keychain_and_remove_deletes_the_token() {
     daemon.ok(json!({"cmd":"token_set","target":"ACME","token":"d"}));
     let saved: Value =
         serde_json::from_str(&std::fs::read_to_string(keychain(dir.path())).unwrap()).unwrap();
-    assert_eq!(saved["scope:acme"], "d");
+    assert_eq!(saved["tokens"]["scope:acme"], "d");
+    assert_eq!(saved["tokens"]["notifications"], "a", "the others stay");
     daemon.stop();
 }
 

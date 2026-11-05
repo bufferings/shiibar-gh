@@ -52,8 +52,8 @@ if [ -d "$APP_PATH" ]; then
     printf '{"cmd":"shutdown"}\n' | nc -U -w 2 "$STATE_DIR/shiibar-ghd.sock" >/dev/null 2>&1 \
       || kill "$daemon_pid" 2>/dev/null || true
     wait "$daemon_pid" 2>/dev/null || true
-    echo "    the notifications token stays in the Keychain under service shiibar-gh;"
-    echo "    delete it in Keychain Access if you want it gone"
+    echo "    the notifications token stays in the Keychain item shiibar-gh / tokens;"
+    echo "    delete that item in Keychain Access if you want it gone"
   fi
 
   echo "==> Unregistering the login item"

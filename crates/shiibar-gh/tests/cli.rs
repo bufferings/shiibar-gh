@@ -383,7 +383,10 @@ fn token_set_reads_the_first_line_of_standard_input() {
     );
     assert_eq!(set.code, 0, "{}", set.stderr);
     let saved: Value = serde_json::from_str(&std::fs::read_to_string(&keychain).unwrap()).unwrap();
-    assert_eq!(saved, json!({"notifications":"ghp_first_line"}));
+    assert_eq!(
+        saved,
+        json!({"version":1,"tokens":{"notifications":"ghp_first_line"}})
+    );
     assert_eq!(
         run_with_input(dir.path(), &["token", "set", "nobody"], "x\n").code,
         2,
