@@ -6,13 +6,13 @@
 
 import Foundation
 
-public enum IconElement: Equatable {
+public enum IconElement: Equatable, Sendable {
     case circle(cx: Double, cy: Double, r: Double, dash: [Double]?)
     case rect(x: Double, y: Double, width: Double, height: Double, radius: Double)
     case path(String)
 }
 
-public struct BoardIcon: Equatable {
+public struct BoardIcon: Equatable, Sendable {
     public var elements: [IconElement]
     public var lineWidth: Double
     /// Round line caps.
@@ -124,7 +124,7 @@ extension BoardIcons {
             return RowIcon(icon: merged, tone: .merged)
         case .closed:
             return RowIcon(icon: rowCross, tone: .closed)
-        case .reviewRequested, .mentioned, .comment, .reply, .none:
+        case .reviewRequested, .mentioned, .comment, .reply, nil:
             return RowIcon(icon: reviewRequest, tone: .info)
         }
     }

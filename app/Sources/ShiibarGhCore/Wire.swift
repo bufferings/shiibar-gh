@@ -147,7 +147,9 @@ public struct Scope: Equatable, Decodable, Identifiable {
         self.updatedAt = updatedAt
     }
 
-    public var isPublic: Bool { id == "public" }
+    /// Public is told by its kind. The id is an opaque identifier that is
+    /// never read as an owner login (docs/tasks/M3.md, "Socket client").
+    public var isPublic: Bool { kind?.value == .public }
 }
 
 public struct Links: Equatable, Decodable {

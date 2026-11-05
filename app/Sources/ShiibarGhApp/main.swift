@@ -1,4 +1,14 @@
-// The app entry point. The menu bar, popover and windows follow in the next
-// step; until then the executable only links the core.
+// The app entry point: an accessory app (no Dock icon) with menu bar icons
+// only. Info.plist sets LSUIElement for the bundle.
 
-import ShiibarGhCore
+import AppKit
+
+MainActor.assumeIsolated {
+    let application = NSApplication.shared
+    let delegate = AppDelegate()
+    application.delegate = delegate
+    application.setActivationPolicy(.accessory)
+    withExtendedLifetime(delegate) {
+        application.run()
+    }
+}

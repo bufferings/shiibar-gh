@@ -295,22 +295,30 @@ public enum TokenState {
         return TokenLabel("Verified", .good)
     }
 
-    /// The warnings of one token: a scope token's come from its scope, the
-    /// notifications token's from any scope.
-    public static func warnings(forTarget target: String, scopes: [Scope]) -> [Warning] {
-        if target == "notifications" {
-            var seen: [WarningKind] = []
-            var result: [Warning] = []
-            for warning in scopes.flatMap(\.warnings) where warning.token?.value == .notifications {
-                if let kind = warning.kind.value, !seen.contains(kind) {
-                    seen.append(kind)
-                    result.append(warning)
-                }
+    /// The warnings about the notifications token, from any scope.
+    public static func notificationsWarnings(_ scopes: [Scope]) -> [Warning] {
+        var seen: [WarningKind] = []
+        var result: [Warning] = []
+        for warning in scopes.flatMap(\.warnings) where warning.token?.value == .notifications {
+            if let kind = warning.kind.value, !seen.contains(kind) {
+                seen.append(kind)
+                result.append(warning)
             }
-            return result
         }
-        let scope = scopes.first { $0.id.caseInsensitiveCompare(target) == .orderedSame }
-        return scope?.warnings.filter { $0.token?.value == .scope } ?? []
+        return result
+    }
+
+    /// The warnings about a scope's own token.
+    public static func scopeWarnings(_ scope: Scope) -> [Warning] {
+        scope.warnings.filter { $0.token?.value == .scope }
+    }
+
+    /// The `settings_status` entry of a scope's token. The daemon names it
+    /// after the scope's display name (`public` for Public); the id is not
+    /// read.
+    public static func status(of scope: Scope, in tokens: [TokenStatus]) -> TokenStatus? {
+        let target = scope.isPublic ? "public" : scope.name
+        return tokens.first { $0.target.caseInsensitiveCompare(target) == .orderedSame }
     }
 
     /// "OK", "Failed (Actions)" or "Can't check", before " · <item>".

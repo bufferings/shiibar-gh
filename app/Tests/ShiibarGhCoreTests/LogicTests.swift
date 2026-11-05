@@ -188,8 +188,14 @@ final class PresentationTests: XCTestCase {
             Scope(id: "a", warnings: [Warning(kind: .tokenInvalid, token: .notifications), Warning(kind: .tokenExpiring, token: .scope)]),
             Scope(id: "b", warnings: [Warning(kind: .tokenInvalid, token: .notifications)]),
         ]
-        XCTAssertEqual(TokenState.warnings(forTarget: "notifications", scopes: scopes).map(\.kind), [.known(.tokenInvalid)])
-        XCTAssertEqual(TokenState.warnings(forTarget: "A", scopes: scopes).map(\.kind), [.known(.tokenExpiring)])
+        XCTAssertEqual(TokenState.notificationsWarnings(scopes).map(\.kind), [.known(.tokenInvalid)])
+        XCTAssertEqual(TokenState.scopeWarnings(scopes[0]).map(\.kind), [.known(.tokenExpiring)])
+        // The token entry is found by the display name, never by the id.
+        let tokens = [TokenStatus(target: "Example-Org", registered: true), TokenStatus(target: "public", registered: false)]
+        let org = Scope(id: "opaque-1", name: "example-org", kind: .org)
+        XCTAssertEqual(TokenState.status(of: org, in: tokens)?.target, "Example-Org")
+        XCTAssertEqual(TokenState.status(of: Scope(id: "opaque-2", name: "Public", kind: .public), in: tokens)?.target, "public")
+        XCTAssertFalse(Scope(id: "public", name: "public").isPublic, "Public is told by its kind, not its id")
         XCTAssertEqual(TokenState.masked, "••••••••••••")
     }
 
