@@ -231,7 +231,12 @@ final class AppModelTests: XCTestCase {
         await settle()
         XCTAssertTrue(api.calls.contains("list org needs=true mine=false others=true snoozed=false"), "\(api.calls)")
         let again = AppModel(api: api, store: UIStateStore(defaults: defaults), opener: opener, notifier: notifier)
-        XCTAssertEqual(again.viewModel("x").chips, Chips(needsAction: true, author: .others))
+        XCTAssertEqual(again.viewModel("org").chips, Chips(needsAction: true, author: .others))
+        XCTAssertEqual(again.viewModel("other").chips, Chips(), "each scope keeps its own chips")
+        again.viewModel("other").chips.showSnoozed = true
+        let third = AppModel(api: api, store: UIStateStore(defaults: defaults), opener: opener, notifier: notifier)
+        XCTAssertEqual(third.viewModel("org").chips, Chips(needsAction: true, author: .others))
+        XCTAssertEqual(third.viewModel("other").chips, Chips(showSnoozed: true))
     }
 
     func testKeysAndClicksAct() async {

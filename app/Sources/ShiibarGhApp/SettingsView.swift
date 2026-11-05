@@ -24,8 +24,8 @@ struct SettingsView: View {
             }
             .padding(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
             .frame(maxWidth: .infinity)
-            .background(Color(.sRGB, red: 0.929, green: 0.929, blue: 0.941))
-            .overlay(alignment: .bottom) { Rectangle().fill(Color(white: 0.84)).frame(height: 1) }
+            .background(Palette.settingsTabBar.color)
+            .overlay(alignment: .bottom) { Rectangle().fill(Palette.settingsTabBarBorder.color).frame(height: 1) }
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     if app.dbUnreadable {
@@ -50,7 +50,7 @@ struct SettingsView: View {
             }
         }
         .frame(minWidth: 720, minHeight: 600)
-        .background(Color(.sRGB, red: 0.965, green: 0.965, blue: 0.969))
+        .background(Palette.settingsBackground.color)
         .foregroundColor(Palette.text.color)
         .font(.system(size: 13))
     }
@@ -76,14 +76,14 @@ struct TabButton: View {
                 if tab == .notifications {
                     Image(systemName: "bell").font(.system(size: 14))
                 } else {
-                    IconView(icon: icon, size: 18, color: selected ? Color(.sRGB, red: 0.04, green: 0.31, blue: 0.65) : Color(white: 0.23))
+                    IconView(icon: icon, size: 18, color: selected ? Palette.settingsTabSelected.color : Palette.strongText.color)
                 }
                 Text(tab.rawValue).font(.system(size: 11))
             }
-            .foregroundColor(selected ? Color(.sRGB, red: 0.04, green: 0.31, blue: 0.65) : Color(white: 0.23))
+            .foregroundColor(selected ? Palette.settingsTabSelected.color : Palette.strongText.color)
             .frame(minWidth: 72)
             .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
-            .background(RoundedRectangle(cornerRadius: 7).fill(selected ? Color(.sRGB, red: 0.863, green: 0.906, blue: 0.969) : .clear))
+            .background(RoundedRectangle(cornerRadius: 7).fill(selected ? Palette.settingsTabSelectedBackground.color : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -97,7 +97,7 @@ struct Section2<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.system(size: 12, weight: .semibold)).foregroundColor(Color(white: 0.23)).padding(.leading, 4)
+            Text(title).font(.system(size: 12, weight: .semibold)).foregroundColor(Palette.strongText.color).padding(.leading, 4)
             GroupBox2 { content }
         }
     }
@@ -108,8 +108,8 @@ struct GroupBox2<Content: View>: View {
 
     var body: some View {
         VStack(spacing: 0) { content }
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color.white))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(white: 0.89), lineWidth: 1))
+            .background(RoundedRectangle(cornerRadius: 10).fill(Palette.surface.color))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.groupBorder.color, lineWidth: 1))
     }
 }
 
@@ -130,7 +130,7 @@ struct Item<Content: View>: View {
         .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
         .padding(EdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14))
         .overlay(alignment: .top) {
-            if !first { Rectangle().fill(Color(white: 0.926)).frame(height: 1) }
+            if !first { Rectangle().fill(Palette.itemDivider.color).frame(height: 1) }
         }
     }
 }

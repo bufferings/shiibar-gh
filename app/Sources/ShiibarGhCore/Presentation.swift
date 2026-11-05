@@ -307,22 +307,14 @@ public enum TokenState {
         return nil
     }
 
-    /// The warnings about the notifications token, from any scope.
-    public static func notificationsWarnings(_ scopes: [Scope]) -> [Warning] {
-        var seen: [WarningKind] = []
-        var result: [Warning] = []
-        for warning in scopes.flatMap(\.warnings) where warning.token?.value == .notifications {
-            if let kind = warning.kind.value, !seen.contains(kind) {
-                seen.append(kind)
-                result.append(warning)
-            }
-        }
-        return result
-    }
-
-    /// The warnings about a scope's own token.
-    public static func scopeWarnings(_ scope: Scope) -> [Warning] {
-        scope.warnings.filter { $0.token?.value == .scope }
+    /// The SSO link of a token that got `sso_required`: the authorization
+    /// URL GitHub sent, else the token settings page (DESIGN.md, "Tokens").
+    /// Nil while there is no such warning.
+    public static func ssoLink(_ status: TokenStatus?) -> String? {
+        guard let status, status.registered,
+              status.warnings.contains(where: { $0.kind.value == .ssoRequired }) || !status.ssoUrls.isEmpty
+        else { return nil }
+        return status.ssoUrls.first ?? CreateTokenURL.tokenSettings
     }
 
     /// The `settings_status` entry of a scope's token. The daemon names it

@@ -29,6 +29,12 @@ public final class AppModel: ObservableObject {
     public var onOpenSettings: (() -> Void)?
     /// The scope list changed: Settings refetches `settings_status`.
     public var onScopesChanged: (() -> Void)?
+    private var configObservers: [(String, ConfigValue) -> Void] = []
+
+    /// Called for every `config_changed`.
+    public func observeConfig(_ observer: @escaping (String, ConfigValue) -> Void) {
+        configObservers.append(observer)
+    }
 
     public init(
         api: DaemonAPI, store: UIStateStore, opener: URLOpening, notifier: NotificationPresenting,
@@ -86,6 +92,8 @@ public final class AppModel: ObservableObject {
             }
         case .notify(let notification):
             notifier.present(notification)
+        case .configChanged(let key, let value):
+            for observer in configObservers { observer(key, value) }
         case .unknown:
             break
         }
@@ -246,7 +254,7 @@ public final class ScopeViewModel: ObservableObject {
     }
     @Published public var chips: Chips {
         didSet {
-            app.store.chips = chips
+            app.store.setChips(chips, scope: scope)
             reload()
         }
     }
@@ -259,7 +267,7 @@ public final class ScopeViewModel: ObservableObject {
     init(scope: String, app: AppModel) {
         self.scope = scope
         self.app = app
-        self.chips = app.store.chips
+        self.chips = app.store.chips(scope: scope)
     }
 
     public var items: [SelectionItem] {

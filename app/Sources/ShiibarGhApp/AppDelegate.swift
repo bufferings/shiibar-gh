@@ -48,6 +48,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             launch = LaunchAtLogin(service: MainAppLoginItem(), api: api, store: store)
         }
         settings = SettingsModel(app: model, launch: launch)
+        if let launch {
+            model.observeConfig { key, value in
+                Task { await launch.configChanged(key: key, value: value) }
+            }
+        }
         model.onOpenPopover = { [weak self] scope in self?.surfaces.showPopover(scope: scope) }
         model.onOpenSettings = { [weak self] in self?.showSettings(.scopes) }
         presenter?.onClick = { [weak self] type, scope, url in
@@ -89,7 +94,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             )
             window.title = "Settings"
             window.isReleasedWhenClosed = false
-            window.appearance = NSAppearance(named: .aqua)
             window.contentViewController = NSHostingController(rootView: SettingsView(model: settings, app: model))
             window.setContentSize(NSSize(width: 720, height: 640))
             window.center()

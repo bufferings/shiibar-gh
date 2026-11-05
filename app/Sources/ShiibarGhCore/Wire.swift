@@ -359,9 +359,11 @@ public struct TokenStatus: Equatable, Decodable {
     public var scopes: [String]?
     public var lastTest: LastTest?
     public var ssoUrls: [String]
+    /// The warnings about this token itself (DESIGN.md, "Wire format").
+    public var warnings: [Warning]
 
     enum CodingKeys: String, CodingKey {
-        case target, registered, owner, scopes
+        case target, registered, owner, scopes, warnings
         case expiresAt = "expires_at"
         case lastTest = "last_test"
         case ssoUrls = "sso_urls"
@@ -369,7 +371,8 @@ public struct TokenStatus: Equatable, Decodable {
 
     public init(
         target: String, registered: Bool, owner: String? = nil, expiresAt: Int64? = nil,
-        scopes: [String]? = nil, lastTest: LastTest? = nil, ssoUrls: [String] = []
+        scopes: [String]? = nil, lastTest: LastTest? = nil, ssoUrls: [String] = [],
+        warnings: [Warning] = []
     ) {
         self.target = target
         self.registered = registered
@@ -378,6 +381,7 @@ public struct TokenStatus: Equatable, Decodable {
         self.scopes = scopes
         self.lastTest = lastTest
         self.ssoUrls = ssoUrls
+        self.warnings = warnings
     }
 
     public init(from decoder: Decoder) throws {
@@ -389,6 +393,7 @@ public struct TokenStatus: Equatable, Decodable {
         scopes = try c.decodeIfPresent([String].self, forKey: .scopes)
         lastTest = try c.decodeIfPresent(LastTest.self, forKey: .lastTest)
         ssoUrls = try c.decodeIfPresent([String].self, forKey: .ssoUrls) ?? []
+        warnings = try c.decodeIfPresent([Warning].self, forKey: .warnings) ?? []
     }
 }
 
@@ -397,11 +402,13 @@ public enum SubscribeEvent: Equatable, Decodable {
     case snapshot(scopes: [Scope], dbUnreadable: Bool)
     case scopeChanged(Scope)
     case notify(DaemonNotification)
+    /// A setting changed through `config_set`, by any client.
+    case configChanged(key: String, value: ConfigValue)
     /// An event this build does not know. Clients ignore it.
     case unknown(String)
 
     enum CodingKeys: String, CodingKey {
-        case event, scopes, scope, notification
+        case event, scopes, scope, notification, key, value
         case dbUnreadable = "db_unreadable"
     }
 
@@ -418,6 +425,11 @@ public enum SubscribeEvent: Equatable, Decodable {
             self = .scopeChanged(try c.decode(Scope.self, forKey: .scope))
         case "notify":
             self = .notify(try c.decode(DaemonNotification.self, forKey: .notification))
+        case "config_changed":
+            self = .configChanged(
+                key: try c.decode(String.self, forKey: .key),
+                value: try c.decode(ConfigValue.self, forKey: .value)
+            )
         default:
             self = .unknown(event)
         }

@@ -6,7 +6,21 @@ import SwiftUI
 
 extension RGB {
     var nsColor: NSColor { NSColor(srgbRed: red, green: green, blue: blue, alpha: 1) }
-    var color: Color { Color(.sRGB, red: red, green: green, blue: blue, opacity: 1) }
+}
+
+extension NSAppearance {
+    var isDark: Bool { bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
+}
+
+extension Shade {
+    /// A color that follows the light or dark appearance it is drawn in.
+    var nsColor: NSColor {
+        let light = self.light.nsColor
+        let dark = self.dark.nsColor
+        return NSColor(name: nil) { appearance in appearance.isDark ? dark : light }
+    }
+
+    var color: Color { Color(nsColor: nsColor) }
 }
 
 enum IconPath {
@@ -94,10 +108,10 @@ struct StatusIcon: View {
             switch look {
             case .ok:
                 Circle().fill(Palette.green.color).frame(width: 12.25, height: 12.25)
-                IconView(icon: BoardIcons.checkMark, size: 14, color: .white)
+                IconView(icon: BoardIcons.checkMark, size: 14, color: Palette.onColor.color)
             case .bad:
                 Circle().fill(Palette.badge.color).frame(width: 12.25, height: 12.25)
-                IconView(icon: BoardIcons.crossMark, size: 14, color: .white)
+                IconView(icon: BoardIcons.crossMark, size: 14, color: Palette.onColor.color)
             case .waiting:
                 IconView(icon: BoardIcons.dashedCircle, size: 14, color: Palette.waiting.color)
             case .empty:
@@ -110,14 +124,15 @@ struct StatusIcon: View {
 
 /// The menu bar image of one scope (docs/design/MenuBarIcon.html): the
 /// owner glyph in a 22 point slot, the red badge at the top right, the blue
-/// dot at the top right when there is no badge, and the triangle at the
-/// bottom left.
+/// dot at the top right, or at the bottom right next to a badge, and the
+/// triangle at the bottom left (`MenuBarMarks`).
 enum MenuBarImage {
     static let width: CGFloat = 26
     static let height: CGFloat = 22
 
     static func make(icon: BoardIcon, badge: Int, dot: Bool, triangle: Bool) -> NSImage {
-        let plain = badge == 0 && !dot && !triangle
+        let marks = MenuBarMarks(badge: badge, dot: dot, triangle: triangle)
+        let plain = marks.plain
         let image = NSImage(size: NSSize(width: width, height: height), flipped: false) { _ in
             let dark = NSAppearance.currentDrawing().bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             let foreground: NSColor = plain ? .black : (dark ? .white : NSColor(srgbRed: 0.11, green: 0.11, blue: 0.12, alpha: 1))
@@ -131,8 +146,7 @@ enum MenuBarImage {
             context.setLineJoin(icon.roundJoins ? .round : .miter)
             context.strokePath()
 
-            if badge > 0 {
-                let text = badge > 99 ? "99+" : "\(badge)"
+            if let text = marks.badge {
                 let attributes: [NSAttributedString.Key: Any] = [
                     .font: NSFont.systemFont(ofSize: 9, weight: .bold),
                     .foregroundColor: NSColor.white,
@@ -149,8 +163,11 @@ enum MenuBarImage {
                     at: CGPoint(x: pill.midX - size.width / 2, y: pill.midY - size.height / 2),
                     withAttributes: attributes
                 )
-            } else if dot {
-                let center = CGPoint(x: 22 - 1 - 3.5, y: height - 3.5)
+            }
+            if let place = marks.dot {
+                let center = place == .topRight
+                    ? CGPoint(x: 22 - 1 - 3.5, y: height - 3.5)
+                    : CGPoint(x: 22 - 1 - 3.5, y: 3.5)
                 barColor.setFill()
                 NSBezierPath(ovalIn: CGRect(x: center.x - 5, y: center.y - 5, width: 10, height: 10)).fill()
                 Palette.blueDot.nsColor.setFill()

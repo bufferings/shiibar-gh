@@ -255,9 +255,9 @@ struct Chip: View {
     var tap: () -> Void
 
     var body: some View {
-        let fill: Color = on ? (action ? Palette.badge.color : Palette.text.color) : .white
+        let fill: Color = on ? (action ? Palette.badge.color : Palette.text.color) : Palette.surface.color
         let border: Color = action ? Palette.badge.color : (on ? Palette.text.color : Palette.controlBorder.color)
-        let text: Color = on ? .white : (action ? Palette.orangeText.color : Color(white: 0.23))
+        let text: Color = on ? (action ? Palette.onColor.color : Palette.surface.color) : (action ? Palette.orangeText.color : Palette.strongText.color)
         let shape = UnevenRoundedRectangle(
             topLeadingRadius: corners == .right ? 0 : 12, bottomLeadingRadius: corners == .right ? 0 : 12,
             bottomTrailingRadius: corners == .left ? 0 : 12, topTrailingRadius: corners == .left ? 0 : 12
@@ -297,7 +297,7 @@ struct KeyHints: View {
         HStack(spacing: 3) {
             Text(key)
                 .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(Color(white: 0.23))
+                .foregroundColor(Palette.strongText.color)
                 .padding(.horizontal, 4)
                 .background(RoundedRectangle(cornerRadius: 3).fill(theme.tint.color))
             Text(text)
@@ -346,7 +346,7 @@ struct ListArea: View {
                                         RowView(row: row, model: model, theme: theme, now: now, showsPR: true, card: nil)
                                     }
                                 }
-                                .background(Color.white)
+                                .background(Palette.surface.color)
                                 .clipShape(RoundedRectangle(cornerRadius: 10))
                                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(theme.border.color, lineWidth: 1))
                                 .padding(.horizontal, 12)
@@ -454,7 +454,7 @@ struct CardView: View {
                         }
                     } else {
                         Button { model.perform(.snooze(pr: card.pr)) } label: {
-                            IconView(icon: BoardIcons.clock, size: 13, color: Color(white: 0.7))
+                            IconView(icon: BoardIcons.clock, size: 13, color: Palette.snoozeIcon.color)
                                 .frame(width: 18, height: 18)
                                 .contentShape(Rectangle())
                         }
@@ -475,7 +475,7 @@ struct CardView: View {
             }
             .opacity(faded)
         }
-        .background(Color.white)
+        .background(Palette.surface.color)
         .overlay(alignment: .leading) {
             if let stateBar { Rectangle().fill(stateBar).frame(width: 4).opacity(faded) }
         }
@@ -509,8 +509,8 @@ struct StateLabelView: View {
     var body: some View {
         let style: (String, Color, Color)? = {
             switch label.value {
-            case .mergeable: return ("Mergeable", Palette.green.color, .white)
-            case .draft: return ("Draft", theme.tint.color, Color(white: 0.29))
+            case .mergeable: return ("Mergeable", Palette.green.color, Palette.onColor.color)
+            case .draft: return ("Draft", theme.tint.color, Palette.draftText.color)
             case .merged: return ("Merged", Palette.purpleBackground.color, Palette.purpleText.color)
             case .closed: return ("Closed", Palette.orangeIconBackground.color, Palette.orangeText.color)
             case .open, nil: return nil
@@ -588,7 +588,7 @@ struct Avatar: View {
             if let data, let image = NSImage(data: data) {
                 Image(nsImage: image).resizable().interpolation(.high)
             } else {
-                Circle().fill(Color(white: 0.92)).overlay(Circle().stroke(Color(white: 0.85), lineWidth: 1))
+                Circle().fill(Palette.avatarFill.color).overlay(Circle().stroke(Palette.avatarBorder.color, lineWidth: 1))
             }
         }
         .frame(width: 16, height: 16)
@@ -630,7 +630,7 @@ struct RowView: View {
                     HStack(spacing: 6) {
                         Text(p.label)
                             .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(p.dimmed ? Palette.faded.color : (toDo ? Palette.orangeText.color : Color(white: 0.23)))
+                            .foregroundColor(p.dimmed ? Palette.faded.color : (toDo ? Palette.orangeText.color : Palette.strongText.color))
                             .lineLimit(1)
                         if let counts = p.counts {
                             Text(counts).font(.system(size: 12))
@@ -660,8 +660,8 @@ struct RowView: View {
             }
             .padding(EdgeInsets(top: 5, leading: 14, bottom: 5, trailing: 10))
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(toDo ? Palette.orangeRow.color : Color.white)
-            .overlay(alignment: .top) { Rectangle().fill(Color(white: 0.94)).frame(height: 1) }
+            .background(toDo ? Palette.orangeRow.color : Palette.surface.color)
+            .overlay(alignment: .top) { Rectangle().fill(Palette.rowDivider.color).frame(height: 1) }
             .overlay(RoundedRectangle(cornerRadius: 4).stroke(selected ? Palette.blueDot.color : .clear, lineWidth: 1.5).padding(1))
             .contentShape(Rectangle())
         }
@@ -684,11 +684,11 @@ struct Checkbox: View {
         Button(action: toggle) {
             ZStack {
                 RoundedRectangle(cornerRadius: 5)
-                    .fill(on ? Palette.green.color : Color.white)
+                    .fill(on ? Palette.green.color : Palette.surface.color)
                 RoundedRectangle(cornerRadius: 5)
                     .stroke(on ? Palette.green.color : Palette.controlBorder.color, lineWidth: 1.5)
                 if on {
-                    IconView(icon: BoardIcons.checkbox, size: 12, color: .white)
+                    IconView(icon: BoardIcons.checkbox, size: 12, color: Palette.onColor.color)
                 }
             }
             .frame(width: 18, height: 18)
@@ -732,7 +732,7 @@ struct SettingsButton: View {
                 .font(.system(size: 12))
                 .foregroundColor(Palette.text.color)
                 .padding(EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10))
-                .background(RoundedRectangle(cornerRadius: 6).fill(Color.white))
+                .background(RoundedRectangle(cornerRadius: 6).fill(Palette.surface.color))
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.controlBorder.color, lineWidth: 1))
                 .contentShape(Rectangle())
         }

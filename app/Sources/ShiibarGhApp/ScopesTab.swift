@@ -64,8 +64,7 @@ struct NotificationsTokenSection: View {
 
     var body: some View {
         let status = model.token("notifications")
-        let warnings = TokenState.notificationsWarnings(app.scopes)
-        let label = TokenState.label(status: status, warnings: warnings, now: app.now)
+        let label = TokenState.label(status: status, warnings: status?.warnings ?? [], now: app.now)
         let registered = status?.registered ?? false
         Section2(title: "Notifications token (classic PAT)") {
             Item(first: true) {
@@ -73,13 +72,7 @@ struct NotificationsTokenSection: View {
                 Label2(title: registered ? TokenState.masked : "classic PAT", sub: classicSub(status))
                 TokenLabelView(label: label)
             }
-            if registered, showsSSO(status, warnings) {
-                Item {
-                    Label2(title: "SSO authorization required", sub: "Shown only when GitHub reports that this token needs SSO authorization")
-                    Button("Authorize") { app.open(status?.ssoUrls.first ?? CreateTokenURL.tokenSettings) }
-                        .buttonStyle(.plain).font(.system(size: 12)).foregroundColor(Palette.caution.color)
-                }
-            }
+            SSOItem(status: status, app: app)
             if let last = status?.lastTest, registered {
                 TestResults(results: last.results)
             }
@@ -105,10 +98,21 @@ struct NotificationsTokenSection: View {
         if let expires = status.expiresAt { parts.append("Expires " + RelativeTime.date(expires)) }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
+}
 
-    func showsSSO(_ status: TokenStatus?, _ warnings: [Warning]) -> Bool {
-        !(status?.ssoUrls.isEmpty ?? true) || app.scopes.flatMap(\.warnings).contains {
-            $0.kind.value == .ssoRequired && $0.token?.value == .notifications
+/// "SSO authorization required" on the row of the token that got the
+/// warning (DESIGN.md, "Tokens").
+struct SSOItem: View {
+    var status: TokenStatus?
+    @ObservedObject var app: AppModel
+
+    var body: some View {
+        if let link = TokenState.ssoLink(status) {
+            Item {
+                Label2(title: "SSO authorization required", sub: "Shown only when GitHub reports that this token needs SSO authorization")
+                Button("Authorize") { app.open(link) }
+                    .buttonStyle(.plain).font(.system(size: 12)).foregroundColor(Palette.caution.color)
+            }
         }
     }
 }
@@ -122,7 +126,7 @@ struct ScopeItems: View {
 
     var body: some View {
         let status = TokenState.status(of: scope, in: model.status.tokens)
-        let label = TokenState.label(status: status, warnings: TokenState.scopeWarnings(scope), now: app.now)
+        let label = TokenState.label(status: status, warnings: status?.warnings ?? [], now: app.now)
         let registered = status?.registered ?? false
         let type = model.addedTypes[scope.id] ?? CreateTokenURL.ownerType(of: scope)
         Item(first: first) {
@@ -142,6 +146,7 @@ struct ScopeItems: View {
             }))
             .toggleStyle(.checkbox).font(.system(size: 11)).foregroundColor(Palette.secondary.color)
         }
+        SSOItem(status: status, app: app)
         if let last = status?.lastTest, registered {
             TestResults(results: last.results)
         }

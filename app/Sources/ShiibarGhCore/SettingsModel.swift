@@ -43,6 +43,10 @@ public final class SettingsModel: ObservableObject {
             guard let self, self.isOpen else { return }
             self.reloadStatus()
         }
+        app.observeConfig { [weak self] key, value in
+            self?.config[key] = value
+            if key == LaunchAtLogin.configKey { self?.refreshLaunch() }
+        }
     }
 
     public func windowOpened() {
@@ -60,11 +64,15 @@ public final class SettingsModel: ObservableObject {
 
     public var isOpen: Bool { timer != nil }
 
+    /// Opening Settings also writes the login item as macOS has it to the
+    /// setting, in case it was changed in System Settings.
     public func reload() {
         reloadStatus()
         refreshLaunch()
         let api = app.api
+        let launch = self.launch
         Task {
+            await launch?.syncConfig()
             for key in Self.keys {
                 if let value = try? await api.configGet(key) {
                     config[key] = value

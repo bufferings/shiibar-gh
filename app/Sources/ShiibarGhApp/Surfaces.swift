@@ -36,7 +36,6 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         popover.behavior = .transient
         popover.animates = false
         popover.delegate = self
-        popover.appearance = NSAppearance(named: .aqua)
         app.$scopes
             .receive(on: RunLoop.main)
             .sink { [weak self] scopes in self?.update(scopes) }
@@ -194,7 +193,6 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         panel.isFloatingPanel = true
         panel.becomesKeyOnlyIfNeeded = false
         panel.isReleasedWhenClosed = false
-        panel.appearance = NSAppearance(named: .aqua)
         panel.contentViewController = NSHostingController(rootView: view)
         panel.setContentSize(NSSize(width: 400, height: 620))
         panel.identifier = NSUserInterfaceItemIdentifier(scope)

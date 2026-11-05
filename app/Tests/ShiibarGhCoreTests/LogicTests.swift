@@ -183,13 +183,23 @@ final class PresentationTests: XCTestCase {
         }
     }
 
-    func testTokenWarningsComeFromTheirScopeOrFromAnyScopeForTheNotificationsToken() {
+    func testTokenEntriesAndTheirSSOLinks() {
         let scopes = [
             Scope(id: "a", warnings: [Warning(kind: .tokenInvalid, token: .notifications), Warning(kind: .tokenExpiring, token: .scope)]),
             Scope(id: "b", warnings: [Warning(kind: .tokenInvalid, token: .notifications)]),
         ]
-        XCTAssertEqual(TokenState.notificationsWarnings(scopes).map(\.kind), [.known(.tokenInvalid)])
-        XCTAssertEqual(TokenState.scopeWarnings(scopes[0]).map(\.kind), [.known(.tokenExpiring)])
+        _ = scopes
+        // The SSO row goes to the token that got the warning.
+        XCTAssertNil(TokenState.ssoLink(TokenStatus(target: "o", registered: true)))
+        XCTAssertNil(TokenState.ssoLink(nil))
+        XCTAssertEqual(
+            TokenState.ssoLink(TokenStatus(target: "o", registered: true, warnings: [Warning(kind: .ssoRequired, token: .scope)])),
+            "https://github.com/settings/tokens"
+        )
+        XCTAssertEqual(
+            TokenState.ssoLink(TokenStatus(target: "notifications", registered: true, ssoUrls: ["https://github.com/orgs/x/sso"], warnings: [Warning(kind: .ssoRequired, token: .notifications)])),
+            "https://github.com/orgs/x/sso"
+        )
         // The token entry is found by the display name, never by the id.
         let tokens = [TokenStatus(target: "Example-Org", registered: true), TokenStatus(target: "public", registered: false)]
         let org = Scope(id: "opaque-1", name: "example-org", kind: .org)

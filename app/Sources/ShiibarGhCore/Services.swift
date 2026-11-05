@@ -32,8 +32,9 @@ public protocol ImageLoading: AnyObject, Sendable {
     func load(_ url: URL) async throws -> Data
 }
 
-/// The UI state of DESIGN.md, "Saved state": the chips and the frame of each
-/// scope's window.
+/// The UI state of DESIGN.md, "Saved state": each scope's chips and the
+/// frame of each scope's window. Keys carry the scope id as it is, never
+/// read as an owner login.
 public final class UIStateStore {
     private let defaults: UserDefaults
     static let chipsKey = "popover.chips"
@@ -43,16 +44,16 @@ public final class UIStateStore {
         self.defaults = defaults
     }
 
-    public var chips: Chips {
-        get {
-            guard let data = defaults.data(forKey: Self.chipsKey),
-                  let chips = try? JSONDecoder().decode(Chips.self, from: data)
-            else { return Chips() }
-            return chips
-        }
-        set {
-            defaults.set(try? JSONEncoder().encode(newValue), forKey: Self.chipsKey)
-        }
+    /// The chips of one scope (DESIGN.md, "Screens": remembered per scope).
+    public func chips(scope: String) -> Chips {
+        guard let data = defaults.data(forKey: Self.chipsKey + "." + scope),
+              let chips = try? JSONDecoder().decode(Chips.self, from: data)
+        else { return Chips() }
+        return chips
+    }
+
+    public func setChips(_ chips: Chips, scope: String) {
+        defaults.set(try? JSONEncoder().encode(chips), forKey: Self.chipsKey + "." + scope)
     }
 
     /// The window frame as `NSStringFromRect` writes it.
@@ -118,6 +119,25 @@ public final class LaunchAtLogin {
         }
     }
 
+    /// `launch_at_login` changed, from Settings, the CLI or any client: the
+    /// login item follows the change made last (DESIGN.md, "Launch at login
+    /// sync"). If macOS refuses, the setting goes back to what macOS has.
+    public func configChanged(key: String, value: ConfigValue) async {
+        guard key == Self.configKey, let wanted = value.boolValue, wanted != isOn else { return }
+        do {
+            if wanted {
+                try service.register()
+            } else {
+                try service.unregister()
+            }
+        } catch {
+            NSLog("shiibar-gh: cannot change the login item: %@", String(describing: error))
+        }
+        await syncConfig()
+    }
+
+    /// The login item as macOS has it goes to the setting: at launch, when
+    /// Settings opens, and after a change.
     public func syncConfig() async {
         let on = isOn
         if (try? await api.configGet(Self.configKey))?.boolValue != on {

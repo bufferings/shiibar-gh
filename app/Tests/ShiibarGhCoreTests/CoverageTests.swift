@@ -90,10 +90,19 @@ final class SettingsTextTests: XCTestCase {
             .gray: 0xF3F4F8, .green: 0xEAF4F0, .blue: 0xEAF0F9, .purple: 0xF1EEF8, .pink: 0xF8EEF0, .beige: 0xF7F1E3,
         ]
         for color in ScopeColor.allCases {
-            XCTAssertEqual(Palette.theme(color).background, RGB(hex: want[color]!), color.rawValue)
+            XCTAssertEqual(Palette.theme(color).background.light, RGB(hex: want[color]!), color.rawValue)
         }
         XCTAssertEqual(ScopeColor.allCases.map(\.rawValue), ["gray", "green", "blue", "purple", "pink", "beige"])
         XCTAssertEqual(Palette.color(of: Scope(id: "p", kind: .public)), .beige, "Public without a color")
+        // Six distinct dark backgrounds, darker than their light ones.
+        let darks = ScopeColor.allCases.map { Palette.theme($0).background.dark }
+        XCTAssertEqual(Set(darks.map { "\($0.red),\($0.green),\($0.blue)" }).count, 6)
+        for color in ScopeColor.allCases {
+            let theme = Palette.theme(color)
+            XCTAssertLessThan(theme.background.dark.red + theme.background.dark.green, theme.background.light.red + theme.background.light.green)
+        }
+        XCTAssertEqual(Palette.text.resolve(dark: false), RGB(hex: 0x1D1D1F))
+        XCTAssertEqual(Palette.text.resolve(dark: true), RGB(hex: 0xECECEE))
     }
 
     func testReturnTimeRoundTripsThroughThePicker() {
@@ -200,4 +209,125 @@ final class LauncherEnvironmentTests: XCTestCase {
         XCTAssertEqual(try String(contentsOfFile: out, encoding: .utf8), "\(dir) --foreground")
         XCTAssertTrue(FileManager.default.fileExists(atPath: StateDirectory.daemonLog(root: dir)))
     }
+}
+
+
+final class MenuBarMarkTests: XCTestCase {
+    func testBadgeDotAndTriangleTogether() {
+        let cases: [(Int, Bool, Bool, String?, MenuBarMarks.DotPlace?, Bool)] = [
+            (0, false, false, nil, nil, true),
+            (3, false, false, "3", nil, false),
+            (0, true, false, nil, .topRight, false),
+            (3, true, false, "3", .bottomRight, false),
+            (3, true, true, "3", .bottomRight, false),
+            (120, false, true, "99+", nil, false),
+        ]
+        for (badge, dot, triangle, text, place, plain) in cases {
+            let marks = MenuBarMarks(badge: badge, dot: dot, triangle: triangle)
+            XCTAssertEqual(marks.badge, text, "\(badge) \(dot)")
+            XCTAssertEqual(marks.dot, place, "\(badge) \(dot)")
+            XCTAssertEqual(marks.triangle, triangle)
+            XCTAssertEqual(marks.plain, plain)
+        }
+    }
+}
+
+final class ConfigEventTests: XCTestCase {
+    func testConfigChangedDecodesBooleansNumbersAndStrings() throws {
+        let cases: [(String, ConfigValue)] = [
+            (#"{"event":"config_changed","key":"launch_at_login","value":false}"#, .bool(false)),
+            (#"{"event":"config_changed","key":"drop_after_days","value":20}"#, .int(20)),
+            (#"{"event":"config_changed","key":"keep_watching_days","value":0}"#, .int(0)),
+            (#"{"event":"config_changed","key":"snooze_return_time","value":"08:30"}"#, .string("08:30")),
+        ]
+        for (line, value) in cases {
+            let event = try JSONDecoder().decode(SubscribeEvent.self, from: Data(line.utf8))
+            guard case .configChanged(_, let got) = event else { return XCTFail(line) }
+            XCTAssertEqual(got, value, line)
+        }
+    }
+
+    func testTokenStatusCarriesItsWarnings() throws {
+        let line = #"{"target":"notifications","registered":true,"owner":"me","expires_at":null,"scopes":null,"last_test":null,"sso_urls":[],"warnings":[{"kind":"token_invalid","token":"notifications","message":"m","until":null}]}"#
+        let status = try JSONDecoder().decode(TokenStatus.self, from: Data(line.utf8))
+        XCTAssertEqual(TokenState.label(status: status, warnings: status.warnings, now: T0), TokenLabel("Invalid", .bad))
+        let old = #"{"target":"o","registered":false,"owner":null,"expires_at":null,"scopes":null,"last_test":null,"sso_urls":[]}"#
+        XCTAssertEqual(try JSONDecoder().decode(TokenStatus.self, from: Data(old.utf8)).warnings, [])
+    }
+}
+
+@MainActor
+final class LaunchSyncTests: XCTestCase {
+    var defaults: UserDefaults!
+    var suite = ""
+    var api: FakeAPI!
+
+    override func setUp() async throws {
+        (defaults, suite) = testDefaults()
+        api = FakeAPI()
+    }
+
+    override func tearDown() async throws {
+        defaults.removePersistentDomain(forName: suite)
+    }
+
+    func settle() async {
+        for _ in 0..<20 { await Task.yield() }
+        try? await Task.sleep(nanoseconds: 50_000_000)
+    }
+
+    func testAChangedSettingMovesTheLoginItem() async {
+        let item = FakeLoginItem(.enabled)
+        let launch = LaunchAtLogin(service: item, api: api, store: UIStateStore(defaults: defaults))
+        api.config["launch_at_login"] = .bool(false)
+        await launch.configChanged(key: "launch_at_login", value: .bool(false))
+        XCTAssertEqual(item.calls, ["unregister"])
+        await launch.configChanged(key: "launch_at_login", value: .bool(false))
+        XCTAssertEqual(item.calls, ["unregister"], "already off")
+        await launch.configChanged(key: "status_interval_minutes", value: .int(2))
+        XCTAssertEqual(item.calls, ["unregister"], "another key")
+        api.config["launch_at_login"] = .bool(true)
+        await launch.configChanged(key: "launch_at_login", value: .bool(true))
+        XCTAssertEqual(item.calls, ["unregister", "register"])
+        XCTAssertEqual(api.config["launch_at_login"], .bool(true))
+    }
+
+    func testARefusedChangeWritesWhatMacOSHasBack() async {
+        let item = RefusingLoginItem()
+        let launch = LaunchAtLogin(service: item, api: api, store: UIStateStore(defaults: defaults))
+        api.config["launch_at_login"] = .bool(true)
+        await launch.configChanged(key: "launch_at_login", value: .bool(true))
+        XCTAssertEqual(api.config["launch_at_login"], .bool(false))
+    }
+
+    func testOpeningSettingsWritesASystemSettingsChangeToTheSetting() async {
+        // The user turned the login item off in System Settings.
+        let item = FakeLoginItem(.notRegistered)
+        let launch = LaunchAtLogin(service: item, api: api, store: UIStateStore(defaults: defaults))
+        let app = AppModel(api: api, store: UIStateStore(defaults: defaults), opener: FakeOpener(), notifier: FakeNotifier(), clock: { T0 })
+        let settings = SettingsModel(app: app, launch: launch)
+        api.config["launch_at_login"] = .bool(true)
+        settings.windowOpened()
+        await settle()
+        settings.windowClosed()
+        XCTAssertEqual(api.config["launch_at_login"], .bool(false))
+        XCTAssertEqual(settings.config["launch_at_login"], .bool(false))
+        XCTAssertFalse(settings.launchOn)
+        XCTAssertEqual(item.calls, [], "the setting follows macOS, not the other way")
+    }
+
+    func testSettingsFollowConfigChanged() async {
+        let app = AppModel(api: api, store: UIStateStore(defaults: defaults), opener: FakeOpener(), notifier: FakeNotifier(), clock: { T0 })
+        let settings = SettingsModel(app: app, launch: nil)
+        app.handle(.configChanged(key: "drop_after_days", value: .int(20)))
+        XCTAssertEqual(settings.config["drop_after_days"], .int(20))
+    }
+}
+
+final class RefusingLoginItem: LoginItemService {
+    var status: LoginItemStatus = .notRegistered
+    struct Refused: Error {}
+    func register() throws { throw Refused() }
+    func unregister() throws { throw Refused() }
+    func openSystemSettings() {}
 }

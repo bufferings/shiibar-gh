@@ -136,3 +136,23 @@ extension BoardIcons {
         return scope.kind?.value == .org ? organization : person
     }
 }
+
+/// Where the marks go on a scope's menu bar icon (DESIGN.md, "Screens"):
+/// the badge top right, the blue dot top right, or bottom right when the
+/// badge is there too, and the triangle bottom left.
+public struct MenuBarMarks: Equatable {
+    public enum DotPlace: Equatable { case topRight, bottomRight }
+
+    public var badge: String?
+    public var dot: DotPlace?
+    public var triangle: Bool
+
+    public init(badge count: Int, dot: Bool, triangle: Bool) {
+        badge = count > 0 ? (count > 99 ? "99+" : "\(count)") : nil
+        self.dot = dot ? (count > 0 ? .bottomRight : .topRight) : nil
+        self.triangle = triangle
+    }
+
+    /// Without marks the glyph is a template image in the menu bar's color.
+    public var plain: Bool { badge == nil && dot == nil && !triangle }
+}
