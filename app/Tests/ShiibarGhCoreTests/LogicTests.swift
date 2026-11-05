@@ -251,6 +251,16 @@ final class PresentationTests: XCTestCase {
         XCTAssertEqual(BoardIcons.scope(Scope(id: "x")), BoardIcons.person, "the person before the type is fetched")
     }
 
+    func testTheRefreshArcEndsWhereTheBoardsArcEnds() {
+        // `a5.5 5.5 0 1 1-1.6-3.9` from (13.5, 8) ends at (11.9, 4.1).
+        guard case .arc(let cx, let cy, let r, _, let end)? = BoardIcons.refresh.elements.first else {
+            return XCTFail("no arc")
+        }
+        let angle = end * .pi / 180
+        XCTAssertEqual(cx + r * cos(angle), 11.9, accuracy: 0.05)
+        XCTAssertEqual(cy + r * sin(angle), 4.1, accuracy: 0.05)
+    }
+
     func testSVGPaths() {
         XCTAssertEqual(SVGPath.parse("M2.5 13.5V5l5.5-2.5L13.5 5v8.5z"), [
             .move(Point(2.5, 13.5)), .line(Point(2.5, 5)), .line(Point(8, 2.5)), .line(Point(13.5, 5)),

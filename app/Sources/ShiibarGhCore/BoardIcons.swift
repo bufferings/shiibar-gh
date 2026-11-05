@@ -10,6 +10,9 @@ public enum IconElement: Equatable, Sendable {
     case circle(cx: Double, cy: Double, r: Double, dash: [Double]?)
     case rect(x: Double, y: Double, width: Double, height: Double, radius: Double)
     case path(String)
+    /// An arc on the circle around (cx, cy), from `start` to `end` degrees,
+    /// angles growing clockwise on the board's y-down grid.
+    case arc(cx: Double, cy: Double, r: Double, start: Double, end: Double)
 }
 
 public struct BoardIcon: Equatable, Sendable {
@@ -63,6 +66,13 @@ public enum BoardIcons {
     public static let gear = BoardIcon(
         [.circle(cx: 8, cy: 8, r: 2.2, dash: nil), .path("M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4")],
         lineWidth: 1.5
+    )
+    /// Refresh (Main.html): `M13.5 8a5.5 5.5 0 1 1-1.6-3.9` is the arc of
+    /// the circle of radius 5.5 around (8, 8) from 0° clockwise to 315°,
+    /// where (11.9, 4.1) lies, and `M13.5 2.5v3h-3` the arrowhead.
+    public static let refresh = BoardIcon(
+        [.arc(cx: 8, cy: 8, r: 5.5, start: 0, end: 315), .path("M13.5 2.5v3h-3")],
+        lineWidth: 1.5, roundCaps: true
     )
     public static let chevron = BoardIcon([.path("M4 6l4 4 4-4")], lineWidth: 1.5, roundCaps: true, roundJoins: true)
     public static let clock = BoardIcon(

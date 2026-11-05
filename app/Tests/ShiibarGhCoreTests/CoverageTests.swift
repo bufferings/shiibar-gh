@@ -316,6 +316,25 @@ final class LaunchSyncTests: XCTestCase {
         XCTAssertEqual(item.calls, [], "the setting follows macOS, not the other way")
     }
 
+    func testTheSettingsCheckboxFollowsACLIChangeOnceTheLoginItemMoved() async {
+        let item = FakeLoginItem(.enabled)
+        let launch = LaunchAtLogin(service: item, api: api, store: UIStateStore(defaults: defaults))
+        let app = AppModel(api: api, store: UIStateStore(defaults: defaults), opener: FakeOpener(), notifier: FakeNotifier(), clock: { T0 })
+        let settings = SettingsModel(app: app, launch: launch)
+        settings.refreshLaunch()
+        XCTAssertTrue(settings.launchOn)
+        app.observeConfig { key, value in
+            Task { await launch.configChanged(key: key, value: value) }
+        }
+        // `shiibar-gh config set launch_at_login false` elsewhere.
+        api.config["launch_at_login"] = .bool(false)
+        app.handle(.configChanged(key: "launch_at_login", value: .bool(false)))
+        await settle()
+        XCTAssertEqual(item.calls, ["unregister"])
+        XCTAssertFalse(settings.launchOn, "read after the login item changed")
+        XCTAssertEqual(settings.launchStatus, .notRegistered)
+    }
+
     func testSettingsFollowConfigChanged() async {
         let app = AppModel(api: api, store: UIStateStore(defaults: defaults), opener: FakeOpener(), notifier: FakeNotifier(), clock: { T0 })
         let settings = SettingsModel(app: app, launch: nil)

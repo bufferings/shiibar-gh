@@ -122,8 +122,13 @@ public final class LaunchAtLogin {
     /// `launch_at_login` changed, from Settings, the CLI or any client: the
     /// login item follows the change made last (DESIGN.md, "Launch at login
     /// sync"). If macOS refuses, the setting goes back to what macOS has.
+    /// Called once the login item may have changed: after a change made
+    /// here and after a sync, so Settings shows the status macOS now has.
+    public var onStatusChange: (() -> Void)?
+
     public func configChanged(key: String, value: ConfigValue) async {
         guard key == Self.configKey, let wanted = value.boolValue, wanted != isOn else { return }
+        defer { onStatusChange?() }
         do {
             if wanted {
                 try service.register()
@@ -139,6 +144,7 @@ public final class LaunchAtLogin {
     /// The login item as macOS has it goes to the setting: at launch, when
     /// Settings opens, and after a change.
     public func syncConfig() async {
+        defer { onStatusChange?() }
         let on = isOn
         if (try? await api.configGet(Self.configKey))?.boolValue != on {
             _ = try? await api.configSet(Self.configKey, .bool(on))

@@ -45,8 +45,8 @@ public final class SettingsModel: ObservableObject {
         }
         app.observeConfig { [weak self] key, value in
             self?.config[key] = value
-            if key == LaunchAtLogin.configKey { self?.refreshLaunch() }
         }
+        launch?.onStatusChange = { [weak self] in self?.refreshLaunch() }
     }
 
     public func windowOpened() {

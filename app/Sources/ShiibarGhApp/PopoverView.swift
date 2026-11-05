@@ -94,14 +94,7 @@ struct Header: View {
             if let openWindow = actions.openWindow {
                 HeaderButton(icon: BoardIcons.window, size: 15, label: "Open in window", theme: theme, action: openWindow)
             }
-            Button(action: refresh) {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 12, weight: .medium))
-                    .frame(width: 24, height: 24)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(HoverButtonStyle(theme: theme))
-            .help("Refresh")
+            HeaderButton(icon: BoardIcons.refresh, size: 16, label: "Refresh", theme: theme, action: refresh)
             HeaderButton(icon: BoardIcons.gear, size: 16, label: "Settings", theme: theme) { actions.openSettings(SurfaceRules.headerSettings) }
             Menu {
                 Button("About shiibar-gh", action: actions.about)

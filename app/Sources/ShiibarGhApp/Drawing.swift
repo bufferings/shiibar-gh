@@ -53,6 +53,15 @@ enum IconPath {
                     in: CGRect(x: origin.x, y: origin.y, width: width * scale, height: height * scale),
                     cornerWidth: radius * scale, cornerHeight: radius * scale
                 )
+            case .arc(let cx, let cy, let r, let start, let end):
+                // Points along the arc, so the same code serves y-down
+                // (SwiftUI) and y-up (menu bar) drawing.
+                let steps = 48
+                for step in 0...steps {
+                    let angle = (start + (end - start) * Double(step) / Double(steps)) * .pi / 180
+                    let p = point(ShiibarGhCore.Point(cx + r * cos(angle), cy + r * sin(angle)))
+                    if step == 0 { path.move(to: p) } else { path.addLine(to: p) }
+                }
             case .path(let d):
                 for segment in SVGPath.parse(d) {
                     switch segment {
