@@ -9,7 +9,7 @@ shiibar-gh は、自分が関わっている GitHub の PR について「自分
 **対象**
 
 - 自分が関わっている PR（作者、レビュアー、メンションされた、コメントした）。Issue は扱わない。
-- スコープごとに扱う：登録した owner（組織または個人）ごとと Public。1 つの一覧に混ぜない。スコープごとにメニューバーのアイコン、バッジ、背景色、通知のオン・オフを持つ。
+- スコープごとに扱う：登録した owner（組織または個人）ごとと Public。1 つの一覧に混ぜない。スコープごとにメニューバーのアイコン、バッジ、背景色、通知のオン・オフを持つ。背景色は、設定画面で決まった 6 色から選ぶ（「設定項目」）。
 - 画面の表記は英語だけ。GitHub にある用語は GitHub の表記のまま使用する。
 
 **対象外**
@@ -20,11 +20,11 @@ shiibar-gh は、自分が関わっている GitHub の PR について「自分
 
 ## 画面構成
 
-**メニューバー**。スコープごとにアイコン 1 つ（幅固定）。右上のバッジ＝Needs action の PR の数、青い点＝新しい出来事あり、三角＝注意（トークンの期限、取得の失敗、上限による取得の停止）。disabled のスコープのアイコンは表示しない。
+**メニューバー**。スコープごとにアイコン 1 つ（幅固定）。右上のバッジ＝Needs action の PR の数、青い点＝新しい出来事あり、三角＝注意（トークンの期限、取得の失敗、上限による取得の停止）。disabled のスコープのアイコンは表示しない。表示するスコープのアイコンが 1 つもないときは、shiibar-gh のアイコンを 1 つだけ表示する。押すと「No scopes yet」「Add a scope in Settings」と Settings ボタン、⌄ のメニューを表示する。
 
 **ポップオーバー**。押したスコープだけを表示する。上から：
 
-1. 見出し：スコープ名、Updated … ago、Open in window、Refresh、Settings。トークンの期限やレート制限が近いときだけ黄色い帯。
+1. 見出し：スコープ名、Updated … ago、Open in window、Refresh、Settings、⌄ のメニュー（About shiibar-gh、Settings…、Quit shiibar-gh）。警告があるときだけ黄色い帯（「警告の表示」）。ポップオーバーを開いている間は ⌘Q でも終了する。終了するとデーモンも止まる。
 2. タブ：**PRs**（PR ごとのカード。追加が新しい順で位置固定、出来事で動かさない）と **Activity**（全 PR の行を新しい順に 1 本で。各行に PR 名を小さく添える）。並び替えはない。
 3. チップ：**Needs action**（オンで絞る）、**My PRs｜Others' PRs**（どちらか一方、両方オフ＝すべて）、右端に **Show snoozed**（オンで Snooze 中の PR も表示する）。件数は表示しない。どれも前回の選択を記憶。
 4. カードの列。
@@ -38,7 +38,7 @@ shiibar-gh は、自分が関わっている GitHub の PR について「自分
 | 2 | 作者のアバター、タイトル |
 | 3 | base ← head、右端に Snooze の時計 |
 
-状態ラベルと同じ色の縦線をカードの左端にも引く（色だけにしない）。「自分の PR」のタグはなく、アバターで分かる。
+状態ラベルと同じ色の縦線をカードの左端にも引く（色だけにしない）。「自分の PR」のタグはなく、アバターで分かる。アバターは作者の GitHub のアイコンの画像（GraphQL の `author.avatarUrl`）である。
 
 **状況アイコン 3 つ**。順番固定 Review／Checks／Base。塗りの ✓ 緑、塗りの × 赤、点線の ◌ 灰。文字は付けない。
 
@@ -69,12 +69,12 @@ Mergeable は mergeStateStatus が CLEAN のときだけで、自前で計算し
 
 **Comment と Reply の対象**。Comment の行は、自分の PR に他の人が投稿した会話のコメント、レビューの本文、インラインコメントから、1 コメントにつき 1 行を生成する。Bot が投稿したものは、会話のコメント、レビューの本文、インラインコメントのいずれも Bot の Comment の行にし、Bot comments の設定に従う（Needs action にしない）。Approve のレビューの本文も含めて、すべて Needs action とする。本文付きで変更を求めるレビューは、Changes requested の行と Comment の行の両方を残す。他の人の PR の会話のコメントは行にしない。Reply の行は、自分がコメントしたスレッドへの返信と、スレッドで自分がメンションされたあとの返信から生成し、どの PR でも対象にする。ここでのスレッドは、コードの行に付くレビューのスレッドを指す。Comment と Reply の両方に該当するコメント（自分の PR の、自分がコメントしたスレッドへの返信）は、Reply の行だけを生成する。Mentioned と Reply の両方に該当するコメントは、Mentioned の行だけを生成する。Bot の投稿は、自分のスレッドへの返信でも自分へのメンションでも、常に Bot の Comment の行にする（Bot comments の設定に従い、Needs action にしない）。
 
-どちらの行にも左に青い点（未読）が付く。Bot comments が Hide の行は未読に数えず、カードの表示、Needs action、残す行の整理にも影響しない。List only または Notify に戻すと既読で表示する。未読のメンションは本文 3 行（改行→スペース、記号を落とす）、それ以外は 1 行。
+どちらの行にも左に青い点（未読）が付く。Bot comments が Hide の行は未読に数えず、カードの表示、Needs action、残す行の整理にも影響しない。List only または Notify に戻すと既読で表示する。未読のメンションは本文 3 行、それ以外は 1 行。本文は、改行と連続する空白を 1 つの空白にまとめて表示する（`bodyText` は「The body rendered to text」で、Markdown の記号を含まない。公開スキーマで確認）。
 
 **未読の消え方は自動だけ**。役目は「気づいていない出来事がある」を示すことだけ。
 
-- 行が画面に表示された時点で「表示済み」と記録し、ポップオーバーを閉じた（常時表示ウインドウが手前から外れた）ときに点を消す。スクロール外や絞り込みで隠れていた行は消さない。
-- メニューバーの青い点はポップオーバーを開いた時点で消える。Snooze 中の行と Bot comments が Hide の行では付けず、Snooze の解除時（手動の Unsnooze を含む）に未読の行があれば付ける。ポップオーバーまたは常時表示ウインドウを開いている間は、新着でも解除でも付けず、閉じたときに未読の行が残っていても付けない。
+- 行が画面に表示された時点で「表示済み」と記録し、ポップオーバーを閉じたとき、または常時表示ウインドウを閉じたかフォーカスが外れたときに点を消す。常時表示ウインドウは、フォーカスがある間を開いている、フォーカスがない間を閉じているとして扱う。スクロール外や絞り込みで隠れていた行は消さない。
+- メニューバーの青い点はポップオーバーを開いた時点（常時表示ウインドウにフォーカスが移った時点を含む）で消える。Snooze 中の行と Bot comments が Hide の行では付けず、Snooze の解除時（手動の Unsnooze を含む）に未読の行があれば付ける。ポップオーバーを開いている間と、常時表示ウインドウにフォーカスがある間は、新着でも解除でも付けず、閉じたときに未読の行が残っていても付けない。
 - 手動の Mark as read／unread、一括既読はない。Web を開いたか、macOS の通知を押したかは関係しない。
 - 確認していないのに消えることはあり得るが、失うのは Reaction と Bot への気づきだけ。Checks／Conflicts／Mergeable は状況アイコンとラベルに残り、やることはオレンジに残る。
 
@@ -84,7 +84,7 @@ Mergeable は mergeStateStatus が CLEAN のときだけで、自前で計算し
 
 **Include requests to my teams**。チーム宛てのレビュー依頼は、設定に関係なく記録する。オフの間は、チーム宛ての Review requested の行を表示せず、未読、バッジ、通知の対象にしない（Bot comments の Hide と同じ扱い）。オンに戻すと、オフの間に記録した行を既読で表示し、さかのぼって通知しない。今もチームに依頼が続いている行は、上の規則のとおりやることになる。
 
-**残す行の数**。未読の行と未完了の Needs action の行はすべて残す。既読のイベントの行と Done の行は、合わせて PR ごとに新しい 3 件を残す。整理はポップオーバーを閉じたとき（常時表示ウインドウが手前から外れたとき）に行う。整理した行は表示しないが内部に記録を残し、再取得で復活させない。Activity も同じ行を表示する。
+**残す行の数**。未読の行と未完了の Needs action の行はすべて残す。既読のイベントの行と Done の行は、合わせて PR ごとに新しい 3 件を残す。整理はポップオーバーを閉じたとき（常時表示ウインドウを閉じたか、フォーカスが外れたとき）に行う。整理した行は表示しないが内部に記録を残し、再取得で復活させない。Activity も同じ行を表示する。
 
 **Reaction の行**。自分のコメント（会話のコメント、レビューの本文、レビューコメント、PR の本文）の Reaction を種類ごとの件数で検知し、増えた種類ごとに 1 行を生成する。1 回の取得で同じ種類が複数増えた場合は 1 行で件数を表示する（`👍3`）。行の時刻は検知した時刻とする。件数が減っただけのときは行を生成しない。Reaction を削除して再度付けると新しい出来事として扱う。自分が付けた Reaction は件数から除く。監視の外で増えた分は行にせず、監視が戻った時点の件数を基準にする。監視中の PR の自分のコメントは、初めて集めたときの件数を基準にする。ただし、そのスコープの前回の取得より後に投稿されたコメントは 0 を基準にする。
 
@@ -122,11 +122,11 @@ Snooze は PR 単位。「この PR は翌朝まで確認しない」をアプ�
 通知するのは、Review requested、Mentioned、自分の PR への Comment、自分がコメントしたスレッドへの Reply、スレッドで自分がメンションされたあとの Reply、自分のコメントへの Reaction（1 回の取得で検知した同じコメントの分は 1 件にまとめる）、自分の PR の状態変化（Checks failed、Conflicts、Changes requested、Removed from merge queue、Mergeable）。他の人の PR の状態、Added to merge queue は通知しない。Bot の Comment は Bot comments の設定だけで決まり（Notify／List only／Hide、既定 List only）、種類ごとの通知のオン・オフは適用しない。スコープの通知がオフならすべて通知しない。
 
 - オン・オフはスコープ単位。
-- 個別の通知の文面は、タイトルが「スコープ名 · 行の種類」（`example-org · Mentioned`）、サブタイトルが `owner/repo #番号` と PR のタイトル、本文が行の本文である。Reaction の本文は種類ごとの件数とコメント（`👍3 🎉1 “...”`）とする。
-- 通知はスコープごとにまとめる。1 回の配信で、スコープの個別の通知になるはずのものが 2 件以上なら 1 件のまとめ通知にし、1 件なら個別の通知にする。同じコメントの Reaction をまとめた通知は 1 件と数える。通常の取得、アプリの停止のあと、再接続、不在のあとのすべてに適用し、スコープをまたいでまとめない。Snooze の解除は、件数に関係なく `Back from Snooze` の 1 件とする。
+- 個別の通知の文面は、タイトルが「スコープ名 · 行の種類」（`example-org · Mentioned`。Bot の Comment は `example-org · Comment`）、サブタイトルが `owner/repo #番号` と PR のタイトル、本文が行の本文である。Reaction の本文は種類ごとの件数とコメント（`👍3 🎉1 “...”`）とする。
+- 通知はスコープごとにまとめる。1 回の配信で、スコープの個別の通知になるはずのものが 2 件以上なら 1 件のまとめ通知にし、1 件なら個別の通知にする。同じコメントの Reaction をまとめた通知は 1 件と数える。通常の取得、アプリの停止のあと、再接続のすべてに適用し、スコープをまたいでまとめない。Snooze の解除は、件数に関係なく `Back from Snooze` の 1 件とする。
 - まとめ通知の文面は、Snooze の解除以外が `example-org · 5 new events` と `In 3 PRs`、Snooze の解除が `example-org · Back from Snooze` と `3 PRs had new events` である。N は行の数で、件数が 1 のときは `1 new event`、`In 1 PR`、`1 PR had new events` と単数形にする。
-- 不在の間にデーモンから受け取った通知は表示せずにアプリが保持し、戻ったときに 1 回の配信として扱う。不在は、キーボードとマウスの最後の操作から 10 分以上たった間、画面がロックされている間、Mac がスリープしている間のいずれかである。操作の再開、ロックの解除、スリープからの復帰で戻ったとする。不在と判定する前に受け取った通知は、通常どおり表示する。まとめ通知を押すとポップオーバーを開く。
-- 個別の通知を押すと、その場所を Web で直接開く（ポップオーバーを経由しない。青い点の状態は変更しない）。ボタン Done／Snooze を付け、カードに行かずに処理できる。
+- アプリは、デーモンから受け取った通知を保持せずにすぐ表示する。まとめ通知を押すとポップオーバーを開く。
+- 個別の通知を押すと、その場所を Web で直接開く（ポップオーバーを経由しない。青い点の状態は変更しない）。通知にボタンは付けない。Done と Snooze は、ポップオーバーと CLI で行う。
 - Web を開く操作は「出来事を押す」の 1 種類（カードの行、Activity、macOS の通知、すべて同じ）。「押すとカードを選ぶ」操作は設けない。
 
 ## キーボード
@@ -145,7 +145,7 @@ Snooze は PR 単位。「この PR は翌朝まで確認しない」をアプ�
 | General | GraphQL cost cap (last hour)。80% を超えると警告し、達すると取得を止める（「レート制限」） | 1500 points |
 | General | API usage（REST／GraphQL の残り、定期取得 1 回のコスト） | 表示のみ |
 | Scopes | Notifications token（classic PAT、notifications と read:org。必須）、SSO 承認が必要なときの警告 | — |
-| Scopes | スコープごとの fine-grained PAT（Public も専用のトークンを持つ）、テスト取得の結果、Enabled、通知のオン・オフ | Enabled on、通知 on |
+| Scopes | スコープごとの fine-grained PAT（Public も専用のトークンを持つ）、テスト取得の結果、Enabled、通知のオン・オフ、背景色、Remove | Enabled on、通知 on |
 | Notifications | 種類ごとのオン・オフ | on |
 | Notifications | Snooze の戻り時刻 | 09:00 |
 | Notifications | Bot comments：Notify／List only／Hide（Hide は画面に表示しないだけで、内部には記録する） | List only |
@@ -155,7 +155,7 @@ Snooze は PR 単位。「この PR は翌朝まで確認しない」をアプ�
 
 値の範囲：PR status interval と Reactions interval は 1 分以上、GraphQL cost cap は 100 以上、Days to keep watching after close は 0 以上、Days without updates before a PR is dropped は 1 以上、Return time は `HH:MM`。
 
-**スコープ**。PR のリポジトリの owner が登録済みなら、PR はそのスコープに属する。未登録の owner の公開リポジトリの PR は Public に属する。スコープの表示名は owner のログイン名で、アイコンの形は owner の種類（org または user）で決まる。Public は最初から存在し、削除できない。スコープを disabled にすると、アイコンを表示せず、取得も通知もしない。スコープを削除しても状態は保存し、再登録すると元に戻る。スコープを削除すると Keychain のトークンも削除するので、再登録ではスコープを追加してからトークンを登録する。削除した owner の公開リポジトリの PR は Public に移り、Done と Snooze を引き継ぐ。
+**スコープ**。PR のリポジトリの owner が登録済みなら、PR はそのスコープに属する。未登録の owner の公開リポジトリの PR は Public に属する。スコープの表示名は owner のログイン名で、アイコンの形は owner の種類（org または user）で決まる。Public も owner のスコープと同じく、追加と削除ができる。Public は最初は存在せず、使用するときに追加する。スコープを disabled にすると、アイコンを表示せず、取得も通知もしない。スコープを削除しても状態は保存し、再登録すると元に戻る。スコープを削除すると Keychain のトークンも削除するので、再登録ではスコープを追加してからトークンを登録する。削除した owner の公開リポジトリの PR は Public に移り、Done と Snooze を引き継ぐ。Public がないときは、その PR を表示せず、取得もしない。状態は保存し、Public またはその owner を追加すると元に戻る。
 
 ## 実装方針
 
@@ -165,7 +165,7 @@ Snooze は PR 単位。「この PR は翌朝まで確認しない」をアプ�
 - CLI（Rust）：ソケット経由でデーモンを叩くだけのクライアント。
 - アプリ（Swift）：UI（メニューバー、ポップオーバー、設定画面）と macOS 通知。CLI と同じソケットでデーモンと話す。デーモンの起動・停止・更新時の入れ替えはアプリが行う（launchd は使用しない）。
 
-**配布と署名**。リリース版は GitHub Actions で Developer ID Application の証明書で署名し（hardened runtime）、Apple の公証を受けて GitHub Releases で公開する。利用者は Homebrew の cask（`bufferings/tap`）でインストールする。デーモンと CLI は `.app` の中に同梱し、cask が CLI のリンクを作成する。開発版は、ローカルで作成した固定の署名の ID で署名して `~/Applications` に配置する。Keychain の項目の許可は、保存したプログラムの designated requirement（DR）に結び付く。Developer ID の DR は Team ID と識別子で決まり、版を更新しても満たされるので、更新で許可のダイアログを表示しない。ad hoc の署名の DR は、その版のコードに結び付く（Apple TN3127 で確認。2026-11-05）。開発版とリリース版を切り替えたときは、DR が異なるので 1 回ダイアログを表示する。
+**配布と署名**。リリース版は GitHub Actions で Developer ID Application の証明書で署名し（hardened runtime）、Apple の公証を受けて GitHub Releases で公開する。利用者は Homebrew の cask（`bufferings/tap`）でインストールする。デーモンと CLI は `.app` の中に同梱し、cask が CLI のリンクを作成する。開発版は、ローカルで作成した固定の署名の ID で署名して `~/Applications` に配置する。アプリは `Shiibar GH.app`、bundle identifier は `shiibar.gh`、同梱するデーモンと CLI の署名の識別子は `shiibar.gh.daemon` と `shiibar.gh.cli` で、変更しない（Keychain と通知の許可が識別子に結び付くため）。対応する macOS は 14 以上で、Apple Silicon だけを対象とする。Keychain の項目の許可は、保存したプログラムの designated requirement（DR）に結び付く。Developer ID の DR は Team ID と識別子で決まり、版を更新しても満たされるので、更新で許可のダイアログを表示しない。ad hoc の署名の DR は、その版のコードに結び付く（Apple TN3127 で確認。2026-11-05）。開発版とリリース版を切り替えたときは、DR が異なるので 1 回ダイアログを表示する。
 
 **UI**。SwiftUI。メニューバーのアイコンとポップオーバーの枠はまず MenuBarExtra で試し、バッジ付きアイコンとキーボード操作が足りなければ AppKit（NSStatusItem + NSPopover）。常時表示は NSPanel。ログイン時起動は SMAppService。
 
@@ -288,19 +288,23 @@ fine-grained PAT には Checks の権限がなく、statusCheckRollup の個々�
 | open \<pr｜row\> | その場所の URL を出力する（開くのは呼び元） |
 | config get \<key\> / config set \<key\> \<value\> | 設定項目の読み書き（設定画面と同じ項目） |
 | reset | DB を読めないときの初期化 |
-| scope list / scope add \<owner\> / scope remove \<owner\> / scope enable \<scope\> / scope disable \<scope\> / scope notify \<scope\> on\|off | スコープの登録、enabled と disabled の切り替え、通知のオン・オフ。scope remove は Keychain のトークンも削除する |
+| scope list / scope add \<scope\> / scope remove \<scope\> / scope enable \<scope\> / scope disable \<scope\> / scope notify \<scope\> on\|off / scope color \<scope\> \<color\> | スコープの登録と削除（`public` を含む）、enabled と disabled の切り替え、通知のオン・オフ、背景色。scope remove は Keychain のトークンも削除する |
 | token set notifications / token set \<scope\> / token test notifications / token test \<scope\> | トークンの登録とテスト取得。トークンは標準入力から読み取り、引数には渡さない |
 | settings status [--json] | 設定画面の値（API の残量、定期取得 1 回のコスト、トークンごとの状態）を出力する |
 
-`<pr>` は owner/repo#number、`<row>` は list／activity が出力する id、`<scope>` は owner のログイン名または `public`。owner とリポジトリ名の比較は大文字と小文字を区別しない（GitHub の API はログイン名とリポジトリ名を大文字と小文字の違いを問わず解決する。`gh api users/BUFFERINGS` と、GraphQL の `repository(owner:"RUST-LANG",name:"RUST")` が rust-lang/rust を返すことで確認）。`public` と `notifications` という owner は、大文字と小文字の違いを含めて `scope add` でエラーにする。
+`<pr>` は owner/repo#number、`<row>` は list／activity が出力する id、`<scope>` は owner のログイン名または `public`。owner とリポジトリ名の比較は大文字と小文字を区別しない（GitHub の API はログイン名とリポジトリ名を大文字と小文字の違いを問わず解決する。`gh api users/BUFFERINGS` と、GraphQL の `repository(owner:"RUST-LANG",name:"RUST")` が rust-lang/rust を返すことで確認）。`scope add public` は Public を追加する。`notifications` という owner は、大文字と小文字の違いを含めて `scope add` でエラーにする。
 
 **トークンの登録とテスト**。`token set` はトークンを保存するだけで、テスト取得をしない。未登録の owner への `token set` は `not_found` にする。`token test` は、標準入力にトークンがあればそのトークンを保存せずに検証し、なければ保存済みのトークンを検証する（設定画面の Test again）。テストは権限の有無だけを確かめ、項目ごとに 1 回問い合わせる。権限のエラーなら Failed と足りない権限の名前を、データがなくてもエラーでなければ OK を、確かめる対象がなければ確認できないことを返す。スコープと Public のトークンの項目は設定画面のテスト結果と同じ（PRs, reviews, comments、Checks、Behind base、Team membership、Merge queue）で、Team membership は org のスコープだけを対象とする（Public は classic PAT で確かめる）。classic PAT（`notifications`）の項目は Notifications、Team membership（read:org）、Scopes（notifications と read:org）の 3 つである。通知用のトークンと持ち主が異なることも結果に示す。`public` は Public の fine-grained PAT、`notifications` は classic PAT を対象とする。
 
-**設定画面でのスコープの追加とトークンの登録**。Add scope を押すと owner のログイン名の入力欄を表示し、入力した owner を `scope add` で追加する。続けてトークンの入力に進む。トークンの入力（追加したスコープ、Replace、未登録のトークン）は、Create token、Repository access の案内、トークンを貼り付ける欄、Save で構成する。Save はトークンを `token set` で保存し、続けて `token test` で保存済みのトークンをテストして結果を表示する。
+**設定画面でのスコープの追加とトークンの登録**。Add scope を押すと、owner のログイン名の入力欄と、Organization、Personal account、Public の選択を表示する。Organization または Personal account では入力した owner を、Public では `public` を `scope add` で追加する。選択は Create token の URL を組み立てるためだけに使用し、スコープの kind はこれまでどおり取得で求める。続けてトークンの入力に進む。トークンの入力（追加したスコープ、Replace、未登録のトークン）は、Create token、Repository access の案内、トークンを貼り付ける欄、Save で構成する。Save はトークンを `token set` で保存し、続けて `token test` で保存済みのトークンをテストして結果を表示する。
 
-- Create token は GitHub のトークンの作成ページをブラウザで開く。通知用のトークンは `https://github.com/settings/tokens/new?scopes=notifications,read:org&description=shiibar-gh` である。owner のスコープは `https://github.com/settings/personal-access-tokens/new` に、`name`（`shiibar-gh <owner>`。40 文字を超える部分は切り捨てる）、`description`、`target_name`（owner）、権限 `pull_requests=read`、`contents=read`、`statuses=read`、`actions=read`、`metadata=read`、org では `members=read` を付ける。Public は `name`（`shiibar-gh public`）と `description` だけを付け、権限を付けない。期限は指定せず、GitHub の既定に従う（docs.github.com の managing-your-personal-access-tokens で、これらの引数を確認した。2026-11-05）
+- Create token は GitHub のトークンの作成ページをブラウザで開く。通知用のトークンは `https://github.com/settings/tokens/new?scopes=notifications,read:org&description=shiibar-gh` である。owner のスコープは `https://github.com/settings/personal-access-tokens/new` に、`name`（`shiibar-gh <owner>`。40 文字を超える部分は切り捨てる）、`description`、`target_name`（owner）、権限 `pull_requests=read`、`contents=read`、`statuses=read`、`actions=read`、`metadata=read`、Organization を選んだときは `members=read` を付ける。Public は `name`（`shiibar-gh public`）と `description` だけを付け、権限を付けない。期限は指定せず、GitHub の既定に従う（docs.github.com の managing-your-personal-access-tokens で、これらの引数を確認した。2026-11-05）
 - Repository access は URL で指定できない（同ページ）。案内には、owner のスコープでは All repositories、Public では Public repositories を選ぶことを示す
-- トークンが Repository access のどちらで作成されたかは、GitHub の API で読めない（docs.github.com/en/rest/orgs/personal-access-tokens の取得の API は「Only GitHub Apps can use this endpoint」である。2026-11-05 に確認）。設定画面は Repository access を表示しない
+- トークンが Repository access のどちらで作成されたかは、GitHub の API で読めない（docs.github.com/en/rest/orgs/personal-access-tokens の取得の API は「Only GitHub Apps can use this endpoint」である。2026-11-05 に確認）。設定画面は owner のスコープの Repository access を表示しない。Public の行の `Public repositories` は、Public というスコープの説明として表示する
+- 各スコープの行に Remove を配置する。押すと確認（`Remove example-org?` と、トークンを Keychain から削除し、再び追加すると Done と Snooze が戻ること）を表示し、了承すると `scope remove` を実行する
+- 各スコープの行で、背景色を 6 色から選ぶ（`scope color`）。追加した直後は、6 色を追加の順に巡回して割り当てる。Public の初期値はベージュである
+- トークンの行の右には、次の状態のうち最も上のものを 1 つ表示する：`Invalid`（赤、`token_invalid`）、`Belongs to another account`（赤、`token_owner_mismatch`）、`Expires in N days`（黄、`token_expiring`。1 日未満は切り上げて `Expires in 1 day`）、`Missing permission`（黄、最後のテストに Failed がある）、`Verified`（緑、最後のテストがすべて OK）、`Not tested`（灰、テストの記録がない）、`No token`（灰、未登録。Create token と貼り付ける欄を表示する）。期限のないトークンは期限を表示しない
+- テストの結果は項目ごとに `OK · Checks`、`Failed (Actions) · Checks`（括弧に足りない権限の名前）、`Can't check · Merge queue`（確かめる対象がない）の形で表示する
 - 登録済みのトークンは `••••••••••••`（12 文字の固定）で表示し、トークンの一部も表示しない。アプリはトークンを保持せず、Save で `token set` に渡したあとは破棄する
 
 ## デーモンの仕様
@@ -322,7 +326,8 @@ Unix ソケットの NDJSON。1 接続 1 要求 1 応答。`subscribe` だけは
 | `refresh` | scope（省略可） | `warnings` |
 | `open` | pr または row | `url` |
 | `config_get`／`config_set` | key、value | `value` |
-| `scope_list`／`scope_add`／`scope_remove` | owner | `scopes` |
+| `scope_list`／`scope_add`／`scope_remove` | owner（Public は `public`） | `scopes` |
+| `scope_color` | scope、color | — |
 | `scope_enable`／`scope_disable` | scope | — |
 | `scope_notify` | scope、on | — |
 | `token_set` | target、token | — |
@@ -375,7 +380,7 @@ DB を読めない状態に移行したとき、およびその状態から `res
 
 ### 通知の判定
 
-デーモンが行の生成時に通知の要否を判定し、結果を行に保存する。アプリの再起動で再通知しない。Snooze 中の PR の行は個別に通知せず、解除時のまとめ通知の対象として記録する。解除までに Done にした行は対象から除く。種類またはスコープの通知がオフの行はまとめ通知に含めない。通知を渡す時点でも、スコープの通知、種類ごとの通知、enabled、PR を読めるかを確認し、オフ、disabled、読めなくなった PR のいずれかなら通知せず記録を消去する。Bot の Comment は、種類ごとの通知の代わりに Bot comments が Notify であるかを確認する。後からオンに戻しても、消去した分は通知しない。Mac のスリープ中に Return time を過ぎた場合は、復帰時に解除とまとめ通知を 1 回だけ行う。「不在 10 分以上」はアプリが判定する。
+デーモンが行の生成時に通知の要否を判定し、結果を行に保存する。アプリの再起動で再通知しない。Snooze 中の PR の行は個別に通知せず、解除時のまとめ通知の対象として記録する。解除までに Done にした行は対象から除く。種類またはスコープの通知がオフの行はまとめ通知に含めない。通知を渡す時点でも、スコープの通知、種類ごとの通知、enabled、PR を読めるかを確認し、オフ、disabled、読めなくなった PR のいずれかなら通知せず記録を消去する。Bot の Comment は、種類ごとの通知の代わりに Bot comments が Notify であるかを確認する。後からオンに戻しても、消去した分は通知しない。Mac のスリープ中に Return time を過ぎた場合は、復帰時に解除とまとめ通知を 1 回だけ行う。
 
 デーモンは通知をアプリへ渡したかを記録する。渡せなかった通知は、アプリの再接続時に「macOS 通知」のまとめ方に従って通知する（スコープごとに 2 件以上なら `N new events` のまとめ通知）。Done にした行はこの N に含めない。Snooze の解除のまとめ通知を渡せなかった場合は、その対象の行もこの N に含め、`Back from Snooze` は通知しない。Snooze より前に渡せなかった通知は、Snooze 中は保留し、Return time の解除ではまとめ通知の対象に含め、手動の Unsnooze では記録を消去する。手動の Unsnooze は利用者自身の操作で、青い点とカードの未読で足りるためである。アプリの停止中に起きた出来事も、起動後の取得で検知した分を同じようにまとめる。渡した通知はアプリを再起動しても再通知しない。
 
