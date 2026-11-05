@@ -4,6 +4,17 @@
 # development and release builds carry the same version (docs/tasks/M3.md,
 # "Version numbers"). Sourced; expects BUNDLE_ID from scripts/lib/bundle.sh.
 
+# ere_escape <text>
+#
+# The text as a literal in an extended regular expression: pgrep and pkill
+# read their pattern as one ("they are used as extended regular expressions",
+# pgrep(1) on macOS). Without this, `.` in "Shiibar GH.app" matches any
+# character, and a path with ( ) + [ * ? ^ $ | { } or \ can fail to match, so
+# the old daemon would keep running.
+ere_escape() {
+  printf '%s' "$1" | sed 's/[][\.^$*+?(){}|]/\\&/g'
+}
+
 # wait_for_gone <pgrep -f pattern> <attempts of 0.2 seconds>
 wait_for_gone() {
   local pattern="$1" attempts="$2" i
@@ -24,8 +35,9 @@ wait_for_gone() {
 # safe.
 stop_app_and_daemon() {
   local app_path="$1"
-  local app_pattern="$app_path/Contents/MacOS/$APP_EXECUTABLE"
-  local daemon_pattern="$app_path/Contents/Helpers/shiibar-ghd --foreground"
+  local app_pattern daemon_pattern
+  app_pattern="$(ere_escape "$app_path/Contents/MacOS/$APP_EXECUTABLE")"
+  daemon_pattern="$(ere_escape "$app_path/Contents/Helpers/shiibar-ghd") --foreground"
   local state_dir="${SHIIBAR_GH_STATE_DIR:-$HOME/.local/state/shiibar-gh}"
   local socket="$state_dir/shiibar-ghd.sock"
 
