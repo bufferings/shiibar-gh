@@ -157,7 +157,7 @@ input[type=checkbox]{width:16px;height:16px;accent-color:#0A66D6;margin:0}
             <div class="unit">min</div>
           </div>
           <div class="item">
-            <label class="lbl" for="cap">GraphQL cost cap (last hour)<span class="sub">When close to the cap, polling slows down and the list shows “Throttled”</span></label>
+            <label class="lbl" for="cap">GraphQL cost cap (last hour)<span class="sub">Warns at 80% of the cap. At the cap, polling stops until the shown resume time</span></label>
             <input id="cap" class="num" type="number" min="100" value="1500" style="width: 80px;">
             <div class="unit">points</div>
           </div>
@@ -185,15 +185,15 @@ input[type=checkbox]{width:16px;height:16px;accent-color:#0A66D6;margin:0}
         <div class="gh">Notifications token (classic PAT)</div>
         <div class="group">
           <div class="item">
-            <div class="lbl">••••••••••••<span class="sub">Scope: notifications only · Expires 2027-01-20</span></div>
+            <div class="lbl">••••••••••••<span class="sub">Scopes: notifications, read:org · Expires 2027-01-20</span></div>
             <span class="ok" style="font-size: 12px">Verified</span>
           </div>
           <div class="item">
-            <div class="lbl">SSO authorization for your org<span class="sub">Can’t be verified until an org notification arrives. Without it, only org notifications are missing</span></div>
-            <a href="https://github.com/settings/tokens" class="warn" style="font-size: 12px">Not verified · Open authorization page</a>
+            <div class="lbl">SSO authorization required<span class="sub">Shown only when GitHub reports that this token needs SSO authorization</span></div>
+            <a href="https://github.com/settings/tokens" class="warn" style="font-size: 12px">Authorize</a>
           </div>
           <div class="item" style="justify-content: flex-end; gap: 8px">
-            <a href="https://github.com/settings/tokens/new?scopes=notifications&amp;description=shiibar-gh" style="font-size: 12px">Create token</a>
+            <a href="https://github.com/settings/tokens/new?scopes=notifications,read:org&amp;description=shiibar-gh" style="font-size: 12px">Create token</a>
             <button class="btn">Test again</button>
             <button class="btn">Replace</button>
           </div>
@@ -215,8 +215,7 @@ input[type=checkbox]{width:16px;height:16px;accent-color:#0A66D6;margin:0}
               <div><span class="ok">OK</span> · Checks</div>
               <div><span class="ok">OK</span> · Behind base</div>
               <div><span class="ok">OK</span> · Team membership</div>
-              <div><span class="bad">Failed</span> · Merge queue</div>
-              <div class="sub">→ Required permission: [confirm on device]</div>
+              <div><span class="ok">OK</span> · Merge queue</div>
             </div>
           </div>
           <div class="item" style="justify-content: flex-end; gap: 8px">
@@ -230,8 +229,8 @@ input[type=checkbox]{width:16px;height:16px;accent-color:#0A66D6;margin:0}
             <label class="sub" style="display: flex; align-items: center; gap: 4px; margin-left: 8px"><input type="checkbox" checked="checked">Notifications</label>
           </div>
           <div class="item">
-            <div class="lbl"><span style="font-weight: 600">Public</span><span class="sub">No token needed · PRs you’re involved in on public repositories</span></div>
-            <span class="ok" style="font-size: 12px">—</span>
+            <div class="lbl"><span style="font-weight: 600">Public</span><span class="sub">fine-grained PAT •••••••••••• · Public repositories · PRs you’re involved in on public repositories</span></div>
+            <span class="ok" style="font-size: 12px">Verified</span>
             <label class="sub" style="display: flex; align-items: center; gap: 4px; margin-left: 8px"><input type="checkbox" checked="checked">Enabled</label>
             <label class="sub" style="display: flex; align-items: center; gap: 4px; margin-left: 8px"><input type="checkbox" checked="checked">Notifications</label>
           </div>
@@ -246,7 +245,7 @@ input[type=checkbox]{width:16px;height:16px;accent-color:#0A66D6;margin:0}
       <div>
         <div class="gh">macOS notifications</div>
         <div class="group">
-          <div class="item"><label class="lbl" for="n1">Review requests, mentions, comments and replies in PRs I participate in</label><input id="n1" type="checkbox" checked="checked"></div>
+          <div class="item"><label class="lbl" for="n1">Review requests, mentions, comments on my PRs, and replies in threads I commented in or was mentioned in</label><input id="n1" type="checkbox" checked="checked"></div>
           <div class="item"><label class="lbl" for="n2">State changes on my PRs<span class="sub">Checks failed, conflicts, changes requested, removed from merge queue, mergeable</span></label><input id="n2" type="checkbox" checked="checked"></div>
           <div class="item"><label class="lbl" for="n3">Reactions to my comments<span class="sub">Reactions on the same comment are grouped into one</span></label><input id="n3" type="checkbox" checked="checked"></div>
         </div>

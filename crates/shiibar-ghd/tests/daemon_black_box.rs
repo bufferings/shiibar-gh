@@ -173,11 +173,12 @@ fn a_write_to_a_cli_subscriber_is_not_delivery() {
     );
     let mut app = daemon.subscribe("app");
     app.snapshot();
+    // One undelivered notification of a scope goes out as it is.
     let summary = app.notification();
-    assert_eq!(summary["type"], "summary");
-    assert_eq!(summary["title"], "org · 1 new event");
-    assert_eq!(summary["body"], "In 1 PR");
-    assert_eq!(summary["subtitle"], Value::Null);
+    assert_eq!(summary["type"], "single");
+    assert_eq!(summary["title"], "org · Comment");
+    assert_eq!(summary["body"], "text E_1");
+    assert_eq!(summary["subtitle"], "org/app #1 · Title PR_1");
     daemon.stop();
 }
 
@@ -229,7 +230,7 @@ fn absence_becomes_one_summary_per_scope_including_snooze_rows() {
     assert_eq!(first["body"], "In 2 PRs");
     assert_eq!(first["rows"].as_array().unwrap().len(), 3);
     let second = app.notification();
-    assert_eq!(second["title"], "second · 1 new event");
+    assert_eq!(second["title"], "second · Comment", "one is individual");
     daemon.stop();
 }
 
@@ -912,5 +913,24 @@ fn a_readable_again_pr_raises_the_dot_through_the_daemon() {
     }}));
     daemon.ingest(vec![pr("PR_1", "alice")], vec![], vec![]);
     assert_eq!(daemon.scope("org")["dot"], true);
+    daemon.stop();
+}
+
+/// DESIGN.md, "CLI": `<pr>` compares owner and repository without case.
+#[test]
+fn a_pr_key_ignores_the_case_of_owner_and_repository() {
+    let (_dir, daemon) = setup();
+    daemon.ingest(vec![pr("PR_1", "alice")], vec![], vec![]);
+    for key in ["org/app#1", "ORG/APP#1", "Org/App#1", "org/APP#1"] {
+        let card = daemon.ok(json!({"cmd":"status","pr":key}))["card"].clone();
+        assert_eq!(card["pr"], "org/app#1", "{key}");
+        daemon.ok(json!({"cmd":"open","pr":key}));
+    }
+    daemon.ok(json!({"cmd":"snooze","pr":"ORG/App#1"}));
+    daemon.ok(json!({"cmd":"unsnooze","pr":"org/aPP#1"}));
+    assert_eq!(
+        daemon.code(json!({"cmd":"status","pr":"org/app#2"})),
+        "not_found"
+    );
     daemon.stop();
 }

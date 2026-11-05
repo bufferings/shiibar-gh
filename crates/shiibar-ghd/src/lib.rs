@@ -5,9 +5,15 @@
 //! the subscribers, and `server` owns the socket and the startup sequence.
 
 pub mod clock;
+pub mod convert;
 pub mod daemon;
 pub mod engine;
+pub mod fetch;
+pub mod github;
+pub mod keychain;
 pub mod logging;
 pub mod model;
+pub mod plan;
 pub mod server;
 pub mod store;
+pub mod tokentest;

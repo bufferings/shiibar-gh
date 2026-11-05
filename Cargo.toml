@@ -26,3 +26,10 @@ rusqlite = { version = "0.41.1", features = ["bundled"] }
 # given to `dev_clock_set`. Reads the operating system's zoneinfo.
 jiff = "0.2.38"
 tempfile = "3.27.0"
+# HTTP client for the GitHub REST and GraphQL APIs. `native-tls` uses
+# Security.framework on macOS; the default rustls build pulls in aws-lc-sys,
+# whose licenses are outside deny.toml. `system-proxy` follows the macOS proxy
+# settings. docs/tasks/M2.md, "Dependencies".
+reqwest = { version = "0.13.5", default-features = false, features = ["native-tls", "json", "http2", "system-proxy"] }
+# The macOS Keychain (generic passwords). Only the daemon uses it.
+security-framework = "3.7.0"

@@ -14,7 +14,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 const FILE_MODE: u32 = 0o600;
 const SIDE_FILES: [&str; 2] = ["-wal", "-shm"];
@@ -87,8 +87,48 @@ CREATE TABLE reaction_baselines (
 );
 ";
 
+/// M2: what the fetcher keeps. docs/tasks/M2.md, "Fetcher and core".
+const SCHEMA_V2: &str = "
+ALTER TABLE scopes ADD COLUMN kind TEXT;
+ALTER TABLE scopes ADD COLUMN name TEXT;
+ALTER TABLE scopes ADD COLUMN fetched_at INTEGER;
+ALTER TABLE prs ADD COLUMN requested_team INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE prs ADD COLUMN gone_at INTEGER;
+ALTER TABLE prs ADD COLUMN collected INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE pr_rows ADD COLUMN team INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE tokens (
+    target TEXT PRIMARY KEY,
+    registered INTEGER NOT NULL,
+    invalid INTEGER NOT NULL,
+    owner TEXT,
+    expires_at INTEGER,
+    scopes TEXT,
+    sso INTEGER NOT NULL,
+    sso_urls TEXT NOT NULL,
+    last_test TEXT
+);
+CREATE TABLE pr_ids (key TEXT PRIMARY KEY, pr_id TEXT NOT NULL);
+CREATE TABLE own_comments (
+    id TEXT PRIMARY KEY,
+    pr_id TEXT NOT NULL,
+    url TEXT NOT NULL,
+    text TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    baseline_done INTEGER NOT NULL
+);
+CREATE TABLE threads (id TEXT PRIMARY KEY, pr_id TEXT NOT NULL, from_at INTEGER NOT NULL);
+CREATE TABLE teams (
+    scope TEXT NOT NULL,
+    database_id INTEGER NOT NULL,
+    slug TEXT NOT NULL,
+    PRIMARY KEY (scope, database_id)
+);
+CREATE TABLE retries (pr_id TEXT PRIMARY KEY, since INTEGER NOT NULL, failures INTEGER NOT NULL);
+CREATE TABLE fetch_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+";
+
 /// Migrations by the version they produce.
-const MIGRATIONS: [(i64, &str); 1] = [(1, SCHEMA_V1)];
+const MIGRATIONS: [(i64, &str); 2] = [(1, SCHEMA_V1), (2, SCHEMA_V2)];
 
 #[derive(Debug)]
 pub enum OpenOutcome {
@@ -349,6 +389,9 @@ impl Store {
                 }
             }
         }
+        if dirty.fetch {
+            save_fetch(&tx, &data.fetch)?;
+        }
         tx.commit()
     }
 
@@ -405,8 +448,8 @@ fn parse_counts(text: &str) -> rusqlite::Result<BTreeMap<String, u32>> {
 fn save_scope(tx: &Transaction<'_>, scope: &ScopeRec) -> rusqlite::Result<usize> {
     tx.execute(
         "INSERT OR REPLACE INTO scopes
-         (id, removed, enabled, notify, watch_started_at, updated_at, dot)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+         (id, removed, enabled, notify, watch_started_at, updated_at, dot, kind, name, fetched_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             scope.id,
             scope.removed,
@@ -414,7 +457,10 @@ fn save_scope(tx: &Transaction<'_>, scope: &ScopeRec) -> rusqlite::Result<usize>
             scope.notify,
             scope.watch_started_at,
             scope.updated_at,
-            scope.dot
+            scope.dot,
+            scope.kind.map(ScopeKind::as_str),
+            scope.name,
+            scope.fetched_at
         ],
     )
 }
@@ -425,9 +471,11 @@ fn save_pr(tx: &Transaction<'_>, pr: &PrRec) -> rusqlite::Result<usize> {
          (id, owner, repo, number, url, title, author, base, head, state, is_draft, review,
           checks, base_status, mergeable, failed_check, changes_requested_by, updated_at,
           is_private, requested_me, link_review, link_checks, link_base, mine, unreadable,
-          snoozed, added_at, prev_review, prev_checks, prev_base_status, prev_mergeable)
+          snoozed, added_at, prev_review, prev_checks, prev_base_status, prev_mergeable,
+          requested_team, gone_at, collected)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-                 ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31)",
+                 ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32,
+                 ?33, ?34)",
         params![
             pr.id,
             pr.owner,
@@ -460,6 +508,9 @@ fn save_pr(tx: &Transaction<'_>, pr: &PrRec) -> rusqlite::Result<usize> {
             pr.prev.map(|p| p.checks.as_str()),
             pr.prev.map(|p| p.base_status.as_str()),
             pr.prev.map(|p| p.mergeable),
+            pr.requested_team,
+            pr.gone_at,
+            pr.collected,
         ],
     )
 }
@@ -468,8 +519,8 @@ fn save_row(tx: &Transaction<'_>, row: &RowRec) -> rusqlite::Result<usize> {
     tx.execute(
         "INSERT OR REPLACE INTO pr_rows
          (id, pr_id, kind, text, counts, actor, url, occurred_at, comment_id, unread,
-          seen_pending, done, pruned, notify)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+          seen_pending, done, pruned, notify, team)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
             row.id,
             row.pr_id,
@@ -485,6 +536,7 @@ fn save_row(tx: &Transaction<'_>, row: &RowRec) -> rusqlite::Result<usize> {
             row.done,
             row.pruned,
             row.notify.as_str(),
+            row.team,
         ],
     )
 }
@@ -531,10 +583,18 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
     }
 
     let mut statement = conn.prepare(
-        "SELECT id, removed, enabled, notify, watch_started_at, updated_at, dot FROM scopes",
+        "SELECT id, removed, enabled, notify, watch_started_at, updated_at, dot, kind, name,
+                fetched_at
+         FROM scopes",
     )?;
     let scopes = statement.query_map([], |row| {
+        let kind: Option<String> = row.get(7)?;
         Ok(ScopeRec {
+            kind: kind
+                .map(|text| stored(7, &text, ScopeKind::parse))
+                .transpose()?,
+            name: row.get(8)?,
+            fetched_at: row.get(9)?,
             id: row.get(0)?,
             removed: row.get(1)?,
             enabled: row.get(2)?,
@@ -553,7 +613,8 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
         "SELECT id, owner, repo, number, url, title, author, base, head, state, is_draft, review,
                 checks, base_status, mergeable, failed_check, changes_requested_by, updated_at,
                 is_private, requested_me, link_review, link_checks, link_base, mine, unreadable,
-                snoozed, added_at, prev_review, prev_checks, prev_base_status, prev_mergeable
+                snoozed, added_at, prev_review, prev_checks, prev_base_status, prev_mergeable,
+                requested_team, gone_at, collected
          FROM prs",
     )?;
     let prs = statement.query_map([], |row| {
@@ -599,6 +660,9 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
             snoozed: row.get(25)?,
             added_at: row.get(26)?,
             prev,
+            requested_team: row.get(31)?,
+            gone_at: row.get(32)?,
+            collected: row.get(33)?,
         })
     })?;
     for pr in prs {
@@ -608,7 +672,7 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
 
     let mut statement = conn.prepare(
         "SELECT id, pr_id, kind, text, counts, actor, url, occurred_at, comment_id, unread,
-                seen_pending, done, pruned, notify
+                seen_pending, done, pruned, notify, team
          FROM pr_rows",
     )?;
     let rows = statement.query_map([], |row| {
@@ -628,6 +692,7 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
             done: row.get(11)?,
             pruned: row.get(12)?,
             notify: stored(13, &row.get::<_, String>(13)?, NotifyState::parse)?,
+            team: row.get(14)?,
         })
     })?;
     for row in rows {
@@ -647,7 +712,291 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
         let baseline = baseline?;
         data.baselines.insert(baseline.comment_id.clone(), baseline);
     }
+    data.fetch = load_fetch(conn)?;
     Ok(Some(data))
+}
+
+fn json_err(e: serde_json::Error) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+}
+
+fn test_text(test: &TestRec) -> String {
+    let results: Vec<serde_json::Value> = test
+        .results
+        .iter()
+        .map(|item| {
+            serde_json::json!({
+                "item": item.item,
+                "outcome": item.outcome,
+                "missing": item.missing,
+                "reason": item.reason,
+            })
+        })
+        .collect();
+    serde_json::json!({"at": test.at, "results": results}).to_string()
+}
+
+fn parse_test(text: &str) -> rusqlite::Result<TestRec> {
+    let value: serde_json::Value = serde_json::from_str(text).map_err(json_err)?;
+    let string = |v: &serde_json::Value, key: &str| v[key].as_str().map(str::to_string);
+    let results = value["results"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|item| TestItem {
+            item: string(item, "item").unwrap_or_default(),
+            outcome: string(item, "outcome").unwrap_or_default(),
+            missing: string(item, "missing"),
+            reason: string(item, "reason"),
+        })
+        .collect();
+    Ok(TestRec {
+        at: value["at"].as_i64().unwrap_or(0),
+        results,
+    })
+}
+
+fn save_fetch(tx: &Transaction<'_>, fetch: &FetchData) -> rusqlite::Result<()> {
+    for table in [
+        "tokens",
+        "pr_ids",
+        "own_comments",
+        "threads",
+        "teams",
+        "retries",
+        "fetch_meta",
+    ] {
+        tx.execute(&format!("DELETE FROM {table}"), [])?;
+    }
+    for token in fetch.tokens.values() {
+        tx.execute(
+            "INSERT INTO tokens (target, registered, invalid, owner, expires_at, scopes, sso,
+                                 sso_urls, last_test)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                token.target,
+                token.registered,
+                token.invalid,
+                token.owner,
+                token.expires_at,
+                token
+                    .scopes
+                    .as_ref()
+                    .map(|s| serde_json::json!(s).to_string()),
+                token.sso,
+                serde_json::json!(token.sso_urls).to_string(),
+                token.last_test.as_ref().map(test_text),
+            ],
+        )?;
+    }
+    for (key, id) in &fetch.pr_ids {
+        tx.execute(
+            "INSERT INTO pr_ids (key, pr_id) VALUES (?1, ?2)",
+            params![key, id],
+        )?;
+    }
+    for own in fetch.own.values() {
+        tx.execute(
+            "INSERT INTO own_comments (id, pr_id, url, text, created_at, baseline_done)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                own.id,
+                own.pr_id,
+                own.url,
+                own.text,
+                own.created_at,
+                own.baseline_done
+            ],
+        )?;
+    }
+    for thread in fetch.threads.values() {
+        tx.execute(
+            "INSERT INTO threads (id, pr_id, from_at) VALUES (?1, ?2, ?3)",
+            params![thread.id, thread.pr_id, thread.from_at],
+        )?;
+    }
+    for (scope, teams) in &fetch.teams {
+        for team in teams {
+            tx.execute(
+                "INSERT OR REPLACE INTO teams (scope, database_id, slug) VALUES (?1, ?2, ?3)",
+                params![scope, team.database_id, team.slug],
+            )?;
+        }
+    }
+    for retry in fetch.retries.values() {
+        tx.execute(
+            "INSERT INTO retries (pr_id, since, failures) VALUES (?1, ?2, ?3)",
+            params![retry.pr_id, retry.since, retry.failures],
+        )?;
+    }
+    let usage = &fetch.usage;
+    let meta = [
+        (
+            "notif_last_modified",
+            serde_json::json!(fetch.notif_last_modified),
+        ),
+        ("notif_since", serde_json::json!(fetch.notif_since)),
+        ("poll_interval", serde_json::json!(fetch.poll_interval)),
+        ("costs", serde_json::json!(fetch.costs)),
+        (
+            "usage",
+            serde_json::json!([
+                usage.rest_remaining,
+                usage.rest_limit,
+                usage.graphql_remaining,
+                usage.graphql_limit,
+                usage.cost_per_poll
+            ]),
+        ),
+        ("stopped_until", serde_json::json!(fetch.stopped_until)),
+        ("stop_reason", serde_json::json!(fetch.stop_reason)),
+        ("pending_signals", serde_json::json!(fetch.pending_signals)),
+        (
+            "team_requests_on_at",
+            serde_json::json!(fetch.team_requests_on_at),
+        ),
+        (
+            "notif_checked_at",
+            serde_json::json!(fetch.notif_checked_at),
+        ),
+    ];
+    for (key, value) in meta {
+        tx.execute(
+            "INSERT INTO fetch_meta (key, value) VALUES (?1, ?2)",
+            params![key, value.to_string()],
+        )?;
+    }
+    Ok(())
+}
+
+fn load_fetch(conn: &Connection) -> anyhow::Result<FetchData> {
+    let mut fetch = FetchData::default();
+    let mut statement = conn.prepare(
+        "SELECT target, registered, invalid, owner, expires_at, scopes, sso, sso_urls, last_test
+         FROM tokens",
+    )?;
+    let tokens = statement.query_map([], |row| {
+        let scopes: Option<String> = row.get(5)?;
+        let urls: String = row.get(7)?;
+        let test: Option<String> = row.get(8)?;
+        Ok(TokenRec {
+            target: row.get(0)?,
+            registered: row.get(1)?,
+            invalid: row.get(2)?,
+            owner: row.get(3)?,
+            expires_at: row.get(4)?,
+            scopes: scopes
+                .map(|text| serde_json::from_str(&text).map_err(json_err))
+                .transpose()?,
+            sso: row.get(6)?,
+            sso_urls: serde_json::from_str(&urls).map_err(json_err)?,
+            last_test: test.as_deref().map(parse_test).transpose()?,
+        })
+    })?;
+    for token in tokens {
+        let token = token?;
+        fetch.tokens.insert(token.target.clone(), token);
+    }
+    let mut statement = conn.prepare("SELECT key, pr_id FROM pr_ids")?;
+    let pairs = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for pair in pairs {
+        let (key, id) = pair?;
+        fetch.pr_ids.insert(key, id);
+    }
+    let mut statement =
+        conn.prepare("SELECT id, pr_id, url, text, created_at, baseline_done FROM own_comments")?;
+    let own = statement.query_map([], |row| {
+        Ok(OwnComment {
+            id: row.get(0)?,
+            pr_id: row.get(1)?,
+            url: row.get(2)?,
+            text: row.get(3)?,
+            created_at: row.get(4)?,
+            baseline_done: row.get(5)?,
+        })
+    })?;
+    for own in own {
+        let own = own?;
+        fetch.own.insert(own.id.clone(), own);
+    }
+    let mut statement = conn.prepare("SELECT id, pr_id, from_at FROM threads")?;
+    let threads = statement.query_map([], |row| {
+        Ok(ThreadRec {
+            id: row.get(0)?,
+            pr_id: row.get(1)?,
+            from_at: row.get(2)?,
+        })
+    })?;
+    for thread in threads {
+        let thread = thread?;
+        fetch.threads.insert(thread.id.clone(), thread);
+    }
+    let mut statement = conn.prepare("SELECT scope, database_id, slug FROM teams")?;
+    let teams = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            TeamRec {
+                database_id: row.get(1)?,
+                slug: row.get(2)?,
+            },
+        ))
+    })?;
+    for team in teams {
+        let (scope, team) = team?;
+        fetch.teams.entry(scope).or_default().push(team);
+    }
+    let mut statement = conn.prepare("SELECT pr_id, since, failures FROM retries")?;
+    let retries = statement.query_map([], |row| {
+        Ok(RetryRec {
+            pr_id: row.get(0)?,
+            since: row.get(1)?,
+            failures: row.get(2)?,
+        })
+    })?;
+    for retry in retries {
+        let retry = retry?;
+        fetch.retries.insert(retry.pr_id.clone(), retry);
+    }
+    let mut statement = conn.prepare("SELECT key, value FROM fetch_meta")?;
+    let pairs = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for pair in pairs {
+        let (key, text) = pair?;
+        let value: serde_json::Value =
+            serde_json::from_str(&text).context("stored fetch state is not JSON")?;
+        let string = || value.as_str().map(str::to_string);
+        match key.as_str() {
+            "notif_last_modified" => fetch.notif_last_modified = string(),
+            "notif_since" => fetch.notif_since = string(),
+            "poll_interval" => fetch.poll_interval = value.as_i64(),
+            "costs" => {
+                fetch.costs = serde_json::from_value(value).context("stored costs")?;
+            }
+            "usage" => {
+                let at = |i: usize| value.get(i).and_then(serde_json::Value::as_i64);
+                fetch.usage = Usage {
+                    rest_remaining: at(0),
+                    rest_limit: at(1),
+                    graphql_remaining: at(2),
+                    graphql_limit: at(3),
+                    cost_per_poll: at(4),
+                };
+            }
+            "stopped_until" => fetch.stopped_until = value.as_i64(),
+            "stop_reason" => fetch.stop_reason = string(),
+            "pending_signals" => {
+                fetch.pending_signals =
+                    serde_json::from_value(value).context("stored pending signals")?;
+            }
+            "team_requests_on_at" => fetch.team_requests_on_at = value.as_i64().unwrap_or(0),
+            "notif_checked_at" => fetch.notif_checked_at = value.as_i64(),
+            _ => {}
+        }
+    }
+    Ok(fetch)
 }
 
 #[cfg(test)]

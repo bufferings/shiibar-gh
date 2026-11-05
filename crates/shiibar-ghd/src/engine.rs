@@ -9,6 +9,9 @@ use shiibar_gh_proto as proto;
 use shiibar_gh_proto::{Filter, Ingest, IngestEvent, IngestPr, IngestReaction, Lenient};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+mod fetch_api;
+pub use fetch_api::*;
+
 const DAY_SECS: i64 = 86_400;
 /// Rows kept per PR among read events and done rows.
 const KEEP_ROWS: usize = 3;
@@ -51,6 +54,26 @@ pub struct Engine {
     /// Rows the last release moved out of hold.
     released: Vec<String>,
     notification_seq: u64,
+    /// The time warnings are judged against; the daemon sets it before every
+    /// command and pass.
+    clock_at: i64,
+    /// Fetch warnings that hold until the scope's next fetch: `fetch_failed`
+    /// and `permission_missing`. Never saved.
+    fetch_warnings: BTreeMap<String, Vec<proto::Warning>>,
+    /// `fetch_failed` of the last notifications check, shown on every scope
+    /// until a check succeeds. Never saved.
+    notifications_failed: Option<proto::Warning>,
+    /// When each kind of fetch is due next. Never saved: a start fetches.
+    timers: Timers,
+}
+
+/// When each kind of fetch is due next, in epoch seconds. The status fetch
+/// is timed per scope, so `refresh <scope>` leaves the others alone.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Timers {
+    pub status: BTreeMap<String, i64>,
+    pub reactions: i64,
+    pub notifications: i64,
 }
 
 impl Engine {
@@ -70,19 +93,67 @@ impl Engine {
                 watch_started_at: now.at,
                 updated_at: None,
                 dot: false,
+                kind: None,
+                name: None,
+                fetched_at: None,
             },
         );
         let mut engine = Self::restore(data);
+        engine.clock_at = now.at;
         engine.dirty = Dirty {
             scopes: engine.data.scopes.keys().cloned().collect(),
             config: true,
             meta: true,
+            fetch: true,
             ..Dirty::default()
         };
         engine
     }
 
+    /// A fresh state with the scopes and token registrations restored from
+    /// the Keychain accounts. DESIGN.md, "When the database cannot be read".
+    pub fn fresh_from_accounts(now: &Now, accounts: &[String]) -> Self {
+        let mut engine = Self::fresh(now);
+        for account in accounts {
+            let target = match account.as_str() {
+                NOTIFICATIONS | PUBLIC => account.clone(),
+                other => match other.strip_prefix(SCOPE_ACCOUNT_PREFIX) {
+                    Some(owner) if !owner.is_empty() => {
+                        let owner = owner.to_lowercase();
+                        if engine.scope_add(&owner, now).is_err() {
+                            continue;
+                        }
+                        owner
+                    }
+                    _ => continue,
+                },
+            };
+            engine.data.fetch.tokens.insert(
+                target.clone(),
+                TokenRec {
+                    target,
+                    registered: true,
+                    ..TokenRec::default()
+                },
+            );
+        }
+        engine.dirty.fetch = true;
+        engine
+    }
+
     pub fn restore(data: Data) -> Self {
+        // The next notifications check survives a restart: X-Poll-Interval
+        // counts from the last check (owner rule, docs/tasks/M2.md).
+        let timers = Timers {
+            notifications: data.fetch.notif_checked_at.map_or(0, |at| {
+                at + data
+                    .fetch
+                    .poll_interval
+                    .unwrap_or(fetch_api::DEFAULT_POLL_INTERVAL)
+                    .max(1)
+            }),
+            ..Timers::default()
+        };
         let mut rows_by_pr: HashMap<String, Vec<String>> = HashMap::new();
         for row in data.rows.values() {
             rows_by_pr
@@ -99,7 +170,16 @@ impl Engine {
             fresh: Vec::new(),
             released: Vec::new(),
             notification_seq: 0,
+            clock_at: 0,
+            fetch_warnings: BTreeMap::new(),
+            notifications_failed: None,
+            timers,
         }
+    }
+
+    /// The time warnings are judged against.
+    pub fn set_clock(&mut self, now: &Now) {
+        self.clock_at = now.at;
     }
 
     pub fn data(&self) -> &Data {
@@ -185,14 +265,17 @@ impl Engine {
             .filter_map(|id| self.data.rows.get(id))
     }
 
+    /// Bot comments under Hide, and team review requests while Include
+    /// requests to my teams is off: recorded, never shown or counted.
     fn hidden(&self, row: &RowRec) -> bool {
-        row.kind == RowKind::BotComment && self.data.config.bot_comments == BotComments::Hide
+        (row.kind == RowKind::BotComment && self.data.config.bot_comments == BotComments::Hide)
+            || (row.team && !self.data.config.include_team_requests)
     }
 
     /// The Review requested row that can still be something to do.
     fn latest_review_request(&self, pr_id: &str) -> Option<&RowRec> {
         self.rows_of(pr_id)
-            .filter(|r| r.kind == RowKind::ReviewRequested)
+            .filter(|r| r.kind == RowKind::ReviewRequested && !self.hidden(r))
             .min_by(|a, b| {
                 b.occurred_at
                     .cmp(&a.occurred_at)
@@ -206,7 +289,8 @@ impl Engine {
             RowKind::Mentioned | RowKind::Comment | RowKind::Reply => true,
             RowKind::ReviewRequested => {
                 pr.state == PrState::Open
-                    && pr.requested_me
+                    && (pr.requested_me
+                        || (pr.requested_team && self.data.config.include_team_requests))
                     && self
                         .latest_review_request(&pr.id)
                         .is_some_and(|latest| latest.id == row.id)
@@ -440,19 +524,23 @@ impl Engine {
 
     fn wire_scope(&self, scope: &ScopeRec) -> proto::Scope {
         let public = scope.id == PUBLIC;
+        let kind = if public {
+            Some(proto::ScopeKind::Public)
+        } else {
+            scope.kind.map(|kind| match kind {
+                ScopeKind::Org => proto::ScopeKind::Org,
+                ScopeKind::User => proto::ScopeKind::User,
+            })
+        };
         proto::Scope {
             id: scope.id.clone(),
-            name: if public {
-                "Public".into()
-            } else {
-                scope.id.clone()
-            },
-            kind: public.then_some(Lenient::Known(proto::ScopeKind::Public)),
+            name: self.display_name(&scope.id),
+            kind: kind.map(Lenient::Known),
             enabled: scope.enabled,
             notify: scope.notify,
             badge: self.badge(scope),
             dot: scope.enabled && scope.dot,
-            warnings: Vec::new(),
+            warnings: self.warnings(scope),
             updated_at: scope.updated_at,
         }
     }
@@ -542,9 +630,23 @@ impl Engine {
                 touched.insert(scope);
             }
         }
-        for scope in touched {
+        // docs/tasks/M2.md, "Fetcher and core": a fetch names the scopes that
+        // succeeded; a `dev_ingest` without the list keeps the M1 rule.
+        let (succeeded, fetched): (BTreeSet<String>, bool) = match ingest.succeeded_scopes {
+            Some(list) => (
+                list.iter()
+                    .filter_map(|name| self.scope_key(name).map(str::to_string))
+                    .collect(),
+                true,
+            ),
+            None => (touched, false),
+        };
+        for scope in succeeded {
             if let Some(scope) = self.scope_mut(&scope) {
                 scope.updated_at = Some(now.at);
+                if fetched {
+                    scope.fetched_at = Some(now.at);
+                }
             }
         }
         self.settle(now);
@@ -580,6 +682,9 @@ impl Engine {
             updated_at: p.updated_at,
             is_private: p.is_private,
             requested_me: p.requested_me,
+            requested_team: p.requested_team,
+            gone_at: existing.and_then(|pr| pr.gone_at),
+            collected: existing.is_some_and(|pr| pr.collected),
             link_review: p.links.review,
             link_checks: p.links.checks,
             link_base: p.links.base,
@@ -688,8 +793,13 @@ impl Engine {
         let scope_id = scope.id.clone();
         let mut silent = false;
         if event.occurred_at < scope.watch_started_at {
+            let requested = if event.team {
+                pr.requested_team
+            } else {
+                pr.requested_me
+            };
             let kept = event.kind == proto::EventKind::ReviewRequested
-                && pr.requested_me
+                && requested
                 && first_fetch.contains(&event.pr_id);
             if !kept {
                 return Some(scope_id);
@@ -707,6 +817,7 @@ impl Engine {
                 url: event.url,
                 occurred_at: event.occurred_at,
                 comment_id: event.comment_id,
+                team: event.team && event.kind == proto::EventKind::ReviewRequested,
                 ..row_defaults()
             },
             silent,
@@ -795,7 +906,12 @@ impl Engine {
         };
         let scope_id = scope.id.clone();
         let hidden = self.hidden(&row);
-        row.unread = !hidden;
+        // DESIGN.md, "Include requests to my teams": a team request made while
+        // the setting was off shows as read and is never notified.
+        let silent = silent || (row.team && hidden);
+        let quiet = row.team && row.occurred_at < self.data.fetch.team_requests_on_at;
+        let silent = silent || quiet;
+        row.unread = !hidden && !quiet;
         let snoozed = pr.snoozed;
         let unreadable = pr.unreadable;
         row.notify = if !silent && !unreadable && scope.notify && self.kind_notifies(&row, pr) {
@@ -986,17 +1102,16 @@ impl Engine {
             return Ok(());
         }
         self.end_snooze(&id);
-        let held: Vec<(String, NotifyState)> = self
+        // DESIGN.md, "Snooze": a manual Unsnooze notifies nothing, and clears
+        // what was held as well as what went undelivered before the Snooze.
+        let held: Vec<String> = self
             .rows_of(&id)
-            .filter_map(|row| match row.notify {
-                NotifyState::Held => Some((row.id.clone(), NotifyState::None)),
-                NotifyState::HeldUndelivered => Some((row.id.clone(), NotifyState::Pending)),
-                _ => None,
-            })
+            .filter(|row| matches!(row.notify, NotifyState::Held | NotifyState::HeldUndelivered))
+            .map(|row| row.id.clone())
             .collect();
-        for (row, notify) in held {
+        for row in held {
             if let Some(row) = self.row_mut(&row) {
-                row.notify = notify;
+                row.notify = NotifyState::None;
             }
         }
         self.settle(now);
@@ -1073,8 +1188,10 @@ impl Engine {
 
     /// The periodic pass.
     pub fn tick(&mut self, now: &Now) {
+        self.clock_at = now.at;
         self.release_if_due(now);
         self.settle(now);
+        self.track_watching(now);
     }
 
     pub fn config_get(&self, key: &str) -> Result<Value> {
@@ -1091,10 +1208,16 @@ impl Engine {
             self.dirty.meta = true;
         }
         let was_hidden = self.data.config.bot_comments == BotComments::Hide;
+        let teams_were_off = !self.data.config.include_team_requests;
         self.data.config = config;
         self.dirty.config = true;
         if was_hidden && self.data.config.bot_comments != BotComments::Hide {
             self.mark_bot_comments_read();
+        }
+        if teams_were_off && self.data.config.include_team_requests {
+            self.data.fetch.team_requests_on_at = now.at;
+            self.dirty.fetch = true;
+            self.mark_team_requests_read();
         }
         self.settle(now);
         self.config_get(key)
@@ -1117,9 +1240,29 @@ impl Engine {
         }
     }
 
+    /// Team review requests recorded while the setting was off return as read.
+    fn mark_team_requests_read(&mut self) {
+        let rows: Vec<String> = self
+            .data
+            .rows
+            .values()
+            .filter(|row| row.team && (row.unread || row.seen_pending))
+            .map(|row| row.id.clone())
+            .collect();
+        for id in rows {
+            if let Some(row) = self.row_mut(&id) {
+                row.unread = false;
+                row.seen_pending = false;
+            }
+        }
+    }
+
     pub fn scope_add(&mut self, owner: &str, now: &Now) -> Result<()> {
         if owner.eq_ignore_ascii_case(PUBLIC) {
             return Err(CmdError::Invalid("public cannot be added".into()));
+        }
+        if owner.eq_ignore_ascii_case(NOTIFICATIONS) {
+            return Err(CmdError::Invalid("notifications cannot be added".into()));
         }
         if owner.is_empty() {
             return Err(CmdError::Invalid("owner is empty".into()));
@@ -1141,6 +1284,9 @@ impl Engine {
                 watch_started_at: now.at,
                 updated_at: None,
                 dot: false,
+                kind: None,
+                name: None,
+                fetched_at: None,
             });
         self.start_watch(&id, now);
         self.settle(now);
@@ -1176,9 +1322,33 @@ impl Engine {
             self.data.baselines.remove(&comment);
             self.dirty.baselines.insert(comment);
         }
+        // The next Reaction fetch sets the baselines again without rows.
+        for own in self.data.fetch.own.values_mut() {
+            if prs.contains(&own.pr_id) {
+                own.baseline_done = false;
+            }
+        }
+        self.dirty.fetch = true;
     }
 
-    pub fn scope_remove(&mut self, owner: &str) -> Result<()> {
+    /// The Keychain account `scope_remove` would delete, without removing.
+    pub fn scope_token_account(&self, owner: &str) -> Result<Option<String>> {
+        if owner.eq_ignore_ascii_case(PUBLIC) {
+            return Err(CmdError::Invalid("public cannot be removed".into()));
+        }
+        let key = self.require_scope(owner)?.to_lowercase();
+        let registered = self
+            .data
+            .fetch
+            .tokens
+            .get(&key)
+            .is_some_and(|token| token.registered);
+        Ok(registered.then(|| scope_account(&key)))
+    }
+
+    /// Returns the Keychain account to delete: only a scope with a recorded
+    /// token registration has one. docs/tasks/M2.md, "Token registration".
+    pub fn scope_remove(&mut self, owner: &str) -> Result<Option<String>> {
         if owner.eq_ignore_ascii_case(PUBLIC) {
             return Err(CmdError::Invalid("public cannot be removed".into()));
         }
@@ -1187,7 +1357,25 @@ impl Engine {
             scope.removed = true;
         }
         self.open.remove(&id);
-        Ok(())
+        let key = id.to_lowercase();
+        let registered = self
+            .data
+            .fetch
+            .tokens
+            .get(&key)
+            .is_some_and(|token| token.registered);
+        Ok(registered.then(|| scope_account(&key)))
+    }
+
+    /// The Keychain entry is gone: forget the registration.
+    pub fn token_removed(&mut self, owner: &str) {
+        if let Some(token) = self.data.fetch.tokens.get_mut(&owner.to_lowercase()) {
+            *token = TokenRec {
+                target: token.target.clone(),
+                ..TokenRec::default()
+            };
+            self.dirty.fetch = true;
+        }
     }
 
     pub fn scope_enable(&mut self, scope: &str, now: &Now) -> Result<()> {
@@ -1257,25 +1445,35 @@ impl Engine {
             return Vec::new();
         }
         let mut out = self.summaries(released, now, Summary::BackFromSnooze);
+        out.extend(self.deliver(fresh, now));
+        out
+    }
+
+    /// DESIGN.md, "macOS notifications": per scope, one would-be individual
+    /// notification goes out as it is, two or more become one summary. The
+    /// Reaction rows of one comment from one fetch are one notification.
+    fn deliver(&mut self, ids: Vec<String>, now: &Now) -> Vec<proto::Notification> {
         let mut groups: Vec<(String, Vec<String>)> = Vec::new();
-        for id in fresh {
+        // Gated before grouping, so a row cleared by the gate counts for
+        // nothing below.
+        for id in ids {
             let Some(scope) = self.gate(&id) else {
                 continue;
             };
-            let comment = self
+            let same_fetch = |row: &RowRec| (row.comment_id.clone(), row.occurred_at);
+            let reaction = self
                 .data
                 .rows
                 .get(&id)
                 .filter(|row| row.kind == RowKind::Reaction)
-                .and_then(|row| row.comment_id.clone());
-            let group = comment.as_ref().and_then(|comment| {
+                .map(same_fetch);
+            let group = reaction.as_ref().and_then(|key| {
                 groups.iter_mut().find(|(group_scope, rows)| {
                     *group_scope == scope
                         && rows.first().is_some_and(|first| {
-                            self.data
-                                .rows
-                                .get(first)
-                                .is_some_and(|row| row.comment_id.as_ref() == Some(comment))
+                            self.data.rows.get(first).is_some_and(|row| {
+                                row.kind == RowKind::Reaction && same_fetch(row) == *key
+                            })
                         })
                 })
             });
@@ -1284,15 +1482,27 @@ impl Engine {
                 None => groups.push((scope, vec![id])),
             }
         }
+        let mut by_scope: BTreeMap<String, Vec<Vec<String>>> = BTreeMap::new();
         for (scope, rows) in groups {
-            if let Some(notification) = self.single(&scope, rows, now) {
-                out.push(notification);
+            by_scope.entry(scope).or_default().push(rows);
+        }
+        let mut out = Vec::new();
+        for (scope, groups) in by_scope {
+            if groups.len() == 1 {
+                let rows = groups.into_iter().next().unwrap_or_default();
+                if let Some(notification) = self.single(&scope, rows, now) {
+                    out.push(notification);
+                }
+            } else {
+                let rows: Vec<String> = groups.into_iter().flatten().collect();
+                out.push(self.summary_of(&scope, rows, now, Summary::NewEvents));
             }
         }
         out
     }
 
-    /// The summaries an app gets when it connects.
+    /// What an app gets when it connects: undelivered rows, grouped like any
+    /// delivery (DESIGN.md, "Notification decisions").
     pub fn pending_summaries(&mut self, now: &Now) -> Vec<proto::Notification> {
         let pending: Vec<(String, String, bool)> = self
             .data
@@ -1318,7 +1528,7 @@ impl Engine {
                 rows.push(id);
             }
         }
-        self.summaries(rows, now, Summary::NewEvents)
+        self.deliver(rows, now)
     }
 
     /// One summary per scope, in scope order.
@@ -1334,47 +1544,61 @@ impl Engine {
                 by_scope.entry(scope).or_default().push(id);
             }
         }
-        let mut out = Vec::new();
-        for (scope, rows) in by_scope {
-            let prs: BTreeSet<&str> = rows
-                .iter()
-                .filter_map(|id| self.data.rows.get(id))
-                .map(|row| row.pr_id.as_str())
-                .collect();
-            let pr_count = prs.len();
-            let name = self.display_name(&scope);
-            let (title, body) = match summary {
-                Summary::NewEvents => (
-                    format!("{name} · {}", plural(rows.len(), "new event", "new events")),
-                    format!("In {}", plural(pr_count, "PR", "PRs")),
-                ),
-                Summary::BackFromSnooze => (
-                    format!("{name} · Back from Snooze"),
-                    format!("{} had new events", plural(pr_count, "PR", "PRs")),
-                ),
-            };
-            self.in_flight.extend(rows.iter().cloned());
-            out.push(proto::Notification {
-                id: self.next_notification_id(now),
-                kind: Lenient::Known(proto::NotificationType::Summary),
-                scope,
-                rows,
-                pr: None,
-                url: None,
-                title,
-                subtitle: None,
-                body: Some(body),
-            });
-        }
-        out
+        by_scope
+            .into_iter()
+            .map(|(scope, rows)| self.summary_of(&scope, rows, now, summary))
+            .collect()
     }
 
+    /// A summary of rows that already passed the gate.
+    fn summary_of(
+        &mut self,
+        scope: &str,
+        rows: Vec<String>,
+        now: &Now,
+        summary: Summary,
+    ) -> proto::Notification {
+        let prs: BTreeSet<&str> = rows
+            .iter()
+            .filter_map(|id| self.data.rows.get(id))
+            .map(|row| row.pr_id.as_str())
+            .collect();
+        let pr_count = prs.len();
+        let name = self.display_name(scope);
+        let (title, body) = match summary {
+            Summary::NewEvents => (
+                format!("{name} · {}", plural(rows.len(), "new event", "new events")),
+                format!("In {}", plural(pr_count, "PR", "PRs")),
+            ),
+            Summary::BackFromSnooze => (
+                format!("{name} · Back from Snooze"),
+                format!("{} had new events", plural(pr_count, "PR", "PRs")),
+            ),
+        };
+        self.in_flight.extend(rows.iter().cloned());
+        proto::Notification {
+            id: self.next_notification_id(now),
+            kind: Lenient::Known(proto::NotificationType::Summary),
+            scope: scope.to_string(),
+            rows,
+            pr: None,
+            url: None,
+            title,
+            subtitle: None,
+            body: Some(body),
+        }
+    }
+
+    /// `Public`, or the owner login as GitHub spells it once a fetch read it.
     fn display_name(&self, scope: &str) -> String {
         if scope == PUBLIC {
-            "Public".into()
-        } else {
-            scope.to_string()
+            return "Public".into();
         }
+        self.data
+            .scopes
+            .get(scope)
+            .and_then(|s| s.name.clone())
+            .unwrap_or_else(|| scope.to_string())
     }
 
     /// DESIGN.md, "macOS notifications": title, subtitle and body of a row, or
@@ -1437,15 +1661,18 @@ impl Engine {
     }
 }
 
+#[derive(Clone, Copy)]
 enum Summary {
     NewEvents,
     BackFromSnooze,
 }
 
-/// `<pr>` with the owner compared the way GitHub compares logins.
+/// `<pr>` with the owner and the repository compared without regard to case,
+/// the way GitHub resolves them (DESIGN.md, "CLI").
 fn same_pr(pr: &PrRec, key: &str) -> bool {
     key.split_once('/').is_some_and(|(owner, rest)| {
-        owner.eq_ignore_ascii_case(&pr.owner) && rest == format!("{}#{}", pr.repo, pr.number)
+        owner.eq_ignore_ascii_case(&pr.owner)
+            && rest.eq_ignore_ascii_case(&format!("{}#{}", pr.repo, pr.number))
     })
 }
 
@@ -1469,6 +1696,7 @@ fn row_defaults() -> RowRec {
         done: false,
         pruned: false,
         notify: NotifyState::None,
+        team: false,
     }
 }
 

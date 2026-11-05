@@ -3,6 +3,8 @@
 
 use crate::clock::Clock;
 use crate::daemon::{self, Daemon, Subscribed};
+use crate::github::{Api, Recorder};
+use crate::keychain::Keychain;
 use crate::logging;
 use anyhow::Context;
 use shiibar_gh_proto::paths::StateDir;
@@ -23,6 +25,9 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 /// DESIGN.md brief, "Files and constants".
 const PERIODIC_PASS: Duration = Duration::from_secs(30);
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+/// How often the real-time scheduler looks for a due fetch. The intervals
+/// themselves are minutes; this only bounds how late a fetch starts.
+const FETCH_CHECK: Duration = Duration::from_secs(5);
 /// No longer than the socket's own name: a Unix socket path has a small length
 /// limit, and a state directory that fits the socket must fit the draft too.
 const SOCKET_DRAFT: &str = "shiibar-ghd.new";
@@ -105,17 +110,128 @@ fn bind_socket(path: &Path) -> anyhow::Result<UnixListener> {
     Ok(listener)
 }
 
+/// Runs fetches one at a time: the schedule, `refresh`, `dev_clock_set` and
+/// `token_test` all go through `running`.
+pub struct Fetcher {
+    daemon: Shared,
+    /// `None` in a `dev-ingest` build without a test server: nothing is
+    /// fetched.
+    api: Option<Api>,
+    running: tokio::sync::Mutex<()>,
+}
+
+impl Fetcher {
+    /// One run of what is due, or of everything with `forced`.
+    async fn cycle(&self, forced: bool, only_scope: Option<String>) {
+        let Some(api) = &self.api else { return };
+        let Some(plan) = lock(&self.daemon).fetch_plan(forced, only_scope) else {
+            return;
+        };
+        let outcome = crate::fetch::run(api, &plan).await;
+        lock(&self.daemon).apply_fetch(outcome);
+    }
+
+    /// Fetch whatever is due now.
+    pub async fn run_due(&self) {
+        let _running = self.running.lock().await;
+        self.cycle(false, None).await;
+    }
+
+    /// DESIGN.md, "Wire format": `refresh` answers after the fetch and its
+    /// changes are applied. One that arrives during a fetch waits for it.
+    /// While fetching is stopped it answers at once with `rate_limited`.
+    async fn refresh(&self, scope: Option<String>) -> String {
+        let scope = match lock(&self.daemon).precheck(scope.as_deref()) {
+            Ok(scope) => scope,
+            Err(line) => return line,
+        };
+        if !lock(&self.daemon).stopped() {
+            match self.running.try_lock() {
+                Ok(_running) => self.cycle(true, scope.clone()).await,
+                Err(_) => {
+                    logging::debug(format_args!("refresh waits for the running fetch"));
+                    drop(self.running.lock().await);
+                }
+            }
+        }
+        lock(&self.daemon).refresh_answer(scope.as_deref())
+    }
+
+    /// `token_test`: never logged, and the token never leaves this call.
+    async fn token_test(&self, target: String, token: Option<String>) -> String {
+        let mut target = match lock(&self.daemon).test_target(&target, token) {
+            Ok(target) => target,
+            Err(line) => return line,
+        };
+        let Some(api) = &self.api else {
+            return daemon::test_failed("this build does not reach GitHub");
+        };
+        let _running = self.running.lock().await;
+        let mut rec = Recorder::new(target.now, target.cost_cap, target.costs.clone());
+        if let Some(classic) = target.classic.clone() {
+            let found = api
+                .rest(
+                    &mut rec,
+                    crate::model::NOTIFICATIONS,
+                    &classic,
+                    "/user",
+                    None,
+                )
+                .await;
+            target.viewer = found
+                .ok()
+                .and_then(|user| user.body["login"].as_str().map(str::to_string));
+            if target.viewer.is_none() {
+                target.classic = None;
+            }
+        }
+        let report = crate::tokentest::Tester {
+            api,
+            rec: &mut rec,
+            key: &target.key,
+            token: &target.token,
+            classic: target.team_token.as_deref(),
+        }
+        .run(&target.key, target.owner.as_deref())
+        .await;
+        lock(&self.daemon).test_done(&target, report, rec)
+    }
+}
+
+/// The real-time schedule. A fixed clock never moves, so a `dev-ingest`
+/// build with a fixed time fetches on `dev_clock_set` and `refresh` only.
+async fn schedule(fetcher: Arc<Fetcher>) {
+    let mut checks = tokio::time::interval(FETCH_CHECK);
+    loop {
+        checks.tick().await;
+        if !lock(&fetcher.daemon).clock_fixed() {
+            fetcher.run_due().await;
+        }
+    }
+}
+
 /// Run until a `shutdown` request.
-pub async fn run(dir: StateDir, clock: Clock) -> anyhow::Result<()> {
+pub async fn run(
+    dir: StateDir,
+    clock: Clock,
+    keychain: Arc<dyn Keychain>,
+    api: Option<Api>,
+) -> anyhow::Result<()> {
     let socket = dir.socket();
     check_socket_path(&socket)?;
     ensure_dir(&dir)?;
     let _lock = acquire_lock(&dir.lock())?;
     clear_stale_socket(&socket)?;
-    let daemon: Shared = Arc::new(Mutex::new(Daemon::start(dir, clock)?));
+    let daemon: Shared = Arc::new(Mutex::new(Daemon::start(dir, clock, keychain)?));
     let listener = bind_socket(&socket)?;
     logging::info(format_args!("listening on {}", socket.display()));
 
+    let fetcher = Arc::new(Fetcher {
+        daemon: daemon.clone(),
+        api,
+        running: tokio::sync::Mutex::new(()),
+    });
+    let scheduler = tokio::spawn(schedule(fetcher.clone()));
     let shutdown = Arc::new(Notify::new());
     let mut connections = JoinSet::new();
     let start = tokio::time::Instant::now() + PERIODIC_PASS;
@@ -130,6 +246,7 @@ pub async fn run(dir: StateDir, clock: Clock) -> anyhow::Result<()> {
                         connections.spawn(handle_connection(
                             stream,
                             daemon.clone(),
+                            fetcher.clone(),
                             shutdown.clone(),
                         ));
                     }
@@ -140,6 +257,7 @@ pub async fn run(dir: StateDir, clock: Clock) -> anyhow::Result<()> {
         }
     }
     drop(listener);
+    scheduler.abort();
     lock(&daemon).disconnect_all();
     // A write that finished before the shutdown still records its delivery.
     let drain = async { while connections.join_next().await.is_some() {} };
@@ -149,17 +267,43 @@ pub async fn run(dir: StateDir, clock: Clock) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn handle_connection(stream: UnixStream, daemon: Shared, shutdown: Arc<Notify>) {
+/// A line that may carry a token: its decode error never echoes it.
+fn carries_token(text: &str) -> bool {
+    text.contains("token_set") || text.contains("token_test")
+}
+
+async fn handle_connection(
+    stream: UnixStream,
+    daemon: Shared,
+    fetcher: Arc<Fetcher>,
+    shutdown: Arc<Notify>,
+) {
     let (read, mut write) = stream.into_split();
     let mut reader = tokio::io::BufReader::new(read);
     let mut text = String::new();
     let request = match reader.read_line(&mut text).await {
         Ok(0) => return,
-        Ok(_) => codec::decode_line::<Request>(&text).map_err(|e| e.to_string()),
+        Ok(_) => codec::decode_line::<Request>(&text).map_err(|e| {
+            if carries_token(&text) {
+                "malformed token request".to_string()
+            } else {
+                e.to_string()
+            }
+        }),
         Err(e) => Err(e.to_string()),
     };
+    drop(text);
     let response = match request {
         Err(e) => daemon::invalid_line(e),
+        Ok(Request::Refresh { scope }) => fetcher.refresh(scope).await,
+        Ok(Request::TokenTest { target, token }) => fetcher.token_test(target, token).await,
+        #[cfg(feature = "dev-ingest")]
+        Ok(request @ Request::DevClockSet { .. }) => {
+            // The fetches due at the new time run before the answer.
+            let response = lock(&daemon).handle(request);
+            fetcher.run_due().await;
+            response
+        }
         Ok(Request::Subscribe { client }) => {
             let subscribed = lock(&daemon).subscribe(client);
             run_subscriber(reader, write, daemon, subscribed).await;

@@ -39,6 +39,7 @@ pub fn pr(id: &str) -> IngestPr {
         updated_at: T0,
         is_private: false,
         requested_me: false,
+        requested_team: false,
         links: Links {
             review: format!("https://github.example/{id}/r"),
             checks: format!("https://github.example/{id}/c"),
@@ -115,6 +116,7 @@ impl H {
             actor: Some("alice".into()),
             text: Some(format!("text {id}")),
             comment_id: None,
+            team: false,
         }
     }
 
@@ -155,6 +157,7 @@ impl H {
             prs,
             events,
             reactions,
+            succeeded_scopes: None,
         };
         let result = self.engine.ingest(ingest, &self.now);
         self.advance(1);
@@ -176,6 +179,7 @@ impl H {
             prs: vec![],
             events: vec![],
             reactions: vec![],
+            succeeded_scopes: None,
         };
         self.engine.ingest(ingest, &self.now).unwrap();
     }

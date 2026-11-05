@@ -5,6 +5,19 @@ use shiibar_gh_proto as proto;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const PUBLIC: &str = "public";
+/// The token target and Keychain account of the classic PAT.
+pub const NOTIFICATIONS: &str = "notifications";
+/// The Keychain account of an owner scope is this plus the lowercase owner.
+pub const SCOPE_ACCOUNT_PREFIX: &str = "scope:";
+
+/// The Keychain account for a token record key: `notifications`, `public` or
+/// `scope:<lowercase owner>`. docs/tasks/M2.md, "Tokens and the Keychain".
+pub fn scope_account(key: &str) -> String {
+    match key {
+        NOTIFICATIONS | PUBLIC => key.to_string(),
+        owner => format!("{SCOPE_ACCOUNT_PREFIX}{}", owner.to_lowercase()),
+    }
+}
 
 macro_rules! stored_enum {
     ($name:ident { $($variant:ident = $text:literal),+ $(,)? }) => {
@@ -168,10 +181,15 @@ stored_enum!(NotifyState {
     Pending = "pending",
     // Made on a snoozed PR, waiting for the release.
     Held = "held",
-    // Undelivered before the PR was snoozed. A manual Unsnooze returns it to
-    // Pending, where Held is cleared.
+    // Undelivered before the PR was snoozed. The Return time release sends it
+    // with the summary; a manual Unsnooze clears it like Held.
     HeldUndelivered = "held_undelivered",
     Delivered = "delivered",
+});
+
+stored_enum!(ScopeKind {
+    Org = "org",
+    User = "user",
 });
 
 stored_enum!(BotComments {
@@ -190,6 +208,12 @@ pub struct ScopeRec {
     pub watch_started_at: i64,
     pub updated_at: Option<i64>,
     pub dot: bool,
+    /// `org` or `user` once a fetch read it; never set for Public.
+    pub kind: Option<ScopeKind>,
+    /// The owner login as GitHub spells it, once a fetch read it.
+    pub name: Option<String>,
+    /// The last time the search and status fetch of this scope succeeded.
+    pub fetched_at: Option<i64>,
 }
 
 /// The values a state change row compares against.
@@ -223,6 +247,7 @@ pub struct PrRec {
     pub updated_at: i64,
     pub is_private: bool,
     pub requested_me: bool,
+    pub requested_team: bool,
     pub link_review: String,
     pub link_checks: String,
     pub link_base: String,
@@ -231,6 +256,12 @@ pub struct PrRec {
     pub snoozed: bool,
     pub added_at: Option<i64>,
     pub prev: Option<PrevValues>,
+    /// When the card was last seen to disappear, recorded by the periodic
+    /// pass. `None` while the card shows.
+    pub gone_at: Option<i64>,
+    /// The viewer's comments and threads were collected since the PR last
+    /// became watched.
+    pub collected: bool,
 }
 
 impl PrRec {
@@ -256,6 +287,8 @@ pub struct RowRec {
     pub done: bool,
     pub pruned: bool,
     pub notify: NotifyState,
+    /// A Review requested row addressed to one of the viewer's teams.
+    pub team: bool,
 }
 
 /// The last counted reactions of one of the viewer's comments.
@@ -301,6 +334,113 @@ impl Default for Config {
     }
 }
 
+/// A token registration. The token itself lives in the Keychain only.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TokenRec {
+    /// `notifications`, `public` or a lowercase owner login.
+    pub target: String,
+    pub registered: bool,
+    /// The last fetch got a 401: fetching with it stops until it is replaced.
+    pub invalid: bool,
+    pub owner: Option<String>,
+    pub expires_at: Option<i64>,
+    /// Granted scopes of a classic PAT.
+    pub scopes: Option<Vec<String>>,
+    /// A response carried `X-GitHub-SSO`.
+    pub sso: bool,
+    pub sso_urls: Vec<String>,
+    pub last_test: Option<TestRec>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestRec {
+    pub at: i64,
+    pub results: Vec<TestItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestItem {
+    pub item: String,
+    /// `ok`, `failed` or `unverifiable`.
+    pub outcome: String,
+    pub missing: Option<String>,
+    pub reason: Option<String>,
+}
+
+/// A review thread whose comments become Reply rows after `from_at`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadRec {
+    pub id: String,
+    pub pr_id: String,
+    pub from_at: i64,
+}
+
+/// One of the viewer's comments, reviews, review comments or PR bodies.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnComment {
+    pub id: String,
+    pub pr_id: String,
+    pub url: String,
+    pub text: String,
+    pub created_at: i64,
+    /// The core already holds a baseline, or this comment starts from zero.
+    pub baseline_done: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TeamRec {
+    pub database_id: i64,
+    pub slug: String,
+}
+
+/// A PR whose events must be fetched again from `since`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetryRec {
+    pub pr_id: String,
+    pub since: i64,
+    pub failures: u32,
+}
+
+/// Remaining API budget as the last responses said.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Usage {
+    pub rest_remaining: Option<i64>,
+    pub rest_limit: Option<i64>,
+    pub graphql_remaining: Option<i64>,
+    pub graphql_limit: Option<i64>,
+    pub cost_per_poll: Option<i64>,
+}
+
+/// What the fetcher keeps between runs. docs/tasks/M2.md, "Fetcher and core".
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FetchData {
+    pub tokens: BTreeMap<String, TokenRec>,
+    /// Lowercase `owner/repo#number` to PR id.
+    pub pr_ids: BTreeMap<String, String>,
+    pub own: BTreeMap<String, OwnComment>,
+    pub threads: BTreeMap<String, ThreadRec>,
+    /// Scope id to the viewer's teams that scope's token can read.
+    pub teams: BTreeMap<String, Vec<TeamRec>>,
+    pub retries: BTreeMap<String, RetryRec>,
+    /// Notified PRs (lowercase `owner/repo#number`) not fetched yet.
+    pub pending_signals: BTreeSet<String>,
+    pub notif_last_modified: Option<String>,
+    pub notif_since: Option<String>,
+    pub poll_interval: Option<i64>,
+    /// GraphQL cost by time, for the last hour.
+    pub costs: Vec<(i64, i64)>,
+    pub usage: Usage,
+    /// Every fetch stops until this time.
+    pub stopped_until: Option<i64>,
+    pub stop_reason: Option<String>,
+    /// The last time Include requests to my teams was turned on.
+    pub team_requests_on_at: i64,
+    /// The last run where the notifications check was due, even if it
+    /// stopped before `/notifications`. With `poll_interval` it times the
+    /// next check across restarts.
+    pub notif_checked_at: Option<i64>,
+}
+
 /// Everything that outlives the process.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Data {
@@ -310,6 +450,7 @@ pub struct Data {
     pub baselines: BTreeMap<String, Baseline>,
     pub config: Config,
     pub last_release_at: i64,
+    pub fetch: FetchData,
 }
 
 /// What changed in [`Data`] since the last save.
@@ -321,6 +462,8 @@ pub struct Dirty {
     pub baselines: BTreeSet<String>,
     pub config: bool,
     pub meta: bool,
+    /// Everything in [`FetchData`]; saved as a whole.
+    pub fetch: bool,
 }
 
 impl Dirty {
@@ -331,5 +474,6 @@ impl Dirty {
             && self.baselines.is_empty()
             && !self.config
             && !self.meta
+            && !self.fetch
     }
 }
