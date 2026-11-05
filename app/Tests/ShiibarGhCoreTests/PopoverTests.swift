@@ -324,6 +324,17 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(loader.loads.sorted(), ["https://avatars.example/a", "https://avatars.example/fail"])
     }
 
+    func testOnlyHttpsAvatarsAreLoaded() async {
+        let loader = FakeImages()
+        let avatars = AvatarStore(loader: loader)
+        avatars.request("http://avatars.example/plain")
+        avatars.request("https://avatars.example/secure")
+        await settle()
+        XCTAssertEqual(loader.loads, ["https://avatars.example/secure"])
+        XCTAssertNil(avatars.image(for: "http://avatars.example/plain"))
+        XCTAssertEqual(avatars.image(for: "https://avatars.example/secure"), Data([1]))
+    }
+
     func testAFailedAvatarIsTriedAgainLater() async {
         let loader = FakeImages()
         var now = Date(timeIntervalSince1970: 0)

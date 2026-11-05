@@ -154,7 +154,7 @@ public final class LaunchAtLogin {
 
 /// Author avatars, loaded once per URL and kept in memory. A pending load
 /// shows the empty circle; a failed one too, and is tried again once
-/// `retryAfter` seconds have passed.
+/// `retryAfter` seconds have passed. Only `https` URLs are loaded.
 @MainActor
 public final class AvatarStore: ObservableObject {
     @Published public private(set) var images: [String: Data] = [:]
@@ -177,7 +177,7 @@ public final class AvatarStore: ObservableObject {
 
     public func request(_ url: String?) {
         guard let url, images[url] == nil, !loading.contains(url),
-              let parsed = URL(string: url), parsed.scheme == "https" || parsed.scheme == "http"
+              let parsed = URL(string: url), parsed.scheme == "https"
         else { return }
         if let failed = failedAt[url], clock().timeIntervalSince(failed) < retryAfter { return }
         loading.insert(url)
