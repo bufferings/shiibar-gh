@@ -125,7 +125,7 @@ Snooze は PR 単位。「この PR は翌朝まで確認しない」をアプ�
 - 個別の通知の文面は、タイトルが「スコープ名 · 行の種類」（`example-org · Mentioned`）、サブタイトルが `owner/repo #番号` と PR のタイトル、本文が行の本文である。Reaction の本文は種類ごとの件数とコメント（`👍3 🎉1 “...”`）とする。
 - 通知はスコープごとにまとめる。1 回の配信で、スコープの個別の通知になるはずのものが 2 件以上なら 1 件のまとめ通知にし、1 件なら個別の通知にする。同じコメントの Reaction をまとめた通知は 1 件と数える。通常の取得、アプリの停止のあと、再接続、不在のあとのすべてに適用し、スコープをまたいでまとめない。Snooze の解除は、件数に関係なく `Back from Snooze` の 1 件とする。
 - まとめ通知の文面は、Snooze の解除以外が `example-org · 5 new events` と `In 3 PRs`、Snooze の解除が `example-org · Back from Snooze` と `3 PRs had new events` である。N は行の数で、件数が 1 のときは `1 new event`、`In 1 PR`、`1 PR had new events` と単数形にする。
-- 不在 10 分以上のあとは、不在の間の通知を 1 回の配信として扱う。まとめ通知を押すとポップオーバーを開く。
+- 不在の間にデーモンから受け取った通知は表示せずにアプリが保持し、戻ったときに 1 回の配信として扱う。不在は、キーボードとマウスの最後の操作から 10 分以上たった間、画面がロックされている間、Mac がスリープしている間のいずれかである。操作の再開、ロックの解除、スリープからの復帰で戻ったとする。不在と判定する前に受け取った通知は、通常どおり表示する。まとめ通知を押すとポップオーバーを開く。
 - 個別の通知を押すと、その場所を Web で直接開く（ポップオーバーを経由しない。青い点の状態は変更しない）。ボタン Done／Snooze を付け、カードに行かずに処理できる。
 - Web を開く操作は「出来事を押す」の 1 種類（カードの行、Activity、macOS の通知、すべて同じ）。「押すとカードを選ぶ」操作は設けない。
 
@@ -164,6 +164,8 @@ Snooze は PR 単位。「この PR は翌朝まで確認しない」をアプ�
 - デーモン（Rust）：GitHub の取得、状態（表示済み、Done、Snooze、カードの追加時刻、設定、スコープ）の保持と保存、トークン（Keychain の読み書きはデーモンだけ）。Unix ソケットで NDJSON を話し、状態の変化を接続中のクライアントに push する。
 - CLI（Rust）：ソケット経由でデーモンを叩くだけのクライアント。
 - アプリ（Swift）：UI（メニューバー、ポップオーバー、設定画面）と macOS 通知。CLI と同じソケットでデーモンと話す。デーモンの起動・停止・更新時の入れ替えはアプリが行う（launchd は使用しない）。
+
+**配布と署名**。リリース版は GitHub Actions で Developer ID Application の証明書で署名し（hardened runtime）、Apple の公証を受けて GitHub Releases で公開する。利用者は Homebrew の cask（`bufferings/tap`）でインストールする。デーモンと CLI は `.app` の中に同梱し、cask が CLI のリンクを作成する。開発版は、ローカルで作成した固定の署名の ID で署名して `~/Applications` に配置する。Keychain の項目の許可は、保存したプログラムの designated requirement（DR）に結び付く。Developer ID の DR は Team ID と識別子で決まり、版を更新しても満たされるので、更新で許可のダイアログを表示しない。ad hoc の署名の DR は、その版のコードに結び付く（Apple TN3127 で確認。2026-11-05）。開発版とリリース版を切り替えたときは、DR が異なるので 1 回ダイアログを表示する。
 
 **UI**。SwiftUI。メニューバーのアイコンとポップオーバーの枠はまず MenuBarExtra で試し、バッジ付きアイコンとキーボード操作が足りなければ AppKit（NSStatusItem + NSPopover）。常時表示は NSPanel。ログイン時起動は SMAppService。
 
@@ -257,6 +259,20 @@ fine-grained PAT には Checks の権限がなく、statusCheckRollup の個々�
 | カードが 0 件 | 「Nothing needs you」。絞り込みで 0 件なら「Nothing matches」 |
 | Activity が 0 件 | 「No activity」 |
 
+**警告の表示**。スコープの `warnings` の種類ごとに、メニューバーの三角と、ポップオーバーの黄色い帯の文面を次のとおりにする。三角は、取得が止まっている、または止まりそうな種類だけに付ける。警告が複数あるときは、表の上の行から順に、すべてを 1 行ずつ帯に並べる。文面の `example-org token` は、通知用のトークンの警告（`token` が `notifications`）では `Notifications token` にする。`no_token` は帯ではなく「初回、失敗、空」の表のとおり表示する。
+
+| 種類 | 三角 | 帯の文面 |
+| --- | --- | --- |
+| `token_expiring` | 付ける | `example-org token expires in 5 days` |
+| `fetch_failed` | 付ける | `Couldn't reach GitHub · retrying in 1 min` |
+| `token_invalid` | 付ける | `example-org token is invalid · Replace it in Settings` |
+| `token_owner_mismatch` | 付ける | `example-org token belongs to another account · Replace it in Settings` |
+| `rate_limited` | 付ける | `Polling paused until 14:05 · API limit reached` |
+| `cost_near_cap` | 付けない | `GraphQL usage is over 80% of the cost cap` |
+| `sso_required` | 付けない | `SSO authorization required · Authorize in Settings` |
+| `permission_missing` | 付けない | `example-org token is missing a permission · Check it in Settings` |
+| `events_fetch_failed` | 付けない | `Couldn't fetch events for example-org/api #407 · retrying` |
+
 **通知 API の取り方**。If-Modified-Since と X-Poll-Interval に従う。`refresh` でも、前回の通知の確認から X-Poll-Interval の秒数がたっていなければ、通知の確認だけを省き、ほかの取得はする。GitHub のドキュメントが X-Poll-Interval に従うよう求めているためである。50 件ずつ、since は前回の最新。既読の同期はしない（GitHub 側の未読は触らない）。
 
 **CLI（AI 連携）**。`shiibar-gh` コマンドで、ポップオーバーと設定でできる操作をすべて持つ。アプリのローカル状態を読み書きするだけで、GitHub には書き込まない。AI エージェントは Bash から呼ぶ（--help と --json で足りる。CLI の存在と主な使い方は CLAUDE.md に数行記述する）。MCP は作成しない。
@@ -279,6 +295,13 @@ fine-grained PAT には Checks の権限がなく、statusCheckRollup の個々�
 `<pr>` は owner/repo#number、`<row>` は list／activity が出力する id、`<scope>` は owner のログイン名または `public`。owner とリポジトリ名の比較は大文字と小文字を区別しない（GitHub の API はログイン名とリポジトリ名を大文字と小文字の違いを問わず解決する。`gh api users/BUFFERINGS` と、GraphQL の `repository(owner:"RUST-LANG",name:"RUST")` が rust-lang/rust を返すことで確認）。`public` と `notifications` という owner は、大文字と小文字の違いを含めて `scope add` でエラーにする。
 
 **トークンの登録とテスト**。`token set` はトークンを保存するだけで、テスト取得をしない。未登録の owner への `token set` は `not_found` にする。`token test` は、標準入力にトークンがあればそのトークンを保存せずに検証し、なければ保存済みのトークンを検証する（設定画面の Test again）。テストは権限の有無だけを確かめ、項目ごとに 1 回問い合わせる。権限のエラーなら Failed と足りない権限の名前を、データがなくてもエラーでなければ OK を、確かめる対象がなければ確認できないことを返す。スコープと Public のトークンの項目は設定画面のテスト結果と同じ（PRs, reviews, comments、Checks、Behind base、Team membership、Merge queue）で、Team membership は org のスコープだけを対象とする（Public は classic PAT で確かめる）。classic PAT（`notifications`）の項目は Notifications、Team membership（read:org）、Scopes（notifications と read:org）の 3 つである。通知用のトークンと持ち主が異なることも結果に示す。`public` は Public の fine-grained PAT、`notifications` は classic PAT を対象とする。
+
+**設定画面でのスコープの追加とトークンの登録**。Add scope を押すと owner のログイン名の入力欄を表示し、入力した owner を `scope add` で追加する。続けてトークンの入力に進む。トークンの入力（追加したスコープ、Replace、未登録のトークン）は、Create token、Repository access の案内、トークンを貼り付ける欄、Save で構成する。Save はトークンを `token set` で保存し、続けて `token test` で保存済みのトークンをテストして結果を表示する。
+
+- Create token は GitHub のトークンの作成ページをブラウザで開く。通知用のトークンは `https://github.com/settings/tokens/new?scopes=notifications,read:org&description=shiibar-gh` である。owner のスコープは `https://github.com/settings/personal-access-tokens/new` に、`name`（`shiibar-gh <owner>`。40 文字を超える部分は切り捨てる）、`description`、`target_name`（owner）、権限 `pull_requests=read`、`contents=read`、`statuses=read`、`actions=read`、`metadata=read`、org では `members=read` を付ける。Public は `name`（`shiibar-gh public`）と `description` だけを付け、権限を付けない。期限は指定せず、GitHub の既定に従う（docs.github.com の managing-your-personal-access-tokens で、これらの引数を確認した。2026-11-05）
+- Repository access は URL で指定できない（同ページ）。案内には、owner のスコープでは All repositories、Public では Public repositories を選ぶことを示す
+- トークンが Repository access のどちらで作成されたかは、GitHub の API で読めない（docs.github.com/en/rest/orgs/personal-access-tokens の取得の API は「Only GitHub Apps can use this endpoint」である。2026-11-05 に確認）。設定画面は Repository access を表示しない
+- 登録済みのトークンは `••••••••••••`（12 文字の固定）で表示し、トークンの一部も表示しない。アプリはトークンを保持せず、Save で `token set` に渡したあとは破棄する
 
 ## デーモンの仕様
 
@@ -372,5 +395,4 @@ DB を読めない状態に移行したとき、およびその状態から `res
 - [ ] 1 つの PR が同時にマージキューに 2 回追加されることがあるか、取り除きが追加の順と異なる順に起きることがあるか（Removed from merge queue の行の、キューに追加した人の対応に影響する。ドキュメントに記載がなく、確認していない）
 - [ ] Notifications API（`/notifications`）の応答に X-GitHub-SSO が付くか（ドキュメントは REST の応答一般について記載している。所有者は SSO の organization に属していないので確認できない）
 - [ ] SSO の承認が必要という警告の動作全体（SSO を有効にした organization で確認できていない）
-- [ ] 再ビルドしたデーモンが Keychain のトークンを読み込むと、macOS が許可のダイアログ（「shiibar-ghd がキーチェーン内の "shiibar-gh" に保存されている機密情報を使用しようとしています」とログインのキーチェーンのパスワードの入力）を表示する。所有者の確認（2026-11-05）で、リリース版のデーモンで保存したトークンをデバッグ版のデーモンで読み込むと表示された。Keychain の項目の許可が、保存したプログラムの版に結び付くためである（Apple TN3127）。対処はアプリとデーモンの署名と合わせて決める
 - [ ] 通知の書き込みと配信の記録の間にデーモンが強制終了すると、次の再接続のまとめ通知で 1 件多く数える場合がある（M1 から引き継いだ既知の動作で、M2 では変更しない）
