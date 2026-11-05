@@ -1,5 +1,6 @@
-# The four local completion checks of docs/tasks/M1.md, on every push and PR.
-# `uses:` entries are pinned to full commit SHAs.
+# The local completion checks of docs/tasks/M3.md on every push and PR, plus
+# a style check of the cask template. `uses:` entries are pinned to full
+# commit SHAs.
 name: CI
 
 on:
@@ -25,6 +26,44 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+  app:
+    # The default Xcode of macos-15 (16.4) builds the package; see the
+    # comment in app/Package.swift.
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      # The app's tests drive a real daemon of the dev-ingest build, which
+      # never reaches the Keychain or GitHub (docs/tasks/M3.md, "How to test").
+      - name: Daemon for the app tests
+        run: cargo build -p shiibar-ghd --features dev-ingest --locked
+
+      - name: App tests
+        env:
+          SHIIBAR_GH_TEST_DAEMON: ${{ github.workspace }}/target/debug/shiibar-ghd
+        run: swift test --package-path app
+
+  cask:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      # The template rendered with dummy values. `brew style --cask` wants
+      # the cask inside a tap, so it goes into a throwaway one.
+      - name: Cask template style (brew style --cask)
+        run: |
+          tapdir="$(brew --repository)/Library/Taps/bufferings/homebrew-shiibar-gh-ci"
+          mkdir -p "$tapdir/Casks"
+          dummy_sha256="$(printf 'a%.0s' $(seq 1 64))"
+          sed \
+            -e "s/{{VERSION}}/0.0.0/g" \
+            -e "s/{{SHA256}}/$dummy_sha256/g" \
+            packaging/homebrew/shiibar-gh.rb \
+            > "$tapdir/Casks/shiibar-gh.rb"
+          brew style --cask "$tapdir/Casks/shiibar-gh.rb"
 
   deny:
     runs-on: ubuntu-latest
