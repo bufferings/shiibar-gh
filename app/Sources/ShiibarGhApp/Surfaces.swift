@@ -1,11 +1,9 @@
-// The menu bar icons, the popover and the always-on-top windows.
+// The menu bar icons, the popovers and the always-on-top windows.
 //
-// AppKit, not MenuBarExtra: the menu bar shows one icon per scope and the
-// number changes as scopes come and go, and Apple's MenuBarExtra
-// documentation describes one scene per item without a way to make items
-// from data. NSStatusItem (one per scope) with NSPopover and NSPanel give
-// the dynamic icons, the badge drawn into the image, and key handling
-// through an event monitor (DESIGN.md, "UI").
+// AppKit, not MenuBarExtra: the menu bar shows one icon per account and the
+// number changes as accounts come and go. NSStatusItem (one per account) with
+// NSPopover and NSPanel give the dynamic icons, the marks drawn into the
+// image, and key handling through an event monitor (DESIGN.md, "UI").
 
 import AppKit
 import Combine
@@ -20,20 +18,19 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
     private var items: [String: NSStatusItem] = [:]
     private var order: [String] = []
     private var fallback: NSStatusItem?
+    private var appearanceWatch: [ObjectIdentifier: NSKeyValueObservation] = [:]
     private let popover = NSPopover()
-    private var popoverScope: String?
+    private var popoverAccount: String?
     private var panels: [String: NSPanel] = [:]
     private var keyMonitor: Any?
     private var cancellables: Set<AnyCancellable> = []
-    /// The appearance of the popover and the windows, set explicitly (see
-    /// SurfaceAppearance.named).
     private var surfaceAppearance = NSAppearance(named: .aqua)
-    /// A scope's window opened or closed: the app is a regular app while one
-    /// exists.
     var onWindowOpened: ((String) -> Void)?
     var onWindowClosed: ((String) -> Void)?
     /// Called on ⌘Q while a surface has the focus.
     var onQuit: (() -> Void)?
+
+    static let popoverWidth: CGFloat = 460
 
     init(app: AppModel, avatars: AvatarStore, actions: @escaping (String?) -> SurfaceActions) {
         self.app = app
@@ -43,74 +40,86 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         popover.behavior = .transient
         popover.animates = false
         popover.delegate = self
-        app.$scopes
+        app.objectWillChange
             .receive(on: RunLoop.main)
-            .sink { [weak self] scopes in self?.update(scopes) }
+            .sink { [weak self] _ in DispatchQueue.main.async { self?.update() } }
             .store(in: &cancellables)
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
             return self.handleKey(event) ? nil : event
         }
-        update([])
+        update()
     }
 
-    /// Light or dark for the popover and every window, from the
-    /// Appearance setting and the Mac (AppDelegate).
     func applyAppearance(_ name: NSAppearance.Name) {
         surfaceAppearance = NSAppearance(named: name)
         popover.appearance = surfaceAppearance
         for panel in panels.values { panel.appearance = surfaceAppearance }
-        update(app.scopes)
+        update()
     }
 
-    /// The Dock icon or ⌘Tab: the open windows come to the front.
     func bringWindowsToFront() {
         for panel in panels.values { panel.orderFront(nil) }
     }
 
     // MARK: - Menu bar
 
-
-    private func update(_ scopes: [Scope]) {
-        let shown = scopes.filter(\.enabled)
-        let ids = shown.map(\.id)
+    private func update() {
+        let accounts = app.dbUnreadable ? [] : app.accounts
+        let ids = accounts.map(\.id)
         for id in items.keys where !ids.contains(id) {
-            if let item = items.removeValue(forKey: id) {
-                NSStatusBar.system.removeStatusItem(item)
-            }
-            if popoverScope == id { popover.performClose(nil) }
+            if let item = items.removeValue(forKey: id) { remove(item) }
+            if popoverAccount == id { popover.performClose(nil) }
         }
-        // A removed or disabled scope has no window either.
         for id in panels.keys where !ids.contains(id) {
             panels[id]?.close()
         }
         if ids != order {
-            // Recreate in order so the icons keep the order of the scopes.
-            for id in order { if let item = items.removeValue(forKey: id) { NSStatusBar.system.removeStatusItem(item) } }
+            // Recreate in order so the icons keep the order of the accounts.
+            for id in order { if let item = items.removeValue(forKey: id) { remove(item) } }
             order = ids
         }
-        for scope in shown.reversed() {
-            let item = items[scope.id] ?? makeItem(scope.id)
-            item.button?.image = MenuBarImage.make(
-                icon: BoardIcons.scope(scope), badge: scope.badge, dot: scope.dot,
-                triangle: Warnings.hasTriangle(scope) || app.dbUnreadable
-            )
-            item.button?.setAccessibilityLabel(accessibility(scope))
-            item.button?.toolTip = scope.name
+        // The rightmost icon is created first.
+        for account in accounts.reversed() {
+            let item = items[account.id] ?? makeItem(account.id)
+            draw(item, color: account.accountColor, marks: MenuBarMarks(account))
+            item.button?.setAccessibilityLabel(accessibility(account))
+            item.button?.toolTip = account.login
         }
-        if SurfaceRules.showsAppIcon(scopes) {
+        if SurfaceRules.showsAppIcon(accounts) {
             if fallback == nil {
                 let item = NSStatusBar.system.statusItem(withLength: MenuBarImage.width)
                 item.button?.target = self
                 item.button?.action = #selector(clickedFallback(_:))
                 item.button?.toolTip = "shiibar-gh"
+                watchAppearance(item)
                 fallback = item
             }
-            fallback?.button?.image = MenuBarImage.make(icon: BoardIcons.app, badge: 0, dot: false, triangle: app.dbUnreadable)
+            if let fallback {
+                draw(fallback, color: .none, marks: MenuBarMarks(count: 0, dot: false, triangle: app.dbUnreadable || app.keychain != .ok))
+            }
         } else if let fallback {
-            NSStatusBar.system.removeStatusItem(fallback)
+            remove(fallback)
             self.fallback = nil
-            if popoverScope == nil { popover.performClose(nil) }
+            if popoverAccount == nil { popover.performClose(nil) }
+        }
+    }
+
+    private func draw(_ item: NSStatusItem, color: AccountColor, marks: MenuBarMarks) {
+        guard let button = item.button else { return }
+        button.image = MenuBarImage.make(color: color, marks: marks, appearance: button.effectiveAppearance)
+    }
+
+    private func remove(_ item: NSStatusItem) {
+        appearanceWatch[ObjectIdentifier(item)] = nil
+        NSStatusBar.system.removeStatusItem(item)
+    }
+
+    /// A new image whenever the menu bar turns light or dark.
+    private func watchAppearance(_ item: NSStatusItem) {
+        guard let button = item.button else { return }
+        appearanceWatch[ObjectIdentifier(item)] = button.observe(\.effectiveAppearance) { [weak self] _, _ in
+            DispatchQueue.main.async { self?.update() }
         }
     }
 
@@ -120,59 +129,60 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         item.button?.action = #selector(clicked(_:))
         item.button?.identifier = NSUserInterfaceItemIdentifier(id)
         items[id] = item
+        watchAppearance(item)
         return item
     }
 
-    private func accessibility(_ scope: Scope) -> String {
-        var parts = [scope.name]
-        if scope.badge > 0 { parts.append("\(scope.badge) need action") }
-        if scope.dot { parts.append("unread") }
-        if Warnings.hasTriangle(scope) { parts.append("warning") }
+    private func accessibility(_ account: Account) -> String {
+        var parts = [account.login]
+        if account.unread { parts.append("unread") }
+        if account.todoCount > 0 { parts.append("\(account.todoCount) Todo") }
+        if Warnings.hasTriangle(account) { parts.append("warning") }
         return parts.joined(separator: ", ")
     }
 
     @objc private func clicked(_ sender: NSStatusBarButton) {
         guard let id = sender.identifier?.rawValue else { return }
-        toggle(scope: id, from: sender)
+        toggle(account: id, from: sender)
     }
 
     @objc private func clickedFallback(_ sender: NSStatusBarButton) {
-        toggle(scope: nil, from: sender)
+        toggle(account: nil, from: sender)
     }
 
     // MARK: - Popover
 
-    func showPopover(scope: String) {
-        guard let button = items[scope]?.button else { return }
-        if popover.isShown && popoverScope == scope { return }
-        toggle(scope: scope, from: button)
+    func showPopover(account: String) {
+        guard let button = items[account]?.button else { return }
+        if popover.isShown && popoverAccount == account { return }
+        toggle(account: account, from: button)
     }
 
-    private func toggle(scope: String?, from button: NSStatusBarButton) {
+    private func toggle(account: String?, from button: NSStatusBarButton) {
         if popover.isShown {
-            let same = popoverScope == scope
+            let same = popoverAccount == account
             popover.performClose(nil)
             if same { return }
         }
-        popoverScope = scope
+        popoverAccount = account
         let content: AnyView
-        if let scope {
-            content = AnyView(PopoverView(app: app, model: app.viewModel(scope), avatars: avatars, actions: actions(scope), surface: .popover))
-            popover.contentSize = NSSize(width: 400, height: 620)
+        if let account {
+            content = AnyView(PopoverView(app: app, model: app.viewModel(account), avatars: avatars, actions: actions(account), surface: .popover))
+            popover.contentSize = NSSize(width: Self.popoverWidth, height: 620)
         } else {
-            var noScope = actions(nil)
-            noScope.openWindow = nil
-            content = AnyView(NoScopesView(app: app, actions: noScope))
-            popover.contentSize = NSSize(width: 300, height: 180)
+            var none = actions(nil)
+            none.openWindow = nil
+            content = AnyView(NoAccountsView(app: app, actions: none))
+            popover.contentSize = NSSize(width: 300, height: 200)
         }
         popover.contentViewController = NSHostingController(rootView: content)
         popover.appearance = surfaceAppearance
         NSApp.activate(ignoringOtherApps: true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
-        if let scope {
-            app.surfaceDisplayed(.popover, scope: scope, true)
-            app.surfaceOpened(.popover, scope: scope)
+        if let account {
+            app.surfaceDisplayed(.popover, account: account, true)
+            app.surfaceOpened(.popover, account: account)
         }
     }
 
@@ -182,33 +192,33 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
 
     nonisolated func popoverDidClose(_ notification: Notification) {
         MainActor.assumeIsolated {
-            if let scope = popoverScope {
-                app.surfaceClosed(.popover, scope: scope)
-                app.surfaceDisplayed(.popover, scope: scope, false)
+            if let account = popoverAccount {
+                app.surfaceClosed(.popover, account: account)
+                app.surfaceDisplayed(.popover, account: account, false)
             }
-            popoverScope = nil
+            popoverAccount = nil
             popover.contentViewController = nil
         }
     }
 
     // MARK: - Window
 
-    func openWindow(scope: String) {
+    func openWindow(account: String) {
         popover.performClose(nil)
-        if let panel = panels[scope] {
+        if let panel = panels[account] {
             NSApp.activate(ignoringOtherApps: true)
             panel.makeKeyAndOrderFront(nil)
             return
         }
-        var surface = actions(scope)
+        var surface = actions(account)
         surface.openWindow = nil
-        let view = PopoverView(app: app, model: app.viewModel(scope), avatars: avatars, actions: surface, surface: .window)
+        let view = PopoverView(app: app, model: app.viewModel(account), avatars: avatars, actions: surface, surface: .window)
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 620),
+            contentRect: NSRect(x: 0, y: 0, width: Self.popoverWidth, height: 620),
             styleMask: [.titled, .closable, .resizable, .utilityWindow, .fullSizeContentView],
             backing: .buffered, defer: false
         )
-        panel.title = app.scope(scope)?.name ?? scope
+        panel.title = app.account(account)?.login ?? ""
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.level = .floating
@@ -218,37 +228,37 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         panel.isReleasedWhenClosed = false
         panel.appearance = surfaceAppearance
         panel.contentViewController = NSHostingController(rootView: view)
-        panel.setContentSize(NSSize(width: 400, height: 620))
-        panel.identifier = NSUserInterfaceItemIdentifier(scope)
+        panel.setContentSize(NSSize(width: Self.popoverWidth, height: 620))
+        panel.identifier = NSUserInterfaceItemIdentifier(account)
         panel.delegate = self
-        if let saved = app.store.windowFrame(scope: scope) {
+        if let saved = app.store.windowFrame(account: account) {
             panel.setFrame(NSRectFromString(saved), display: false)
         } else {
             panel.center()
         }
-        panels[scope] = panel
-        onWindowOpened?(scope)
-        app.surfaceDisplayed(.window, scope: scope, true)
+        panels[account] = panel
+        onWindowOpened?(account)
+        app.surfaceDisplayed(.window, account: account, true)
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
     }
 
-    private func scope(of notification: Notification) -> String? {
+    private func account(of notification: Notification) -> String? {
         (notification.object as? NSWindow)?.identifier?.rawValue
     }
 
     nonisolated func windowDidBecomeKey(_ notification: Notification) {
         MainActor.assumeIsolated {
-            if let scope = scope(of: notification), panels[scope] != nil {
-                app.surfaceOpened(.window, scope: scope)
+            if let account = account(of: notification), panels[account] != nil {
+                app.surfaceOpened(.window, account: account)
             }
         }
     }
 
     nonisolated func windowDidResignKey(_ notification: Notification) {
         MainActor.assumeIsolated {
-            if let scope = scope(of: notification), panels[scope] != nil {
-                app.surfaceClosed(.window, scope: scope)
+            if let account = account(of: notification), panels[account] != nil {
+                app.surfaceClosed(.window, account: account)
             }
         }
     }
@@ -262,31 +272,32 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
     }
 
     private func saveFrame(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow, let scope = scope(of: notification), panels[scope] != nil else { return }
-        app.store.setWindowFrame(NSStringFromRect(window.frame), scope: scope)
+        guard let window = notification.object as? NSWindow, let account = account(of: notification), panels[account] != nil else { return }
+        app.store.setWindowFrame(NSStringFromRect(window.frame), account: account)
     }
 
     nonisolated func windowWillClose(_ notification: Notification) {
         MainActor.assumeIsolated {
-            guard let scope = scope(of: notification), panels[scope] != nil else { return }
-            app.surfaceClosed(.window, scope: scope)
-            app.surfaceDisplayed(.window, scope: scope, false)
-            panels[scope] = nil
-            onWindowClosed?(scope)
+            guard let account = account(of: notification), panels[account] != nil else { return }
+            app.surfaceClosed(.window, account: account)
+            app.surfaceDisplayed(.window, account: account, false)
+            panels[account] = nil
+            onWindowClosed?(account)
         }
     }
 
     // MARK: - Keys
 
-    /// ↑↓, ⏎, D and S while the popover or a window has the focus, and ⌘Q.
+    /// ↑↓, ⏎, T, D and S while the popover or a window has the focus, and ⌘Q.
+    /// Keys typed into a text field are left alone.
     private func handleKey(_ event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let key = NSApp.keyWindow
-        let scope: String?
+        let account: String?
         if popover.isShown, key === popover.contentViewController?.view.window {
-            scope = popoverScope
+            account = popoverAccount
         } else if let window = key, let id = window.identifier?.rawValue, panels[id] === window {
-            scope = id
+            account = id
         } else {
             return false
         }
@@ -294,8 +305,9 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             onQuit?()
             return true
         }
-        guard let scope, flags.subtracting([.numericPad, .function]).isEmpty else { return false }
-        let model = app.viewModel(scope)
+        if key?.firstResponder is NSText { return false }
+        guard let account, flags.subtracting([.numericPad, .function]).isEmpty else { return false }
+        let model = app.viewModel(account)
         switch event.keyCode {
         case 126: model.press(.up)
         case 125: model.press(.down)
@@ -303,6 +315,7 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         default:
             switch event.charactersIgnoringModifiers?.lowercased() {
             case "d": model.press(.done)
+            case "t": model.press(.todo)
             case "s": model.press(.snooze)
             default: return false
             }

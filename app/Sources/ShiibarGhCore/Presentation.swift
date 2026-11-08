@@ -16,20 +16,19 @@ public enum RelativeTime {
         return days == 1 ? "1 day ago" : "\(days) days ago"
     }
 
-    /// The header line under the scope name.
+    /// The header line under the account name.
     public static func updated(_ updatedAt: Int64?, now: Int64) -> String {
         guard let updatedAt else { return "Not updated yet" }
         return "Updated " + ago(now - updatedAt)
     }
 
-    /// Whole minutes until `until`, rounded up, at least 1 (docs/tasks/M3.md,
-    /// "Menu bar and popover").
+    /// Whole minutes until `until`, rounded up, at least 1.
     public static func minutesUntil(_ until: Int64, now: Int64) -> Int64 {
         max(1, (until - now + 59) / 60)
     }
 
-    /// Whole days until `until`, rounded up, at least 1 (DESIGN.md, "Adding a
-    /// scope and registering a token in Settings": under a day is 1 day).
+    /// Whole days until `until`, rounded up, at least 1 (DESIGN.md, "Token
+    /// status": under a day is 1 day).
     public static func daysUntil(_ until: Int64, now: Int64) -> Int64 {
         max(1, (until - now + 86_399) / 86_400)
     }
@@ -38,107 +37,197 @@ public enum RelativeTime {
         count == 1 ? "1 day" : "\(count) days"
     }
 
-    /// "14:05" in the given time zone.
+    private static func format(_ at: Int64, _ pattern: String, _ timeZone: TimeZone) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = timeZone
+        formatter.dateFormat = pattern
+        return formatter.string(from: Date(timeIntervalSince1970: TimeInterval(at)))
+    }
+
+    /// "14:05".
     public static func clock(_ at: Int64, timeZone: TimeZone = .current) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = timeZone
-        formatter.dateFormat = "HH:mm"
-        return formatter.string(from: Date(timeIntervalSince1970: TimeInterval(at)))
+        format(at, "HH:mm", timeZone)
     }
 
-    /// "Mon 09:00", for "Snoozed until Mon 09:00".
+    /// "Mon 09:00", for "until Mon 09:00".
     public static func weekdayClock(_ at: Int64, timeZone: TimeZone = .current) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = timeZone
-        formatter.dateFormat = "EEE HH:mm"
-        return formatter.string(from: Date(timeIntervalSince1970: TimeInterval(at)))
+        format(at, "EEE HH:mm", timeZone)
     }
 
-    /// "2027-01-20", for token expiry dates in Settings.
+    /// "2027-01-20", for "Expires 2027-01-20".
     public static func date(_ at: Int64, timeZone: TimeZone = .current) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = timeZone
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: Date(timeIntervalSince1970: TimeInterval(at)))
+        format(at, "yyyy-MM-dd", timeZone)
     }
 }
 
 // MARK: - Warnings
 
+/// The button at the right of a banner line (DESIGN.md, "Showing warnings").
+public enum BannerButton: Equatable {
+    /// Settings with the account selected.
+    case settings
+    /// The Keychain dialog for `keychain_unavailable`.
+    case retry
+    /// The Keychain dialog for `tokens_unreadable`.
+    case resetTokens
+    /// Opens the SSO URL, else the token settings page.
+    case authorize(String)
+
+    public var title: String {
+        switch self {
+        case .settings: return "Settings…"
+        case .retry: return "Retry…"
+        case .resetTokens: return "Reset tokens…"
+        case .authorize: return "Authorize…"
+        }
+    }
+}
+
 public struct BannerLine: Equatable {
     public var kind: WarningKind
     public var text: String
+    public var button: BannerButton?
+
+    public init(kind: WarningKind, text: String, button: BannerButton?) {
+        self.kind = kind
+        self.text = text
+        self.button = button
+    }
+
+    /// The Keychain line of Settings and of the popover without accounts.
+    public static func keychain(_ dialog: KeychainDialog) -> BannerLine {
+        dialog.state == .unreadable
+            ? BannerLine(kind: .tokensUnreadable, text: dialog.title, button: .resetTokens)
+            : BannerLine(kind: .keychainUnavailable, text: dialog.title, button: .retry)
+    }
 }
 
 public enum Warnings {
-    /// The banner order of DESIGN.md, "Showing warnings": top row first.
-    public static let bannerOrder: [WarningKind] = [
-        .tokenExpiring, .fetchFailed, .tokenInvalid, .tokenOwnerMismatch, .rateLimited,
-        .costNearCap, .ssoRequired, .permissionMissing, .eventsFetchFailed,
-    ]
-
     /// The kinds that put the triangle on the menu bar icon: fetching has
     /// stopped or is about to.
     public static let triangleKinds: Set<WarningKind> = [
-        .tokenExpiring, .fetchFailed, .tokenInvalid, .tokenOwnerMismatch, .rateLimited,
+        .keychainUnavailable, .tokensUnreadable, .noToken, .tokenInvalid, .tokenExpiring, .fetchFailed, .rateLimited,
     ]
 
-    public static func hasTriangle(_ scope: Scope) -> Bool {
-        scope.warnings.contains { $0.kind.value.map(triangleKinds.contains) ?? false }
+    public static func hasTriangle(_ account: Account) -> Bool {
+        account.warnings.contains { $0.kind.value.map(triangleKinds.contains) ?? false }
     }
 
-    public static func needsToken(_ scope: Scope) -> Bool {
-        scope.warnings.contains { $0.kind.value == .noToken }
+    public static func button(_ warning: Warning, kind: WarningKind) -> BannerButton? {
+        switch kind {
+        case .keychainUnavailable: return .retry
+        case .tokensUnreadable: return .resetTokens
+        case .noToken, .tokenInvalid, .tokenExpiring, .scopeMissing: return .settings
+        case .ssoRequired: return .authorize(warning.url ?? CreateTokenURL.tokenSettings)
+        case .fetchFailed, .rateLimited, .graphqlNearLimit, .restNearLimit, .eventsFetchFailed: return nil
+        }
     }
 
-    /// Every warning as one banner line, in the order of the table.
-    /// `no_token` is not a banner: the popover shows its own state for it.
-    public static func banner(_ scope: Scope, now: Int64, timeZone: TimeZone = .current) -> [BannerLine] {
+    /// Every warning as one banner line, in the order of the table. Unknown
+    /// kinds are left out.
+    public static func banner(_ warnings: [Warning], now: Int64) -> [BannerLine] {
         var lines: [BannerLine] = []
-        for kind in bannerOrder {
-            for warning in scope.warnings where warning.kind.value == kind {
-                lines.append(BannerLine(kind: kind, text: text(warning, kind: kind, scope: scope, now: now, timeZone: timeZone)))
+        for kind in WarningKind.allCases {
+            for warning in warnings where warning.kind.value == kind {
+                lines.append(BannerLine(kind: kind, text: text(warning, kind: kind, now: now), button: button(warning, kind: kind)))
             }
         }
         return lines
     }
 
-    static func text(_ warning: Warning, kind: WarningKind, scope: Scope, now: Int64, timeZone: TimeZone) -> String {
-        let token = warning.token?.value == .notifications ? "Notifications token" : "\(scope.name) token"
+    /// The daemon's message, with the countdowns worked out again at `now`
+    /// (the message was written when the warning was made).
+    static func text(_ warning: Warning, kind: WarningKind, now: Int64) -> String {
         switch kind {
-        case .tokenExpiring:
-            let days = warning.until.map { RelativeTime.daysUntil($0, now: now) } ?? 1
-            return "\(token) expires in \(RelativeTime.days(days))"
         case .fetchFailed:
             let minutes = warning.until.map { RelativeTime.minutesUntil($0, now: now) } ?? 1
             return "Couldn't reach GitHub · retrying in \(minutes) min"
-        case .tokenInvalid:
-            return "\(token) is invalid · Replace it in Settings"
-        case .tokenOwnerMismatch:
-            return "\(token) belongs to another account · Replace it in Settings"
-        case .rateLimited:
-            guard let until = warning.until else { return "Polling paused · API limit reached" }
-            return "Polling paused until \(RelativeTime.clock(until, timeZone: timeZone)) · API limit reached"
-        case .costNearCap:
-            return "GraphQL usage is over 80% of the cost cap"
-        case .ssoRequired:
-            return "SSO authorization required · Authorize in Settings"
-        case .permissionMissing:
-            return "\(token) is missing a permission · Check it in Settings"
-        case .eventsFetchFailed:
-            return "Couldn't fetch events for \(prLabel(warning.message)) · retrying"
-        case .noToken:
-            return "Add a token in Settings"
+        case .tokenExpiring:
+            guard let until = warning.until else { break }
+            return "Token expires in " + RelativeTime.days(RelativeTime.daysUntil(until, now: now))
+        case .keychainUnavailable where warning.message.isEmpty:
+            return KeychainDialog.unavailable.title
+        case .tokensUnreadable where warning.message.isEmpty:
+            return KeychainDialog.unreadable.title
+        default:
+            break
         }
+        return warning.message
     }
 
     /// `owner/repo#123` as `owner/repo #123`, the way cards show it.
     public static func prLabel(_ key: String) -> String {
         guard let hash = key.lastIndex(of: "#") else { return key }
         return key[..<hash] + " " + key[hash...]
+    }
+}
+
+// MARK: - Keychain dialogs
+
+/// DESIGN.md, "When the Keychain cannot be read".
+public struct KeychainDialog: Equatable {
+    public var state: KeychainState
+    public var title: String
+    public var message: String
+    /// The default button.
+    public var action: String
+    public var cancel = "Not now"
+
+    public static let unavailable = KeychainDialog(
+        state: .unavailable, title: "Couldn't read tokens from Keychain",
+        message: "If macOS asked whether shiibar-gh may use the Keychain, allow it, then retry.", action: "Retry"
+    )
+    public static let unreadable = KeychainDialog(
+        state: .unreadable, title: "Saved tokens are unreadable",
+        message: "Reset deletes the Keychain item. You enter every token again. PRs, Done marks, snoozes and settings stay.",
+        action: "Reset tokens"
+    )
+
+    public static func `for`(_ state: KeychainState) -> KeychainDialog? {
+        switch state {
+        case .ok: return nil
+        case .unavailable: return unavailable
+        case .unreadable: return unreadable
+        }
+    }
+
+    /// The state the Keychain warnings in a `refresh` answer tell.
+    public static func state(in warnings: [Warning]) -> KeychainState {
+        if warnings.contains(where: { $0.kind.value == .tokensUnreadable }) { return .unreadable }
+        if warnings.contains(where: { $0.kind.value == .keychainUnavailable }) { return .unavailable }
+        return .ok
+    }
+}
+
+/// When the Keychain dialog shows by itself: once each time `keychain` turns
+/// from `ok` (or from the other failure) into a failure, on a snapshot or a
+/// `keychain_changed` (docs/tasks/M4.md, "App"). A Retry that fails shows it
+/// again; that goes through `again`.
+public struct KeychainPrompt: Equatable {
+    public private(set) var state: KeychainState = .ok
+    private var prompted: KeychainState?
+
+    public init() {}
+
+    /// The dialog to show for a new state, if any.
+    public mutating func update(_ new: KeychainState) -> KeychainDialog? {
+        state = new
+        guard new != .ok else {
+            prompted = nil
+            return nil
+        }
+        guard prompted != new else { return nil }
+        prompted = new
+        return KeychainDialog.for(new)
+    }
+
+    /// After a Retry or a Reset: the dialog again while the state is still
+    /// a failure.
+    public mutating func again(_ new: KeychainState) -> KeychainDialog? {
+        state = new
+        prompted = new == .ok ? nil : new
+        return KeychainDialog.for(new)
     }
 }
 
@@ -151,8 +240,9 @@ public enum RowText {
         text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).joined(separator: " ")
     }
 
-    /// `ReactionContent` values in display order, with their emoji (the same
-    /// table as the daemon's notification text).
+    /// Every `ReactionContent` value the daemon sends as a `counts` key (the
+    /// GraphQL enum; the public schema lists exactly these eight, checked
+    /// 2026-11-09), in display order, with its emoji.
     public static let reactions: [(String, String)] = [
         ("THUMBS_UP", "👍"), ("THUMBS_DOWN", "👎"), ("LAUGH", "😄"), ("HOORAY", "🎉"),
         ("CONFUSED", "😕"), ("HEART", "❤️"), ("ROCKET", "🚀"), ("EYES", "👀"),
@@ -165,29 +255,37 @@ public enum RowText {
             if let count = counts[key], count > 0 { parts.append("\(emoji)\(count)") }
         }
         for key in counts.keys.sorted() where !reactions.contains(where: { $0.0 == key }) {
-            if let count = counts[key], count > 0 { parts.append("\(key.lowercased())\(count)") }
+            // A value this build does not know: its name, then the count.
+            if let count = counts[key], count > 0 {
+                parts.append(key.lowercased().replacingOccurrences(of: "_", with: " ") + " \(count)")
+            }
         }
         return parts.joined(separator: " ")
     }
 
+    /// The label of a row. Main.html shows a team's review request as
+    /// "Review requested" with "for frontend team" under it; the other kinds
+    /// use the names of the event table, Merged / Closed split in two.
     public static func label(_ kind: Lenient<RowKind>) -> String {
         guard let kind = kind.value else {
             return kind.rawText.replacingOccurrences(of: "_", with: " ").capitalizedFirst
         }
         switch kind {
-        case .reviewRequested: return "Review requested"
+        case .reviewRequested, .teamReviewRequested: return "Review requested"
         case .mentioned: return "Mentioned"
-        case .comment, .botComment: return "Comment"
-        case .reply: return "Reply"
-        case .addedToMergeQueue: return "Added to merge queue"
-        case .removedFromMergeQueue: return "Removed from merge queue"
-        case .merged: return "Merged"
-        case .closed: return "Closed"
+        case .teamMentioned: return "My team mentioned"
+        case .comment: return "Comment"
+        case .reply, .replyMentioned: return "Reply"
+        case .reaction: return "Reaction"
+        case .approved: return "Approved"
+        case .changesRequested: return "Changes requested"
         case .checksFailed: return "Checks failed"
         case .conflicts: return "Conflicts"
-        case .changesRequested: return "Changes requested"
         case .mergeable: return "Mergeable"
-        case .reaction: return "Reaction"
+        case .mergeQueueAdded: return "Added to merge queue"
+        case .mergeQueueRemoved: return "Removed from merge queue"
+        case .merged: return "Merged"
+        case .closed: return "Closed"
         }
     }
 }
@@ -199,13 +297,13 @@ extension String {
     }
 }
 
-/// How a row looks: the board's `.ev`, `.ev-act` and `.ev-dim` classes.
+/// How a row looks: the board's `.ev` classes.
 public enum RowStyle: Equatable {
-    /// A Needs action row not done yet: orange, with an empty checkbox.
+    /// A Todo row not done yet: orange, with an empty checkbox.
     case toDo
-    /// A Needs action row made Done: faded, with a green checkbox.
+    /// A Todo row made Done: faded, with a green checkbox.
     case done
-    /// An event row, or a Review requested row that is no longer to do.
+    /// Any other row: its kind's icon.
     case event
 }
 
@@ -222,7 +320,7 @@ public struct RowPresentation: Equatable {
     /// Read rows and Done rows show faded.
     public var dimmed: Bool
     public var unreadDot: Bool
-    /// The checkbox shows for Needs action rows only.
+    /// The checkbox shows for Todo rows only.
     public var hasCheckbox: Bool
 
     public init(_ row: Row, now: Int64) {
@@ -232,11 +330,10 @@ public struct RowPresentation: Equatable {
         let actor = row.actor.flatMap { $0.isEmpty ? nil : $0 }
         let text = row.text.map(RowText.normalize).flatMap { $0.isEmpty ? nil : $0 }
         switch kind {
-        case .merged, .closed, .addedToMergeQueue:
-            // The board: "by alice" under the label, the time alone beside it.
+        case .merged, .closed, .mergeQueueAdded, .approved:
             meta = time
             body = text ?? actor.map { "by \($0)" }
-        case .reviewRequested, .checksFailed, .changesRequested, .conflicts, .mergeable:
+        case .reviewRequested, .teamReviewRequested, .checksFailed, .changesRequested, .conflicts, .mergeable:
             meta = time
             body = text
         case .reaction:
@@ -247,7 +344,7 @@ public struct RowPresentation: Equatable {
             body = text
         }
         counts = kind == .reaction ? row.counts.map(RowText.counts).flatMap { $0.isEmpty ? nil : $0 } : nil
-        if row.isNeedsAction {
+        if row.todo {
             style = row.done ? .done : .toDo
             hasCheckbox = true
         } else {
@@ -255,8 +352,50 @@ public struct RowPresentation: Equatable {
             hasCheckbox = false
         }
         unreadDot = row.unread
-        dimmed = row.done || !row.unread
-        bodyLines = (kind == .mentioned && row.unread) ? 3 : 1
+        // DESIGN.md, "Todo rows" and "Review requested rows": a Done row, a
+        // read row that is not Todo, and a Review requested row that is not
+        // Todo (any longer) show faded; an open Todo row never does, read or
+        // not. The blue dot stays on an unread one.
+        let request = kind == .reviewRequested || kind == .teamReviewRequested
+        dimmed = row.done || (!row.todo && (!row.unread || request))
+        bodyLines = ((kind == .mentioned || kind == .teamMentioned) && row.unread) ? 3 : 1
+    }
+}
+
+// MARK: - API usage
+
+/// One bar of the usage line (DESIGN.md, "Rate limits").
+public struct UsageBar: Equatable {
+    public var label: String
+    /// "1,240 / 5,000", or "– / –" before any value.
+    public var text: String
+    /// Used over limit, 0...1.
+    public var fraction: Double
+    /// Less than 20% left: the orange bar.
+    public var warn: Bool
+
+    public init(label: String, limit: Limit?) {
+        self.label = label
+        guard let limit, limit.limit > 0 else {
+            text = "\u{2013} / \u{2013}"
+            fraction = 0
+            warn = false
+            return
+        }
+        text = Self.number(limit.used) + " / " + Self.number(limit.limit)
+        fraction = min(1, max(0, Double(limit.used) / Double(limit.limit)))
+        warn = (limit.limit - limit.used) * 100 < limit.limit * 20
+    }
+
+    public static func bars(_ rateLimit: RateLimit?) -> [UsageBar] {
+        [UsageBar(label: "GraphQL API", limit: rateLimit?.graphql), UsageBar(label: "REST API", limit: rateLimit?.rest)]
+    }
+
+    static func number(_ value: Int64) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.locale = Locale(identifier: "en_US")
+        return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
     }
 }
 
@@ -275,92 +414,163 @@ public struct TokenLabel: Equatable {
 }
 
 public enum TokenState {
-    /// The one label beside a token, the first that applies (DESIGN.md,
-    /// "Adding a scope and registering a token in Settings"). `warnings`
-    /// are the warnings about this token. A test with items that could not
-    /// be checked but no Failed counts as Verified.
-    public static func label(status: TokenStatus?, warnings: [Warning], now: Int64) -> TokenLabel {
-        guard let status, status.registered else { return TokenLabel("No token", .neutral) }
-        let kinds = warnings.compactMap { $0.kind.value }
+    /// The state text of the Token row: the first that applies (DESIGN.md,
+    /// "Token status"), nil when all is well.
+    public static func label(account: Account, keychain: KeychainState, checking: Bool, now: Int64) -> TokenLabel? {
+        if checking { return TokenLabel("Checking…", .neutral) }
+        if keychain != .ok { return TokenLabel("Keychain unavailable", .caution) }
+        let kinds = Set(account.warnings.compactMap { $0.kind.value })
+        if !account.token.registered || kinds.contains(.noToken) { return TokenLabel("No token", .neutral) }
         if kinds.contains(.tokenInvalid) { return TokenLabel("Invalid", .bad) }
-        if kinds.contains(.tokenOwnerMismatch) { return TokenLabel("Belongs to another account", .bad) }
-        if let until = expiring(status: status, warnings: warnings, now: now) {
-            return TokenLabel("Expires in \(RelativeTime.days(RelativeTime.daysUntil(until, now: now)))", .caution)
+        if let warning = account.warnings.first(where: { $0.kind.value == .tokenExpiring }) {
+            let until = warning.until ?? account.token.expiresAt ?? now
+            return TokenLabel("Expires in " + RelativeTime.days(RelativeTime.daysUntil(until, now: now)), .caution)
         }
-        guard let test = status.lastTest else { return TokenLabel("Not tested", .neutral) }
-        if test.results.contains(where: { $0.outcome.value == .failed }) {
-            return TokenLabel("Missing permission", .caution)
-        }
-        return TokenLabel("Verified", .good)
-    }
-
-    /// When the token expires, if that is within the 7 days of DESIGN.md,
-    /// "Tokens": from a `token_expiring` warning, else from the token's own
-    /// `expires_at`, so the notifications token shows it without any scope.
-    static func expiring(status: TokenStatus, warnings: [Warning], now: Int64) -> Int64? {
-        if let warning = warnings.first(where: { $0.kind.value == .tokenExpiring }) {
-            return warning.until ?? status.expiresAt ?? now
-        }
-        if let at = status.expiresAt, at > now, at - now <= 7 * 86_400 {
-            return at
-        }
+        if kinds.contains(.scopeMissing) { return TokenLabel("Missing scope", .caution) }
+        if kinds.contains(.ssoRequired) { return TokenLabel("SSO authorization required", .caution) }
         return nil
     }
 
-    /// The SSO link of a token that got `sso_required`: the authorization
-    /// URL GitHub sent, else the token settings page (DESIGN.md, "Tokens").
-    /// Nil while there is no such warning.
-    public static func ssoLink(_ status: TokenStatus?) -> String? {
-        guard let status, status.registered,
-              status.warnings.contains(where: { $0.kind.value == .ssoRequired }) || !status.ssoUrls.isEmpty
-        else { return nil }
-        return status.ssoUrls.first ?? CreateTokenURL.tokenSettings
+    /// The description under Token: "Expires 2027-02-01", none without an
+    /// expiry.
+    public static func expiry(_ account: Account, timeZone: TimeZone = .current) -> String? {
+        account.token.expiresAt.map { "Expires " + RelativeTime.date($0, timeZone: timeZone) }
     }
 
-    /// The `settings_status` entry of a scope's token. The daemon names it
-    /// after the scope's display name (`public` for Public); the id is not
-    /// read.
-    public static func status(of scope: Scope, in tokens: [TokenStatus]) -> TokenStatus? {
-        let target = scope.isPublic ? "public" : scope.name
-        return tokens.first { $0.target.caseInsensitiveCompare(target) == .orderedSame }
-    }
+    /// Edit… shows unless the Keychain cannot be read.
+    public static func canEdit(keychain: KeychainState) -> Bool { keychain == .ok }
 
-    /// The whole line of one test result: "OK · Checks".
-    public static func resultLine(_ result: TestResult) -> String {
-        resultText(result).status + " · " + result.item
-    }
-
-    /// "OK", "Failed (Actions)" or "Can't check", before " · <item>".
-    public static func resultText(_ result: TestResult) -> (status: String, tone: TokenLabelTone) {
-        switch result.outcome.value {
-        case .ok: return ("OK", .good)
-        case .failed: return ("Failed" + (result.missing.map { " (\($0))" } ?? ""), .bad)
-        case .unverifiable, .none: return ("Can't check", .neutral)
-        }
-    }
-
-    /// The masked token: always 12 bullets, never a part of the token.
+    /// The masked saved token in Edit…: always 12 bullets.
     public static let masked = String(repeating: "\u{2022}", count: 12)
 }
 
-// MARK: - Settings: scopes
+/// How one result of a test reads (Sheets.html).
+public struct TestResultLine: Equatable {
+    public enum Tone: Equatable { case good, bad, caution, neutral }
+    public var label: String
+    public var text: String
+    public var tone: Tone
+    /// `Authorize…` with its URL.
+    public var authorize: String?
 
-public enum ScopeText {
-    /// The Remove confirmation (DESIGN.md, "Adding a scope and registering a
-    /// token in Settings").
-    public static func removeTitle(_ name: String) -> String {
-        "Remove \(name)?"
+    public init(_ result: TestResult) {
+        label = result.label
+        authorize = nil
+        switch result.outcome.value {
+        case .ok:
+            if result.item.value == .account {
+                text = result.text
+                tone = .neutral
+            } else {
+                text = "\u{2713} " + result.text
+                tone = .good
+            }
+        case .failed:
+            text = "\u{2717} " + result.text
+            tone = .bad
+        case .ssoRequired:
+            text = result.text
+            tone = .caution
+            authorize = result.url ?? CreateTokenURL.tokenSettings
+        case .cantCheck, nil:
+            text = result.text
+            tone = .neutral
+        }
     }
 
-    public static func removeDetail(_ name: String) -> String {
-        "Its token is deleted from the Keychain. Add \(name) again to get its Done and Snooze back."
+    /// "You can save now and test again later." shows when some item is not
+    /// OK.
+    public static func allOK(_ results: [TestResult]) -> Bool {
+        results.allSatisfy { $0.outcome.value == .ok }
+    }
+
+    /// Save is off while the Account item failed.
+    public static func accountFailed(_ results: [TestResult]) -> Bool {
+        results.contains { $0.item.value == .account && $0.outcome.value == .failed }
+    }
+}
+
+public enum CreateTokenURL {
+    /// DESIGN.md, "Tokens": a classic PAT with repo, notifications and
+    /// read:org; no expiry, so GitHub's default applies.
+    public static let classic =
+        "https://github.com/settings/tokens/new?scopes=repo,notifications,read:org&description=shiibar-gh"
+    public static let tokenSettings = "https://github.com/settings/tokens"
+}
+
+// MARK: - Settings: texts
+
+public enum SettingsText {
+    public static let colorDetail = "Tints this account's icon and the dot next to its name."
+    public static let removeAccountDetail =
+        "Deletes this account and its owners from shiibar-gh: token, PRs, Done marks, snoozes and settings. Nothing changes on GitHub."
+    public static let removeOwnerDetail =
+        "Deletes this owner from shiibar-gh: its PRs, Done marks, snoozes and settings. Nothing changes on GitHub."
+    public static let enabledDetail = "Off hides this owner's section and stops fetching."
+    public static let notifyDetail = "Off keeps the table below but sends no notifications for this owner."
+    public static let skipDraftsDetail = "Events on draft PRs stay in the list but never notify."
+    public static let copyDetail = "Replaces the table above with that owner's."
+    public static let reposDetail = "Hidden: not in the list. List only: in the list, but no Todo and no notifications."
+    public static let usersDetail = "Same for a user. Bots are users too."
+    public static let ssoNote =
+        "If an organization enforces SAML SSO, authorize the token for it after creating it (Configure SSO on the token page)."
+    public static let saveLater = "You can save now and test again later."
+    public static let ownerNotFound = "Owner not found"
+    public static let unreachable = "Couldn't reach GitHub"
+
+    public static func removeAccountTitle(_ login: String) -> String { "Remove \(login)?" }
+    public static func removeOwnerTitle(_ name: String) -> String { "Remove \(name)?" }
+    public static func notifyTitle(_ owner: String) -> String { "Notify for \(owner)" }
+    public static func tokenSheetTitle(_ login: String) -> String { "Token for \(login)" }
+    public static func addOwnerTitle(_ login: String) -> String { "Add owner to \(login)" }
+    public static func copyTitle(_ owner: String) -> String { "Copy table to \(owner)" }
+    public static func copyNote(_ owner: String) -> String {
+        "Replaces \(owner)'s table. The switches and Exclusions stay as they are."
+    }
+
+    /// The event table's rows, grouped as DESIGN.md, "Row kinds and states".
+    public static let eventGroups: [(String, [EventKind])] = [
+        ("Reviews and mentions", [.reviewRequested, .teamReviewRequested, .mentioned, .teamMentioned]),
+        ("Comments", [.comment, .reply, .replyMentioned, .reaction]),
+        ("My pull requests", [.approved, .changesRequested, .checksFailed, .conflicts, .mergeable]),
+        ("Any pull request", [.mergeQueueAdded, .mergeQueueRemoved, .mergedClosed]),
+    ]
+
+    public static func eventTitle(_ kind: EventKind) -> String {
+        switch kind {
+        case .reviewRequested: return "Review requested"
+        case .teamReviewRequested: return "Review requested to my team"
+        case .mentioned: return "Mentioned"
+        case .teamMentioned: return "My team mentioned"
+        case .comment: return "Comment on my PR"
+        case .reply: return "Reply in a thread I commented in"
+        case .replyMentioned: return "Reply in a thread I was mentioned in"
+        case .reaction: return "Reaction to my comment"
+        case .approved: return "Approved"
+        case .changesRequested: return "Changes requested"
+        case .checksFailed: return "Checks failed"
+        case .conflicts: return "Conflicts"
+        case .mergeable: return "Mergeable"
+        case .mergeQueueAdded: return "Added to merge queue"
+        case .mergeQueueRemoved: return "Removed from merge queue"
+        case .mergedClosed: return "Merged / Closed"
+        }
+    }
+
+    /// The message under the owner field of Add owner.
+    public static func addOwnerError(_ error: Error) -> String {
+        guard let error = error as? DaemonError else { return "\(error)" }
+        switch error.code?.value {
+        case .notFound: return ownerNotFound
+        case .unreachable: return unreachable
+        default: return error.message
+        }
     }
 }
 
 /// Return time: the daemon's `HH:MM` and the hour and minute a time picker
 /// edits.
 public enum ReturnTime {
-    /// Hour and minute of `HH:MM`; nil for anything else.
     public static func parse(_ text: String?) -> (hour: Int, minute: Int)? {
         guard let text else { return nil }
         let parts = text.split(separator: ":", omittingEmptySubsequences: false)
@@ -375,8 +585,6 @@ public enum ReturnTime {
         String(format: "%02d:%02d", hour, minute)
     }
 
-    /// A date carrying the time in `calendar`, for a picker that uses the
-    /// same calendar: a fixed day, so no daylight saving gap moves it.
     public static func date(_ text: String?, calendar: Calendar) -> Date {
         let (hour, minute) = parse(text) ?? (9, 0)
         let components = DateComponents(year: 2001, month: 1, day: 1, hour: hour, minute: minute)
@@ -396,69 +604,6 @@ public enum ReturnTime {
     }
 }
 
-// MARK: - Settings: Create token
-
-public enum OwnerType: String, Equatable, CaseIterable {
-    case organization, personal, `public`
-
-    public var title: String {
-        switch self {
-        case .organization: return "Organization"
-        case .personal: return "Personal account"
-        case .public: return "Public"
-        }
-    }
-}
-
-public enum CreateTokenURL {
-    public static let classic =
-        "https://github.com/settings/tokens/new?scopes=notifications,read:org&description=shiibar-gh"
-    public static let tokenSettings = "https://github.com/settings/tokens"
-    static let description = "Read-only access for shiibar-gh"
-
-    /// The fine-grained PAT page with what URL parameters can fill in
-    /// (docs.github.com, managing-your-personal-access-tokens, "Pre-filling
-    /// fine-grained personal access token details using URL parameters":
-    /// `name` up to 40 characters, `description`, `target_name`, and one
-    /// parameter per permission). No `expires_in`: GitHub's default applies.
-    public static func fineGrained(owner: String?, type: OwnerType) -> String {
-        var items: [URLQueryItem] = []
-        switch type {
-        case .public:
-            items.append(URLQueryItem(name: "name", value: "shiibar-gh public"))
-            items.append(URLQueryItem(name: "description", value: description))
-        case .organization, .personal:
-            let owner = owner ?? ""
-            items.append(URLQueryItem(name: "name", value: String("shiibar-gh \(owner)".prefix(40))))
-            items.append(URLQueryItem(name: "description", value: description))
-            items.append(URLQueryItem(name: "target_name", value: owner))
-            for permission in ["pull_requests", "contents", "statuses", "actions", "metadata"] {
-                items.append(URLQueryItem(name: permission, value: "read"))
-            }
-            if type == .organization {
-                items.append(URLQueryItem(name: "members", value: "read"))
-            }
-        }
-        var components = URLComponents(string: "https://github.com/settings/personal-access-tokens/new")!
-        components.queryItems = items
-        return components.url!.absoluteString
-    }
-
-    /// Repository access cannot be set by URL; the token form says which to
-    /// pick.
-    public static func repositoryAccessHint(_ type: OwnerType) -> String {
-        type == .public
-            ? "Under Repository access, choose Public repositories"
-            : "Under Repository access, choose All repositories"
-    }
-
-    /// The type a scope's token is made for when it is replaced.
-    public static func ownerType(of scope: Scope) -> OwnerType {
-        if scope.isPublic { return .public }
-        return scope.kind?.value == .org ? .organization : .personal
-    }
-}
-
 // MARK: - Empty states
 
 public enum EmptyState {
@@ -467,8 +612,9 @@ public enum EmptyState {
     }
 
     public static let activity = "No activity"
-    public static let noToken = "Add a token in Settings"
     public static let unreadable = "Couldn't read saved state"
-    public static let noScopesTitle = "No scopes yet"
-    public static let noScopesDetail = "Add a scope in Settings"
+    public static let noAccountsTitle = "No accounts yet"
+    public static let noAccountsDetail = "Add an account in Settings"
+    public static let noOwnersTitle = "No owners yet"
+    public static let noOwnersDetail = "Add an owner in Settings"
 }

@@ -61,6 +61,7 @@ final class URLSessionImageLoader: ImageLoading {
 /// subtitle and body are the daemon's; a notification has no buttons
 /// (DESIGN.md, "macOS notifications"). A click goes to `onClick`.
 final class UserNotificationPresenter: NSObject, NotificationPresenting, UNUserNotificationCenterDelegate {
+    /// The type, the account id and the URL of a clicked notification.
     var onClick: ((NotificationType?, String, String?) -> Void)?
     private var center: UNUserNotificationCenter { UNUserNotificationCenter.current() }
 
@@ -84,7 +85,7 @@ final class UserNotificationPresenter: NSObject, NotificationPresenting, UNUserN
         content.sound = .default
         content.userInfo = [
             "type": notification.type.rawText,
-            "scope": notification.scope,
+            "account": notification.account,
             "url": notification.url ?? "",
         ]
         // No trigger: shown right away.
@@ -104,10 +105,10 @@ final class UserNotificationPresenter: NSObject, NotificationPresenting, UNUserN
     ) {
         let info = response.notification.request.content.userInfo
         let type = (info["type"] as? String).flatMap(NotificationType.init(rawValue:))
-        let scope = info["scope"] as? String ?? ""
+        let account = info["account"] as? String ?? ""
         let url = (info["url"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         DispatchQueue.main.async { [weak self] in
-            self?.onClick?(type, scope, url)
+            self?.onClick?(type, account, url)
         }
         completionHandler()
     }
@@ -118,4 +119,36 @@ final class UserNotificationPresenter: NSObject, NotificationPresenting, UNUserN
 final class NoNotifications: NotificationPresenting {
     func requestAuthorization() {}
     func present(_ notification: DaemonNotification) {}
+}
+
+/// The Keychain dialogs of DESIGN.md, "When the Keychain cannot be read":
+/// an alert with the default button first and Not now.
+@MainActor
+final class KeychainAlerts {
+    private var showing = false
+    private var queued: KeychainDialog?
+
+    func show(_ dialog: KeychainDialog, act: @escaping (KeychainDialog) -> Void) {
+        guard !showing else {
+            queued = dialog
+            return
+        }
+        showing = true
+        let alert = NSAlert()
+        alert.messageText = dialog.title
+        alert.informativeText = dialog.message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: dialog.action)
+        alert.addButton(withTitle: dialog.cancel)
+        NSApp.activate(ignoringOtherApps: true)
+        let answer = alert.runModal()
+        showing = false
+        if answer == .alertFirstButtonReturn {
+            act(dialog)
+        }
+        if let next = queued {
+            queued = nil
+            if next != dialog { show(next, act: act) }
+        }
+    }
 }

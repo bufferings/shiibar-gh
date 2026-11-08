@@ -1,5 +1,5 @@
-// The popover of one scope, also the content of its window
-// (docs/design/Main.html, MainSnoozed.html and PublicScope.html).
+// The popover of one account, also the content of its window
+// (docs/design/Main.html, Activity.html, Keychain.html, Sheets.html).
 
 import AppKit
 import ShiibarGhCore
@@ -16,7 +16,7 @@ struct SurfaceActions {
     var menuItems: [IconMenuItem?] {
         [
             IconMenuItem("About shiibar-gh", action: about),
-            IconMenuItem("Settings…") { openSettings(SurfaceRules.headerSettings) },
+            IconMenuItem("Settings…") { openSettings(.general) },
             nil,
             IconMenuItem("Quit shiibar-gh", action: quit),
         ]
@@ -25,23 +25,19 @@ struct SurfaceActions {
 
 struct PopoverView: View {
     @ObservedObject var app: AppModel
-    @ObservedObject var model: ScopeViewModel
+    @ObservedObject var model: AccountViewModel
     @ObservedObject var avatars: AvatarStore
     var actions: SurfaceActions
     var surface: Surface
 
-    var scope: Scope? { app.scope(model.scope) }
-
-    var theme: ScopeTheme {
-        Palette.theme(scope.map(Palette.color(of:)) ?? .gray)
-    }
+    var account: Account? { app.account(model.accountId) }
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             content(now: Int64(context.date.timeIntervalSince1970))
         }
-        .frame(minWidth: 360, minHeight: 300)
-        .background(theme.background.color)
+        .frame(minWidth: 400, minHeight: 300)
+        .background(Palette.background.color)
         .foregroundColor(Palette.text.color)
         .font(.system(size: 13))
     }
@@ -50,28 +46,29 @@ struct PopoverView: View {
     func content(now: Int64) -> some View {
         VStack(spacing: 0) {
             Header(
-                name: scope?.name ?? model.scope, isPublic: scope?.isPublic ?? false,
-                updated: app.dbUnreadable ? nil : RelativeTime.updated(scope?.updatedAt, now: now),
-                theme: theme, actions: actions, refresh: { app.refresh(model.scope) }
+                login: account?.login ?? "", color: account?.accountColor ?? .none,
+                updated: app.dbUnreadable ? nil : RelativeTime.updated(account?.updatedAt, now: now),
+                actions: actions, refresh: { app.refresh(model.accountId) }
             )
-            switch SurfaceRules.content(scope: scope, dbUnreadable: app.dbUnreadable) {
+            switch SurfaceRules.content(account: account, dbUnreadable: app.dbUnreadable) {
             case .unreadable:
                 CenteredMessage(title: EmptyState.unreadable, button: "Reset") { app.reset() }
-            case .noToken:
-                CenteredMessage(title: EmptyState.noToken, button: "Settings") {
-                    actions.openSettings(SurfaceRules.noTokenSettings)
+            case .noOwners:
+                BannerView(lines: Warnings.banner(account?.warnings ?? [], now: now)) { app.bannerButton($0, account: model.accountId) }
+                CenteredMessage(title: EmptyState.noOwnersTitle, detail: EmptyState.noOwnersDetail, button: "Settings") {
+                    actions.openSettings(.account(model.accountId))
                 }
             case .list:
-                if let scope {
-                    let lines = Warnings.banner(scope, now: now)
-                    if !lines.isEmpty {
-                        Banner(lines: lines.map(\.text)) { actions.openSettings(SurfaceRules.bannerSettings) }
-                    }
+                BannerView(lines: Warnings.banner(account?.warnings ?? [], now: now)) { app.bannerButton($0, account: model.accountId) }
+                Tabs(tab: $model.tab)
+                if model.tab == .prs {
+                    FilterRow(filter: $model.filter)
+                } else if let account {
+                    OwnerButtons(account: account, model: model)
                 }
-                Tabs(tab: $model.tab, theme: theme)
-                ChipBar(chips: $model.chips)
-                ListArea(app: app, model: model, avatars: avatars, theme: theme, now: now, surface: surface)
-                KeyHints(theme: theme)
+                ListArea(app: app, model: model, avatars: avatars, now: now, surface: surface)
+                UsageRow(bars: UsageBar.bars(account?.rateLimit))
+                KeyHints(hints: model.hints)
             }
         }
     }
@@ -79,11 +76,20 @@ struct PopoverView: View {
 
 // MARK: - Header
 
+/// The account color's dot (Main.html `.adot`).
+struct AccountDot: View {
+    var color: AccountColor
+    var size: CGFloat = 10
+
+    var body: some View {
+        Circle().fill(color.dotColor).frame(width: size, height: size)
+    }
+}
+
 struct Header: View {
-    var name: String
-    var isPublic: Bool
+    var login: String
+    var color: AccountColor
     var updated: String?
-    var theme: ScopeTheme
     var actions: SurfaceActions
     var refresh: () -> Void
 
@@ -91,10 +97,8 @@ struct Header: View {
         HStack(spacing: 6) {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 8) {
-                    Text(name)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(isPublic ? Palette.publicName.color : Palette.text.color)
-                    Text("shiibar-gh").font(.system(size: 11)).foregroundColor(Palette.secondary.color)
+                    AccountDot(color: color)
+                    Text(login).font(.system(size: 14, weight: .semibold)).lineLimit(1)
                 }
                 if let updated {
                     Text(updated).font(.system(size: 11)).foregroundColor(Palette.secondary.color)
@@ -102,39 +106,42 @@ struct Header: View {
             }
             Spacer(minLength: 0)
             if let openWindow = actions.openWindow {
-                HeaderButton(icon: BoardIcons.window, size: 15, label: "Open in window", theme: theme, action: openWindow)
+                HeaderButton(icon: BoardIcons.window, size: 15, label: "Open in window", action: openWindow)
             }
-            HeaderButton(icon: BoardIcons.refresh, size: 16, label: "Refresh", theme: theme, action: refresh)
-            HeaderButton(icon: BoardIcons.settings, size: 16, label: "Settings", theme: theme) { actions.openSettings(SurfaceRules.headerSettings) }
-            MenuIconButton(icon: BoardIcons.chevron, label: "More", theme: theme, items: actions.menuItems)
+            HeaderButton(icon: BoardIcons.refresh, size: 16, label: "Refresh", action: refresh)
+            HeaderButton(icon: BoardIcons.settings, size: 16, label: "Settings") { actions.openSettings(.general) }
+            MenuIconButton(icon: BoardIcons.chevron, label: "More", items: actions.menuItems)
         }
         .padding(EdgeInsets(top: 12, leading: 16, bottom: 0, trailing: 10))
     }
 }
 
-struct Banner: View {
-    var lines: [String]
-    var settings: () -> Void
+/// The yellow banner: one line per warning, each with its button
+/// (DESIGN.md, "Showing warnings").
+struct BannerView: View {
+    var lines: [BannerLine]
+    var press: (BannerButton) -> Void
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            IconView(icon: BoardIcons.warning, size: 14, color: Palette.bannerText.color)
-                .padding(.top, 1)
-            VStack(alignment: .leading, spacing: 3) {
+        if !lines.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                    Text(line).fixedSize(horizontal: false, vertical: true)
+                    HStack(alignment: .center, spacing: 8) {
+                        IconView(icon: BoardIcons.warning, size: 14, color: Palette.bannerText.color)
+                        Text(line.text).fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if let button = line.button {
+                            SettingsButton(title: button.title) { press(button) }
+                        }
+                    }
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            Button("Settings", action: settings)
-                .buttonStyle(.plain)
-                .foregroundColor(Palette.link.color)
+            .font(.system(size: 12))
+            .foregroundColor(Palette.bannerText.color)
+            .padding(EdgeInsets(top: 7, leading: 10, bottom: 7, trailing: 10))
+            .background(RoundedRectangle(cornerRadius: 8).fill(Palette.bannerBackground.color))
+            .padding(EdgeInsets(top: 8, leading: 12, bottom: 0, trailing: 12))
         }
-        .font(.system(size: 12))
-        .foregroundColor(Palette.bannerText.color)
-        .padding(EdgeInsets(top: 7, leading: 10, bottom: 7, trailing: 10))
-        .background(RoundedRectangle(cornerRadius: 8).fill(Palette.bannerBackground.color))
-        .padding(EdgeInsets(top: 8, leading: 12, bottom: 0, trailing: 12))
     }
 }
 
@@ -158,11 +165,10 @@ struct CenteredMessage: View {
     }
 }
 
-// MARK: - Tabs and chips
+// MARK: - Tabs and the filter row
 
 struct Tabs: View {
     @Binding var tab: PopoverTab
-    var theme: ScopeTheme
 
     var body: some View {
         HStack(spacing: 2) {
@@ -171,7 +177,7 @@ struct Tabs: View {
             Spacer()
         }
         .padding(EdgeInsets(top: 8, leading: 12, bottom: 0, trailing: 12))
-        .overlay(alignment: .bottom) { Rectangle().fill(theme.border.color).frame(height: 1) }
+        .overlay(alignment: .bottom) { Rectangle().fill(Palette.border.color).frame(height: 1) }
     }
 
     func tabButton(_ title: String, _ value: PopoverTab) -> some View {
@@ -190,80 +196,102 @@ struct Tabs: View {
     }
 }
 
-struct ChipBar: View {
-    @Binding var chips: Chips
+/// Todo (a push-in button) and the segment, both standard macOS controls
+/// whose on state takes the system accent color (DESIGN.md, "Screens").
+struct FilterRow: View {
+    @Binding var filter: FilterState
 
     var body: some View {
         HStack(spacing: 8) {
-            Chip(title: "Needs action", on: chips.needsAction, action: true) { chips.needsAction.toggle() }
-            HStack(spacing: 0) {
-                Chip(title: "My PRs", on: chips.author == .mine, corners: .left) { chips.pick(.mine) }
-                Chip(title: "Others' PRs", on: chips.author == .others, corners: .right) { chips.pick(.others) }
+            Toggle(isOn: $filter.todo) { Text("Todo") }
+                .toggleStyle(.button)
+                .controlSize(.small)
+                .fixedSize()
+            Picker("", selection: $filter.segment) {
+                ForEach(PrFilter.allCases, id: \.self) { Text(FilterState.title($0)).tag($0) }
             }
-            Spacer(minLength: 0)
-            Chip(title: "Show snoozed", on: chips.showSnoozed) { chips.showSnoozed.toggle() }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .controlSize(.small)
+            .font(.system(size: 11))
         }
         .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
     }
 }
 
-struct Chip: View {
-    enum Corners { case both, left, right }
-    var title: String
-    var on: Bool
-    var action = false
-    var corners: Corners = .both
-    var tap: () -> Void
+/// Activity: one push-in button per owner; none on is every owner.
+struct OwnerButtons: View {
+    var account: Account
+    @ObservedObject var model: AccountViewModel
 
     var body: some View {
-        let look = ChipLook(on: on, action: action)
-        let fill = look.fill.color
-        let border = look.border.color
-        let text = look.text.color
-        let shape = UnevenRoundedRectangle(
-            topLeadingRadius: corners == .right ? 0 : 12, bottomLeadingRadius: corners == .right ? 0 : 12,
-            bottomTrailingRadius: corners == .left ? 0 : 12, topTrailingRadius: corners == .left ? 0 : 12
-        )
-        Button(action: tap) {
-            Text(look.label(title))
-                .font(.system(size: 11))
-                .foregroundColor(text)
-                .padding(EdgeInsets(top: 3, leading: 9, bottom: 3, trailing: 9))
-                .background(shape.fill(fill))
-                .overlay(shape.stroke(border, lineWidth: 1))
-                .contentShape(shape)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(ActivityOwners.buttons(account)) { owner in
+                    Toggle(isOn: Binding(
+                        get: { model.isOwnerOn(owner.id) },
+                        set: { _ in model.toggleOwner(owner.id) }
+                    )) { Text(owner.displayName) }
+                    .toggleStyle(.button)
+                    .controlSize(.small)
+                    .fixedSize()
+                }
+            }
+            .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
         }
-        .buttonStyle(.plain)
-        .fixedSize()
+    }
+}
+
+/// The API usage line: two thin bars (DESIGN.md, "Rate limits").
+struct UsageRow: View {
+    var bars: [UsageBar]
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(Array(bars.enumerated()), id: \.offset) { index, bar in
+                if index > 0 { Spacer().frame(width: 10) }
+                Text(bar.label).fontWeight(.semibold).foregroundColor(Palette.strongText.color)
+                GeometryReader { geometry in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Palette.usageTrack.color)
+                        Capsule().fill(bar.warn ? Palette.usageWarn.color : Palette.usageFill.color)
+                            .frame(width: geometry.size.width * bar.fraction)
+                    }
+                }
+                .frame(width: 64, height: 5)
+                Text(bar.text)
+            }
+            Spacer(minLength: 0)
+        }
+        .font(.system(size: 10))
+        .foregroundColor(Palette.waiting.color)
+        .lineLimit(1)
+        .padding(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+        .overlay(alignment: .top) { Rectangle().fill(Palette.border.color).frame(height: 1) }
     }
 }
 
 struct KeyHints: View {
-    var theme: ScopeTheme
+    var hints: [KeyHint]
 
     var body: some View {
         HStack(spacing: 10) {
-            hint("↑↓", "Move")
-            hint("⏎", "Open")
-            hint("D", "Done")
-            hint("S", "Snooze")
+            ForEach(Array(hints.enumerated()), id: \.offset) { _, hint in
+                HStack(spacing: 3) {
+                    Text(hint.key)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(Palette.strongText.color)
+                        .padding(.horizontal, 4)
+                        .background(RoundedRectangle(cornerRadius: 3).fill(Palette.tint.color))
+                    Text(hint.text)
+                }
+            }
             Spacer()
         }
         .font(.system(size: 11))
         .foregroundColor(Palette.secondary.color)
         .padding(EdgeInsets(top: 6, leading: 16, bottom: 8, trailing: 16))
-        .overlay(alignment: .top) { Rectangle().fill(theme.border.color).frame(height: 1) }
-    }
-
-    func hint(_ key: String, _ text: String) -> some View {
-        HStack(spacing: 3) {
-            Text(key)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(Palette.strongText.color)
-                .padding(.horizontal, 4)
-                .background(RoundedRectangle(cornerRadius: 3).fill(theme.tint.color))
-            Text(text)
-        }
+        .overlay(alignment: .top) { Rectangle().fill(Palette.border.color).frame(height: 1) }
     }
 }
 
@@ -279,9 +307,8 @@ struct RowFrames: PreferenceKey {
 
 struct ListArea: View {
     @ObservedObject var app: AppModel
-    @ObservedObject var model: ScopeViewModel
+    @ObservedObject var model: AccountViewModel
     @ObservedObject var avatars: AvatarStore
-    var theme: ScopeTheme
     var now: Int64
     var surface: Surface
 
@@ -291,28 +318,9 @@ struct ListArea: View {
                 ScrollView {
                     VStack(spacing: 0) {
                         if model.tab == .prs {
-                            if model.cards.isEmpty && model.loaded {
-                                EmptyList(text: EmptyState.cards(filtered: model.chips.narrows))
-                            }
-                            ForEach(model.cards) { card in
-                                CardView(
-                                    card: card, model: model, avatars: avatars, theme: theme, now: now
-                                )
-                            }
+                            prs
                         } else {
-                            if model.activity.isEmpty && model.loaded {
-                                EmptyList(text: EmptyState.activity)
-                            } else {
-                                VStack(spacing: 0) {
-                                    ForEach(model.activity) { row in
-                                        RowView(row: row, model: model, theme: theme, now: now, showsPR: true, card: nil)
-                                    }
-                                }
-                                .background(Palette.surface.color)
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                                .overlay(RoundedRectangle(cornerRadius: 10).stroke(theme.border.color, lineWidth: 1))
-                                .padding(.horizontal, 12)
-                            }
+                            activity
                         }
                     }
                     .padding(.bottom, 8)
@@ -328,6 +336,105 @@ struct ListArea: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    var prs: some View {
+        if let empty = model.emptyText {
+            EmptyList(text: empty)
+        }
+        // Without cards the owner sections are not there at all, so the
+        // selection cannot land on them (PopoverLogic.sections).
+        ForEach(model.sections) { section in
+            SectionHeaderView(section: section, model: model)
+            ForEach(section.cards) { card in
+                CardView(card: card, model: model, avatars: avatars, now: now)
+            }
+            if let more = section.moreText {
+                MoreRow(text: more, section: section.key, model: model)
+            }
+        }
+    }
+
+    @ViewBuilder
+    var activity: some View {
+        if model.activity.isEmpty && model.loaded {
+            EmptyList(text: EmptyState.activity)
+        } else {
+            let account = model.account
+            VStack(spacing: 0) {
+                ForEach(model.activity) { row in
+                    RowView(
+                        row: row, model: model, now: now, showsPR: true, card: nil,
+                        ownerName: account?.owner(row.owner)?.displayName ?? ""
+                    )
+                }
+            }
+            .background(Palette.surface.color)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.border.color, lineWidth: 1))
+            .padding(.horizontal, 12)
+        }
+    }
+}
+
+/// A section header (Main.html `.sec`): the name, the red Todo count, the PR
+/// count and the chevron. Pressing it folds the section.
+struct SectionHeaderView: View {
+    var section: SectionLayout
+    @ObservedObject var model: AccountViewModel
+
+    var body: some View {
+        let selected = model.selection == .section(section.key)
+        Button { model.perform(.toggleSection(section.key)) } label: {
+            HStack(spacing: 8) {
+                Text(section.title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(section.collapsed ? Palette.secondary.color : Palette.text.color)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let todo = section.todoCount {
+                    Text("\(todo)")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(Palette.onColor.color)
+                        .padding(.horizontal, 6)
+                        .frame(height: 15)
+                        .background(Capsule().fill(Palette.badge.color))
+                }
+                Text(section.detail).font(.system(size: 11)).foregroundColor(Palette.secondary.color)
+                IconView(icon: section.collapsed ? BoardIcons.sectionClosed : BoardIcons.sectionOpen, size: 12, color: Palette.faded.color)
+                    .frame(width: 14, height: 14)
+            }
+            .padding(EdgeInsets(top: 10, leading: 16, bottom: 6, trailing: 14))
+            .contentShape(Rectangle())
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(selected ? Palette.blueDot.color : .clear, lineWidth: 1.5).padding(.horizontal, 8))
+        }
+        .buttonStyle(.plain)
+        .id(SelectionItem.section(section.key).id)
+    }
+}
+
+/// "+ 2 more PRs" (Main.html `.empty`): pressing it shows the rest.
+struct MoreRow: View {
+    var text: String
+    var section: String
+    @ObservedObject var model: AccountViewModel
+
+    var body: some View {
+        let selected = model.selection == .more(section)
+        Button { model.perform(.expand(section)) } label: {
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundColor(Palette.faded.color)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(EdgeInsets(top: 0, leading: 12, bottom: 8, trailing: 12))
+                .contentShape(Rectangle())
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(selected ? Palette.blueDot.color : .clear, lineWidth: 1.5).padding(.horizontal, 6))
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
+        .id(SelectionItem.more(section).id)
     }
 }
 
@@ -345,9 +452,8 @@ struct EmptyList: View {
 
 struct CardView: View {
     var card: Card
-    @ObservedObject var model: ScopeViewModel
+    @ObservedObject var model: AccountViewModel
     @ObservedObject var avatars: AvatarStore
-    var theme: ScopeTheme
     var now: Int64
 
     var stateBar: Color? {
@@ -364,24 +470,19 @@ struct CardView: View {
         card.stateLabel.value == .merged || card.stateLabel.value == .closed
     }
 
-    /// docs/design/MainSnoozed.html: a snoozed card is faded except "Snoozed
-    /// until …" and Unsnooze.
-    var faded: Double { card.snoozed ? 0.55 : 1 }
-
     var body: some View {
         let selected = model.selection == .header(card: card.id)
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 6) {
-                    StateLabelView(label: card.stateLabel, theme: theme)
+                    StateLabelView(label: card.stateLabel)
                     LinkText(text: Warnings.prLabel(card.pr), url: card.url, model: model)
                     Spacer(minLength: 0)
                     if !finished {
-                        StatusIcons(card: card, model: model, theme: theme)
+                        StatusIcons(card: card, model: model)
                     }
                 }
                 .padding(.horizontal, 4)
-                .opacity(faded)
                 Button { model.perform(.open(card.url)) } label: {
                     HStack(spacing: 7) {
                         Avatar(data: avatars.image(for: card.authorAvatarUrl))
@@ -397,32 +498,18 @@ struct CardView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .opacity(faded)
                 HStack(spacing: 6) {
                     LinkText(text: "\(card.base) ← \(card.head)", url: card.url, model: model)
-                        .opacity(faded)
                     Spacer(minLength: 0)
-                    if card.snoozed {
-                        HStack(spacing: 4) {
-                            if let until = card.snoozedUntil {
-                                Text(SurfaceRules.snoozedUntil(until))
-                                    .font(.system(size: 11))
-                                    .foregroundColor(Palette.text.color)
-                            }
-                            Button("Unsnooze") { model.perform(.unsnooze(pr: card.pr)) }
-                                .buttonStyle(.plain)
-                                .font(.system(size: 11))
-                                .foregroundColor(Palette.link.color)
-                        }
-                    } else {
-                        Button { model.perform(.snooze(pr: card.pr)) } label: {
-                            IconView(icon: BoardIcons.clock, size: 13, color: Palette.snoozeIcon.color)
-                                .frame(width: 18, height: 18)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .help("Snooze")
+                    // A snoozed card looks like any other; its clock unsnoozes
+                    // (DESIGN.md, "Snooze").
+                    Button { model.perform(card.snoozed ? .unsnooze(pr: card.pr) : .snooze(pr: card.pr)) } label: {
+                        IconView(icon: BoardIcons.clock, size: 13, color: Palette.snoozeIcon.color)
+                            .frame(width: 18, height: 18)
+                            .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .help(card.snoozed ? "Unsnooze" : "Snooze")
                 }
                 .padding(.horizontal, 4)
                 .padding(.bottom, 2)
@@ -432,17 +519,16 @@ struct CardView: View {
             .id(SelectionItem.header(card: card.id).id)
             VStack(spacing: 0) {
                 ForEach(card.rows) { row in
-                    RowView(row: row, model: model, theme: theme, now: now, showsPR: false, card: card.id)
+                    RowView(row: row, model: model, now: now, showsPR: false, card: card.id)
                 }
             }
-            .opacity(faded)
         }
         .background(Palette.surface.color)
         .overlay(alignment: .leading) {
-            if let stateBar { Rectangle().fill(stateBar).frame(width: 4).opacity(faded) }
+            if let stateBar { Rectangle().fill(stateBar).frame(width: 4) }
         }
         .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(theme.border.color, lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.border.color, lineWidth: 1))
         .padding(EdgeInsets(top: 0, leading: 12, bottom: 8, trailing: 12))
     }
 }
@@ -450,7 +536,7 @@ struct CardView: View {
 struct LinkText: View {
     var text: String
     var url: String
-    var model: ScopeViewModel
+    var model: AccountViewModel
 
     var body: some View {
         Button { model.perform(.open(url)) } label: {
@@ -466,13 +552,12 @@ struct LinkText: View {
 
 struct StateLabelView: View {
     var label: Lenient<StateLabel>
-    var theme: ScopeTheme
 
     var body: some View {
         let style: (String, Color, Color)? = {
             switch label.value {
             case .mergeable: return ("Mergeable", Palette.green.color, Palette.onColor.color)
-            case .draft: return ("Draft", theme.tint.color, Palette.draftText.color)
+            case .draft: return ("Draft", Palette.tint.color, Palette.draftText.color)
             case .merged: return ("Merged", Palette.purpleBackground.color, Palette.purpleText.color)
             case .closed: return ("Closed", Palette.orangeIconBackground.color, Palette.orangeText.color)
             case .open, nil: return nil
@@ -492,8 +577,7 @@ struct StateLabelView: View {
 
 struct StatusIcons: View {
     var card: Card
-    var model: ScopeViewModel
-    var theme: ScopeTheme
+    var model: AccountViewModel
 
     var body: some View {
         HStack(spacing: 2) {
@@ -536,7 +620,7 @@ struct StatusIcons: View {
                 .frame(width: 22, height: 22)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(HoverButtonStyle(theme: theme))
+        .buttonStyle(HoverButtonStyle())
         .help("\(axis): \(value.1)")
         .accessibilityLabel("\(axis): \(value.1)")
     }
@@ -560,11 +644,12 @@ struct Avatar: View {
 
 struct RowView: View {
     var row: Row
-    @ObservedObject var model: ScopeViewModel
-    var theme: ScopeTheme
+    @ObservedObject var model: AccountViewModel
     var now: Int64
     var showsPR: Bool
     var card: String?
+    /// Activity: the owner column (Activity.html `.own`).
+    var ownerName: String? = nil
 
     var body: some View {
         let p = RowPresentation(row, now: now)
@@ -577,14 +662,25 @@ struct RowView: View {
                     .fill(p.unreadDot ? Palette.blueDot.color : .clear)
                     .frame(width: 7, height: 7)
                     .padding(.top, 6)
+                if let ownerName {
+                    Text(ownerName)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(Palette.ownerTagText.color)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .padding(.horizontal, 5)
+                        .frame(width: 80, height: 15)
+                        .background(RoundedRectangle(cornerRadius: 4).fill(Palette.ownerTag.color))
+                        .padding(.top, 2)
+                }
                 if p.hasCheckbox {
                     Checkbox(on: row.done) {
-                        model.perform(row.done ? .undone(row: row.id) : .done(row: row.id))
+                        model.perform(.done(row: row.id, on: !row.done))
                     }
                     .opacity(p.dimmed ? 0.5 : 1)
                     .padding(.top, 1)
                 } else {
-                    RowIconView(icon: BoardIcons.row(row.kind), theme: theme)
+                    RowIconView(icon: BoardIcons.row(row.kind))
                         .opacity(p.dimmed ? 0.5 : 1)
                         .padding(.top, 1)
                 }
@@ -664,7 +760,6 @@ struct Checkbox: View {
 
 struct RowIconView: View {
     var icon: RowIcon
-    var theme: ScopeTheme
 
     var body: some View {
         let (background, foreground): (Color, Color) = {
@@ -672,7 +767,6 @@ struct RowIconView: View {
             case .action: return (Palette.orangeIconBackground.color, Palette.orangeIcon.color)
             case .info: return (Palette.infoIconBackground.color, Palette.infoIcon.color)
             case .ok: return (Palette.greenBackground.color, Palette.greenText.color)
-            case .bot: return (theme.tint.color, Palette.botIcon.color)
             case .merged: return (Palette.purpleBackground.color, Palette.purpleText.color)
             case .closed: return (Palette.orangeIconBackground.color, Palette.orangeText.color)
             }
@@ -683,28 +777,9 @@ struct RowIconView: View {
     }
 }
 
-/// The board's `.btn`.
-struct SettingsButton: View {
-    var title: String
-    var action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 12))
-                .foregroundColor(Palette.text.color)
-                .padding(EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10))
-                .background(RoundedRectangle(cornerRadius: 6).fill(Palette.surface.color))
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.controlBorder.color, lineWidth: 1))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-/// The popover while no scope icon shows (DESIGN.md, "Screens"), or the
-/// unreadable state when the database cannot be read.
-struct NoScopesView: View {
+/// The popover of the shiibar-gh icon while there is no account
+/// (DESIGN.md, "First run, failure and empty"), or the unreadable state.
+struct NoAccountsView: View {
     @ObservedObject var app: AppModel
     var actions: SurfaceActions
 
@@ -713,20 +788,23 @@ struct NoScopesView: View {
             HStack {
                 Text("shiibar-gh").font(.system(size: 14, weight: .semibold))
                 Spacer()
-                MenuIconButton(icon: BoardIcons.chevron, label: "More", theme: Palette.theme(.gray), items: actions.menuItems)
+                MenuIconButton(icon: BoardIcons.chevron, label: "More", items: actions.menuItems)
             }
             .padding(EdgeInsets(top: 12, leading: 16, bottom: 0, trailing: 10))
-            switch SurfaceRules.noScopeContent(dbUnreadable: app.dbUnreadable) {
+            switch SurfaceRules.noAccountsContent(dbUnreadable: app.dbUnreadable) {
             case .unreadable:
                 CenteredMessage(title: EmptyState.unreadable, button: "Reset") { app.reset() }
-            case .noScopes:
-                CenteredMessage(title: EmptyState.noScopesTitle, detail: EmptyState.noScopesDetail, button: "Settings") {
-                    actions.openSettings(SurfaceRules.noScopesSettings)
+            case .noAccounts:
+                if let dialog = KeychainDialog.for(app.keychain) {
+                    BannerView(lines: [BannerLine.keychain(dialog)]) { app.bannerButton($0, account: nil) }
+                }
+                CenteredMessage(title: EmptyState.noAccountsTitle, detail: EmptyState.noAccountsDetail, button: "Settings") {
+                    actions.openSettings(.accounts)
                 }
             }
         }
-        .frame(width: 300, height: 180)
-        .background(Palette.theme(.gray).background.color)
+        .frame(width: 300, height: 200)
+        .background(Palette.background.color)
         .foregroundColor(Palette.text.color)
     }
 }

@@ -1,7 +1,10 @@
 // Request and response over the daemon socket: one connection, one request
 // line, one response line (docs/DESIGN.md, "Wire format"). The app never
-// keeps a token: `tokenSet` and `tokenTest` pass it straight into the
-// request line and nothing here logs a request.
+// keeps a token: `accountAdd`, `tokenSet` and `tokenTest` pass it straight
+// into the request line, and nothing here logs a request.
+//
+// The `account` argument of a request is the account's login and `owner`
+// the owner's login or `public`; responses refer to both by id.
 
 import Foundation
 
@@ -22,58 +25,95 @@ public struct DaemonError: Error, Equatable, CustomStringConvertible {
     }
 }
 
-/// The filter shared by `list` and `activity`.
-public struct ListFilter: Equatable {
-    public var scope: String?
-    public var needsAction = false
-    public var mine = false
-    public var others = false
-    public var snoozed = false
+/// `list`: one account's PRs tab, or its Snoozed section.
+public struct ListQuery: Equatable {
+    public var account: String?
+    public var owner: String?
+    public var todo: Bool
+    public var filter: PrFilter
+    public var snoozed: Bool
 
-    public init(scope: String? = nil, needsAction: Bool = false, mine: Bool = false, others: Bool = false, snoozed: Bool = false) {
-        self.scope = scope
-        self.needsAction = needsAction
-        self.mine = mine
-        self.others = others
+    public init(account: String? = nil, owner: String? = nil, todo: Bool = false, filter: PrFilter = .all, snoozed: Bool = false) {
+        self.account = account
+        self.owner = owner
+        self.todo = todo
+        self.filter = filter
         self.snoozed = snoozed
     }
 
     var fields: [String: Any] {
-        var fields: [String: Any] = [
-            "needs_action": needsAction, "mine": mine, "others": others, "snoozed": snoozed,
-        ]
-        if let scope { fields["scope"] = scope }
+        var fields: [String: Any] = ["cmd": "list", "todo": todo, "filter": filter.rawValue, "snoozed": snoozed]
+        if let account { fields["account"] = account }
+        if let owner { fields["owner"] = owner }
         return fields
     }
+}
+
+/// `activity`: one account's Activity tab. `owners` are owner arguments
+/// (login or `public`); empty is every owner.
+public struct ActivityQuery: Equatable {
+    public var account: String?
+    public var owners: [String]
+    public var todo: Bool
+    public var filter: PrFilter
+
+    public init(account: String? = nil, owners: [String] = [], todo: Bool = false, filter: PrFilter = .all) {
+        self.account = account
+        self.owners = owners
+        self.todo = todo
+        self.filter = filter
+    }
+
+    var fields: [String: Any] {
+        var fields: [String: Any] = ["cmd": "activity", "owners": owners, "todo": todo, "filter": filter.rawValue]
+        if let account { fields["account"] = account }
+        return fields
+    }
+}
+
+/// `owner_lookup`'s answer.
+public struct OwnerLookup: Equatable, Decodable {
+    public var owner: String
+    public var kind: Lenient<OwnerKind>
+    public var id: Int64
 }
 
 /// Everything the app asks of the daemon. A protocol so the view models can
 /// run against a fake in tests.
 public protocol DaemonAPI: AnyObject, Sendable {
     func info() async throws -> InfoResponse
-    func list(_ filter: ListFilter) async throws -> [Card]
-    func activity(_ filter: ListFilter) async throws -> [Row]
+    func list(_ query: ListQuery) async throws -> [Card]
+    func activity(_ query: ActivityQuery) async throws -> [Row]
     func seen(_ rowIds: [String]) async throws
-    func popoverOpened(_ scope: String) async throws
-    func popoverClosed(_ scope: String) async throws
-    func done(_ row: String) async throws
-    func undone(_ row: String) async throws
-    func snooze(_ pr: String) async throws
-    func unsnooze(_ pr: String) async throws
-    func refresh(_ scope: String?) async throws -> [Warning]
+    func popoverOpened(_ account: String) async throws
+    func popoverClosed(_ account: String) async throws
+    func done(_ row: String, on: Bool) async throws
+    func todo(_ row: String, on: Bool) async throws
+    func snooze(account: String, pr: String) async throws
+    func unsnooze(account: String, pr: String) async throws
+    func refresh(_ account: String?) async throws -> [Warning]
     func configGet(_ key: String) async throws -> ConfigValue
     func configSet(_ key: String, _ value: ConfigValue) async throws -> ConfigValue
-    func scopeList() async throws -> [Scope]
-    func scopeAdd(_ owner: String) async throws -> [Scope]
-    func scopeRemove(_ owner: String) async throws -> [Scope]
-    func scopeEnable(_ scope: String) async throws
-    func scopeDisable(_ scope: String) async throws
-    func scopeNotify(_ scope: String, on: Bool) async throws
-    func scopeColor(_ scope: String, _ color: ScopeColor) async throws
-    func scopeLookup(_ owner: String) async throws -> ScopeLookup
-    func tokenSet(_ target: String, token: String) async throws
-    func tokenTest(_ target: String) async throws -> TokenTestResponse
-    func settingsStatus() async throws -> SettingsStatus
+    func accountList() async throws -> [Account]
+    func accountAdd(token: String) async throws -> Account
+    func accountRemove(_ account: String) async throws
+    func accountColor(_ account: String, _ color: AccountColor) async throws
+    func ownerAdd(account: String, owner: String) async throws -> Account
+    func ownerRemove(account: String, owner: String) async throws -> Account
+    func ownerEnabled(account: String, owner: String, on: Bool) async throws
+    func ownerNotify(account: String, owner: String, on: Bool) async throws
+    func ownerSkipDrafts(account: String, owner: String, on: Bool) async throws
+    func ownerEvents(account: String, owner: String) async throws -> [String: EventCell]
+    func ownerEventsSet(account: String, owner: String, event: EventKind, column: EventColumn, on: Bool) async throws -> [String: EventCell]
+    func ownerEventsCopy(account: String, from: String, to: String) async throws -> [String: EventCell]
+    func ownerExclusions(account: String, owner: String) async throws -> Exclusions
+    func ownerExclusionsSet(account: String, owner: String, kind: ExclusionKind, name: String, state: ExclusionState) async throws -> Exclusions
+    func ownerExclusionsRemove(account: String, owner: String, kind: ExclusionKind, name: String) async throws -> Exclusions
+    func tokenSet(account: String, token: String) async throws
+    /// Without `account` the token is checked as for a new account; without
+    /// `token` the saved one is.
+    func tokenTest(account: String?, token: String?) async throws -> [TestResult]
+    func tokenReset() async throws
     func reset() async throws
     func shutdown() async throws
 }
@@ -83,7 +123,7 @@ public final class SocketDaemonAPI: DaemonAPI, @unchecked Sendable {
     public let socketPath: String
     /// How long an ordinary answer may take.
     public var timeout: TimeInterval
-    /// `refresh` and `token_test` answer after GitHub did; they get longer.
+    /// Requests that wait for GitHub get longer.
     public var slowTimeout: TimeInterval
 
     public init(socketPath: String, timeout: TimeInterval = 10, slowTimeout: TimeInterval = 300) {
@@ -128,53 +168,53 @@ public final class SocketDaemonAPI: DaemonAPI, @unchecked Sendable {
         }
     }
 
+    private func ack(_ fields: [String: Any], slow: Bool = false) async throws {
+        _ = try await call(fields, slow: slow)
+    }
+
     public func info() async throws -> InfoResponse {
         try decode(InfoResponse.self, try await call(["cmd": "info"]))
     }
 
-    public func list(_ filter: ListFilter) async throws -> [Card] {
-        var fields = filter.fields
-        fields["cmd"] = "list"
-        return try decode(ListResponse.self, try await call(fields)).cards
+    public func list(_ query: ListQuery) async throws -> [Card] {
+        try decode(ListResponse.self, try await call(query.fields)).cards
     }
 
-    public func activity(_ filter: ListFilter) async throws -> [Row] {
-        var fields = filter.fields
-        fields["cmd"] = "activity"
-        return try decode(ActivityResponse.self, try await call(fields)).rows
+    public func activity(_ query: ActivityQuery) async throws -> [Row] {
+        try decode(ActivityResponse.self, try await call(query.fields)).rows
     }
 
     public func seen(_ rowIds: [String]) async throws {
-        _ = try await call(["cmd": "seen", "row_ids": rowIds])
+        try await ack(["cmd": "seen", "row_ids": rowIds])
     }
 
-    public func popoverOpened(_ scope: String) async throws {
-        _ = try await call(["cmd": "popover_opened", "scope": scope])
+    public func popoverOpened(_ account: String) async throws {
+        try await ack(["cmd": "popover_opened", "account": account])
     }
 
-    public func popoverClosed(_ scope: String) async throws {
-        _ = try await call(["cmd": "popover_closed", "scope": scope])
+    public func popoverClosed(_ account: String) async throws {
+        try await ack(["cmd": "popover_closed", "account": account])
     }
 
-    public func done(_ row: String) async throws {
-        _ = try await call(["cmd": "done", "row": row])
+    public func done(_ row: String, on: Bool) async throws {
+        try await ack(["cmd": "done", "row": row, "on": on])
     }
 
-    public func undone(_ row: String) async throws {
-        _ = try await call(["cmd": "undone", "row": row])
+    public func todo(_ row: String, on: Bool) async throws {
+        try await ack(["cmd": "todo", "row": row, "on": on])
     }
 
-    public func snooze(_ pr: String) async throws {
-        _ = try await call(["cmd": "snooze", "pr": pr])
+    public func snooze(account: String, pr: String) async throws {
+        try await ack(["cmd": "snooze", "account": account, "pr": pr])
     }
 
-    public func unsnooze(_ pr: String) async throws {
-        _ = try await call(["cmd": "unsnooze", "pr": pr])
+    public func unsnooze(account: String, pr: String) async throws {
+        try await ack(["cmd": "unsnooze", "account": account, "pr": pr])
     }
 
-    public func refresh(_ scope: String?) async throws -> [Warning] {
+    public func refresh(_ account: String?) async throws -> [Warning] {
         var fields: [String: Any] = ["cmd": "refresh"]
-        if let scope { fields["scope"] = scope }
+        if let account { fields["account"] = account }
         return try decode(RefreshResponse.self, try await call(fields, slow: true)).warnings
     }
 
@@ -201,55 +241,100 @@ public final class SocketDaemonAPI: DaemonAPI, @unchecked Sendable {
         }
     }
 
-    public func scopeList() async throws -> [Scope] {
-        try decode(ScopesResponse.self, try await call(["cmd": "scope_list"])).scopes
+    public func accountList() async throws -> [Account] {
+        try decode(AccountsResponse.self, try await call(["cmd": "account_list"])).accounts
     }
 
-    public func scopeAdd(_ owner: String) async throws -> [Scope] {
-        try decode(ScopesResponse.self, try await call(["cmd": "scope_add", "owner": owner])).scopes
+    public func accountAdd(token: String) async throws -> Account {
+        try decode(AccountResponse.self, try await call(["cmd": "account_add", "token": token], slow: true)).account
     }
 
-    public func scopeRemove(_ owner: String) async throws -> [Scope] {
-        try decode(ScopesResponse.self, try await call(["cmd": "scope_remove", "owner": owner])).scopes
+    public func accountRemove(_ account: String) async throws {
+        try await ack(["cmd": "account_remove", "account": account])
     }
 
-    public func scopeEnable(_ scope: String) async throws {
-        _ = try await call(["cmd": "scope_enable", "scope": scope])
+    public func accountColor(_ account: String, _ color: AccountColor) async throws {
+        try await ack(["cmd": "account_color", "account": account, "color": color.rawValue])
     }
 
-    public func scopeDisable(_ scope: String) async throws {
-        _ = try await call(["cmd": "scope_disable", "scope": scope])
+    public func ownerAdd(account: String, owner: String) async throws -> Account {
+        try decode(AccountResponse.self, try await call(["cmd": "owner_add", "account": account, "owner": owner], slow: true)).account
     }
 
-    public func scopeNotify(_ scope: String, on: Bool) async throws {
-        _ = try await call(["cmd": "scope_notify", "scope": scope, "on": on])
+    public func ownerRemove(account: String, owner: String) async throws -> Account {
+        try decode(AccountResponse.self, try await call(["cmd": "owner_remove", "account": account, "owner": owner])).account
     }
 
-    public func scopeColor(_ scope: String, _ color: ScopeColor) async throws {
-        _ = try await call(["cmd": "scope_color", "scope": scope, "color": color.rawValue])
+    public func ownerEnabled(account: String, owner: String, on: Bool) async throws {
+        try await ack(["cmd": on ? "owner_enable" : "owner_disable", "account": account, "owner": owner])
     }
 
-    public func scopeLookup(_ owner: String) async throws -> ScopeLookup {
-        try decode(ScopeLookup.self, try await call(["cmd": "scope_lookup", "owner": owner], slow: true))
+    public func ownerNotify(account: String, owner: String, on: Bool) async throws {
+        try await ack(["cmd": "owner_notify", "account": account, "owner": owner, "on": on])
     }
 
-    public func tokenSet(_ target: String, token: String) async throws {
-        _ = try await call(["cmd": "token_set", "target": target, "token": token])
+    public func ownerSkipDrafts(account: String, owner: String, on: Bool) async throws {
+        try await ack(["cmd": "owner_skip_drafts", "account": account, "owner": owner, "on": on])
     }
 
-    public func tokenTest(_ target: String) async throws -> TokenTestResponse {
-        try decode(TokenTestResponse.self, try await call(["cmd": "token_test", "target": target], slow: true))
+    public func ownerEvents(account: String, owner: String) async throws -> [String: EventCell] {
+        try decode(EventsResponse.self, try await call(["cmd": "owner_events_get", "account": account, "owner": owner])).events
     }
 
-    public func settingsStatus() async throws -> SettingsStatus {
-        try decode(SettingsStatus.self, try await call(["cmd": "settings_status"]))
+    public func ownerEventsSet(
+        account: String, owner: String, event: EventKind, column: EventColumn, on: Bool
+    ) async throws -> [String: EventCell] {
+        try decode(EventsResponse.self, try await call([
+            "cmd": "owner_events_set", "account": account, "owner": owner,
+            "event": event.rawValue, "column": column.rawValue, "on": on,
+        ])).events
+    }
+
+    public func ownerEventsCopy(account: String, from: String, to: String) async throws -> [String: EventCell] {
+        try decode(EventsResponse.self, try await call([
+            "cmd": "owner_events_copy", "account": account, "from_owner": from, "to_owner": to,
+        ])).events
+    }
+
+    public func ownerExclusions(account: String, owner: String) async throws -> Exclusions {
+        try decode(ExclusionsResponse.self, try await call(["cmd": "owner_exclusions_get", "account": account, "owner": owner])).exclusions
+    }
+
+    public func ownerExclusionsSet(
+        account: String, owner: String, kind: ExclusionKind, name: String, state: ExclusionState
+    ) async throws -> Exclusions {
+        try decode(ExclusionsResponse.self, try await call([
+            "cmd": "owner_exclusions_set", "account": account, "owner": owner,
+            "kind": kind.rawValue, "name": name, "state": state.rawValue,
+        ])).exclusions
+    }
+
+    public func ownerExclusionsRemove(account: String, owner: String, kind: ExclusionKind, name: String) async throws -> Exclusions {
+        try decode(ExclusionsResponse.self, try await call([
+            "cmd": "owner_exclusions_remove", "account": account, "owner": owner, "kind": kind.rawValue, "name": name,
+        ])).exclusions
+    }
+
+    public func tokenSet(account: String, token: String) async throws {
+        try await ack(["cmd": "token_set", "account": account, "token": token], slow: true)
+    }
+
+    public func tokenTest(account: String?, token: String?) async throws -> [TestResult] {
+        var fields: [String: Any] = ["cmd": "token_test"]
+        if let account { fields["account"] = account }
+        if let token { fields["token"] = token }
+        return try decode(TokenTestResponse.self, try await call(fields, slow: true)).results
+    }
+
+    public func tokenReset() async throws {
+        try await ack(["cmd": "token_reset"])
     }
 
     public func reset() async throws {
-        _ = try await call(["cmd": "reset"])
+        try await ack(["cmd": "reset"])
     }
 
     public func shutdown() async throws {
-        _ = try await call(["cmd": "shutdown"])
+        try await ack(["cmd": "shutdown"])
     }
 }

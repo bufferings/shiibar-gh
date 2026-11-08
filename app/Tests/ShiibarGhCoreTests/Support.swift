@@ -31,7 +31,7 @@ final class FakeDaemon: @unchecked Sendable {
     private var received: [String] = []
     var respond: (String) -> String = { _ in "{\"ok\":true}" }
     /// Lines sent to each new subscriber right after it subscribes.
-    var greeting: [String] = ["{\"event\":\"snapshot\",\"scopes\":[],\"db_unreadable\":false}"]
+    var greeting: [String] = ["{\"event\":\"snapshot\",\"accounts\":[],\"keychain\":\"ok\",\"db_unreadable\":false}"]
     /// When set, the greeting goes out in pieces of this many bytes.
     var chunk: Int?
 
@@ -140,7 +140,8 @@ final class FakeDaemon: @unchecked Sendable {
         for client in targets { send(line, to: client) }
     }
 
-    /// Cut every subscriber, like the daemon does after a scope removal.
+    /// Cut every subscriber, like the daemon does when the database turns
+    /// unreadable.
     func dropSubscribers() {
         lock.lock()
         let targets = subscribers
@@ -218,9 +219,19 @@ final class FakeAPI: DaemonAPI, @unchecked Sendable {
     private let lock = NSLock()
     private var log: [String] = []
     var cards: [Card] = []
+    var snoozedCards: [Card] = []
     var rows: [Row] = []
     var config: [String: ConfigValue] = ["launch_at_login": .bool(true)]
     var failNext: DaemonError?
+    var refreshWarnings: [Warning] = []
+    var testResults: [TestResult] = []
+    var added = Account(id: "9919001", login: "new")
+    var events: [String: EventCell] = [:]
+    /// How long `owner_events_get` takes, in nanoseconds.
+    var eventsDelay: UInt64 = 0
+    var exclusions = Exclusions()
+    /// Owners `owner_add` refuses, with the error.
+    var ownerErrors: [String: DaemonError] = [:]
 
     var calls: [String] {
         lock.lock()
@@ -244,19 +255,25 @@ final class FakeAPI: DaemonAPI, @unchecked Sendable {
     }
 
     func info() async throws -> InfoResponse { try record("info"); return InfoResponse(version: "0.1.0", startedAt: 0) }
-    func list(_ filter: ListFilter) async throws -> [Card] {
-        try record("list \(filter.scope ?? "") needs=\(filter.needsAction) mine=\(filter.mine) others=\(filter.others) snoozed=\(filter.snoozed)")
+    func list(_ query: ListQuery) async throws -> [Card] {
+        try record("list \(query.account ?? "") todo=\(query.todo) filter=\(query.filter.rawValue) snoozed=\(query.snoozed)")
+        if query.snoozed {
+            return snoozedCards.filter { !query.todo || $0.hasOpenTodo }
+        }
         return cards
     }
-    func activity(_ filter: ListFilter) async throws -> [Row] { try record("activity \(filter.scope ?? "")"); return rows }
+    func activity(_ query: ActivityQuery) async throws -> [Row] {
+        try record("activity \(query.account ?? "") owners=\(query.owners.joined(separator: ",")) todo=\(query.todo) filter=\(query.filter.rawValue)")
+        return rows
+    }
     func seen(_ rowIds: [String]) async throws { try record("seen \(rowIds.joined(separator: ","))") }
-    func popoverOpened(_ scope: String) async throws { try record("popover_opened \(scope)") }
-    func popoverClosed(_ scope: String) async throws { try record("popover_closed \(scope)") }
-    func done(_ row: String) async throws { try record("done \(row)") }
-    func undone(_ row: String) async throws { try record("undone \(row)") }
-    func snooze(_ pr: String) async throws { try record("snooze \(pr)") }
-    func unsnooze(_ pr: String) async throws { try record("unsnooze \(pr)") }
-    func refresh(_ scope: String?) async throws -> [Warning] { try record("refresh \(scope ?? "")"); return [] }
+    func popoverOpened(_ account: String) async throws { try record("popover_opened \(account)") }
+    func popoverClosed(_ account: String) async throws { try record("popover_closed \(account)") }
+    func done(_ row: String, on: Bool) async throws { try record("done \(row) \(on)") }
+    func todo(_ row: String, on: Bool) async throws { try record("todo \(row) \(on)") }
+    func snooze(account: String, pr: String) async throws { try record("snooze \(account) \(pr)") }
+    func unsnooze(account: String, pr: String) async throws { try record("unsnooze \(account) \(pr)") }
+    func refresh(_ account: String?) async throws -> [Warning] { try record("refresh \(account ?? "")"); return refreshWarnings }
     func configGet(_ key: String) async throws -> ConfigValue {
         try record("config_get \(key)")
         return config[key] ?? .bool(false)
@@ -266,30 +283,56 @@ final class FakeAPI: DaemonAPI, @unchecked Sendable {
         config[key] = value
         return value
     }
-    func scopeList() async throws -> [Scope] { try record("scope_list"); return [] }
-    func scopeAdd(_ owner: String) async throws -> [Scope] { try record("scope_add \(owner)"); return scopesAfterAdd }
-    func scopeRemove(_ owner: String) async throws -> [Scope] { try record("scope_remove \(owner)"); return [] }
-    func scopeEnable(_ scope: String) async throws { try record("scope_enable \(scope)") }
-    func scopeDisable(_ scope: String) async throws { try record("scope_disable \(scope)") }
-    func scopeNotify(_ scope: String, on: Bool) async throws { try record("scope_notify \(scope) \(on)") }
-    func scopeColor(_ scope: String, _ color: ScopeColor) async throws { try record("scope_color \(scope) \(color.rawValue)") }
-    /// Owners `scope_lookup` finds; others are not found. `lookupFailure`
-    /// fails every lookup instead.
-    var owners: [String: ScopeKind] = [:]
-    var lookupFailure: DaemonError?
-    /// What `scope_add` answers.
-    var scopesAfterAdd: [Scope] = []
-    func scopeLookup(_ owner: String) async throws -> ScopeLookup {
-        try record("scope_lookup \(owner)")
-        if let lookupFailure { throw lookupFailure }
-        guard let (name, kind) = owners.first(where: { $0.key.lowercased() == owner.lowercased() }) else {
-            throw DaemonError(code: .notFound, message: "not found: no such owner on GitHub")
-        }
-        return ScopeLookup(owner: name, kind: kind)
+    func accountList() async throws -> [Account] { try record("account_list"); return [] }
+    /// The token is not recorded: tests check it never shows up anywhere.
+    func accountAdd(token: String) async throws -> Account { try record("account_add"); return added }
+    func accountRemove(_ account: String) async throws { try record("account_remove \(account)") }
+    func accountColor(_ account: String, _ color: AccountColor) async throws { try record("account_color \(account) \(color.rawValue)") }
+    func ownerAdd(account: String, owner: String) async throws -> Account {
+        try record("owner_add \(account) \(owner)")
+        if let error = ownerErrors[owner] { throw error }
+        return Account(id: "3407303", login: account)
     }
-    func tokenSet(_ target: String, token: String) async throws { try record("token_set \(target)") }
-    func tokenTest(_ target: String) async throws -> TokenTestResponse { try record("token_test \(target)"); return TokenTestResponse(results: []) }
-    func settingsStatus() async throws -> SettingsStatus { try record("settings_status"); return SettingsStatus() }
+    func ownerRemove(account: String, owner: String) async throws -> Account {
+        try record("owner_remove \(account) \(owner)")
+        return Account(id: "3407303", login: account)
+    }
+    func ownerEnabled(account: String, owner: String, on: Bool) async throws { try record("owner_enabled \(account) \(owner) \(on)") }
+    func ownerNotify(account: String, owner: String, on: Bool) async throws { try record("owner_notify \(account) \(owner) \(on)") }
+    func ownerSkipDrafts(account: String, owner: String, on: Bool) async throws { try record("owner_skip_drafts \(account) \(owner) \(on)") }
+    func ownerEvents(account: String, owner: String) async throws -> [String: EventCell] {
+        try record("owner_events_get \(account) \(owner)")
+        // The table as it is when the request arrives, answered late.
+        let table = events
+        if eventsDelay > 0 { try? await Task.sleep(nanoseconds: eventsDelay) }
+        return table
+    }
+    func ownerEventsSet(account: String, owner: String, event: EventKind, column: EventColumn, on: Bool) async throws -> [String: EventCell] {
+        try record("owner_events_set \(account) \(owner) \(event.rawValue) \(column.rawValue) \(on)")
+        return events
+    }
+    func ownerEventsCopy(account: String, from: String, to: String) async throws -> [String: EventCell] {
+        try record("owner_events_copy \(account) \(from) \(to)")
+        return events
+    }
+    func ownerExclusions(account: String, owner: String) async throws -> Exclusions {
+        try record("owner_exclusions_get \(account) \(owner)")
+        return exclusions
+    }
+    func ownerExclusionsSet(account: String, owner: String, kind: ExclusionKind, name: String, state: ExclusionState) async throws -> Exclusions {
+        try record("owner_exclusions_set \(account) \(owner) \(kind.rawValue) \(name) \(state.rawValue)")
+        return exclusions
+    }
+    func ownerExclusionsRemove(account: String, owner: String, kind: ExclusionKind, name: String) async throws -> Exclusions {
+        try record("owner_exclusions_remove \(account) \(owner) \(kind.rawValue) \(name)")
+        return exclusions
+    }
+    func tokenSet(account: String, token: String) async throws { try record("token_set \(account)") }
+    func tokenTest(account: String?, token: String?) async throws -> [TestResult] {
+        try record("token_test \(account ?? "-") \(token == nil ? "saved" : "pasted")")
+        return testResults
+    }
+    func tokenReset() async throws { try record("token_reset") }
     func reset() async throws { try record("reset") }
     func shutdown() async throws { try record("shutdown") }
 }
@@ -299,3 +342,13 @@ func testDefaults() -> (UserDefaults, String) {
     let name = "shiibar.gh.tests." + UUID().uuidString
     return (UserDefaults(suiteName: name)!, name)
 }
+
+/// Wait for the tasks the models start.
+@MainActor
+func settle() async {
+    for _ in 0..<20 { await Task.yield() }
+    try? await Task.sleep(nanoseconds: 50_000_000)
+}
+
+let utc = TimeZone(identifier: "UTC")!
+let T0: Int64 = 1_800_000_000
