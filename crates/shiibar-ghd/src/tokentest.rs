@@ -1,418 +1,348 @@
-//! `token_test`: whether a token has each permission, one question per item.
-//! The data itself does not matter: an answer without a permission error is
-//! OK, a permission error is Failed with the permission's name, and nothing
-//! to ask about is Unverifiable. docs/tasks/M2.md, "Token test procedure".
+//! `token_test`: the items of DESIGN.md, "Token registration and test", one
+//! question per item: Account (`viewer { databaseId login }`), Scopes
+//! (`X-OAuth-Scopes`), Notifications (`GET /notifications`), Team
+//! membership (`GET /user/teams`), and one search per registered owner.
 
-use crate::fetch::{encode, owner_kind};
-use crate::github::{Api, CallError, Gql, Recorder};
-use crate::model::{NOTIFICATIONS, PUBLIC, ScopeKind};
-use serde_json::{Value, json};
-use shiibar_gh_proto::{Lenient, TestOutcome, TestResult};
+use crate::engine::missing_scopes;
+use crate::github::{Api, CallError, Recorder};
+use crate::model::OwnerKind;
+use serde_json::json;
+use shiibar_gh_proto::{Lenient, TestItem, TestOutcome, TestResult};
 
-pub const PRS: &str = "PRs, reviews, comments";
-pub const CHECKS: &str = "Checks";
-pub const BEHIND: &str = "Behind base";
-pub const TEAMS: &str = "Team membership";
-pub const MERGE_QUEUE: &str = "Merge queue";
-pub const NOTIFICATIONS_ITEM: &str = "Notifications";
+pub const ACCOUNT: &str = "Account";
 pub const SCOPES: &str = "Scopes";
+pub const NOTIFICATIONS: &str = "Notifications";
+pub const TEAMS: &str = "Team membership";
+pub const UNREACHABLE: &str = "Couldn't reach GitHub";
+pub const CANT_CHECK: &str = "Can't check";
+/// Why `viewer` gave no account: `databaseId` came back `null`.
+pub const NO_NUMERIC_ID: &str = "GitHub gave no numeric id (databaseId) for the token owner";
 
-/// What the test of one token found.
-#[derive(Debug, Default)]
-pub struct Report {
-    pub results: Vec<TestResult>,
-    pub owner: Option<String>,
-    pub kind: Option<ScopeKind>,
-    pub name: Option<String>,
+/// DESIGN.md, "Token registration and test": an item that could not be
+/// asked is `Can't check (<why>)`; an HTTP answer that is not a success is
+/// `Failed (HTTP <status>)`.
+fn call_failed(item: TestItem, label: &str, owner: Option<&str>, error: &CallError) -> TestResult {
+    let (outcome, text) = match error {
+        CallError::Network(_) => (
+            TestOutcome::CantCheck,
+            format!("{CANT_CHECK} ({UNREACHABLE})"),
+        ),
+        CallError::RateLimited { .. } => (
+            TestOutcome::CantCheck,
+            format!("{CANT_CHECK} (rate limited)"),
+        ),
+        CallError::Unauthorized => (TestOutcome::Failed, "Failed (HTTP 401)".to_string()),
+        CallError::Forbidden { .. } => (TestOutcome::Failed, "Failed (HTTP 403)".to_string()),
+        CallError::NotFound => (TestOutcome::Failed, "Failed (HTTP 404)".to_string()),
+        CallError::Other(message) => match message.strip_prefix("GitHub answered ") {
+            Some(status) if status.bytes().all(|b| b.is_ascii_digit()) => {
+                (TestOutcome::Failed, format!("Failed (HTTP {status})"))
+            }
+            _ => (TestOutcome::Failed, "Failed".to_string()),
+        },
+    };
+    result(item, label, owner, outcome, &text, None)
 }
 
 fn result(
-    item: &str,
+    item: TestItem,
+    label: &str,
+    owner: Option<&str>,
     outcome: TestOutcome,
-    missing: Option<&str>,
-    reason: Option<&str>,
+    text: &str,
+    url: Option<String>,
 ) -> TestResult {
     TestResult {
-        item: item.to_string(),
+        item: Lenient::Known(item),
+        label: label.to_string(),
+        owner: owner.map(str::to_string),
         outcome: Lenient::Known(outcome),
-        missing: missing.map(str::to_string),
-        reason: reason.map(str::to_string),
+        text: text.to_string(),
+        url,
     }
 }
 
-fn ok(item: &str) -> TestResult {
-    result(item, TestOutcome::Ok, None, None)
+/// An owner to test, as the daemon knows it.
+#[derive(Debug, Clone)]
+pub struct OwnerProbe {
+    pub id: String,
+    pub name: String,
+    pub kind: OwnerKind,
+    pub github_id: Option<i64>,
 }
 
-fn unverifiable(item: &str, reason: &str) -> TestResult {
-    result(item, TestOutcome::Unverifiable, None, Some(reason))
+/// Who the token has to belong to.
+#[derive(Debug, Clone)]
+pub enum Expect {
+    /// Edit…: the account's own id.
+    Account { id: String },
+    /// Add account: any id not added yet; `taken` maps ids to logins.
+    New { taken: Vec<(String, String)> },
 }
 
-fn failed(item: &str, missing: &str) -> TestResult {
-    result(
-        item,
-        TestOutcome::Failed,
-        Some(missing),
-        Some("permission error"),
-    )
+/// What a test found besides the results.
+#[derive(Debug, Default)]
+pub struct Report {
+    pub results: Vec<TestResult>,
+    /// `viewer { databaseId login }`, when it answered: the numeric id as
+    /// a decimal string, and the login.
+    pub viewer: Option<(String, String)>,
 }
 
-/// One item from a GraphQL answer: a permission error anywhere fails it.
-fn judge_gql(
-    item: &str,
-    missing: &str,
-    answer: Result<Gql, CallError>,
-) -> Result<TestResult, CallError> {
-    match answer {
-        Ok(answer) if answer.errors.iter().any(|e| e.is_permission()) => Ok(failed(item, missing)),
-        Ok(_) | Err(CallError::NotFound) => Ok(ok(item)),
-        Err(CallError::Forbidden { .. }) => Ok(failed(item, missing)),
-        Err(e) => Err(e),
-    }
-}
-
-/// The repository the scope items ask about.
-struct Probe {
-    owner: String,
-    name: String,
-    branch: Option<String>,
-    oid: Option<String>,
-}
-
-fn probe_of(repo: &Value) -> Option<Probe> {
-    Some(Probe {
-        owner: repo["owner"]["login"].as_str()?.to_string(),
-        name: repo["name"].as_str()?.to_string(),
-        branch: repo["defaultBranchRef"]["name"]
-            .as_str()
-            .map(str::to_string),
-        oid: repo["defaultBranchRef"]["target"]["oid"]
-            .as_str()
-            .map(str::to_string),
-    })
-}
-
-/// The newest repository with a commit on its default branch, else the
-/// newest one: an empty repository can still answer for PRs, while the
-/// commit items are then unverifiable. docs/tasks/M2.md, "Token test
-/// procedure": "can't verify" only without a repository or a commit.
-fn pick(repos: &[Value]) -> Option<Probe> {
-    let usable = |repo: &&Value| {
-        repo["isEmpty"] != true && repo["defaultBranchRef"]["target"]["oid"].is_string()
+/// The owner of a token: `viewer { databaseId login }`. The account id is
+/// GitHub's numeric user id (`User.databaseId`, the `id` of REST `GET
+/// /user`) as a decimal string; node ids are moving to a new format
+/// (DESIGN.md, "Tokens"). Used by `account_add`, `token_set` and the
+/// Account item.
+pub async fn viewer(
+    api: &Api,
+    rec: &mut Recorder,
+    token: &str,
+) -> Result<(String, String), CallError> {
+    let answer = api
+        .graphql(
+            rec,
+            token,
+            "query Viewer { rateLimit { cost limit remaining resetAt } viewer { databaseId login } }",
+            json!({}),
+        )
+        .await?;
+    let login = answer.data["viewer"]["login"].as_str().unwrap_or_default();
+    // `databaseId` is nullable in the public schema.
+    let Some(id) = answer.data["viewer"]["databaseId"].as_i64() else {
+        return Err(CallError::Other(NO_NUMERIC_ID.into()));
     };
-    repos
-        .iter()
-        .find(usable)
-        .or(repos.first())
-        .and_then(probe_of)
+    if login.is_empty() {
+        return Err(CallError::Other(
+            "GitHub did not name the token owner".into(),
+        ));
+    }
+    Ok((id.to_string(), login.to_string()))
 }
 
-/// How many repositories a probe looks through for one with a commit.
-const PROBE_REPOS: usize = 10;
-
-const REPO_FIELDS: &str = "name isEmpty owner { login } defaultBranchRef { name target { oid } }";
-
-pub struct Tester<'a> {
-    pub api: &'a Api,
-    pub rec: &'a mut Recorder,
-    /// The token record key, for the recorder.
-    pub key: &'a str,
-    pub token: &'a str,
-    /// The classic PAT, for Public's Team membership item.
-    pub classic: Option<&'a str>,
-}
-
-impl Tester<'_> {
-    async fn gql(&mut self, query: &str, vars: Value) -> Result<Gql, CallError> {
-        let query = query.replacen('{', "{ rateLimit { cost limit remaining resetAt } ", 1);
-        self.api
-            .graphql(self.rec, self.key, self.token, &query, vars)
-            .await
-    }
-
-    async fn rest(&mut self, path: &str) -> Result<crate::github::Rest, CallError> {
-        self.api
-            .rest(self.rec, self.key, self.token, path, None)
-            .await
-    }
-
-    /// Every item Failed: the token itself was rejected.
-    fn rejected(items: &[&str]) -> Report {
-        Report {
-            results: items
-                .iter()
-                .map(|item| {
-                    result(
-                        item,
-                        TestOutcome::Failed,
-                        None,
-                        Some("the token was rejected"),
-                    )
-                })
-                .collect(),
-            ..Report::default()
+pub async fn run(
+    api: &Api,
+    rec: &mut Recorder,
+    token: &str,
+    expect: &Expect,
+    owners: &[OwnerProbe],
+) -> Report {
+    let mut report = Report::default();
+    let cant_check = |report: &mut Report, text: &str| {
+        for (item, label) in [
+            (TestItem::Scopes, SCOPES),
+            (TestItem::Notifications, NOTIFICATIONS),
+            (TestItem::TeamMembership, TEAMS),
+        ] {
+            report.results.push(result(
+                item,
+                label,
+                None,
+                TestOutcome::CantCheck,
+                text,
+                None,
+            ));
         }
-    }
-
-    pub async fn run(&mut self, target: &str, owner: Option<&str>) -> Result<Report, CallError> {
-        match target {
-            NOTIFICATIONS => self.classic().await,
-            PUBLIC => self.public().await,
-            _ => self.owner_scope(owner.unwrap_or(target)).await,
+        for owner in owners {
+            report.results.push(result(
+                TestItem::Owner,
+                &owner.name,
+                Some(&owner.id),
+                TestOutcome::CantCheck,
+                text,
+                None,
+            ));
         }
-    }
-
-    /// Notifications, Team membership (`read:org`) and Scopes.
-    async fn classic(&mut self) -> Result<Report, CallError> {
-        let items = [NOTIFICATIONS_ITEM, TEAMS, SCOPES];
-        let user = match self.rest("/user").await {
-            Ok(answer) => answer,
-            Err(CallError::Unauthorized) => return Ok(Self::rejected(&items)),
-            Err(e) => return Err(e),
-        };
-        let mut report = Report {
-            owner: user.body["login"].as_str().map(str::to_string),
-            ..Report::default()
-        };
-        let granted: Option<Vec<String>> = user.header("x-oauth-scopes").map(|s| {
-            s.split(',')
-                .map(|scope| scope.trim().to_string())
-                .filter(|scope| !scope.is_empty())
-                .collect()
-        });
-        report
-            .results
-            .push(match self.rest("/notifications?per_page=1").await {
-                Ok(_) | Err(CallError::NotFound) => ok(NOTIFICATIONS_ITEM),
-                Err(CallError::Forbidden { accepted, .. }) => failed(
-                    NOTIFICATIONS_ITEM,
-                    accepted.as_deref().unwrap_or("notifications"),
-                ),
-                Err(e) => return Err(e),
-            });
-        report
-            .results
-            .push(match self.rest("/user/teams?per_page=1").await {
-                Ok(_) | Err(CallError::NotFound) => ok(TEAMS),
-                Err(CallError::Forbidden { accepted, .. }) => {
-                    failed(TEAMS, accepted.as_deref().unwrap_or("read:org"))
+    };
+    let failed_account = |report: &mut Report, text: &str| {
+        report.results.push(result(
+            TestItem::Account,
+            ACCOUNT,
+            None,
+            TestOutcome::Failed,
+            text,
+            None,
+        ));
+    };
+    match viewer(api, rec, token).await {
+        Ok((id, login)) => {
+            let wrong = match expect {
+                Expect::Account { id: expected } if *expected != id => {
+                    Some(format!("Belongs to {login}"))
                 }
-                Err(e) => return Err(e),
-            });
-        report.results.push(match granted {
-            None => unverifiable(SCOPES, "GitHub did not list the scopes"),
-            Some(granted) => {
-                let lacking: Vec<&str> = ["notifications", "read:org"]
-                    .into_iter()
-                    .filter(|scope| !granted.iter().any(|g| g == scope))
-                    .collect();
-                if lacking.is_empty() {
-                    ok(SCOPES)
-                } else {
-                    failed(SCOPES, &lacking.join(", "))
-                }
-            }
-        });
-        Ok(report)
-    }
-
-    /// Public: a repository of a public PR the viewer is involved in, else
-    /// one of the viewer's own public repositories.
-    async fn public(&mut self) -> Result<Report, CallError> {
-        let items = [PRS, CHECKS, BEHIND, TEAMS, MERGE_QUEUE];
-        let query = format!(
-            "query Probe {{ viewer {{ login repositories(first: {PROBE_REPOS}, privacy: PUBLIC, ownerAffiliations: [OWNER], orderBy: {{field: PUSHED_AT, direction: DESC}}) {{ nodes {{ {REPO_FIELDS} }} }} }} \
-             involved: search(type: ISSUE, query: \"is:pr is:public involves:@me\", first: 1) {{ nodes {{ ... on PullRequest {{ repository {{ {REPO_FIELDS} }} }} }} }} }}"
-        );
-        let answer = match self.gql(&query, json!({})).await {
-            Ok(answer) => answer,
-            Err(CallError::Unauthorized) => return Ok(Self::rejected(&items)),
-            Err(e) => return Err(e),
-        };
-        let owner = answer.data["viewer"]["login"].as_str().map(str::to_string);
-        let involved = answer.data["involved"]["nodes"][0]["repository"].clone();
-        let own: Vec<Value> = answer.data["viewer"]["repositories"]["nodes"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        let probe = if involved.is_object() {
-            probe_of(&involved)
-        } else {
-            pick(&own)
-        };
-        let mut report = Report {
-            owner,
-            ..Report::default()
-        };
-        match probe {
-            None => {
-                for item in [PRS, CHECKS, BEHIND, MERGE_QUEUE] {
-                    report
-                        .results
-                        .push(unverifiable(item, "no public repository to check against"));
-                }
-            }
-            Some(probe) => self.repository_items(&probe, &mut report).await?,
-        }
-        // DESIGN.md, "Token registration and test": Public's team membership
-        // is read with the classic PAT (`read:org`).
-        let teams = match self.classic {
-            None => unverifiable(TEAMS, "no notifications token"),
-            Some(classic) => match self
-                .api
-                .rest(
-                    self.rec,
-                    NOTIFICATIONS,
-                    classic,
-                    "/user/teams?per_page=1",
+                Expect::New { taken } => taken
+                    .iter()
+                    .find(|(taken, _)| *taken == id)
+                    .map(|(_, known)| format!("{known} is already added")),
+                _ => None,
+            };
+            match wrong {
+                Some(text) => failed_account(&mut report, &text),
+                None => report.results.push(result(
+                    TestItem::Account,
+                    ACCOUNT,
                     None,
-                )
-                .await
-            {
-                Ok(_) | Err(CallError::NotFound) => ok(TEAMS),
-                Err(CallError::Forbidden { accepted, .. }) => {
-                    failed(TEAMS, accepted.as_deref().unwrap_or("read:org"))
+                    TestOutcome::Ok,
+                    &login,
+                    None,
+                )),
+            }
+            report.viewer = Some((id, login));
+        }
+        Err(CallError::Unauthorized) => {
+            failed_account(&mut report, "Token is invalid");
+            cant_check(&mut report, CANT_CHECK);
+            return report;
+        }
+        // DESIGN.md, "Token registration and test": a rate limit is
+        // `✗ Rate limited` with every other item `Can't check`.
+        Err(CallError::RateLimited { .. }) => {
+            failed_account(&mut report, "Rate limited");
+            cant_check(&mut report, CANT_CHECK);
+            return report;
+        }
+        // GitHub answered, without the numeric id the account needs.
+        Err(CallError::Other(message)) if message == NO_NUMERIC_ID => {
+            failed_account(&mut report, "Failed (no numeric id)");
+            cant_check(&mut report, CANT_CHECK);
+            return report;
+        }
+        Err(_) => {
+            failed_account(&mut report, UNREACHABLE);
+            cant_check(&mut report, &format!("{CANT_CHECK} ({UNREACHABLE})"));
+            return report;
+        }
+    }
+
+    // Scopes: `X-OAuth-Scopes` of `GET /user`, as 0.1 read it.
+    report
+        .results
+        .push(match api.rest(rec, token, "/user", None).await {
+            Ok(answer) => match answer.header("x-oauth-scopes") {
+                None => result(
+                    TestItem::Scopes,
+                    SCOPES,
+                    None,
+                    TestOutcome::CantCheck,
+                    "Can't check",
+                    None,
+                ),
+                Some(header) => {
+                    let granted: Vec<String> = header
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    let missing = missing_scopes(&granted);
+                    if missing.is_empty() {
+                        result(TestItem::Scopes, SCOPES, None, TestOutcome::Ok, "OK", None)
+                    } else {
+                        result(
+                            TestItem::Scopes,
+                            SCOPES,
+                            None,
+                            TestOutcome::Failed,
+                            &format!("Missing ({})", missing.join(", ")),
+                            None,
+                        )
+                    }
                 }
-                Err(e) => return Err(e),
             },
-        };
-        report.results.insert(3.min(report.results.len()), teams);
-        Ok(report)
-    }
-
-    async fn owner_scope(&mut self, owner: &str) -> Result<Report, CallError> {
-        let query = format!(
-            "query Probe($owner: String!) {{ viewer {{ login }} owner: repositoryOwner(login: $owner) {{ __typename login \
-             repositories(first: {PROBE_REPOS}, orderBy: {{field: PUSHED_AT, direction: DESC}}) {{ nodes {{ {REPO_FIELDS} }} }} }} }}"
-        );
-        let answer = match self.gql(&query, json!({"owner": owner})).await {
-            Ok(answer) => answer,
-            Err(CallError::Unauthorized) => {
-                return Ok(Self::rejected(&[PRS, CHECKS, BEHIND, TEAMS, MERGE_QUEUE]));
-            }
-            Err(e) => return Err(e),
-        };
-        let kind = owner_kind(&answer.data["owner"]);
-        let mut report = Report {
-            owner: answer.data["viewer"]["login"].as_str().map(str::to_string),
-            kind,
-            name: answer.data["owner"]["login"].as_str().map(str::to_string),
-            ..Report::default()
-        };
-        let Some(kind) = kind else {
-            for item in [PRS, CHECKS, BEHIND, TEAMS, MERGE_QUEUE] {
-                report.results.push(unverifiable(item, "owner not found"));
-            }
-            return Ok(report);
-        };
-        let repos: Vec<Value> = answer.data["owner"]["repositories"]["nodes"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        match pick(&repos) {
-            None => {
-                for item in [PRS, CHECKS, BEHIND, MERGE_QUEUE] {
-                    report
-                        .results
-                        .push(unverifiable(item, "no repository to check against"));
-                }
-            }
-            Some(probe) => self.repository_items(&probe, &mut report).await?,
-        }
-        if kind == ScopeKind::Org {
-            let viewer = report.owner.clone().unwrap_or_default();
-            let answer = self
-                .gql(
-                    "query Teams($owner: String!, $viewer: String!) { organization(login: $owner) { teams(first: 1, userLogins: [$viewer]) { totalCount } } }",
-                    json!({"owner": owner, "viewer": viewer}),
-                )
-                .await;
-            let item = judge_gql(TEAMS, "Members", answer)?;
-            report.results.insert(3.min(report.results.len()), item);
-        }
-        Ok(report)
-    }
-
-    /// PRs, Checks, Behind base and Merge queue against one repository.
-    async fn repository_items(
-        &mut self,
-        probe: &Probe,
-        report: &mut Report,
-    ) -> Result<(), CallError> {
-        let vars = json!({"owner": probe.owner, "name": probe.name});
-        let answer = self
-            .gql(
-                "query Pulls($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { pullRequests(first: 1) { nodes { id } } } }",
-                vars.clone(),
-            )
-            .await;
-        report
-            .results
-            .push(judge_gql(PRS, "Pull requests", answer)?);
-
-        let Some(oid) = probe.oid.clone() else {
-            report
-                .results
-                .push(unverifiable(CHECKS, "no commit to check against"));
-            report
-                .results
-                .push(unverifiable(BEHIND, "no commit to check against"));
-            report
-                .results
-                .push(unverifiable(MERGE_QUEUE, "no default branch"));
-            return Ok(());
-        };
-        let repo = format!("/repos/{}/{}", encode(&probe.owner), encode(&probe.name));
-        let mut lacking = Vec::new();
-        match self
-            .rest(&format!("{repo}/commits/{}/status", encode(&oid)))
-            .await
-        {
-            Ok(_) | Err(CallError::NotFound) => {}
-            Err(CallError::Forbidden { accepted, .. }) => {
-                lacking.push(accepted.unwrap_or_else(|| "Commit statuses".into()))
-            }
-            Err(e) => return Err(e),
-        }
-        match self
-            .rest(&format!(
-                "{repo}/actions/runs?head_sha={}&per_page=1",
-                encode(&oid)
-            ))
-            .await
-        {
-            Ok(_) | Err(CallError::NotFound) => {}
-            Err(CallError::Forbidden { accepted, .. }) => {
-                lacking.push(accepted.unwrap_or_else(|| "Actions".into()))
-            }
-            Err(e) => return Err(e),
-        }
-        report.results.push(if lacking.is_empty() {
-            ok(CHECKS)
-        } else {
-            failed(CHECKS, &lacking.join(", "))
+            Err(e) => call_failed(TestItem::Scopes, SCOPES, None, &e),
         });
 
-        let branch = probe.branch.clone().unwrap_or_default();
-        let vars = json!({"owner": probe.owner, "name": probe.name, "branch": branch});
-        let answer = self
-            .gql(
-                "query Behind($owner: String!, $name: String!, $branch: String!) { repository(owner: $owner, name: $name) { defaultBranchRef { compare(headRef: $branch) { behindBy } } } }",
-                vars.clone(),
-            )
-            .await;
-        report.results.push(judge_gql(BEHIND, "Contents", answer)?);
-        let answer = self
-            .gql(
-                "query Queue($owner: String!, $name: String!, $branch: String!) { repository(owner: $owner, name: $name) { mergeQueue(branch: $branch) { id } } }",
-                vars,
-            )
-            .await;
-        // The permission a private repository's merge queue needs is not
-        // known (DESIGN.md, open questions).
+    for (item, label, path, scope) in [
+        (
+            TestItem::Notifications,
+            NOTIFICATIONS,
+            "/notifications?per_page=1",
+            "notifications",
+        ),
+        (
+            TestItem::TeamMembership,
+            TEAMS,
+            "/user/teams?per_page=1",
+            "read:org",
+        ),
+    ] {
         report
             .results
-            .push(judge_gql(MERGE_QUEUE, "unknown", answer)?);
-        Ok(())
+            .push(match api.rest(rec, token, path, None).await {
+                Ok(_) => result(item, label, None, TestOutcome::Ok, "OK", None),
+                Err(
+                    CallError::Forbidden { .. } | CallError::NotFound | CallError::Unauthorized,
+                ) => result(
+                    item,
+                    label,
+                    None,
+                    TestOutcome::Failed,
+                    &format!("Failed ({scope})"),
+                    None,
+                ),
+                Err(e) => call_failed(item, label, None, &e),
+            });
+    }
+
+    for owner in owners {
+        report
+            .results
+            .push(test_owner(api, rec, token, owner).await);
+    }
+    report
+}
+
+/// One search of the owner. `X-GitHub-SSO` naming the owner's organization,
+/// or a single-organization refusal with its URL, is `SSO authorization
+/// required`.
+async fn test_owner(api: &Api, rec: &mut Recorder, token: &str, owner: &OwnerProbe) -> TestResult {
+    let qualifier = match owner.kind {
+        OwnerKind::Public => "is:public".to_string(),
+        OwnerKind::User => format!("user:{}", owner.name),
+        OwnerKind::Org => format!("org:{}", owner.name),
+    };
+    rec.token.sso = false;
+    rec.token.sso_orgs.clear();
+    rec.token.sso_urls.clear();
+    let answer = api
+        .graphql(
+            rec,
+            token,
+            "query OwnerTest($q: String!) { rateLimit { cost limit remaining resetAt } search(type: ISSUE, query: $q, first: 1) { issueCount } }",
+            json!({"q": format!("is:pr involves:@me {qualifier}")}),
+        )
+        .await;
+    let sso = rec.token.sso
+        && (rec.token.sso_orgs.is_empty()
+            || owner
+                .github_id
+                .is_some_and(|id| rec.token.sso_orgs.contains(&id)));
+    if sso {
+        return result(
+            TestItem::Owner,
+            &owner.name,
+            Some(&owner.id),
+            TestOutcome::SsoRequired,
+            "SSO authorization required",
+            rec.token.sso_urls.first().cloned(),
+        );
+    }
+    match answer {
+        Ok(answer) if answer.errors.is_empty() => result(
+            TestItem::Owner,
+            &owner.name,
+            Some(&owner.id),
+            TestOutcome::Ok,
+            "OK",
+            None,
+        ),
+        Ok(_) => result(
+            TestItem::Owner,
+            &owner.name,
+            Some(&owner.id),
+            TestOutcome::Failed,
+            "Failed",
+            None,
+        ),
+        Err(e) => call_failed(TestItem::Owner, &owner.name, Some(&owner.id), &e),
     }
 }

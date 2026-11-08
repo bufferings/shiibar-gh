@@ -85,7 +85,7 @@ public enum MainMenu {
 }
 
 /// The windows that make the app a regular app: a pinned window of any
-/// scope and Settings (DESIGN.md, "Switching to a regular app").
+/// account and Settings (DESIGN.md, "Switching to a regular app").
 public struct RegularWindows: Equatable {
     private var open: Set<String> = []
 

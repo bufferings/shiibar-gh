@@ -1,27 +1,24 @@
 //! The daemon's own state types. Deliberately separate from the wire types in
 //! `shiibar-gh-proto`: saved values must survive whatever a client can parse.
+//!
+//! Keys: an account is GitHub's numeric user id as a decimal string. A PR
+//! and a row are keyed by the account id and the GitHub node id joined with
+//! `:` ([`join_key`]); neither contains `:`, so the key is unambiguous and
+//! unique across accounts. An owner has an id the daemon assigns (`o<n>`).
 
 use shiibar_gh_proto as proto;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const PUBLIC: &str = "public";
-/// The token target and Keychain account of the classic PAT.
-pub const NOTIFICATIONS: &str = "notifications";
-/// The Keychain account of an owner scope is this plus the lowercase owner.
-pub const SCOPE_ACCOUNT_PREFIX: &str = "scope:";
 
-/// The Keychain account for a token record key: `notifications`, `public` or
-/// `scope:<lowercase owner>`. docs/tasks/M2.md, "Tokens and the Keychain".
-pub fn scope_account(key: &str) -> String {
-    match key {
-        NOTIFICATIONS | PUBLIC => key.to_string(),
-        owner => format!("{SCOPE_ACCOUNT_PREFIX}{}", owner.to_lowercase()),
-    }
+/// `<account id>:<node id>`, the key of a PR, row, baseline or comment.
+pub fn join_key(account: &str, node: &str) -> String {
+    format!("{account}:{node}")
 }
 
 macro_rules! stored_enum {
     ($name:ident { $($variant:ident = $text:literal),+ $(,)? }) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub enum $name { $($variant),+ }
 
         impl $name {
@@ -102,76 +99,199 @@ both_ways!(BaseStatus {
     None
 });
 
-stored_enum!(RowKind {
+stored_enum!(EventKind {
     ReviewRequested = "review_requested",
+    TeamReviewRequested = "team_review_requested",
     Mentioned = "mentioned",
+    TeamMentioned = "team_mentioned",
     Comment = "comment",
     Reply = "reply",
-    AddedToMergeQueue = "added_to_merge_queue",
-    RemovedFromMergeQueue = "removed_from_merge_queue",
-    Merged = "merged",
-    Closed = "closed",
-    BotComment = "bot_comment",
+    ReplyMentioned = "reply_mentioned",
+    Reaction = "reaction",
+    Approved = "approved",
+    ChangesRequested = "changes_requested",
     ChecksFailed = "checks_failed",
     Conflicts = "conflicts",
-    ChangesRequested = "changes_requested",
     Mergeable = "mergeable",
+    MergeQueueAdded = "merge_queue_added",
+    MergeQueueRemoved = "merge_queue_removed",
+    MergedClosed = "merged_closed",
+});
+both_ways!(EventKind {
+    ReviewRequested,
+    TeamReviewRequested,
+    Mentioned,
+    TeamMentioned,
+    Comment,
+    Reply,
+    ReplyMentioned,
+    Reaction,
+    Approved,
+    ChangesRequested,
+    ChecksFailed,
+    Conflicts,
+    Mergeable,
+    MergeQueueAdded,
+    MergeQueueRemoved,
+    MergedClosed,
+});
+
+impl EventKind {
+    pub const ALL: [EventKind; 16] = [
+        EventKind::ReviewRequested,
+        EventKind::TeamReviewRequested,
+        EventKind::Mentioned,
+        EventKind::TeamMentioned,
+        EventKind::Comment,
+        EventKind::Reply,
+        EventKind::ReplyMentioned,
+        EventKind::Reaction,
+        EventKind::Approved,
+        EventKind::ChangesRequested,
+        EventKind::ChecksFailed,
+        EventKind::Conflicts,
+        EventKind::Mergeable,
+        EventKind::MergeQueueAdded,
+        EventKind::MergeQueueRemoved,
+        EventKind::MergedClosed,
+    ];
+
+    /// The defaults of DESIGN.md, "Row kinds and states": List, Todo, Notify.
+    pub fn default_cell(self) -> Cell {
+        use EventKind::*;
+        let (list, todo, notify) = match self {
+            ReviewRequested | TeamReviewRequested | Mentioned | TeamMentioned | Comment | Reply
+            | ReplyMentioned => (true, true, true),
+            Reaction | Approved | ChangesRequested | ChecksFailed | Conflicts | Mergeable
+            | MergeQueueRemoved => (true, false, true),
+            MergeQueueAdded | MergedClosed => (true, false, false),
+        };
+        Cell { list, todo, notify }
+    }
+}
+
+stored_enum!(RowKind {
+    ReviewRequested = "review_requested",
+    TeamReviewRequested = "team_review_requested",
+    Mentioned = "mentioned",
+    TeamMentioned = "team_mentioned",
+    Comment = "comment",
+    Reply = "reply",
+    ReplyMentioned = "reply_mentioned",
     Reaction = "reaction",
+    Approved = "approved",
+    ChangesRequested = "changes_requested",
+    ChecksFailed = "checks_failed",
+    Conflicts = "conflicts",
+    Mergeable = "mergeable",
+    MergeQueueAdded = "merge_queue_added",
+    MergeQueueRemoved = "merge_queue_removed",
+    Merged = "merged",
+    Closed = "closed",
 });
 both_ways!(RowKind {
     ReviewRequested,
+    TeamReviewRequested,
     Mentioned,
+    TeamMentioned,
     Comment,
     Reply,
-    AddedToMergeQueue,
-    RemovedFromMergeQueue,
-    Merged,
-    Closed,
-    BotComment,
+    ReplyMentioned,
+    Reaction,
+    Approved,
+    ChangesRequested,
     ChecksFailed,
     Conflicts,
-    ChangesRequested,
     Mergeable,
-    Reaction,
+    MergeQueueAdded,
+    MergeQueueRemoved,
+    Merged,
+    Closed,
 });
 
-impl From<proto::EventKind> for RowKind {
-    fn from(kind: proto::EventKind) -> Self {
-        use proto::EventKind as E;
+impl From<proto::IngestKind> for RowKind {
+    fn from(kind: proto::IngestKind) -> Self {
+        use proto::IngestKind as I;
         match kind {
-            E::ReviewRequested => Self::ReviewRequested,
-            E::Mentioned => Self::Mentioned,
-            E::Comment => Self::Comment,
-            E::Reply => Self::Reply,
-            E::AddedToMergeQueue => Self::AddedToMergeQueue,
-            E::RemovedFromMergeQueue => Self::RemovedFromMergeQueue,
-            E::Merged => Self::Merged,
-            E::Closed => Self::Closed,
-            E::BotComment => Self::BotComment,
+            I::ReviewRequested => Self::ReviewRequested,
+            I::TeamReviewRequested => Self::TeamReviewRequested,
+            I::Mentioned => Self::Mentioned,
+            I::TeamMentioned => Self::TeamMentioned,
+            I::Comment => Self::Comment,
+            I::Reply => Self::Reply,
+            I::ReplyMentioned => Self::ReplyMentioned,
+            I::Approved => Self::Approved,
+            I::MergeQueueAdded => Self::MergeQueueAdded,
+            I::MergeQueueRemoved => Self::MergeQueueRemoved,
+            I::Merged => Self::Merged,
+            I::Closed => Self::Closed,
         }
     }
 }
 
 impl RowKind {
-    /// The name in notification titles, in GitHub's own wording.
-    pub fn label(self) -> &'static str {
+    /// The kind of the event table this row follows.
+    pub fn event(self) -> EventKind {
+        use RowKind::*;
         match self {
-            Self::ReviewRequested => "Review requested",
-            Self::Mentioned => "Mentioned",
-            Self::Comment => "Comment",
-            Self::Reply => "Reply",
-            Self::AddedToMergeQueue => "Added to merge queue",
-            Self::RemovedFromMergeQueue => "Removed from merge queue",
-            Self::Merged => "Merged",
-            Self::Closed => "Closed",
-            // DESIGN.md, "macOS notifications": a bot's comment is titled
-            // like any other comment; the row kind stays `bot_comment`.
-            Self::BotComment => "Comment",
-            Self::ChecksFailed => "Checks failed",
-            Self::Conflicts => "Conflicts",
-            Self::ChangesRequested => "Changes requested",
-            Self::Mergeable => "Mergeable",
-            Self::Reaction => "Reaction",
+            ReviewRequested => EventKind::ReviewRequested,
+            TeamReviewRequested => EventKind::TeamReviewRequested,
+            Mentioned => EventKind::Mentioned,
+            TeamMentioned => EventKind::TeamMentioned,
+            Comment => EventKind::Comment,
+            Reply => EventKind::Reply,
+            ReplyMentioned => EventKind::ReplyMentioned,
+            Reaction => EventKind::Reaction,
+            Approved => EventKind::Approved,
+            ChangesRequested => EventKind::ChangesRequested,
+            ChecksFailed => EventKind::ChecksFailed,
+            Conflicts => EventKind::Conflicts,
+            Mergeable => EventKind::Mergeable,
+            MergeQueueAdded => EventKind::MergeQueueAdded,
+            MergeQueueRemoved => EventKind::MergeQueueRemoved,
+            Merged | Closed => EventKind::MergedClosed,
+        }
+    }
+
+    pub fn is_review_request(self) -> bool {
+        matches!(self, Self::ReviewRequested | Self::TeamReviewRequested)
+    }
+
+    /// Rows the Users of the Exclusions apply to: not the state changes
+    /// and not reactions (DESIGN.md, "Exclusions").
+    pub fn has_actor(self) -> bool {
+        !matches!(
+            self,
+            Self::Reaction
+                | Self::ChangesRequested
+                | Self::ChecksFailed
+                | Self::Conflicts
+                | Self::Mergeable
+        )
+    }
+
+    /// The name in notification titles: the table's, with Merged / Closed
+    /// told apart (DESIGN.md, "macOS notifications").
+    pub fn label(self) -> &'static str {
+        use RowKind::*;
+        match self {
+            ReviewRequested => "Review requested",
+            TeamReviewRequested => "Review requested to my team",
+            Mentioned => "Mentioned",
+            TeamMentioned => "My team mentioned",
+            Comment => "Comment on my PR",
+            Reply => "Reply in a thread I commented in",
+            ReplyMentioned => "Reply in a thread I was mentioned in",
+            Reaction => "Reaction to my comment",
+            Approved => "Approved",
+            ChangesRequested => "Changes requested",
+            ChecksFailed => "Checks failed",
+            Conflicts => "Conflicts",
+            Mergeable => "Mergeable",
+            MergeQueueAdded => "Added to merge queue",
+            MergeQueueRemoved => "Removed from merge queue",
+            Merged => "Merged",
+            Closed => "Closed",
         }
     }
 }
@@ -183,54 +303,55 @@ stored_enum!(NotifyState {
     Pending = "pending",
     // Made on a snoozed PR, waiting for the release.
     Held = "held",
-    // Undelivered before the PR was snoozed. The Return time release sends it
-    // with the summary; a manual Unsnooze clears it like Held.
+    // Undelivered before the PR was snoozed.
     HeldUndelivered = "held_undelivered",
     Delivered = "delivered",
 });
 
-stored_enum!(ScopeKind {
+stored_enum!(OwnerKind {
     Org = "org",
     User = "user",
+    Public = "public",
 });
+both_ways!(OwnerKind { Org, User, Public });
 
-stored_enum!(ScopeColor {
-    Gray = "gray",
+stored_enum!(AccountColor {
+    None = "none",
+    Red = "red",
+    Orange = "orange",
+    Yellow = "yellow",
     Green = "green",
     Blue = "blue",
     Purple = "purple",
-    Pink = "pink",
-    Beige = "beige",
 });
-both_ways!(ScopeColor {
-    Gray,
+both_ways!(AccountColor {
+    None,
+    Red,
+    Orange,
+    Yellow,
     Green,
     Blue,
-    Purple,
-    Pink,
-    Beige
+    Purple
 });
 
-impl ScopeColor {
-    /// The order new scopes take colors in. DESIGN.md, "Adding a scope and
-    /// registering a token in Settings": each newly added scope takes the next
-    /// color, cycling through all six.
-    pub const CYCLE: [ScopeColor; 6] = [
-        ScopeColor::Gray,
-        ScopeColor::Green,
-        ScopeColor::Blue,
-        ScopeColor::Purple,
-        ScopeColor::Pink,
-        ScopeColor::Beige,
+impl AccountColor {
+    /// DESIGN.md, "Account colors": the order second and later accounts take
+    /// unused colors in.
+    pub const CYCLE: [AccountColor; 6] = [
+        AccountColor::Red,
+        AccountColor::Orange,
+        AccountColor::Yellow,
+        AccountColor::Green,
+        AccountColor::Blue,
+        AccountColor::Purple,
     ];
-    /// Public starts beige (DESIGN.md, "Overview and scope").
-    pub const PUBLIC: ScopeColor = ScopeColor::Beige;
-
-    /// The color of the `seq`-th owner scope ever added.
-    pub fn nth(seq: u32) -> ScopeColor {
-        Self::CYCLE[seq as usize % Self::CYCLE.len()]
-    }
 }
+
+stored_enum!(ExclusionState {
+    Hidden = "hidden",
+    ListOnly = "list_only",
+});
+both_ways!(ExclusionState { Hidden, ListOnly });
 
 stored_enum!(Appearance {
     System = "system",
@@ -238,29 +359,185 @@ stored_enum!(Appearance {
     Dark = "dark",
 });
 
-stored_enum!(BotComments {
-    Notify = "notify",
-    ListOnly = "list_only",
-    Hide = "hide",
-});
+/// One line of an owner's event table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cell {
+    pub list: bool,
+    pub todo: bool,
+    pub notify: bool,
+}
+
+/// An owner's event table, every kind present.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventTable(pub BTreeMap<EventKind, Cell>);
+
+impl Default for EventTable {
+    fn default() -> Self {
+        Self(
+            EventKind::ALL
+                .iter()
+                .map(|k| (*k, k.default_cell()))
+                .collect(),
+        )
+    }
+}
+
+impl EventTable {
+    pub fn cell(&self, kind: EventKind) -> Cell {
+        self.0.get(&kind).copied().unwrap_or(kind.default_cell())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScopeRec {
+pub struct ExclusionRec {
+    pub name: String,
+    pub state: ExclusionState,
+}
+
+/// A login compared for the Exclusions: without case, as GraphQL spells it.
+/// DESIGN.md, "Exclusions": a bot is compared by `Bot.login` (`renovate`,
+/// without `[bot]`). Every actor shiibar-gh records comes from GraphQL, so
+/// no REST `[bot]` suffix ever needs removing.
+pub fn user_key(login: &str) -> String {
+    login.to_lowercase()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnerRec {
     pub id: String,
-    /// Removed scopes stay so adding the owner again restores them.
-    pub removed: bool,
+    pub account: String,
+    /// The login as GitHub spells it, or `Public`.
+    pub name: String,
+    pub kind: OwnerKind,
+    pub github_id: Option<i64>,
+    /// Registration order within the account.
+    pub seq: u64,
     pub enabled: bool,
     pub notify: bool,
+    pub skip_drafts: bool,
     pub watch_started_at: i64,
-    pub updated_at: Option<i64>,
-    pub dot: bool,
-    /// `org` or `user` once a fetch read it; never set for Public.
-    pub kind: Option<ScopeKind>,
-    /// The owner login as GitHub spells it, once a fetch read it.
-    pub name: Option<String>,
-    /// The last time the search and status fetch of this scope succeeded.
+    /// The last time the search and status fetch of this owner succeeded.
     pub fetched_at: Option<i64>,
-    pub color: ScopeColor,
+    pub events: EventTable,
+    pub repos: Vec<ExclusionRec>,
+    pub users: Vec<ExclusionRec>,
+}
+
+impl OwnerRec {
+    pub fn is_public(&self) -> bool {
+        self.kind == OwnerKind::Public
+    }
+}
+
+/// A rate limit as the last response said.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct LimitRec {
+    pub limit: i64,
+    pub remaining: i64,
+    pub reset_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TestRec {
+    pub at: i64,
+    pub results: Vec<proto::TestResult>,
+}
+
+/// What the daemon knows about an account's token. The token itself lives
+/// in the Keychain only.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct TokenRec {
+    pub registered: bool,
+    /// The last fetch got a 401: fetching stops until it is replaced.
+    pub invalid: bool,
+    pub expires_at: Option<i64>,
+    /// `X-OAuth-Scopes` of the last response that had it.
+    pub scopes: Option<Vec<String>>,
+    /// Scopes an endpoint refused for lack of (`read:org`, `notifications`).
+    pub refused: BTreeSet<String>,
+    /// The last run saw `X-GitHub-SSO`: its organization ids and URLs.
+    pub sso: bool,
+    pub sso_orgs: Vec<i64>,
+    pub sso_urls: Vec<String>,
+    pub last_test: Option<TestRec>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TeamRec {
+    pub database_id: i64,
+    pub slug: String,
+}
+
+/// A review thread whose comments become Reply rows.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ThreadRec {
+    pub id: String,
+    pub pr_id: String,
+    /// The account's first comment in it.
+    pub mine_at: Option<i64>,
+    /// The first mention of the account or its team in it.
+    pub mention_at: Option<i64>,
+}
+
+/// One of the account's comments, reviews, review comments or PR bodies.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct OwnComment {
+    pub id: String,
+    pub pr_id: String,
+    pub url: String,
+    pub text: String,
+    pub created_at: i64,
+    /// The core already holds a baseline, or this comment starts from zero.
+    pub baseline_done: bool,
+}
+
+/// A PR whose events must be fetched again from `since`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RetryRec {
+    pub pr_id: String,
+    pub since: i64,
+    pub failures: u32,
+}
+
+/// What the fetcher keeps between runs for one account. PR, thread and
+/// comment ids here are GitHub node ids.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct FetchRec {
+    /// Lowercase `owner/repo#number` to PR node id.
+    pub pr_ids: BTreeMap<String, String>,
+    pub own: BTreeMap<String, OwnComment>,
+    pub threads: BTreeMap<String, ThreadRec>,
+    pub retries: BTreeMap<String, RetryRec>,
+    /// Notified PRs (lowercase `owner/repo#number`) not fetched yet.
+    pub pending_signals: BTreeSet<String>,
+    pub notif_last_modified: Option<String>,
+    pub notif_since: Option<String>,
+    pub poll_interval: Option<i64>,
+    pub notif_checked_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountRec {
+    /// GitHub's numeric user id (`viewer { databaseId }`), as a decimal
+    /// string.
+    pub id: String,
+    pub login: String,
+    pub color: AccountColor,
+    /// Registration order.
+    pub seq: u64,
+    pub token: TokenRec,
+    /// The end of the last fetch run (Updated … ago).
+    pub updated_at: Option<i64>,
+    /// The blue dot of the menu bar icon.
+    pub dot: bool,
+    pub teams: Vec<TeamRec>,
+    pub graphql: Option<LimitRec>,
+    pub rest: Option<LimitRec>,
+    /// Every fetch of the account stops until this time.
+    pub stopped_until: Option<i64>,
+    pub fetch: FetchRec,
 }
 
 /// The values a state change row compares against.
@@ -274,6 +551,9 @@ pub struct PrevValues {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrRec {
+    /// `<account>:<node id>`.
+    pub key: String,
+    pub account: String,
     pub id: String,
     pub owner: String,
     pub repo: String,
@@ -296,33 +576,39 @@ pub struct PrRec {
     pub is_private: bool,
     pub requested_me: bool,
     pub requested_team: bool,
+    pub assignees: Vec<String>,
     pub link_review: String,
     pub link_checks: String,
     pub link_base: String,
-    pub mine: bool,
     pub unreadable: bool,
     pub snoozed: bool,
     pub added_at: Option<i64>,
     pub prev: Option<PrevValues>,
-    /// When the card was last seen to disappear, recorded by the periodic
-    /// pass. `None` while the card shows.
+    /// When the card was last seen to disappear. `None` while it shows.
     pub gone_at: Option<i64>,
-    /// The viewer's comments and threads were collected since the PR last
+    /// The account's comments and threads were collected since the PR last
     /// became watched.
     pub collected: bool,
 }
 
 impl PrRec {
     /// `owner/repo#number`, the `<pr>` of the wire format.
-    pub fn key(&self) -> String {
+    pub fn display_key(&self) -> String {
         format!("{}/{}#{}", self.owner, self.repo, self.number)
+    }
+
+    pub fn repo_name(&self) -> String {
+        format!("{}/{}", self.owner, self.repo)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RowRec {
+    /// `<account>:<event node id or synthesized id>`.
     pub id: String,
-    pub pr_id: String,
+    pub account: String,
+    /// The PR key.
+    pub pr: String,
     pub kind: RowKind,
     pub text: Option<String>,
     pub counts: Option<BTreeMap<String, u32>>,
@@ -335,15 +621,18 @@ pub struct RowRec {
     pub done: bool,
     pub pruned: bool,
     pub notify: NotifyState,
-    /// A Review requested row addressed to one of the viewer's teams.
-    pub team: bool,
+    /// The table's Todo when the row was made (and no List only).
+    pub todo_auto: bool,
+    /// The value `todo` set by hand, which wins over `todo_auto`.
+    pub todo_manual: Option<bool>,
 }
 
-/// The last counted reactions of one of the viewer's comments.
+/// The last counted reactions of one of the account's comments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Baseline {
-    pub comment_id: String,
-    pub pr_id: String,
+    /// `<account>:<comment node id>`.
+    pub key: String,
+    pub pr: String,
     pub counts: BTreeMap<String, u32>,
 }
 
@@ -352,17 +641,9 @@ pub struct Config {
     pub launch_at_login: bool,
     pub status_interval_minutes: i64,
     pub reactions_interval_minutes: i64,
-    pub graphql_cost_cap: i64,
-    pub notify_activity: bool,
-    pub notify_state: bool,
-    pub notify_reactions: bool,
     pub snooze_return_time: (u8, u8),
-    pub bot_comments: BotComments,
-    pub include_team_requests: bool,
     pub keep_watching_days: i64,
     pub drop_after_days: i64,
-    /// The app's appearance (DESIGN.md, "Settings" and "UI"). Only the app
-    /// reads it.
     pub appearance: Appearance,
 }
 
@@ -372,13 +653,7 @@ impl Default for Config {
             launch_at_login: true,
             status_interval_minutes: 1,
             reactions_interval_minutes: 3,
-            graphql_cost_cap: 1500,
-            notify_activity: true,
-            notify_state: true,
-            notify_reactions: true,
             snooze_return_time: (9, 0),
-            bot_comments: BotComments::ListOnly,
-            include_team_requests: true,
             keep_watching_days: 3,
             drop_after_days: 14,
             appearance: Appearance::System,
@@ -386,149 +661,42 @@ impl Default for Config {
     }
 }
 
-/// A token registration. The token itself lives in the Keychain only.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TokenRec {
-    /// `notifications`, `public` or a lowercase owner login.
-    pub target: String,
-    pub registered: bool,
-    /// The last fetch got a 401: fetching with it stops until it is replaced.
-    pub invalid: bool,
-    pub owner: Option<String>,
-    pub expires_at: Option<i64>,
-    /// Granted scopes of a classic PAT.
-    pub scopes: Option<Vec<String>>,
-    /// A response carried `X-GitHub-SSO`.
-    pub sso: bool,
-    pub sso_urls: Vec<String>,
-    pub last_test: Option<TestRec>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TestRec {
-    pub at: i64,
-    pub results: Vec<TestItem>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TestItem {
-    pub item: String,
-    /// `ok`, `failed` or `unverifiable`.
-    pub outcome: String,
-    pub missing: Option<String>,
-    pub reason: Option<String>,
-}
-
-/// A review thread whose comments become Reply rows after `from_at`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ThreadRec {
-    pub id: String,
-    pub pr_id: String,
-    pub from_at: i64,
-}
-
-/// One of the viewer's comments, reviews, review comments or PR bodies.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OwnComment {
-    pub id: String,
-    pub pr_id: String,
-    pub url: String,
-    pub text: String,
-    pub created_at: i64,
-    /// The core already holds a baseline, or this comment starts from zero.
-    pub baseline_done: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TeamRec {
-    pub database_id: i64,
-    pub slug: String,
-}
-
-/// A PR whose events must be fetched again from `since`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RetryRec {
-    pub pr_id: String,
-    pub since: i64,
-    pub failures: u32,
-}
-
-/// Remaining API budget as the last responses said.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Usage {
-    pub rest_remaining: Option<i64>,
-    pub rest_limit: Option<i64>,
-    pub graphql_remaining: Option<i64>,
-    pub graphql_limit: Option<i64>,
-    pub cost_per_poll: Option<i64>,
-}
-
-/// What the fetcher keeps between runs. docs/tasks/M2.md, "Fetcher and core".
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct FetchData {
-    pub tokens: BTreeMap<String, TokenRec>,
-    /// Lowercase `owner/repo#number` to PR id.
-    pub pr_ids: BTreeMap<String, String>,
-    pub own: BTreeMap<String, OwnComment>,
-    pub threads: BTreeMap<String, ThreadRec>,
-    /// Scope id to the viewer's teams that scope's token can read.
-    pub teams: BTreeMap<String, Vec<TeamRec>>,
-    pub retries: BTreeMap<String, RetryRec>,
-    /// Notified PRs (lowercase `owner/repo#number`) not fetched yet.
-    pub pending_signals: BTreeSet<String>,
-    pub notif_last_modified: Option<String>,
-    pub notif_since: Option<String>,
-    pub poll_interval: Option<i64>,
-    /// GraphQL cost by time, for the last hour.
-    pub costs: Vec<(i64, i64)>,
-    pub usage: Usage,
-    /// Every fetch stops until this time.
-    pub stopped_until: Option<i64>,
-    pub stop_reason: Option<String>,
-    /// The last time Include requests to my teams was turned on.
-    pub team_requests_on_at: i64,
-    /// The last run where the notifications check was due, even if it
-    /// stopped before `/notifications`. With `poll_interval` it times the
-    /// next check across restarts.
-    pub notif_checked_at: Option<i64>,
-}
-
 /// Everything that outlives the process.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Data {
-    pub scopes: BTreeMap<String, ScopeRec>,
+    pub accounts: BTreeMap<String, AccountRec>,
+    pub owners: BTreeMap<String, OwnerRec>,
     pub prs: BTreeMap<String, PrRec>,
     pub rows: BTreeMap<String, RowRec>,
     pub baselines: BTreeMap<String, Baseline>,
     pub config: Config,
     pub last_release_at: i64,
-    /// How many owner scopes were ever added, for the color cycle. Saved
-    /// with the meta values.
-    pub color_seq: u32,
-    pub fetch: FetchData,
+    /// The last number given to an account, owner (ids and order).
+    pub seq: u64,
+    /// After `reset`: the next Keychain read restores the accounts.
+    pub restore_accounts: bool,
 }
 
 /// What changed in [`Data`] since the last save.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Dirty {
-    pub scopes: BTreeSet<String>,
+    pub accounts: BTreeSet<String>,
+    pub owners: BTreeSet<String>,
     pub prs: BTreeSet<String>,
     pub rows: BTreeSet<String>,
     pub baselines: BTreeSet<String>,
     pub config: bool,
     pub meta: bool,
-    /// Everything in [`FetchData`]; saved as a whole.
-    pub fetch: bool,
 }
 
 impl Dirty {
     pub fn is_empty(&self) -> bool {
-        self.scopes.is_empty()
+        self.accounts.is_empty()
+            && self.owners.is_empty()
             && self.prs.is_empty()
             && self.rows.is_empty()
             && self.baselines.is_empty()
             && !self.config
             && !self.meta
-            && !self.fetch
     }
 }

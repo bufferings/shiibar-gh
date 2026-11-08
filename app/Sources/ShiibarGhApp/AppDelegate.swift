@@ -41,17 +41,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let store = UIStateStore(defaults: .standard)
         model = AppModel(api: api, store: store, opener: WorkspaceOpener(), notifier: notifier)
         let avatars = AvatarStore(loader: URLSessionImageLoader())
-        surfaces = SurfaceController(app: model, avatars: avatars) { [weak self] scope in
+        surfaces = SurfaceController(app: model, avatars: avatars) { [weak self] account in
             SurfaceActions(
-                openWindow: scope.map { id in { self?.surfaces.openWindow(scope: id) } },
-                openSettings: { destination in self?.showSettings(destination == .scopes ? .scopes : .general) },
+                openWindow: account.map { id in { self?.surfaces.openWindow(account: id) } },
+                openSettings: { destination in self?.showSettings(destination) },
                 about: { self?.about() },
                 quit: { self?.quit() }
             )
         }
         surfaces.onQuit = { [weak self] in self?.quit() }
-        surfaces.onWindowOpened = { [weak self] scope in self?.regularWindowOpened("window:" + scope) }
-        surfaces.onWindowClosed = { [weak self] scope in self?.regularWindowClosed("window:" + scope) }
+        surfaces.onWindowOpened = { [weak self] account in self?.regularWindowOpened("window:" + account) }
+        surfaces.onWindowClosed = { [weak self] account in self?.regularWindowClosed("window:" + account) }
         if bundled {
             launch = LaunchAtLogin(service: MainAppLoginItem(), api: api, store: store)
         }
@@ -75,10 +75,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 Task { await launch.configChanged(key: key, value: value) }
             }
         }
-        model.onOpenPopover = { [weak self] scope in self?.surfaces.showPopover(scope: scope) }
-        model.onOpenSettings = { [weak self] in self?.showSettings(.scopes) }
-        presenter?.onClick = { [weak self] type, scope, url in
-            self?.model.notificationClicked(type: type, scope: scope, url: url)
+        model.onOpenPopover = { [weak self] account in self?.surfaces.showPopover(account: account) }
+        model.onOpenSettings = { [weak self] destination in self?.showSettings(destination) }
+        // Shown from the next turn of the run loop so a dialog never runs
+        // inside the event handler that raised it.
+        model.onKeychainDialog = { [weak self] dialog in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.keychainAlerts.show(dialog) { [weak self] chosen in self?.model.keychainAction(chosen) }
+            }
+        }
+        presenter?.onClick = { [weak self] type, account, url in
+            self?.model.notificationClicked(type: type, account: account, url: url)
         }
 
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
@@ -102,14 +110,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         self.supervisor = supervisor
         supervisor.start()
 
-        // Asked at the first launch, so the first notification can show.
+        // Asked at launch, before any notification is scheduled (Apple:
+        // "Always call this method before scheduling any local
+        // notifications"); macOS prompts only the first time.
         notifier.requestAuthorization()
     }
 
     private var didApplyLaunch = false
+    private let keychainAlerts = KeychainAlerts()
     private var appearance: AppearanceFollower?
     private var appearanceObservation: NSKeyValueObservation?
     private var regularWindows = RegularWindows()
+    private var settingsTitle: Any?
 
     // MARK: - Regular app while a window is open
 
@@ -163,22 +175,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         settingsWindow?.appearance = NSAppearance(named: name)
     }
 
-    func showSettings(_ tab: SettingsTab) {
+    func showSettings(_ destination: SettingsDestination) {
         surfaces.closePopover()
-        settings.tab = tab
+        settings.show(destination)
         if settingsWindow == nil {
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 720, height: 640),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered, defer: false
             )
-            window.title = "Settings"
+            window.title = settings.tab.rawValue
             window.appearance = NSAppearance(named: SurfaceAppearance.named(dark: SurfaceAppearance.isDark(
                 setting: appearance?.current ?? .system, systemDark: NSApp.effectiveAppearance.isDark
             )))
             window.isReleasedWhenClosed = false
             window.contentViewController = NSHostingController(rootView: SettingsView(model: settings, app: model))
             window.setContentSize(NSSize(width: 720, height: 640))
+            // The title is the tab (Settings.html).
+            settingsTitle = settings.$tab.sink { [weak window] tab in window?.title = tab.rawValue }
             window.center()
             window.delegate = self
             settingsWindow = window

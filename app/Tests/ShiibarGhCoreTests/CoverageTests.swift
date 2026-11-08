@@ -1,110 +1,9 @@
-import Darwin
+import AppKit
 import Foundation
 @testable import ShiibarGhCore
 import XCTest
 
-final class SurfaceRuleTests: XCTestCase {
-    func testWhatAPopoverShows() {
-        let plain = Scope(id: "o", kind: .org)
-        let noToken = Scope(id: "o", kind: .org, warnings: [Warning(kind: .noToken, token: .notifications)])
-        XCTAssertEqual(SurfaceRules.content(scope: plain, dbUnreadable: false), .list)
-        XCTAssertEqual(SurfaceRules.content(scope: noToken, dbUnreadable: false), .noToken)
-        XCTAssertEqual(SurfaceRules.content(scope: noToken, dbUnreadable: true), .unreadable)
-        XCTAssertEqual(SurfaceRules.noScopeContent(dbUnreadable: false), .noScopes)
-        XCTAssertEqual(SurfaceRules.noScopeContent(dbUnreadable: true), .unreadable, "Reset, not No scopes yet")
-    }
-
-    func testTheAppIconShowsWhenNoScopeIconDoes() {
-        XCTAssertTrue(SurfaceRules.showsAppIcon([]))
-        XCTAssertTrue(SurfaceRules.showsAppIcon([Scope(id: "a", enabled: false), Scope(id: "b", enabled: false)]))
-        XCTAssertFalse(SurfaceRules.showsAppIcon([Scope(id: "a", enabled: false), Scope(id: "b")]))
-    }
-
-    func testEmptyStateWording() {
-        XCTAssertEqual(EmptyState.noScopesTitle, "No scopes yet")
-        XCTAssertEqual(EmptyState.noScopesDetail, "Add a scope in Settings")
-        XCTAssertEqual(EmptyState.noToken, "Add a token in Settings")
-        XCTAssertEqual(EmptyState.unreadable, "Couldn't read saved state")
-        XCTAssertEqual(EmptyState.activity, "No activity")
-    }
-
-    func testSettingsButtonsGoWhereTheSpecSays() {
-        XCTAssertEqual(SurfaceRules.bannerSettings, .scopes)
-        XCTAssertEqual(SurfaceRules.noTokenSettings, .scopes)
-        XCTAssertEqual(SurfaceRules.noScopesSettings, .scopes)
-        XCTAssertEqual(SurfaceRules.headerSettings, .general)
-    }
-
-    func testSnoozedUntilUsesTheNextReturnTimeFromTheCard() {
-        // 2027-01-18 09:00 in Tokyo is a Monday.
-        let tokyo = TimeZone(identifier: "Asia/Tokyo")!
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = tokyo
-        let at = Int64(calendar.date(from: DateComponents(year: 2027, month: 1, day: 18, hour: 9))!.timeIntervalSince1970)
-        XCTAssertEqual(SurfaceRules.snoozedUntil(at, timeZone: tokyo), "Snoozed until Mon 09:00")
-    }
-}
-
-final class SettingsTextTests: XCTestCase {
-    func testFullTestResultLines() {
-        XCTAssertEqual(TokenState.resultLine(TestResult(item: "Checks", outcome: .ok)), "OK · Checks")
-        XCTAssertEqual(TokenState.resultLine(TestResult(item: "Checks", outcome: .failed, missing: "Actions")), "Failed (Actions) · Checks")
-        XCTAssertEqual(TokenState.resultLine(TestResult(item: "Merge queue", outcome: .unverifiable)), "Can't check · Merge queue")
-    }
-
-    func testNotificationsTokenWarningsNameTheNotificationsToken() {
-        let scope = Scope(id: "o", name: "example-org", kind: .org, warnings: [
-            Warning(kind: .tokenExpiring, token: .notifications, until: T0 + 5 * 86_400),
-            Warning(kind: .tokenOwnerMismatch, token: .notifications),
-            Warning(kind: .tokenOwnerMismatch, token: .scope),
-        ])
-        XCTAssertEqual(Warnings.banner(scope, now: T0).map(\.text), [
-            "Notifications token expires in 5 days",
-            "Notifications token belongs to another account · Replace it in Settings",
-            "example-org token belongs to another account · Replace it in Settings",
-        ])
-    }
-
-    func testTheNotificationsTokenExpiryComesFromItsOwnDateWithoutAnyScope() {
-        let soon = TokenStatus(target: "notifications", registered: true, expiresAt: T0 + 3 * 86_400 - 10)
-        XCTAssertEqual(TokenState.label(status: soon, warnings: [], now: T0), TokenLabel("Expires in 3 days", .caution))
-        let later = TokenStatus(target: "notifications", registered: true, expiresAt: T0 + 8 * 86_400)
-        XCTAssertEqual(TokenState.label(status: later, warnings: [], now: T0), TokenLabel("Not tested", .neutral))
-        let none = TokenStatus(target: "notifications", registered: true, expiresAt: nil)
-        XCTAssertEqual(TokenState.label(status: none, warnings: [], now: T0), TokenLabel("Not tested", .neutral), "no expiry, no label for it")
-    }
-
-    func testRemoveConfirmationAndRepositoryAccessGuidance() {
-        XCTAssertEqual(ScopeText.removeTitle("example-org"), "Remove example-org?")
-        XCTAssertEqual(
-            ScopeText.removeDetail("example-org"),
-            "Its token is deleted from the Keychain. Add example-org again to get its Done and Snooze back."
-        )
-        XCTAssertEqual(CreateTokenURL.repositoryAccessHint(.organization), "Under Repository access, choose All repositories")
-        XCTAssertEqual(CreateTokenURL.repositoryAccessHint(.personal), "Under Repository access, choose All repositories")
-        XCTAssertEqual(CreateTokenURL.repositoryAccessHint(.public), "Under Repository access, choose Public repositories")
-    }
-
-    func testColorNamesMapToTheirBackgrounds() {
-        let want: [ScopeColor: UInt32] = [
-            .gray: 0xF3F4F8, .green: 0xEAF4F0, .blue: 0xEAF0F9, .purple: 0xF1EEF8, .pink: 0xF8EEF0, .beige: 0xF7F1E3,
-        ]
-        for color in ScopeColor.allCases {
-            XCTAssertEqual(Palette.theme(color).background.light, RGB(hex: want[color]!), color.rawValue)
-        }
-        XCTAssertEqual(ScopeColor.allCases.map(\.rawValue), ["gray", "green", "blue", "purple", "pink", "beige"])
-        XCTAssertEqual(Palette.color(of: Scope(id: "p", kind: .public)), .beige, "Public without a color")
-        // Six distinct dark backgrounds, darker than their light ones.
-        let darks = ScopeColor.allCases.map { Palette.theme($0).background.dark }
-        XCTAssertEqual(Set(darks.map { "\($0.red),\($0.green),\($0.blue)" }).count, 6)
-        for color in ScopeColor.allCases {
-            let theme = Palette.theme(color)
-            XCTAssertLessThan(theme.background.dark.red + theme.background.dark.green, theme.background.light.red + theme.background.light.green)
-        }
-        XCTAssertEqual(Palette.text.resolve(dark: false), RGB(hex: 0x1D1D1F))
-        XCTAssertEqual(Palette.text.resolve(dark: true), RGB(hex: 0xECECEE))
-    }
-
+final class StoreTests: XCTestCase {
     func testReturnTimeRoundTripsThroughThePicker() {
         let calendar = ReturnTime.calendar
         for text in ["00:00", "09:00", "23:59", "07:05"] {
@@ -116,14 +15,31 @@ final class SettingsTextTests: XCTestCase {
         XCTAssertEqual(ReturnTime.text(ReturnTime.date(nil, calendar: calendar), calendar: calendar), "09:00", "the default")
     }
 
-    func testWindowFramesAreKeptPerScope() {
+    func testTheUIStateIsKeptPerAccount() {
         let (defaults, suite) = testDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = UIStateStore(defaults: defaults)
-        XCTAssertNil(store.windowFrame(scope: "org"))
-        store.setWindowFrame("{{10, 20}, {400, 620}}", scope: "org")
-        XCTAssertEqual(UIStateStore(defaults: defaults).windowFrame(scope: "org"), "{{10, 20}, {400, 620}}")
-        XCTAssertNil(store.windowFrame(scope: "public"))
+        XCTAssertNil(store.windowFrame(account: "1001"))
+        XCTAssertEqual(store.filter(account: "1001"), FilterState())
+        XCTAssertEqual(store.collapsed(account: "1001"), [:])
+        XCTAssertEqual(store.activityOwners(account: "1001"), [])
+        store.setWindowFrame("{{10, 20}, {460, 620}}", account: "1001")
+        store.setFilter(FilterState(todo: true, segment: .authored), account: "1001")
+        store.setCollapsed(["owner:o2": true], account: "1001")
+        store.setActivityOwners(["o2", "o4"], account: "1001")
+        let again = UIStateStore(defaults: defaults)
+        XCTAssertEqual(again.windowFrame(account: "1001"), "{{10, 20}, {460, 620}}")
+        XCTAssertEqual(again.filter(account: "1001"), FilterState(todo: true, segment: .authored))
+        XCTAssertEqual(again.collapsed(account: "1001"), ["owner:o2": true])
+        XCTAssertEqual(again.activityOwners(account: "1001"), ["o2", "o4"])
+        XCTAssertNil(again.windowFrame(account: "583231"), "another account has its own")
+        XCTAssertEqual(again.filter(account: "583231"), FilterState())
+    }
+
+    func testPaletteHasDarkVariants() {
+        XCTAssertLessThan(Palette.background.dark.red, Palette.background.light.red)
+        XCTAssertEqual(Palette.text.resolve(dark: false), RGB(hex: 0x1D1D1F))
+        XCTAssertEqual(Palette.text.resolve(dark: true), RGB(hex: 0xECECEE))
     }
 }
 
@@ -138,15 +54,11 @@ final class SettingsModelTests: XCTestCase {
         (defaults, suite) = testDefaults()
         api = FakeAPI()
         app = AppModel(api: api, store: UIStateStore(defaults: defaults), opener: FakeOpener(), notifier: FakeNotifier(), clock: { T0 })
+        app.handle(.snapshot(accounts: [sampleAccount(), Account(id: "583231", login: "bufferings")], keychain: .known(.ok), dbUnreadable: false))
     }
 
     override func tearDown() async throws {
         defaults.removePersistentDomain(forName: suite)
-    }
-
-    func settle() async {
-        for _ in 0..<20 { await Task.yield() }
-        try? await Task.sleep(nanoseconds: 50_000_000)
     }
 
     func testAnInvalidValueShowsTheErrorAndKeepsTheSavedValue() async {
@@ -164,22 +76,284 @@ final class SettingsModelTests: XCTestCase {
         XCTAssertEqual(settings.config["status_interval_minutes"], .int(2))
     }
 
-    func testSettingsStatusIsReadAgainOnScopeChangedWhileOpen() async {
+    func testDestinationsAndSelection() async {
         let settings = SettingsModel(app: app, launch: nil)
-        app.handle(.scopeChanged(Scope(id: "org")))
+        settings.show(.account("583231"))
+        XCTAssertEqual(settings.tab, .accounts)
+        XCTAssertEqual(settings.selection, .account("583231"))
+        settings.show(.general)
+        XCTAssertEqual(settings.tab, .general)
+        settings.select(.owner(account: "3407303", owner: "o2"))
+        settings.ownerTab = .exclusions
+        settings.select(.owner(account: "3407303", owner: "o2"))
+        XCTAssertEqual(settings.ownerTab, .exclusions, "the same owner keeps its tab")
+        settings.select(.owner(account: "3407303", owner: "o3"))
+        XCTAssertEqual(settings.ownerTab, .owner, "another owner opens on Owner")
+        XCTAssertEqual(settings.selectedOwner?.name, "acme-corp")
         await settle()
-        XCTAssertFalse(api.calls.contains("settings_status"), "closed: nothing")
-        settings.windowOpened()
+        XCTAssertTrue(api.calls.contains("owner_events_get bufferings-work acme-corp"))
+        XCTAssertTrue(api.calls.contains("owner_exclusions_get bufferings-work acme-corp"))
+        app.handle(.accountRemoved("3407303"))
+        settings.ensureSelection()
+        XCTAssertEqual(settings.selection, .account("583231"), "a removed account moves the selection")
+        settings.select(.owner(account: "583231", owner: "gone"))
+        settings.ensureSelection()
+        XCTAssertEqual(settings.selection, .account("583231"))
+    }
+
+    func testOwnerControlsSendTheLoginAndPublic() async {
+        let settings = SettingsModel(app: app, launch: nil)
+        let account = sampleAccount()
+        let org = account.owners[0]
+        let pub = account.owners[2]
+        settings.setColor(account, .blue)
+        settings.setOwnerEnabled(pub, of: account, false)
+        settings.setOwnerNotify(org, of: account, false)
+        settings.setSkipDrafts(org, of: account, true)
+        settings.setEvent(org, of: account, .teamReviewRequested, .list, false)
+        settings.setExclusion(org, of: account, .repo, " example-org/legacy ", .hidden)
+        settings.setExclusion(org, of: account, .user, "  ", .hidden)
+        settings.removeExclusion(org, of: account, .user, "renovate")
+        settings.removeOwner(pub, of: account)
+        settings.removeAccount(account)
         await settle()
+        for call in [
+            "account_color bufferings-work blue", "owner_enabled bufferings-work public false",
+            "owner_notify bufferings-work example-org false", "owner_skip_drafts bufferings-work example-org true",
+            "owner_events_set bufferings-work example-org team_review_requested list false",
+            "owner_exclusions_set bufferings-work example-org repo example-org/legacy hidden",
+            "owner_exclusions_remove bufferings-work example-org user renovate",
+            "owner_remove bufferings-work public", "account_remove bufferings-work",
+        ] {
+            XCTAssertTrue(api.calls.contains(call), call)
+        }
+        XCTAssertFalse(api.calls.contains { $0.contains("user  ") }, "an empty name is not sent")
+        XCTAssertEqual(settings.selection, .account("3407303"), "removing an owner selects its account")
+    }
+
+    func testAReadStartedBeforeAChangeDoesNotUndoIt() async {
+        let settings = SettingsModel(app: app, launch: nil)
+        let account = sampleAccount()
+        let org = account.owners[0]
+        api.events = ["mentioned": EventCell(list: true, todo: true, notify: true)]
+        api.eventsDelay = 200_000_000
+        settings.select(.owner(account: "3407303", owner: "o2"))
+        await settle()
+        // The user unticks Notify while the read is still on its way.
+        api.events = ["mentioned": EventCell(list: true, todo: true, notify: false)]
+        settings.setEvent(org, of: account, .mentioned, .notify, false)
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        await settle()
+        XCTAssertEqual(settings.cell("o2", .mentioned), EventCell(list: true, todo: true, notify: false), "the late read is dropped")
+        // A read started after the change is kept.
+        api.eventsDelay = 0
+        api.events = ["mentioned": EventCell(list: false, todo: false, notify: false)]
+        settings.loadOwner(account: "3407303", owner: "o2")
+        await settle()
+        XCTAssertEqual(settings.cell("o2", .mentioned), EventCell(list: false, todo: false, notify: false))
+    }
+
+    func testAFailedEditReadsTheTableAgain() async {
+        let settings = SettingsModel(app: app, launch: nil)
+        let account = sampleAccount()
+        let org = account.owners[0]
+        let saved = ["mentioned": EventCell(list: true, todo: true, notify: true)]
+        api.events = saved
+        api.eventsDelay = 200_000_000
+        settings.select(.owner(account: "3407303", owner: "o2"))
+        await settle()
+        // The edit is refused while the first read is still on its way.
+        api.failNext = DaemonError(code: .invalid, message: "invalid: refused")
+        settings.setEvent(org, of: account, .mentioned, .notify, false)
+        api.eventsDelay = 0
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        await settle()
+        XCTAssertEqual(settings.errors["events:o2"], "invalid: refused")
+        XCTAssertEqual(settings.cell("o2", .mentioned), saved["mentioned"], "the daemon's table is read again")
+        XCTAssertEqual(api.calls.filter { $0.hasPrefix("owner_events_get") }.count, 2)
         api.clearCalls()
-        app.handle(.scopeChanged(Scope(id: "org", badge: 1)))
+        api.failNext = DaemonError(code: .invalid, message: "invalid: owner/repo")
+        settings.setExclusion(org, of: account, .repo, "bad", .hidden)
         await settle()
-        XCTAssertEqual(api.calls.filter { $0 == "settings_status" }.count, 1)
-        settings.windowClosed()
-        api.clearCalls()
-        app.handle(.snapshot(scopes: [], dbUnreadable: false))
+        XCTAssertTrue(api.calls.contains("owner_exclusions_get bufferings-work example-org"), "Exclusions are read again too")
+    }
+
+    func testAddAccountAndRemoveNeedTheKeychain() {
+        let settings = SettingsModel(app: app, launch: nil)
+        XCTAssertTrue(settings.canAddAccount)
+        XCTAssertTrue(settings.canRemoveAccount)
+        for state in [KeychainState.unavailable, .unreadable] {
+            app.handle(.keychainChanged(.known(state)))
+            XCTAssertFalse(settings.canAddAccount, "\(state)")
+            XCTAssertFalse(settings.canRemoveAccount, "\(state)")
+        }
+        app.handle(.keychainChanged(.known(.ok)))
+        XCTAssertTrue(settings.canAddAccount)
+    }
+
+    func testTodoAndNotifyFollowList() {
+        XCTAssertTrue(SettingsModel.cellEnabled(EventCell(list: false, todo: false, notify: false), .list))
+        XCTAssertFalse(SettingsModel.cellEnabled(EventCell(list: false, todo: false, notify: false), .todo))
+        XCTAssertFalse(SettingsModel.cellEnabled(EventCell(list: false, todo: false, notify: false), .notify))
+        XCTAssertTrue(SettingsModel.cellEnabled(EventCell(list: true, todo: false, notify: false), .notify))
+    }
+
+    func testCopyReplacesTheTargetTable() async {
+        let settings = SettingsModel(app: app, launch: nil)
+        let account = sampleAccount()
+        api.events = ["mentioned": EventCell(list: true, todo: false, notify: false)]
+        XCTAssertEqual(settings.otherOwners(of: "o2", in: account).map(\.id), ["o3", "o4"])
+        var copied: Bool?
+        settings.copyTable(from: account.owners[1], to: account.owners[0], of: account) { copied = $0 }
         await settle()
-        XCTAssertFalse(api.calls.contains("settings_status"))
+        XCTAssertEqual(copied, true)
+        XCTAssertTrue(api.calls.contains("owner_events_copy bufferings-work acme-corp example-org"))
+        XCTAssertEqual(settings.cell("o2", .mentioned), EventCell(list: true, todo: false, notify: false))
+    }
+}
+
+@MainActor
+final class SheetTests: XCTestCase {
+    var defaults: UserDefaults!
+    var suite = ""
+    var api: FakeAPI!
+    var app: AppModel!
+
+    override func setUp() async throws {
+        (defaults, suite) = testDefaults()
+        api = FakeAPI()
+        app = AppModel(api: api, store: UIStateStore(defaults: defaults), opener: FakeOpener(), notifier: FakeNotifier(), clock: { T0 })
+        var me = sampleAccount()
+        me.token = TokenInfo(registered: true, lastTest: LastTest(at: 100, results: []))
+        app.handle(.snapshot(accounts: [me], keychain: .known(.ok), dbUnreadable: false))
+    }
+
+    override func tearDown() async throws {
+        defaults.removePersistentDomain(forName: suite)
+    }
+
+    func testAddAccountTestsWithoutAnAccountAndSavesWithAccountAdd() async {
+        let sheet = TokenSheetModel(mode: .add, app: app)
+        XCTAssertEqual(sheet.title, "Add account")
+        XCTAssertEqual(sheet.placeholder, "")
+        XCTAssertFalse(sheet.canTest, "nothing pasted")
+        XCTAssertFalse(sheet.canSave)
+        sheet.token = "  ghp_secret\n"
+        XCTAssertTrue(sheet.canSave, "Save without a test is allowed")
+        api.testResults = [
+            TestResult(item: .account, label: "Account", outcome: .ok, text: "bufferings"),
+            TestResult(item: .scopes, label: "Scopes", outcome: .failed, text: "Missing (read:org)"),
+        ]
+        sheet.test()
+        await settle()
+        XCTAssertEqual(api.calls.last, "token_test - pasted")
+        XCTAssertTrue(sheet.showsSaveLater)
+        XCTAssertTrue(sheet.canSave)
+        var saved: Bool?
+        sheet.save { saved = $0 }
+        XCTAssertEqual(sheet.token, "", "the field is cleared as the token goes")
+        await settle()
+        XCTAssertEqual(saved, true)
+        XCTAssertEqual(api.calls.last, "account_add")
+        XCTAssertTrue(app.isChecking("9919001"), "Checking… until the daemon's test arrives")
+        app.handle(.accountChanged(Account(id: "9919001", login: "new", token: TokenInfo(lastTest: LastTest(at: T0, results: [])))))
+        XCTAssertFalse(app.isChecking("9919001"))
+    }
+
+    func testAFailedAccountItemBlocksSave() async {
+        let sheet = TokenSheetModel(mode: .add, app: app)
+        sheet.token = "ghp_x"
+        api.testResults = [TestResult(item: .account, label: "Account", outcome: .failed, text: "bufferings-work is already added")]
+        sheet.test()
+        await settle()
+        XCTAssertFalse(sheet.canSave)
+        sheet.token = "ghp_y"
+        XCTAssertNil(sheet.results, "a new paste drops the old results")
+        XCTAssertTrue(sheet.canSave)
+        api.failNext = DaemonError(code: .invalid, message: "bufferings-work is already added")
+        var saved: Bool?
+        sheet.save { saved = $0 }
+        await settle()
+        XCTAssertEqual(saved, false)
+        XCTAssertEqual(sheet.error, "bufferings-work is already added")
+    }
+
+    func testEditTestsTheSavedTokenUntilANewOneIsPasted() async {
+        let sheet = TokenSheetModel(mode: .edit("3407303"), app: app)
+        XCTAssertEqual(sheet.title, "Token for bufferings-work")
+        XCTAssertEqual(sheet.placeholder, TokenState.masked)
+        XCTAssertTrue(sheet.canTest, "the saved token")
+        XCTAssertFalse(sheet.canSave, "only a pasted token saves")
+        sheet.test()
+        await settle()
+        XCTAssertEqual(api.calls.last, "token_test bufferings-work saved")
+        sheet.token = "ghp_new"
+        sheet.test()
+        await settle()
+        XCTAssertEqual(api.calls.last, "token_test bufferings-work pasted")
+        var saved: Bool?
+        sheet.save { saved = $0 }
+        await settle()
+        XCTAssertEqual(saved, true)
+        XCTAssertEqual(api.calls.last, "token_set bufferings-work")
+        XCTAssertTrue(app.isChecking("3407303"))
+        var same = sampleAccount()
+        same.token = TokenInfo(lastTest: nil)
+        app.handle(.accountChanged(same))
+        XCTAssertTrue(app.isChecking("3407303"), "the save cleared last_test; still checking")
+        same.token = TokenInfo(lastTest: LastTest(at: 100, results: []))
+        app.handle(.accountChanged(same))
+        XCTAssertTrue(app.isChecking("3407303"), "the old test does not end it")
+        same.token = TokenInfo(lastTest: LastTest(at: T0, results: []))
+        app.handle(.accountChanged(same))
+        XCTAssertFalse(app.isChecking("3407303"))
+    }
+
+    func testEditOfAnAccountWithoutATokenStartsEmpty() {
+        var me = sampleAccount()
+        me.token = TokenInfo(registered: false)
+        app.handle(.accountChanged(me))
+        let sheet = TokenSheetModel(mode: .edit("3407303"), app: app)
+        XCTAssertEqual(sheet.placeholder, "")
+        XCTAssertFalse(sheet.canTest)
+    }
+
+    func testAddOwnerShowsWhyItFailedAndStaysOpen() async {
+        api.ownerErrors["nobody"] = DaemonError(code: .notFound, message: "not found: owner nobody")
+        api.ownerErrors["offline"] = DaemonError(code: .unreachable, message: "unreachable")
+        let sheet = AddOwnerModel(account: "3407303", app: app)
+        XCTAssertFalse(sheet.canAdd, "nothing typed")
+        XCTAssertTrue(sheet.hasPublic)
+        XCTAssertFalse(sheet.canAddPublic, "Public is there already")
+        var closed = 0
+        sheet.name = "nobody"
+        sheet.add { closed += 1 }
+        await settle()
+        XCTAssertEqual(sheet.error, "Owner not found")
+        sheet.name = "offline"
+        XCTAssertNil(sheet.error, "typing clears it")
+        sheet.add { closed += 1 }
+        await settle()
+        XCTAssertEqual(sheet.error, "Couldn't reach GitHub")
+        sheet.name = " example-org "
+        sheet.add { closed += 1 }
+        await settle()
+        XCTAssertEqual(closed, 1)
+        XCTAssertEqual(api.calls.last, "owner_add bufferings-work example-org")
+    }
+
+    func testAddPublicAndTheKeychainRule() async {
+        app.handle(.accountChanged(Account(id: "3407303", login: "bufferings-work")))
+        let sheet = AddOwnerModel(account: "3407303", app: app)
+        XCTAssertTrue(sheet.canAddPublic)
+        var closed = false
+        sheet.addPublic { closed = true }
+        await settle()
+        XCTAssertTrue(closed)
+        XCTAssertEqual(api.calls.last, "owner_add bufferings-work public")
+        app.handle(.keychainChanged(.known(.unavailable)))
+        sheet.name = "example-org"
+        XCTAssertFalse(sheet.canAdd, "Add needs the token, which cannot be read")
     }
 }
 
@@ -211,51 +385,6 @@ final class LauncherEnvironmentTests: XCTestCase {
     }
 }
 
-
-final class MenuBarMarkTests: XCTestCase {
-    func testBadgeDotAndTriangleTogether() {
-        let cases: [(Int, Bool, Bool, String?, MenuBarMarks.DotPlace?, Bool)] = [
-            (0, false, false, nil, nil, true),
-            (3, false, false, "3", nil, false),
-            (0, true, false, nil, .topRight, false),
-            (3, true, false, "3", .bottomRight, false),
-            (3, true, true, "3", .bottomRight, false),
-            (120, false, true, "99+", nil, false),
-        ]
-        for (badge, dot, triangle, text, place, plain) in cases {
-            let marks = MenuBarMarks(badge: badge, dot: dot, triangle: triangle)
-            XCTAssertEqual(marks.badge, text, "\(badge) \(dot)")
-            XCTAssertEqual(marks.dot, place, "\(badge) \(dot)")
-            XCTAssertEqual(marks.triangle, triangle)
-            XCTAssertEqual(marks.plain, plain)
-        }
-    }
-}
-
-final class ConfigEventTests: XCTestCase {
-    func testConfigChangedDecodesBooleansNumbersAndStrings() throws {
-        let cases: [(String, ConfigValue)] = [
-            (#"{"event":"config_changed","key":"launch_at_login","value":false}"#, .bool(false)),
-            (#"{"event":"config_changed","key":"drop_after_days","value":20}"#, .int(20)),
-            (#"{"event":"config_changed","key":"keep_watching_days","value":0}"#, .int(0)),
-            (#"{"event":"config_changed","key":"snooze_return_time","value":"08:30"}"#, .string("08:30")),
-        ]
-        for (line, value) in cases {
-            let event = try JSONDecoder().decode(SubscribeEvent.self, from: Data(line.utf8))
-            guard case .configChanged(_, let got) = event else { return XCTFail(line) }
-            XCTAssertEqual(got, value, line)
-        }
-    }
-
-    func testTokenStatusCarriesItsWarnings() throws {
-        let line = #"{"target":"notifications","registered":true,"owner":"me","expires_at":null,"scopes":null,"last_test":null,"sso_urls":[],"warnings":[{"kind":"token_invalid","token":"notifications","message":"m","until":null}]}"#
-        let status = try JSONDecoder().decode(TokenStatus.self, from: Data(line.utf8))
-        XCTAssertEqual(TokenState.label(status: status, warnings: status.warnings, now: T0), TokenLabel("Invalid", .bad))
-        let old = #"{"target":"o","registered":false,"owner":null,"expires_at":null,"scopes":null,"last_test":null,"sso_urls":[]}"#
-        XCTAssertEqual(try JSONDecoder().decode(TokenStatus.self, from: Data(old.utf8)).warnings, [])
-    }
-}
-
 @MainActor
 final class LaunchSyncTests: XCTestCase {
     var defaults: UserDefaults!
@@ -269,11 +398,6 @@ final class LaunchSyncTests: XCTestCase {
 
     override func tearDown() async throws {
         defaults.removePersistentDomain(forName: suite)
-    }
-
-    func settle() async {
-        for _ in 0..<20 { await Task.yield() }
-        try? await Task.sleep(nanoseconds: 50_000_000)
     }
 
     func testAChangedSettingMovesTheLoginItem() async {
@@ -405,30 +529,6 @@ final class MainMenuTests: XCTestCase {
     }
 }
 
-final class ChipLookTests: XCTestCase {
-    func testOffChipsAreAllGrayAndOnChipsAreFilledWithACheck() {
-        for action in [false, true] {
-            let off = ChipLook(on: false, action: action)
-            XCTAssertEqual(off.border, Palette.controlBorder, "\(action)")
-            XCTAssertEqual(off.text, Palette.strongText, "Needs action is not orange when off")
-            XCTAssertEqual(off.fill, Palette.surface)
-            XCTAssertEqual(off.label("Needs action"), "Needs action")
-        }
-        let needs = ChipLook(on: true, action: true)
-        XCTAssertEqual(needs.fill, Palette.badge)
-        XCTAssertEqual(needs.border, Palette.badge)
-        XCTAssertEqual(needs.text, Palette.onColor)
-        XCTAssertEqual(needs.label("Needs action"), "✓ Needs action")
-        let mine = ChipLook(on: true, action: false)
-        XCTAssertEqual(mine.fill, Palette.text)
-        XCTAssertEqual(mine.text, Palette.surface)
-        XCTAssertEqual(mine.label("My PRs"), "✓ My PRs")
-        // In the dark appearance the black chip turns light with dark text.
-        XCTAssertEqual(mine.fill.resolve(dark: true), RGB(hex: 0xECECEE))
-        XCTAssertEqual(mine.text.resolve(dark: true), RGB(hex: 0x2B2B2F))
-    }
-}
-
 @MainActor
 final class AppearanceTests: XCTestCase {
     func testTheAppearanceIsLoadedAndFollowsConfigChanged() async {
@@ -455,85 +555,3 @@ final class AppearanceTests: XCTestCase {
     }
 }
 
-@MainActor
-final class AddScopeTests: XCTestCase {
-    var defaults: UserDefaults!
-    var suite = ""
-    var api: FakeAPI!
-    var settings: SettingsModel!
-
-    override func setUp() async throws {
-        (defaults, suite) = testDefaults()
-        api = FakeAPI()
-        let app = AppModel(api: api, store: UIStateStore(defaults: defaults), opener: FakeOpener(), notifier: FakeNotifier(), clock: { T0 })
-        settings = SettingsModel(app: app, launch: nil)
-    }
-
-    override func tearDown() async throws {
-        defaults.removePersistentDomain(forName: suite)
-    }
-
-    func add(_ owner: String) async -> String? {
-        await withCheckedContinuation { continuation in
-            settings.addOwner(owner) { continuation.resume(returning: $0) }
-        }
-    }
-
-    func testAnOrganizationIsLookedUpThenAddedWithMembersRead() async throws {
-        api.owners = ["Example-Org": .org]
-        api.scopesAfterAdd = [Scope(id: "opaque-1", name: "Example-Org")]
-        let added = await add(" example-org ")
-        XCTAssertEqual(added, "opaque-1")
-        XCTAssertEqual(api.calls.filter { $0.hasPrefix("scope_") }, ["scope_lookup example-org", "scope_add Example-Org"])
-        XCTAssertEqual(settings.addedTypes["opaque-1"], .organization)
-        XCTAssertTrue(settings.entering.contains("opaque-1"), "the token entry follows")
-        let url = URLComponents(string: CreateTokenURL.fineGrained(owner: "Example-Org", type: settings.addedTypes["opaque-1"]!))!
-        XCTAssertTrue(url.queryItems!.contains(URLQueryItem(name: "members", value: "read")))
-        XCTAssertNil(settings.errors["add"])
-    }
-
-    func testAPersonalAccountGetsNoMembersPermission() async {
-        api.owners = ["someone": .user]
-        api.scopesAfterAdd = [Scope(id: "opaque-2", name: "someone")]
-        _ = await add("someone")
-        XCTAssertEqual(settings.addedTypes["opaque-2"], .personal)
-        let url = URLComponents(string: CreateTokenURL.fineGrained(owner: "someone", type: .personal))!
-        XCTAssertFalse(url.queryItems!.contains { $0.name == "members" })
-    }
-
-    func testAnUnknownOwnerAddsNothing() async {
-        let added = await add("nobody")
-        XCTAssertNil(added)
-        XCTAssertEqual(settings.errors["add"], "Owner not found")
-        XCTAssertFalse(api.calls.contains { $0.hasPrefix("scope_add") })
-    }
-
-    func testAnotherFailureShowsItsReasonAndCanBeRetried() async {
-        api.lookupFailure = DaemonError(code: .internal, message: "cannot look the owner up: GitHub answered 502")
-        let failed = await add("org")
-        XCTAssertNil(failed)
-        XCTAssertEqual(settings.errors["add"], "cannot look the owner up: GitHub answered 502")
-        XCTAssertFalse(api.calls.contains { $0.hasPrefix("scope_add") })
-        api.lookupFailure = nil
-        api.owners = ["org": .org]
-        api.scopesAfterAdd = [Scope(id: "o", name: "org")]
-        let retried = await add("org")
-        XCTAssertEqual(retried, "o")
-        XCTAssertNil(settings.errors["add"])
-    }
-
-    func testPublicHasItsOwnButtonWithoutALookup() async {
-        api.scopesAfterAdd = [Scope(id: "p", name: "Public", kind: .public)]
-        let added: String? = await withCheckedContinuation { continuation in
-            settings.addPublic { continuation.resume(returning: $0) }
-        }
-        XCTAssertEqual(added, "p")
-        XCTAssertEqual(api.calls.filter { $0.hasPrefix("scope_") }, ["scope_add public"])
-        XCTAssertEqual(settings.addedTypes["p"], .public)
-    }
-
-    func testTheLookupAnswerDecodes() throws {
-        let line = #"{"ok":true,"owner":"rust-lang","kind":"org"}"#
-        XCTAssertEqual(try JSONDecoder().decode(ScopeLookup.self, from: Data(line.utf8)), ScopeLookup(owner: "rust-lang", kind: .org))
-    }
-}

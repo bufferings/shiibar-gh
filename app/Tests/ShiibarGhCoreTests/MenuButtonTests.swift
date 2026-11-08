@@ -7,7 +7,7 @@ import XCTest
 final class MenuButtonTests: XCTestCase {
     /// Pixels that differ from the background in a 40 by 40 rendering.
     func inked(_ view: some View, dark: Bool) -> Int {
-        let background = Palette.theme(.gray).background
+        let background = Palette.background
         let host = NSHostingView(rootView: view.frame(width: 40, height: 40).background(background.color))
         host.frame = NSRect(x: 0, y: 0, width: 40, height: 40)
         host.appearance = NSAppearance(named: SurfaceAppearance.named(dark: dark))
@@ -30,7 +30,7 @@ final class MenuButtonTests: XCTestCase {
     }
 
     func testTheChevronButtonIsDrawnInLightAndDark() {
-        let button = MenuIconButton(icon: BoardIcons.chevron, label: "More", theme: Palette.theme(.gray), items: [])
+        let button = MenuIconButton(icon: BoardIcons.chevron, label: "More", items: [])
         for dark in [false, true] {
             XCTAssertGreaterThan(inked(button, dark: dark), 10, "dark=\(dark)")
         }

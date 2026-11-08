@@ -3,6 +3,7 @@
 mod support;
 
 use shiibar_gh_proto::*;
+use shiibar_ghd::engine::ActivityArgs;
 use std::collections::BTreeMap;
 use support::*;
 
@@ -108,9 +109,7 @@ fn reaction_table_for_a_comment_posted_after_the_watch_started() {
 }
 
 fn reaction_rows(h: &H) -> Vec<Row> {
-    h.engine
-        .activity(&Filter::default(), &h.now)
-        .unwrap()
+    h.activity(ActivityArgs::default())
         .into_iter()
         .filter(|r| r.kind == Lenient::Known(RowKind::Reaction))
         .collect()
@@ -153,8 +152,15 @@ fn a_row_carries_the_comment_and_the_detection_time() {
     assert_eq!(row.text.as_deref(), Some("comment C_1"));
     assert_eq!(row.url, "https://github.example/C_1");
     assert_eq!(row.actor, None);
-    assert_eq!(class(row), RowClass::Event);
-    assert!(row.id.contains("C_1") && row.id.contains(UP) && row.id.contains(&at.to_string()));
+    // DESIGN.md, "Row kinds and states": Reaction to my comment is not Todo
+    // by default.
+    assert!(!row.todo);
+    assert!(
+        row.id.starts_with("1001:")
+            && row.id.contains("C_1")
+            && row.id.contains(UP)
+            && row.id.contains(&at.to_string())
+    );
 }
 
 #[test]
@@ -164,9 +170,10 @@ fn counts_reset_when_the_watch_restarts() {
     let mut r = h.reaction("C_1", "PR_1", &[(UP, 1)]);
     r.comment_created_at = T0 + 20;
     h.push(vec![], vec![], vec![r.clone()]);
-    h.engine.scope_disable(ORG).unwrap();
+    let owner = h.owner_id(ORG);
+    h.engine.owner_enable(&owner, false, &h.now);
     h.advance(100);
-    h.engine.scope_enable(ORG, &h.now).unwrap();
+    h.engine.owner_enable(&owner, true, &h.now);
     // Posted before the new watch started: the fetched count is the baseline.
     r.counts.insert(UP.into(), 9);
     let before = reaction_rows(&h).len();

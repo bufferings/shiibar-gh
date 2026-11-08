@@ -100,14 +100,12 @@ public struct HeaderButton: View {
     public var icon: BoardIcon
     public var size: CGFloat
     public var label: String
-    public var theme: ScopeTheme
     public var action: () -> Void
 
-    public init(icon: BoardIcon, size: CGFloat, label: String, theme: ScopeTheme, action: @escaping () -> Void) {
+    public init(icon: BoardIcon, size: CGFloat, label: String, action: @escaping () -> Void) {
         self.icon = icon
         self.size = size
         self.label = label
-        self.theme = theme
         self.action = action
     }
 
@@ -117,24 +115,21 @@ public struct HeaderButton: View {
                 .frame(width: 24, height: 24)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(HoverButtonStyle(theme: theme))
+        .buttonStyle(HoverButtonStyle())
         .help(label)
         .accessibilityLabel(label)
     }
 }
 
 public struct HoverButtonStyle: ButtonStyle {
-    public var theme: ScopeTheme
     @State private var hovering = false
 
-    public init(theme: ScopeTheme) {
-        self.theme = theme
-    }
+    public init() {}
 
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .foregroundColor(Palette.botIcon.color)
-            .background(RoundedRectangle(cornerRadius: 6).fill(hovering || configuration.isPressed ? theme.tint.color : .clear))
+            .background(RoundedRectangle(cornerRadius: 6).fill(hovering || configuration.isPressed ? Palette.tint.color : .clear))
             .onHover { hovering = $0 }
     }
 }
@@ -160,18 +155,16 @@ public struct IconMenuItem {
 public struct MenuIconButton: View {
     public var icon: BoardIcon
     public var label: String
-    public var theme: ScopeTheme
     public var items: [IconMenuItem?]
 
-    public init(icon: BoardIcon, label: String, theme: ScopeTheme, items: [IconMenuItem?]) {
+    public init(icon: BoardIcon, label: String, items: [IconMenuItem?]) {
         self.icon = icon
         self.label = label
-        self.theme = theme
         self.items = items
     }
 
     public var body: some View {
-        HeaderButton(icon: icon, size: 14, label: label, theme: theme) {
+        HeaderButton(icon: icon, size: 14, label: label) {
             IconMenu.popUp(items)
         }
     }
@@ -212,5 +205,91 @@ public enum IconMenu {
         @objc func run(_ sender: Any?) {
             action()
         }
+    }
+}
+
+/// The menu bar image of one account (docs/design/MenuBarIcon.html): the
+/// placeholder glyph in the account color, the blue dot at the top right,
+/// the Todo PR count at the bottom right and the triangle at the bottom
+/// left, each cut out of the glyph so it reads on any menu bar.
+///
+/// The colors are resolved for `appearance`, the status button's effective
+/// appearance, inside `performAsCurrentDrawingAppearance` (Apple:
+/// NSAppearance.currentDrawing is "the appearance that the system uses for
+/// color and asset resolution"). Apple's documentation of
+/// NSImage(size:flipped:drawingHandler:) only promises a new drawing when the
+/// pixel density or color space changes, not the appearance, so the
+/// controller makes a new image whenever the button's appearance changes.
+/// The image is not a template: a template image "should consist of only
+/// black and clear colors" (NSImage.isTemplate), which would lose the tint
+/// and the blue dot.
+public enum MenuBarImage {
+    public static let width: CGFloat = 26
+    public static let height: CGFloat = 22
+
+    public static func make(color: AccountColor, marks: MenuBarMarks, appearance: NSAppearance) -> NSImage {
+        let image = NSImage(size: NSSize(width: width, height: height), flipped: false) { _ in
+            var drawn = false
+            appearance.performAsCurrentDrawingAppearance {
+                drawn = draw(color: color, marks: marks, dark: appearance.isDark)
+            }
+            return drawn
+        }
+        image.isTemplate = false
+        return image
+    }
+
+    private static func draw(color: AccountColor, marks: MenuBarMarks, dark: Bool) -> Bool {
+        guard let context = NSGraphicsContext.current?.cgContext else { return false }
+        // None: the color of the other menu bar icons (DESIGN.md, "Account
+        // colors": black in light, white in dark).
+        let plain: NSColor = dark ? .white : .black
+        let tint = (color.nsColor ?? plain).cgColor
+        let glyph = CGRect(x: 3, y: 3, width: 16, height: 16)
+        let icon = BoardIcons.account
+        context.addPath(IconPath.cgPath(icon, in: glyph, flipY: true))
+        context.setStrokeColor(tint)
+        context.setLineWidth(icon.lineWidth)
+        context.setLineCap(icon.roundCaps ? .round : .butt)
+        context.setLineJoin(icon.roundJoins ? .round : .miter)
+        context.strokePath()
+
+        func knockOut(_ path: CGPath) {
+            context.saveGState()
+            context.setBlendMode(.clear)
+            context.addPath(path)
+            context.fillPath()
+            context.restoreGState()
+        }
+
+        if let text = marks.number {
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 9, weight: .bold),
+                .foregroundColor: plain,
+            ]
+            let size = (text as NSString).size(withAttributes: attributes)
+            let box = CGRect(x: width - size.width - 0.5, y: 0, width: size.width, height: size.height - 1)
+            knockOut(CGPath(roundedRect: box.insetBy(dx: -1.2, dy: -0.6), cornerWidth: 2, cornerHeight: 2, transform: nil))
+            (text as NSString).draw(at: CGPoint(x: box.minX, y: box.minY - 1.5), withAttributes: attributes)
+        }
+        if marks.dot {
+            let center = CGPoint(x: 20, y: height - 4.5)
+            knockOut(CGPath(ellipseIn: CGRect(x: center.x - 5, y: center.y - 5, width: 10, height: 10), transform: nil))
+            context.setFillColor(Palette.blueDot.nsColor.cgColor)
+            context.fillEllipse(in: CGRect(x: center.x - 3.5, y: center.y - 3.5, width: 7, height: 7))
+        }
+        if marks.triangle {
+            // M5 .5 9.5 9.5 H.5z of the board, at the bottom left.
+            let triangle = CGMutablePath()
+            triangle.move(to: CGPoint(x: 5, y: 9.5))
+            triangle.addLine(to: CGPoint(x: 9.5, y: 0.5))
+            triangle.addLine(to: CGPoint(x: 0.5, y: 0.5))
+            triangle.closeSubpath()
+            knockOut(triangle.copy(strokingWithWidth: 3, lineCap: .round, lineJoin: .round, miterLimit: 1))
+            context.addPath(triangle)
+            context.setFillColor(tint)
+            context.fillPath()
+        }
+        return true
     }
 }

@@ -23,6 +23,36 @@ extension Shade {
     public var color: Color { Color(nsColor: nsColor) }
 }
 
+extension AccountColor {
+    /// DESIGN.md, "Account colors": the macOS system colors, which Apple
+    /// documents as adapting to vibrancy and accessibility settings
+    /// (NSColor.systemRed, "Returns a color object for red that
+    /// automatically adapts to vibrancy and accessibility settings"). None
+    /// has no color: the icon takes the menu bar's own and the dot the text
+    /// color.
+    public var nsColor: NSColor? {
+        switch self {
+        case .none: return nil
+        case .red: return .systemRed
+        case .orange: return .systemOrange
+        case .yellow: return .systemYellow
+        case .green: return .systemGreen
+        case .blue: return .systemBlue
+        case .purple: return .systemPurple
+        }
+    }
+
+    /// The dot before the account name: the color, or the text color.
+    public var dotColor: Color {
+        nsColor.map { Color(nsColor: $0) } ?? Palette.text.color
+    }
+}
+
+extension Account {
+    /// An unknown color reads as None.
+    public var accountColor: AccountColor { color.value ?? .none }
+}
+
 public enum SurfaceAppearance {
     /// Dark or light for the popover, the window and Settings: the setting
     /// when it is Light or Dark, the Mac's own when it is System.

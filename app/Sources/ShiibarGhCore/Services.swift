@@ -10,7 +10,8 @@ public protocol URLOpening: AnyObject {
 }
 
 public protocol NotificationPresenting: AnyObject {
-    /// Ask once for permission to show notifications.
+    /// Ask for permission to show notifications. macOS prompts the first
+    /// time only (UNUserNotificationCenter.requestAuthorization).
     func requestAuthorization()
     /// Show it now. Nothing is kept for later (DESIGN.md, "macOS
     /// notifications").
@@ -32,37 +33,58 @@ public protocol ImageLoading: AnyObject, Sendable {
     func load(_ url: URL) async throws -> Data
 }
 
-/// The UI state of DESIGN.md, "Saved state": each scope's chips and the
-/// frame of each scope's window. Keys carry the scope id as it is, never
-/// read as an owner login.
+/// The UI state of DESIGN.md, "Saved state", per account: the filter row,
+/// the collapsed sections, the Activity owner buttons and the window frame.
+/// Keys carry the account id (the GitHub user id, numeric, as a string,
+/// which does not change with the login) and owner ids as they are. "+ N more PRs" is not kept.
 public final class UIStateStore {
     private let defaults: UserDefaults
-    static let chipsKey = "popover.chips"
+    static let filterKey = "popover.filter."
+    static let collapsedKey = "popover.collapsed."
+    static let activityOwnersKey = "popover.activityOwners."
+    static let windowFrameKey = "window.frame."
     static let didApplyLaunchDefaultKey = "launchAtLogin.didApplyDefault"
 
     public init(defaults: UserDefaults) {
         self.defaults = defaults
     }
 
-    /// The chips of one scope (DESIGN.md, "Screens": remembered per scope).
-    public func chips(scope: String) -> Chips {
-        guard let data = defaults.data(forKey: Self.chipsKey + "." + scope),
-              let chips = try? JSONDecoder().decode(Chips.self, from: data)
-        else { return Chips() }
-        return chips
+    public func filter(account: String) -> FilterState {
+        guard let data = defaults.data(forKey: Self.filterKey + account),
+              let filter = try? JSONDecoder().decode(FilterState.self, from: data)
+        else { return FilterState() }
+        return filter
     }
 
-    public func setChips(_ chips: Chips, scope: String) {
-        defaults.set(try? JSONEncoder().encode(chips), forKey: Self.chipsKey + "." + scope)
+    public func setFilter(_ filter: FilterState, account: String) {
+        defaults.set(try? JSONEncoder().encode(filter), forKey: Self.filterKey + account)
+    }
+
+    /// Section key to collapsed, for the sections the user toggled.
+    public func collapsed(account: String) -> [String: Bool] {
+        defaults.dictionary(forKey: Self.collapsedKey + account) as? [String: Bool] ?? [:]
+    }
+
+    public func setCollapsed(_ collapsed: [String: Bool], account: String) {
+        defaults.set(collapsed, forKey: Self.collapsedKey + account)
+    }
+
+    /// The owner ids whose Activity button is on.
+    public func activityOwners(account: String) -> Set<String> {
+        Set(defaults.stringArray(forKey: Self.activityOwnersKey + account) ?? [])
+    }
+
+    public func setActivityOwners(_ owners: Set<String>, account: String) {
+        defaults.set(owners.sorted(), forKey: Self.activityOwnersKey + account)
     }
 
     /// The window frame as `NSStringFromRect` writes it.
-    public func windowFrame(scope: String) -> String? {
-        defaults.string(forKey: "window.frame." + scope)
+    public func windowFrame(account: String) -> String? {
+        defaults.string(forKey: Self.windowFrameKey + account)
     }
 
-    public func setWindowFrame(_ frame: String, scope: String) {
-        defaults.set(frame, forKey: "window.frame." + scope)
+    public func setWindowFrame(_ frame: String, account: String) {
+        defaults.set(frame, forKey: Self.windowFrameKey + account)
     }
 
     public var didApplyLaunchDefault: Bool {

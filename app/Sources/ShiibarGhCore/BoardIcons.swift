@@ -1,8 +1,7 @@
 // The icons of the boards on their 16 by 16 grid, copied from the SVG in
 // docs/design/. Rows whose kind has no icon on a board use the closest one
 // from the boards: Conflicts and Removed from merge queue the × of Checks
-// failed, Mergeable the ✓, Closed the × in the closed colors, and a Review
-// requested row that is no longer to do the dashed circle.
+// failed, Mergeable and Approved the ✓, Closed the × in the closed colors.
 
 import Foundation
 
@@ -31,21 +30,9 @@ public struct BoardIcon: Equatable, Sendable {
 }
 
 public enum BoardIcons {
-    // Menu bar (MenuBarIcon.html).
-    public static let organization = BoardIcon(
-        [.path("M2.5 13.5V5l5.5-2.5L13.5 5v8.5z"), .path("M6 13.5V9h4v4.5")],
-        lineWidth: 1.5, roundJoins: true
-    )
-    public static let person = BoardIcon(
-        [.circle(cx: 8, cy: 5.5, r: 3, dash: nil), .path("M2.5 14c.8-3 3-4.5 5.5-4.5s4.7 1.5 5.5 4.5")],
-        lineWidth: 1.5, roundCaps: true
-    )
-    public static let globe = BoardIcon(
-        [.circle(cx: 8, cy: 8, r: 6.5, dash: nil), .path("M1.5 8h13M8 1.5c2.2 2 2.2 11 0 13M8 1.5c-2.2 2-2.2 11 0 13")],
-        lineWidth: 1.5
-    )
-    /// The menu bar icon while no scope icon shows: the Merged glyph of the
-    /// rows, a pull request, so it is not mistaken for a scope.
+    /// The menu bar glyph of every account and of the shiibar-gh icon while
+    /// there is no account: the placeholder of MenuBarIcon.html (a pull
+    /// request), tinted with the account color. The final glyph is M5.
     public static let app = BoardIcon(
         [
             .circle(cx: 4, cy: 3.5, r: 1.8, dash: nil), .circle(cx: 4, cy: 12.5, r: 1.8, dash: nil),
@@ -53,6 +40,7 @@ public enum BoardIcons {
         ],
         lineWidth: 1.5, roundCaps: true
     )
+    public static let account = app
     public static let warning = BoardIcon(
         [.path("M8 2l6.5 11.5h-13z"), .path("M8 6.5v3M8 11.6v.1")],
         lineWidth: 1.5, roundJoins: true
@@ -84,6 +72,16 @@ public enum BoardIcons {
         [.arc(cx: 8, cy: 8, r: 5.5, start: 0, end: 315), .path("M13.5 2.5v3h-3")],
         lineWidth: 1.5, roundCaps: true
     )
+    /// Settings tabs (Settings.html).
+    public static let tabGeneral = BoardIcon([.circle(cx: 8, cy: 8, r: 2.2, dash: nil), .circle(cx: 8, cy: 8, r: 6, dash: nil)], lineWidth: 1.3)
+    public static let tabAccounts = BoardIcon(
+        [.circle(cx: 8, cy: 5.5, r: 3, dash: nil), .path("M2.5 14c.8-3 3-4.5 5.5-4.5s4.7 1.5 5.5 4.5")],
+        lineWidth: 1.3, roundCaps: true
+    )
+    public static let tabWatching = BoardIcon([.circle(cx: 7, cy: 7, r: 4.5, dash: nil), .path("M10.5 10.5l3.5 3.5")], lineWidth: 1.3)
+    /// A section header: expanded (down) and collapsed (right).
+    public static let sectionOpen = BoardIcon([.path("M4 6l4 4 4-4")], lineWidth: 1.8, roundCaps: true, roundJoins: true)
+    public static let sectionClosed = BoardIcon([.path("M6 4l4 4-4 4")], lineWidth: 1.8, roundCaps: true, roundJoins: true)
     public static let chevron = BoardIcon([.path("M4 6l4 4 4-4")], lineWidth: 1.5, roundCaps: true, roundJoins: true)
     public static let clock = BoardIcon(
         [.circle(cx: 8, cy: 8, r: 6, dash: nil), .path("M8 4.5V8l2.5 1.5")],
@@ -98,10 +96,6 @@ public enum BoardIcons {
     // Row icons, 11 points in an 18 point tile.
     public static let rowCross = BoardIcon([.path("M4.5 4.5l7 7M11.5 4.5l-7 7")], lineWidth: 1.8, roundCaps: true)
     public static let rowCheck = BoardIcon([.path("M3.5 8.5l3 3 6-7")], lineWidth: 1.8, roundCaps: true, roundJoins: true)
-    public static let bot = BoardIcon(
-        [.rect(x: 3, y: 5, width: 10, height: 8, radius: 2), .path("M8 2.5V5M6 9h.1M10 9h.1")],
-        lineWidth: 1.6
-    )
     public static let mergeQueue = BoardIcon([.path("M3 4h10M3 8h6M3 12h4M12 8v5M10 11l2 2 2-2")], lineWidth: 1.6, roundCaps: true)
     public static let reaction = BoardIcon(
         [.circle(cx: 8, cy: 8, r: 6, dash: nil), .path("M5.5 9.5s1 1.5 2.5 1.5 2.5-1.5 2.5-1.5M6 6.3h.1M10 6.3h.1")],
@@ -119,7 +113,7 @@ public enum BoardIcons {
     public static let checkbox = BoardIcon([.path("M3.5 8.5l3 3 6-7")], lineWidth: 2.2, roundCaps: true, roundJoins: true)
 }
 
-public enum RowIconTone: Equatable { case action, info, ok, bot, merged, closed }
+public enum RowIconTone: Equatable { case action, info, ok, merged, closed }
 
 public struct RowIcon: Equatable {
     public var icon: BoardIcon
@@ -127,16 +121,14 @@ public struct RowIcon: Equatable {
 }
 
 extension BoardIcons {
-    /// The icon tile of an event row (`.ico` on the board).
+    /// The icon tile of a row without a checkbox (`.ico` on the board).
     public static func row(_ kind: Lenient<RowKind>) -> RowIcon {
         switch kind.value {
-        case .checksFailed, .changesRequested, .conflicts, .removedFromMergeQueue:
+        case .checksFailed, .changesRequested, .conflicts, .mergeQueueRemoved:
             return RowIcon(icon: rowCross, tone: .action)
-        case .mergeable:
+        case .mergeable, .approved:
             return RowIcon(icon: rowCheck, tone: .ok)
-        case .botComment:
-            return RowIcon(icon: bot, tone: .bot)
-        case .addedToMergeQueue:
+        case .mergeQueueAdded:
             return RowIcon(icon: mergeQueue, tone: .info)
         case .reaction:
             return RowIcon(icon: reaction, tone: .info)
@@ -144,35 +136,27 @@ extension BoardIcons {
             return RowIcon(icon: merged, tone: .merged)
         case .closed:
             return RowIcon(icon: rowCross, tone: .closed)
-        case .reviewRequested, .mentioned, .comment, .reply, nil:
+        case .reviewRequested, .teamReviewRequested, .mentioned, .teamMentioned, .comment, .reply, .replyMentioned, nil:
             return RowIcon(icon: reviewRequest, tone: .info)
         }
     }
-
-    /// The menu bar icon of a scope: its owner's type, the person while the
-    /// type is not fetched yet (docs/tasks/M3.md, "Menu bar and popover").
-    public static func scope(_ scope: Scope) -> BoardIcon {
-        if scope.isPublic { return globe }
-        return scope.kind?.value == .org ? organization : person
-    }
 }
 
-/// Where the marks go on a scope's menu bar icon (DESIGN.md, "Screens"):
-/// the badge top right, the blue dot top right, or bottom right when the
-/// badge is there too, and the triangle bottom left.
+/// The marks on an account's menu bar icon (DESIGN.md, "Screens";
+/// MenuBarIcon.html): the blue dot top right, the Todo PR count bottom
+/// right, the triangle bottom left.
 public struct MenuBarMarks: Equatable {
-    public enum DotPlace: Equatable { case topRight, bottomRight }
-
-    public var badge: String?
-    public var dot: DotPlace?
+    public var number: String?
+    public var dot: Bool
     public var triangle: Bool
 
-    public init(badge count: Int, dot: Bool, triangle: Bool) {
-        badge = count > 0 ? (count > 99 ? "99+" : "\(count)") : nil
-        self.dot = dot ? (count > 0 ? .bottomRight : .topRight) : nil
+    public init(count: Int, dot: Bool, triangle: Bool) {
+        number = count > 0 ? (count > 99 ? "99+" : "\(count)") : nil
+        self.dot = dot
         self.triangle = triangle
     }
 
-    /// Without marks the glyph is a template image in the menu bar's color.
-    public var plain: Bool { badge == nil && dot == nil && !triangle }
+    public init(_ account: Account) {
+        self.init(count: account.todoCount, dot: account.unread, triangle: Warnings.hasTriangle(account))
+    }
 }

@@ -3,8 +3,8 @@
 
 mod support;
 
-use serde_json::json;
 use shiibar_gh_proto::*;
+use shiibar_ghd::engine::ActivityArgs;
 use support::*;
 
 type Step = fn(&mut H);
@@ -26,7 +26,7 @@ const fn f(unread: bool, seen_pending: bool, done: bool) -> Flags {
 }
 
 #[test]
-fn trigger_table_for_a_needs_action_row() {
+fn trigger_table_for_a_todo_row() {
     let cases: &[(&str, &[Step], Flags)] = &[
         ("creation", &[], f(true, false, false)),
         ("seen", &[|h| h.seen(&["E_1"])], f(true, true, false)),
@@ -40,28 +40,21 @@ fn trigger_table_for_a_needs_action_row() {
             &[H::close],
             f(true, false, false),
         ),
-        (
-            "done",
-            &[|h| h.engine.done("E_1").unwrap()],
-            f(true, false, true),
-        ),
+        ("done", &[|h| h.done("E_1")], f(true, false, true)),
         (
             "done then undone",
-            &[
-                |h| h.engine.done("E_1").unwrap(),
-                |h| h.engine.undone("E_1").unwrap(),
-            ],
+            &[|h| h.done("E_1"), |h| h.undone("E_1")],
             f(true, false, false),
         ),
         (
             "done does not change seen tracking",
-            &[|h| h.seen(&["E_1"]), |h| h.engine.done("E_1").unwrap()],
+            &[|h| h.seen(&["E_1"]), |h| h.done("E_1")],
             f(true, true, true),
         ),
     ];
     for (name, steps, want) in cases {
         let mut h = H::new();
-        let e = h.ev("E_1", "PR_1", EventKind::Comment);
+        let e = h.ev("E_1", "PR_1", IngestKind::Comment);
         h.push(vec![pr("PR_1")], vec![e], vec![]);
         for step in *steps {
             step(&mut h);
@@ -74,30 +67,38 @@ fn trigger_table_for_a_needs_action_row() {
 }
 
 #[test]
-fn every_event_kind_has_its_class() {
+fn every_event_kind_follows_the_default_table() {
+    // DESIGN.md, "Row kinds and states": the Todo column of the defaults.
     let cases = [
-        (EventKind::Mentioned, RowClass::NeedsAction),
-        (EventKind::Comment, RowClass::NeedsAction),
-        (EventKind::Reply, RowClass::NeedsAction),
-        (EventKind::AddedToMergeQueue, RowClass::Event),
-        (EventKind::RemovedFromMergeQueue, RowClass::Event),
-        (EventKind::Merged, RowClass::Event),
-        (EventKind::Closed, RowClass::Event),
-        (EventKind::BotComment, RowClass::Event),
+        (IngestKind::Mentioned, true),
+        (IngestKind::TeamMentioned, true),
+        (IngestKind::Comment, true),
+        (IngestKind::Reply, true),
+        (IngestKind::ReplyMentioned, true),
+        (IngestKind::Approved, false),
+        (IngestKind::MergeQueueAdded, false),
+        (IngestKind::MergeQueueRemoved, false),
+        (IngestKind::Merged, false),
+        (IngestKind::Closed, false),
     ];
     for (kind, want) in cases {
         let mut h = H::new();
         let e = h.ev("E_1", "PR_1", kind);
         h.push(vec![pr("PR_1")], vec![e], vec![]);
-        assert_eq!(class(&h.wire_row("E_1").unwrap()), want, "{kind:?}");
+        let id = if kind == IngestKind::Approved {
+            "E_1:approved"
+        } else {
+            "E_1"
+        };
+        assert_eq!(h.wire_row(id).unwrap().todo, want, "{kind:?}");
     }
 }
 
 #[test]
-fn done_and_undone_do_not_touch_rows_that_are_not_needs_action() {
+fn done_does_not_touch_rows_that_are_not_todo() {
     let mut h = H::new();
-    let e = h.ev("E_1", "PR_1", EventKind::Merged);
-    let stale = h.ev("E_2", "PR_2", EventKind::ReviewRequested);
+    let e = h.ev("E_1", "PR_1", IngestKind::Merged);
+    let stale = h.ev("E_2", "PR_2", IngestKind::ReviewRequested);
     h.push(
         vec![
             pr("PR_1"),
@@ -110,8 +111,8 @@ fn done_and_undone_do_not_touch_rows_that_are_not_needs_action() {
         vec![e, stale],
         vec![],
     );
-    h.engine.done("E_1").unwrap();
-    h.engine.done("E_2").unwrap();
+    h.done("E_1");
+    h.done("E_2");
     assert!(!h.row("E_1").done);
     assert!(!h.row("E_2").done);
 }
@@ -123,7 +124,8 @@ fn review_requested_table() {
         state: PrState,
         requested_me: bool,
         newer_row: bool,
-        class: RowClass,
+        team: bool,
+        todo: bool,
     }
     let cases = [
         Case {
@@ -131,73 +133,109 @@ fn review_requested_table() {
             state: PrState::Open,
             requested_me: true,
             newer_row: false,
-            class: RowClass::NeedsAction,
+            team: false,
+            todo: true,
         },
         Case {
             name: "request withdrawn",
             state: PrState::Open,
             requested_me: false,
             newer_row: false,
-            class: RowClass::Event,
+            team: false,
+            todo: false,
         },
         Case {
             name: "merged",
             state: PrState::Merged,
             requested_me: true,
             newer_row: false,
-            class: RowClass::Event,
+            team: false,
+            todo: false,
         },
         Case {
             name: "closed",
             state: PrState::Closed,
             requested_me: true,
             newer_row: false,
-            class: RowClass::Event,
+            team: false,
+            todo: false,
         },
         Case {
             name: "not the latest row",
             state: PrState::Open,
             requested_me: true,
             newer_row: true,
-            class: RowClass::Event,
+            team: false,
+            todo: false,
         },
     ];
+    let cases = cases.into_iter().chain([
+        Case {
+            name: "team: latest, open, requested",
+            state: PrState::Open,
+            requested_me: true,
+            newer_row: false,
+            team: true,
+            todo: true,
+        },
+        Case {
+            name: "team: request withdrawn",
+            state: PrState::Open,
+            requested_me: false,
+            newer_row: false,
+            team: true,
+            todo: false,
+        },
+        Case {
+            name: "team: a newer direct request is the latest",
+            state: PrState::Open,
+            requested_me: true,
+            newer_row: true,
+            team: true,
+            todo: false,
+        },
+    ]);
     for c in cases {
         let mut h = H::new();
-        let e = h.ev("E_1", "PR_1", EventKind::ReviewRequested);
-        let open = IngestPr {
-            requested_me: true,
+        let kind = if c.team {
+            IngestKind::TeamReviewRequested
+        } else {
+            IngestKind::ReviewRequested
+        };
+        let e = h.ev("E_1", "PR_1", kind);
+        let asked = |on: bool| IngestPr {
+            requested_me: on && !c.team,
+            requested_team: on && c.team,
             ..other("PR_1")
         };
-        h.push(vec![open], vec![e], vec![]);
+        h.push(vec![asked(true)], vec![e], vec![]);
         let later = IngestPr {
             state: c.state,
-            requested_me: c.requested_me,
-            ..other("PR_1")
+            ..asked(c.requested_me)
         };
         let events = if c.newer_row {
-            vec![h.ev("E_2", "PR_1", EventKind::ReviewRequested)]
+            vec![h.ev("E_2", "PR_1", IngestKind::ReviewRequested)]
         } else {
             vec![]
         };
         h.push(vec![later], events, vec![]);
         // The row may have left the card list; `status` still shows it.
-        let card = h.engine.status(&key("PR_1"), &h.now).unwrap();
-        let row = card.rows.iter().find(|r| r.id == "E_1").unwrap();
-        assert_eq!(class(row), c.class, "{}", c.name);
+        let card = h.engine.status(ME, &key("PR_1"), &h.now).unwrap();
+        let row = card.rows.iter().find(|r| r.id == full("E_1")).unwrap();
+        assert_eq!(row.todo, c.todo, "{}", c.name);
     }
 }
 
 #[test]
-fn a_row_that_stopped_being_needs_action_keeps_done_and_unread() {
+fn a_row_that_stopped_being_todo_keeps_done_and_unread() {
     let mut h = H::new();
-    let e = h.ev("E_1", "PR_1", EventKind::ReviewRequested);
+    let e = h.ev("E_1", "PR_1", IngestKind::ReviewRequested);
     let open = IngestPr {
         requested_me: true,
         ..other("PR_1")
     };
     h.push(vec![open.clone()], vec![e], vec![]);
-    h.engine.done("E_1").unwrap();
+    h.done("E_1");
     h.prs(vec![IngestPr {
         requested_me: false,
         ..other("PR_1")
@@ -209,9 +247,9 @@ fn a_row_that_stopped_being_needs_action_keeps_done_and_unread() {
 }
 
 #[test]
-fn reopening_returns_a_pruned_review_requested_row_to_needs_action() {
+fn reopening_returns_a_pruned_review_requested_row_to_todo() {
     let mut h = H::new();
-    let e = h.ev("E_1", "PR_1", EventKind::ReviewRequested);
+    let e = h.ev("E_1", "PR_1", IngestKind::ReviewRequested);
     let open = IngestPr {
         requested_me: true,
         ..other("PR_1")
@@ -222,27 +260,28 @@ fn reopening_returns_a_pruned_review_requested_row_to_needs_action() {
         ..open.clone()
     }]);
     let newer: Vec<_> = (2..6)
-        .map(|n| h.ev(&format!("E_{n}"), "PR_1", EventKind::Closed))
+        .map(|n| h.ev(&format!("E_{n}"), "PR_1", IngestKind::Closed))
         .collect();
     h.events(newer);
     let all: Vec<String> = (1..6).map(|n| format!("E_{n}")).collect();
-    h.engine.seen(&all);
+    h.engine
+        .seen(&all.iter().map(|s| full(s)).collect::<Vec<_>>());
     h.close();
     assert!(h.row("E_1").pruned, "older read rows are pruned");
     h.prs(vec![open]);
     assert!(!h.row("E_1").pruned);
-    assert_eq!(class(&h.wire_row("E_1").unwrap()), RowClass::NeedsAction);
+    assert!(h.wire_row("E_1").unwrap().todo);
     assert_eq!(h.badge(), 1);
 }
 
 #[test]
 fn the_same_event_never_makes_two_rows() {
     let mut h = H::new();
-    let e = h.ev("E_1", "PR_1", EventKind::Comment);
+    let e = h.ev("E_1", "PR_1", IngestKind::Comment);
     h.push(vec![pr("PR_1")], vec![e.clone()], vec![]);
-    h.engine.done("E_1").unwrap();
+    h.done("E_1");
     h.push(vec![pr("PR_1")], vec![e], vec![]);
-    let rows = h.engine.activity(&Filter::default(), &h.now).unwrap();
+    let rows = h.activity(ActivityArgs::default());
     assert_eq!(ids(&rows), ["E_1"]);
     assert!(h.row("E_1").done, "the existing row is left as it was");
 }
@@ -337,7 +376,7 @@ fn state_change_table() {
         h.prs(vec![(c.before)(pr("PR_1"))]);
         let detected = h.at();
         h.prs(vec![(c.after)(pr("PR_1"))]);
-        let rows = h.engine.activity(&Filter::default(), &h.now).unwrap();
+        let rows = h.activity(ActivityArgs::default());
         assert_eq!(rows.len(), 1, "{}", c.name);
         let row = &rows[0];
         assert_eq!(row.kind, Lenient::Known(c.kind), "{}", c.name);
@@ -345,7 +384,7 @@ fn state_change_table() {
         assert_eq!(row.url, c.url, "{}", c.name);
         assert_eq!(row.occurred_at, detected, "{}", c.name);
         assert_eq!(row.actor, None, "{}", c.name);
-        assert_eq!(class(row), RowClass::Event, "{}", c.name);
+        assert!(!row.todo, "{}", c.name);
         assert!(row.unread, "{}", c.name);
     }
 }
@@ -458,7 +497,7 @@ fn state_changes_that_make_no_row() {
             h.prs(vec![before()]);
         }
         h.prs(vec![after()]);
-        let rows = h.engine.status(&key("PR_1"), &h.now).unwrap().rows;
+        let rows = h.engine.status(ME, &key("PR_1"), &h.now).unwrap().rows;
         assert!(rows.is_empty(), "{name}: {rows:?}");
     }
 }
@@ -478,46 +517,11 @@ fn failing_again_after_recovery_makes_a_new_row() {
     h.prs(vec![failed.clone()]);
     h.prs(vec![passed]);
     h.prs(vec![failed]);
-    let rows = h.engine.activity(&Filter::default(), &h.now).unwrap();
+    let rows = h.activity(ActivityArgs::default());
     assert_eq!(rows.len(), 2);
     assert_ne!(rows[0].id, rows[1].id);
     let card = h.card(&key("PR_1")).unwrap();
     assert_eq!(card.checks, Lenient::Known(Checks::Failed));
-}
-
-#[test]
-fn hidden_bot_comments_are_recorded_read_and_stay_out_of_everything() {
-    let mut h = H::new();
-    h.set("bot_comments", json!("hide"));
-    let e = h.ev("E_1", "PR_1", EventKind::BotComment);
-    h.push(vec![other("PR_1")], vec![e], vec![]);
-    assert!(h.has_row("E_1"));
-    assert!(h.wire_row("E_1").is_none());
-    assert!(!h.visible("PR_1") || h.cards(&Filter::default())[0].rows.is_empty());
-    assert!(!h.dot());
-    h.set("bot_comments", json!("list_only"));
-    let row = h.wire_row("E_1").unwrap();
-    assert!(!row.unread, "read when shown again");
-}
-
-#[test]
-fn hide_also_clears_earlier_unread_bot_comments_when_shown_again() {
-    let mut h = H::new();
-    let e = h.ev("E_1", "PR_1", EventKind::BotComment);
-    h.push(
-        vec![IngestPr {
-            state: PrState::Closed,
-            ..other("PR_1")
-        }],
-        vec![e],
-        vec![],
-    );
-    assert!(h.visible("PR_1"), "unread shows the card");
-    h.set("bot_comments", json!("hide"));
-    assert!(!h.visible("PR_1"), "a hidden row is not unread");
-    h.set("bot_comments", json!("notify"));
-    assert!(!h.visible("PR_1"), "shown again as read");
-    assert!(!h.row("E_1").unread);
 }
 
 #[test]
@@ -533,7 +537,7 @@ fn previous_values_keep_tracking_while_a_pr_is_closed() {
     };
     let kinds = |h: &H| {
         h.engine
-            .status(&key("PR_1"), &h.now)
+            .status(ME, &key("PR_1"), &h.now)
             .unwrap()
             .rows
             .iter()

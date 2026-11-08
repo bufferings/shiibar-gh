@@ -4,7 +4,7 @@
 mod support;
 
 use shiibar_gh_proto::*;
-use shiibar_ghd::model::NotifyState;
+use shiibar_ghd::model::{NotifyState, OwnerKind};
 use support::*;
 
 const BEFORE: i64 = T0 - 100;
@@ -16,7 +16,7 @@ fn event_table() {
     let cases = [
         (
             "old comment",
-            EventKind::Comment,
+            IngestKind::Comment,
             BEFORE,
             false,
             false,
@@ -25,7 +25,7 @@ fn event_table() {
         ),
         (
             "old mention",
-            EventKind::Mentioned,
+            IngestKind::Mentioned,
             BEFORE,
             false,
             false,
@@ -34,7 +34,7 @@ fn event_table() {
         ),
         (
             "old merge",
-            EventKind::Merged,
+            IngestKind::Merged,
             BEFORE,
             false,
             false,
@@ -43,7 +43,7 @@ fn event_table() {
         ),
         (
             "old request, still requested, first fetch",
-            EventKind::ReviewRequested,
+            IngestKind::ReviewRequested,
             BEFORE,
             true,
             false,
@@ -52,7 +52,7 @@ fn event_table() {
         ),
         (
             "old request, no longer requested",
-            EventKind::ReviewRequested,
+            IngestKind::ReviewRequested,
             BEFORE,
             false,
             false,
@@ -61,7 +61,7 @@ fn event_table() {
         ),
         (
             "old request on a PR already fetched",
-            EventKind::ReviewRequested,
+            IngestKind::ReviewRequested,
             BEFORE,
             true,
             true,
@@ -70,7 +70,7 @@ fn event_table() {
         ),
         (
             "exactly at the watch start",
-            EventKind::Comment,
+            IngestKind::Comment,
             T0,
             false,
             false,
@@ -79,7 +79,7 @@ fn event_table() {
         ),
         (
             "new comment on a new PR",
-            EventKind::Comment,
+            IngestKind::Comment,
             AFTER,
             false,
             false,
@@ -88,7 +88,7 @@ fn event_table() {
         ),
         (
             "new request on a new PR",
-            EventKind::ReviewRequested,
+            IngestKind::ReviewRequested,
             AFTER,
             true,
             false,
@@ -97,7 +97,7 @@ fn event_table() {
         ),
         (
             "new comment on a known PR",
-            EventKind::Comment,
+            IngestKind::Comment,
             AFTER,
             false,
             true,
@@ -130,9 +130,9 @@ fn event_table() {
 }
 
 #[test]
-fn an_old_request_is_needs_action_with_a_badge() {
+fn an_old_request_is_todo_with_a_badge() {
     let mut h = H::new();
-    let e = h.ev_at("E_1", "PR_1", EventKind::ReviewRequested, BEFORE);
+    let e = h.ev_at("E_1", "PR_1", IngestKind::ReviewRequested, BEFORE);
     h.push(
         vec![IngestPr {
             requested_me: true,
@@ -142,22 +142,23 @@ fn an_old_request_is_needs_action_with_a_badge() {
         vec![],
     );
     assert_eq!(h.badge(), 1);
-    assert_eq!(class(&h.wire_row("E_1").unwrap()), RowClass::NeedsAction);
+    assert!(h.wire_row("E_1").unwrap().todo);
 }
 
 #[test]
-fn enabling_a_scope_restarts_the_watch_and_forgets_previous_values() {
+fn enabling_a_owner_restarts_the_watch_and_forgets_previous_values() {
     let mut h = H::new();
     h.prs(vec![IngestPr {
         checks: Checks::Passed,
         ..pr("PR_1")
     }]);
-    h.engine.scope_disable(ORG).unwrap();
+    let owner = h.owner_id(ORG);
+    h.engine.owner_enable(&owner, false, &h.now);
     h.advance(100);
     let watch = h.at();
-    h.engine.scope_enable(ORG, &h.now).unwrap();
-    let old = h.ev_at("E_1", "PR_1", EventKind::Comment, watch - 1);
-    let new = h.ev_at("E_2", "PR_1", EventKind::Comment, watch);
+    h.engine.owner_enable(&h.owner_id(ORG), true, &h.now);
+    let old = h.ev_at("E_1", "PR_1", IngestKind::Comment, watch - 1);
+    let new = h.ev_at("E_2", "PR_1", IngestKind::Comment, watch);
     // Failing on the first fetch after the restart is not a change.
     h.push(
         vec![IngestPr {
@@ -169,38 +170,48 @@ fn enabling_a_scope_restarts_the_watch_and_forgets_previous_values() {
     );
     assert!(!h.has_row("E_1"));
     assert!(h.has_row("E_2"));
-    let rows = h.engine.status(&key("PR_1"), &h.now).unwrap().rows;
+    let rows = h.engine.status(ME, &key("PR_1"), &h.now).unwrap().rows;
     assert_eq!(ids(&rows), ["E_2"]);
 }
 
 #[test]
-fn enabling_an_enabled_scope_changes_nothing() {
+fn enabling_an_enabled_owner_changes_nothing() {
     let mut h = H::new();
     h.prs(vec![IngestPr {
         checks: Checks::Passed,
         ..pr("PR_1")
     }]);
     h.advance(100);
-    h.engine.scope_enable(ORG, &h.now).unwrap();
+    h.engine.owner_enable(&h.owner_id(ORG), true, &h.now);
     h.prs(vec![IngestPr {
         checks: Checks::Failed,
         ..pr("PR_1")
     }]);
-    assert_eq!(h.engine.status(&key("PR_1"), &h.now).unwrap().rows.len(), 1);
+    assert_eq!(
+        h.engine
+            .status(ME, &key("PR_1"), &h.now)
+            .unwrap()
+            .rows
+            .len(),
+        1
+    );
 }
 
 #[test]
-fn adding_a_scope_again_restarts_its_watch() {
+fn adding_a_owner_again_restarts_its_watch() {
     let mut h = H::new();
     h.prs(vec![IngestPr {
         checks: Checks::Passed,
         ..pr("PR_1")
     }]);
-    h.engine.scope_remove(ORG).unwrap();
+    let owner = h.owner_id(ORG);
+    h.engine.owner_remove(&owner);
     h.advance(100);
     let watch = h.at();
-    h.engine.scope_add(ORG, &h.now).unwrap();
-    let old = h.ev_at("E_1", "PR_1", EventKind::Comment, watch - 1);
+    h.engine
+        .owner_add(ACCOUNT, ORG, OwnerKind::Org, Some(100), &h.now)
+        .unwrap();
+    let old = h.ev_at("E_1", "PR_1", IngestKind::Comment, watch - 1);
     h.push(
         vec![IngestPr {
             checks: Checks::Failed,
@@ -212,7 +223,7 @@ fn adding_a_scope_again_restarts_its_watch() {
     assert!(!h.has_row("E_1"));
     assert!(
         h.engine
-            .status(&key("PR_1"), &h.now)
+            .status(ME, &key("PR_1"), &h.now)
             .unwrap()
             .rows
             .is_empty()
@@ -220,16 +231,18 @@ fn adding_a_scope_again_restarts_its_watch() {
 }
 
 #[test]
-fn each_scope_has_its_own_watch_start() {
+fn each_owner_has_its_own_watch_start() {
     let mut h = H::new();
     h.advance(1000);
-    h.engine.scope_add("late", &h.now).unwrap();
+    h.engine
+        .owner_add(ACCOUNT, "late", OwnerKind::Org, None, &h.now)
+        .unwrap();
     let late = IngestPr {
         owner: "late".into(),
         ..other("PR_2")
     };
-    let a = h.ev_at("E_1", "PR_1", EventKind::Comment, T0 + 500);
-    let b = h.ev_at("E_2", "PR_2", EventKind::Comment, T0 + 500);
+    let a = h.ev_at("E_1", "PR_1", IngestKind::Comment, T0 + 500);
+    let b = h.ev_at("E_2", "PR_2", IngestKind::Comment, T0 + 500);
     h.push(vec![other("PR_1"), late], vec![a, b], vec![]);
     assert!(h.has_row("E_1"));
     assert!(!h.has_row("E_2"));
@@ -243,12 +256,13 @@ fn the_request_exception_applies_to_a_known_pr_when_the_watch_restarts() {
         ..other("PR_1")
     };
     h.prs(vec![requested.clone()]);
-    h.engine.scope_disable(ORG).unwrap();
+    let owner = h.owner_id(ORG);
+    h.engine.owner_enable(&owner, false, &h.now);
     h.advance(100);
     let asked = h.at();
     h.advance(100);
-    h.engine.scope_enable(ORG, &h.now).unwrap();
-    let e = h.ev_at("E_1", "PR_1", EventKind::ReviewRequested, asked);
+    h.engine.owner_enable(&h.owner_id(ORG), true, &h.now);
+    let e = h.ev_at("E_1", "PR_1", IngestKind::ReviewRequested, asked);
     h.push(vec![requested], vec![e.clone()], vec![]);
     assert!(h.has_row("E_1"), "the first fetch after the restart");
     assert_eq!(h.row("E_1").notify, NotifyState::None);
@@ -262,19 +276,20 @@ fn the_request_exception_needs_the_first_fetch_after_the_restart() {
         requested_me: true,
         ..other("PR_1")
     };
-    h.engine.scope_disable(ORG).unwrap();
+    let owner = h.owner_id(ORG);
+    h.engine.owner_enable(&owner, false, &h.now);
     h.advance(100);
     let asked = h.at();
     h.advance(100);
-    h.engine.scope_enable(ORG, &h.now).unwrap();
+    h.engine.owner_enable(&h.owner_id(ORG), true, &h.now);
     h.prs(vec![requested.clone()]);
-    let e = h.ev_at("E_1", "PR_1", EventKind::ReviewRequested, asked);
+    let e = h.ev_at("E_1", "PR_1", IngestKind::ReviewRequested, asked);
     h.push(vec![requested], vec![e], vec![]);
     assert!(!h.has_row("E_1"));
 }
 
 #[test]
-fn the_request_exception_applies_to_a_pr_moved_into_a_new_scope() {
+fn the_request_exception_applies_to_a_pr_moved_into_a_new_owner() {
     let mut h = H::new();
     let stranger = IngestPr {
         owner: "later".into(),
@@ -282,29 +297,56 @@ fn the_request_exception_applies_to_a_pr_moved_into_a_new_scope() {
         ..other("PR_1")
     };
     h.prs(vec![stranger.clone()]);
-    assert_eq!(h.card("later/app#1").unwrap().scope, "public");
+    assert_eq!(h.card("later/app#1").unwrap().owner, h.owner_id("public"));
     h.advance(100);
     let asked = h.at();
     h.advance(100);
-    h.engine.scope_add("later", &h.now).unwrap();
-    let e = h.ev_at("E_1", "PR_1", EventKind::ReviewRequested, asked);
+    h.engine
+        .owner_add(ACCOUNT, "later", OwnerKind::Org, None, &h.now)
+        .unwrap();
+    let e = h.ev_at("E_1", "PR_1", IngestKind::ReviewRequested, asked);
     h.push(vec![stranger], vec![e], vec![]);
     assert!(h.has_row("E_1"));
     assert_eq!(h.row("E_1").notify, NotifyState::None);
-    assert_eq!(h.card("later/app#1").unwrap().scope, "later");
+    assert_eq!(h.card("later/app#1").unwrap().owner, h.owner_id("later"));
 }
 
 #[test]
-fn a_pr_moved_to_public_keeps_its_previous_values_so_no_exception() {
+fn a_removed_owner_forgets_its_prs_so_public_fetches_them_as_new() {
+    // DESIGN.md, "Owners": removing an owner deletes its PRs. The PR then
+    // comes to Public as a first fetch, so the still open request is kept
+    // as a silent Todo row.
     let mut h = H::new();
     let requested = IngestPr {
         requested_me: true,
         ..other("PR_1")
     };
     h.prs(vec![requested.clone()]);
-    h.engine.scope_remove(ORG).unwrap();
-    // Older than Public's watch, and not a first fetch.
-    let e = h.ev_at("E_1", "PR_1", EventKind::ReviewRequested, T0 - 1);
+    let owner = h.owner_id(ORG);
+    h.engine.owner_remove(&owner);
+    let e = h.ev_at("E_1", "PR_1", IngestKind::ReviewRequested, T0 - 1);
     h.push(vec![requested], vec![e], vec![]);
-    assert!(!h.has_row("E_1"));
+    assert!(h.has_row("E_1"));
+    assert_eq!(h.row("E_1").notify, NotifyState::None);
+    assert_eq!(h.card(&key("PR_1")).unwrap().owner, h.owner_id("public"));
+}
+
+#[test]
+fn an_old_team_request_still_open_is_a_silent_todo_row() {
+    let mut h = H::new();
+    let e = h.ev_at("E_1", "PR_1", IngestKind::TeamReviewRequested, BEFORE);
+    h.push(
+        vec![IngestPr {
+            requested_team: true,
+            ..other("PR_1")
+        }],
+        vec![e],
+        vec![],
+    );
+    assert!(h.has_row("E_1"));
+    assert_eq!(h.row("E_1").notify, NotifyState::None);
+    assert!(h.wire_row("E_1").unwrap().todo);
+    let e = h.ev_at("E_2", "PR_2", IngestKind::TeamReviewRequested, BEFORE);
+    h.push(vec![other("PR_2")], vec![e], vec![]);
+    assert!(!h.has_row("E_2"), "no longer requested");
 }

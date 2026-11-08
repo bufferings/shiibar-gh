@@ -998,8 +998,9 @@ dependencies = [
 
 [[package]]
 name = "shiibar-gh"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
+ "serde",
  "serde_json",
  "shiibar-gh-client",
  "shiibar-gh-proto",
@@ -1009,7 +1010,7 @@ dependencies = [
 
 [[package]]
 name = "shiibar-gh-client"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1018,7 +1019,7 @@ dependencies = [
 
 [[package]]
 name = "shiibar-gh-proto"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1026,7 +1027,7 @@ dependencies = [
 
 [[package]]
 name = "shiibar-ghd"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "jiff",

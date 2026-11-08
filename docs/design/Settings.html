@@ -3,322 +3,240 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>shiibar-gh — Settings</title>
+<title>shiibar-gh — Settings: Accounts</title>
 <style>
-body{margin:0;padding:24px;background:#e9e9ee}
+body{margin:0}
+a{color:#0A5FC2;text-decoration:none}a:hover{color:#084A97}
+.ab{width:1240px;height:940px;box-sizing:border-box;padding:28px 32px;background:#FFFFFF;font-family:-apple-system,system-ui,"Hiragino Sans",sans-serif;color:#1D1D1F;font-size:13px;display:flex;flex-direction:column;gap:16px;overflow:hidden}
+.lead{font-size:13px;color:#1D1D1F;line-height:18px}
+.cap{font-size:12px;font-weight:600;color:#1D1D1F}
+.desc{font-size:11px;color:#5E5E64;line-height:16px}
+.scene{display:flex;flex-direction:column;gap:8px}
+.row{display:flex;gap:40px;align-items:flex-start}
 
-    .sc-placeholder{background:color-mix(in srgb,currentColor 8%,transparent);
-      border:1px solid color-mix(in srgb,currentColor 50%,transparent);
-      border-radius:2px;box-sizing:border-box;overflow:hidden}
-    @keyframes sc-shine{0%{background-position:100% 50%}100%{background-position:0% 50%}}
-    html.sc-dc-streaming .sc-placeholder,
-    html.sc-dc-streaming .sc-interp.sc-missing{position:relative;
-      background:color-mix(in srgb,currentColor 5%,transparent);
-      border-color:transparent}
-    html.sc-dc-streaming .sc-placeholder::before,
-    html.sc-dc-streaming .sc-interp.sc-missing::before{content:'';
-      position:absolute;inset:0;pointer-events:none;
-      background:linear-gradient(90deg,rgba(217,119,87,0) 25%,rgba(247,225,211,.95) 37%,rgba(217,119,87,0) 63%);
-      background-size:400% 100%;animation:sc-shine 1.4s ease infinite}
-    html.sc-dc-streaming .sc-placeholder:nth-child(n+9 of .sc-placeholder)::before,
-    html.sc-dc-streaming .sc-interp.sc-missing:nth-child(n+9 of .sc-interp.sc-missing)::before{animation:none;
-      background:color-mix(in srgb,currentColor 8%,transparent)}
-    .sc-placeholder-error{padding:4px 8px;font:11px/1.4 ui-monospace,monospace;
-      color:color-mix(in srgb,currentColor 70%,transparent);word-break:break-word}
-    .sc-interp.sc-missing{display:inline-block;width:2em;height:1em;overflow:hidden;
-      vertical-align:text-bottom;background:rgba(255,255,255,.3);border:1px solid rgba(0,0,0,.5);
-      border-radius:2px;box-sizing:border-box;color:transparent;
-      user-select:none}
-    .sc-interp.sc-unresolved{font-family:ui-monospace,monospace;font-size:.85em;
-      color:color-mix(in srgb,currentColor 50%,transparent);
-      background:color-mix(in srgb,currentColor 10%,transparent);border-radius:3px;
-      padding:0 3px}
-    .sc-host.sc-has-error{position:relative}
-    .sc-logic-error{position:absolute;top:8px;left:8px;z-index:2147483647;max-width:60ch;
-      padding:6px 10px;background:#b00020;color:#fff;font:12px/1.4 ui-monospace,monospace;
-      border-radius:4px;white-space:pre-wrap;pointer-events:none}
-    /* Mirrors PRINT_BASELINE_CSS in apps/web deck-stage-export.ts — keep both
-       in sync until dc-runtime regains a build step. */
-    @media print {
-      @page { margin: 0.5cm; }
-      figure, table { break-inside: avoid; }
-      #dc-root, #dc-root > .sc-host { height: auto; }
-      *, *::before, *::after {
-        print-color-adjust: exact; -webkit-print-color-adjust: exact;
-        backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
-        animation-delay: -99s !important; animation-duration: .001s !important;
-        animation-iteration-count: 1 !important; animation-fill-mode: both !important;
-        animation-play-state: running !important; transition-duration: 0s !important;
-      }
-    }
-  
-x-dc{display:none!important}
+/* menu bar */
+.mbar{height:26px;border-radius:6px;background:#E9E9EC;display:flex;align-items:center;justify-content:flex-end;gap:14px;padding:0 12px;color:#1D1D1F;width:720px;box-sizing:border-box}
+.slot{position:relative;width:22px;height:22px;display:flex;align-items:center;justify-content:center;flex:0 0 22px}
+.bdg{position:absolute;top:-3px;right:-5px;min-width:14px;height:14px;padding:0 4px;box-sizing:border-box;border-radius:7px;background:#C7420D;color:#FFFFFF;font-size:9px;font-weight:700;line-height:14px;text-align:center;border:1.5px solid #E9E9EC}
+.bdot{position:absolute;top:0;right:-1px;width:7px;height:7px;border-radius:4px;background:#0A66D6;border:1.5px solid #E9E9EC}
+.btri{position:absolute;left:-3px;bottom:-2px;display:flex}
+.mbsep{width:1px;height:14px;background:#C9C9CE}
+.avi{width:16px;height:16px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;color:#FFFFFF}
+.clock{font-size:12px}
 
+/* dropdown menu */
+.menu{background:#FFFFFF;border:1px solid #D6D6DA;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.15);padding:4px;width:240px;font-size:12px}
+.mi{display:flex;align-items:center;gap:8px;padding:6px 10px 6px 8px;border-radius:5px;color:#1D1D1F}
+.mi .cnt{margin-left:auto;font-size:11px;color:#5E5E64}
+.sep{height:1px;background:#E3E3E6;margin:4px 6px}
+
+/* popover */
+.pop{width:400px;background:#F3F4F8;border-radius:10px;border:1px solid #D6D6DA;display:flex;flex-direction:column;overflow:hidden;box-sizing:border-box}
+.phead{display:flex;align-items:center;gap:6px;padding:12px 10px 0 16px}
+.m{font-size:11px;color:#5E5E64;white-space:nowrap}
+.iconbtn{width:24px;height:24px;border:none;background:transparent;border-radius:6px;color:#55555B;display:flex;align-items:center;justify-content:center;padding:0;flex:0 0 24px}
+.banner{margin:8px 12px 0;padding:7px 10px;border-radius:8px;background:#FFF4D6;color:#6B4E00;font-size:12px;display:flex;gap:8px;align-items:center}
+.ptabs{display:flex;gap:2px;padding:8px 12px 0;border-bottom:1px solid #E3E3E6}
+.ptab{border:none;background:transparent;font:inherit;font-size:12px;color:#5E5E64;padding:4px 10px 6px;border-bottom:2px solid transparent;margin-bottom:-1px}
+.ptab.on{color:#1D1D1F;font-weight:600;border-bottom-color:#1D1D1F}
+.chips{display:flex;gap:8px;padding:8px 12px;align-items:center;flex-wrap:wrap}
+.chip{font:inherit;font-size:11px;padding:3px 9px;border-radius:12px;border:1px solid #C9C9CE;background:#FFFFFF;color:#3A3A3F;white-space:nowrap;display:flex;align-items:center;gap:5px}
+.chip.on{background:#1D1D1F;color:#FFFFFF;border-color:#1D1D1F}
+.chip.on::before{content:"✓"}
+.chip-act.on{background:#C7420D;border-color:#C7420D}
+.chip .cnt{font-size:10px;font-weight:700;background:rgba(0,0,0,.08);border-radius:7px;padding:0 5px;line-height:14px}
+.chip.on .cnt{background:rgba(255,255,255,.25)}
+.pair{display:flex}
+.pair .chip:first-child{border-radius:12px 0 0 12px}
+.pair .chip:last-child{border-radius:0 12px 12px 0;border-left:none}
+.card{margin:0 12px 8px;background:#FFFFFF;border-radius:10px;border:1px solid #E3E3E6;overflow:hidden;position:relative}
+.sbar{position:absolute;left:0;top:0;bottom:0;width:4px;background:#1F8A3E}
+.prhead{display:flex;flex-direction:column;padding:6px 10px 5px 12px;gap:3px}
+.st{font-size:10px;font-weight:600;line-height:16px;padding:0 6px;border-radius:4px;white-space:nowrap;background:#1F8A3E;color:#FFFFFF}
+.avc{width:16px;height:16px;border-radius:8px;flex:0 0 16px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;color:#FFFFFF}
+.ttl{font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.sls{display:flex;gap:2px}
+.sl{width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:5px}
+.ev{display:flex;gap:8px;align-items:flex-start;padding:5px 10px 6px 14px;border-top:1px solid #F0F0F2;background:#FFF8F3}
+.dot{width:7px;height:7px;border-radius:4px;background:#0A66D6;flex:0 0 7px;margin-top:6px}
+.cb{width:18px;height:18px;border:1.5px solid #C9C9CE;background:#FFFFFF;border-radius:5px;flex:0 0 18px;margin-top:1px;padding:0}
+.k{font-size:11px;font-weight:600;white-space:nowrap;color:#A0390A;margin-top:2px}
+.t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;margin-top:1px}
+.keys{display:flex;gap:10px;padding:6px 16px 8px;border-top:1px solid #E3E3E6;font-size:11px;color:#5E5E64}
+.kb{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#ECECEF;border-radius:3px;padding:0 4px;color:#3A3A3F}
+.pill{font-size:10px;font-weight:600;line-height:15px;padding:0 6px;border-radius:8px;background:#ECECEF;color:#4A4A50;white-space:nowrap}
+
+/* settings window */
+.win{width:720px;background:#F6F6F7;border-radius:10px;border:1px solid #D6D6DA;display:flex;flex-direction:column;overflow:hidden;box-sizing:border-box}
+.titlebar{background:#EDEDF0;border-bottom:1px solid #D6D6DA;padding:8px 12px 6px;display:flex;flex-direction:column;align-items:center;gap:4px}
+.tl{display:flex;align-items:center;width:100%}
+.dots{display:flex;gap:7px}
+.dots span{width:12px;height:12px;border-radius:6px;display:block}
+.wt{flex:1;text-align:center;font-weight:600;font-size:13px}
+.stabs{display:flex;gap:4px}
+.stab{display:flex;flex-direction:column;align-items:center;gap:3px;min-width:72px;padding:6px 8px;border:none;border-radius:7px;background:transparent;font:inherit;font-size:11px;color:#3A3A3F}
+.stab.on{background:#DCE7F7;color:#0A4FA6}
+.body{padding:16px 24px 20px;display:flex;flex-direction:column;gap:14px}
+.group{background:#FFFFFF;border:1px solid #E3E3E6;border-radius:10px}
+.item{display:flex;align-items:center;gap:12px;padding:9px 14px;border-top:1px solid #ECECEF;min-height:22px}
+.item:first-child{border-top:none}
+.item.sub2{padding-left:40px;background:#FAFAFB}
+.lbl{flex:1;display:flex;flex-direction:column;gap:2px;min-width:0}
+.sub{font-size:11px;color:#5E5E64}
+.gh{font-size:12px;font-weight:600;color:#3A3A3F;margin:0 0 6px 4px;display:flex;align-items:center;gap:8px}
+.btn{border:1px solid #C9C9CE;background:#FFFFFF;border-radius:6px;padding:4px 10px;font:inherit;font-size:12px;color:#1D1D1F}
+.sel{border:1px solid #C9C9CE;background:#FFFFFF;border-radius:6px;padding:4px 8px;font:inherit;font-size:12px;color:#1D1D1F;display:flex;align-items:center;gap:6px}
+.ok{color:#1F6E35;font-size:12px}.warn{color:#8A5A00;font-size:12px}.bad{color:#A0390A;font-size:12px}.gray{color:#6E6E76;font-size:12px}
+.ck{display:flex;align-items:center;gap:4px;margin-left:8px;font-size:11px;color:#5E5E64;white-space:nowrap}
+.ck input{width:14px;height:14px;accent-color:#0A66D6;margin:0}
+.av{width:20px;height:20px;border-radius:10px;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:#FFFFFF;flex:0 0 20px}
+.sw{width:12px;height:12px;border-radius:3px;border:1px solid rgba(0,0,0,.12);display:inline-block}
+.foot{display:flex;justify-content:flex-end;gap:8px;align-items:center}
+.msg{font-size:12px;padding:8px 12px;border-radius:8px}
+.msg.good{background:#E2F2E6;color:#1F6E35}
+.msg.err{background:#FCE9DC;color:#A0390A}
+
+/* macOS notification */
+.ntf{width:360px;background:#F2F2F4;border:1px solid #D6D6DA;border-radius:14px;padding:10px 12px;display:flex;gap:10px;align-items:flex-start;box-shadow:0 4px 14px rgba(0,0,0,.12);box-sizing:border-box}
+.ntf .ic{width:34px;height:34px;border-radius:8px;background:#1D1D1F;color:#FFFFFF;display:flex;align-items:center;justify-content:center;flex:0 0 34px}
+.ntf .tt{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ntf .stt{font-size:12px;color:#3A3A3F;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ntf .bd{font-size:12px;color:#5E5E64;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ntf .tm{font-size:11px;color:#8A8A90;margin-left:auto;flex:0 0 auto}
 body{margin:0}
 a{color:#0A5FC2}a:hover{color:#084A97}
-.tab{display:flex;flex-direction:column;align-items:center;gap:3px;min-width:72px;padding:6px 8px;border:none;border-radius:7px;background:transparent;font:inherit;font-size:11px;color:#3A3A3F;cursor:pointer}
-.tab:hover{background:#E6E6E9}
-.tab-on{background:#DCE7F7;color:#0A4FA6}
-.group{background:#FFFFFF;border:1px solid #E3E3E6;border-radius:10px}
-.item{display:flex;align-items:center;gap:12px;padding:10px 14px;border-top:1px solid #ECECEF;min-height:24px}
-.item:first-child{border-top:none}
-.lbl{flex:1;display:flex;flex-direction:column;gap:2px}
-.sub{font-size:11px;color:#5E5E64}
-.gh{font-size:12px;font-weight:600;color:#3A3A3F;margin:0 0 6px 4px}
-.num{width:64px;padding:4px 6px;border:1px solid #C9C9CE;border-radius:6px;font:inherit;font-size:13px;text-align:right;background:#FFFFFF}
-.unit{font-size:12px;color:#5E5E64;min-width:44px}
-.btn{border:1px solid #C9C9CE;background:#FFFFFF;border-radius:6px;padding:4px 10px;font:inherit;font-size:12px;cursor:pointer;color:#1D1D1F}
-.btn:hover{background:#F2F2F4}
-.ok{color:#1F6E35}
-.warn{color:#8A5A00}
-.bad{color:#A0390A}
-input[type=checkbox]{width:16px;height:16px;accent-color:#0A66D6;margin:0}
+.ab{width:1800px;height:5920px}
+.sec{display:flex;align-items:center;gap:8px;padding:10px 14px 6px 16px;font-size:12px;font-weight:600;color:#1D1D1F}
+.sec .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sec .need{font-size:10px;font-weight:700;line-height:15px;padding:0 6px;border-radius:8px;background:#C7420D;color:#FFFFFF}
+.sec .tot{font-size:11px;font-weight:400;color:#5E5E64}
+.chev{width:14px;height:14px;color:#8A8A90;display:flex;align-items:center;justify-content:center}
+.sec.col{color:#5E5E64}
+.empty{margin:0 12px 8px;padding:8px 12px;font-size:12px;color:#8A8A90}
+.act{display:flex;gap:8px;align-items:flex-start;padding:7px 12px 7px 16px;border-top:1px solid #E3E3E6;font-size:12px}
+.act:first-child{border-top:none}
+.act .own{font-size:10px;font-weight:600;color:#4A4A50;background:#ECECEF;border-radius:4px;padding:0 5px;line-height:15px;white-space:nowrap;margin-top:1px}
+.act .body2{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.act .body2 .m{overflow:hidden;text-overflow:ellipsis}
+.list{background:#FFFFFF;margin:0 12px 8px;border-radius:10px;border:1px solid #E3E3E6;overflow:hidden}
+.act .own{flex:0 0 80px;width:80px;box-sizing:border-box;overflow:hidden;text-overflow:ellipsis;text-align:center}
+.num{position:absolute;right:-5px;bottom:-4px;font-size:9px;font-weight:700;line-height:10px;color:#1D1D1F;background:#E9E9EC;padding:0 1px;border-radius:2px}
+.item > .ok,.item > .warn,.item > .bad{flex:0 0 110px;width:110px}
+.item > label.ck{margin-left:0}
+.item > label.ck:nth-of-type(1){flex:0 0 84px;width:84px}
+.item > label.ck:nth-of-type(2){flex:0 0 112px;width:112px}
+.item > .btn,.item > .ph{flex:0 0 72px;width:72px;box-sizing:border-box;text-align:center;padding-left:0;padding-right:0}
+.item > .phc{flex:0 0 208px;width:208px}
+.item.tail{justify-content:flex-end}
+.item.tail > .btn{width:auto;flex:0 0 auto;padding:4px 10px}
+.tg{font:inherit;font-size:11px;padding:3px 9px;border-radius:6px;border:1px solid #C9C9CE;background:linear-gradient(#FFFFFF,#F6F6F7);color:#1D1D1F;line-height:15px;white-space:nowrap;box-shadow:0 .5px 1px rgba(0,0,0,.08)}
+.tg.on{background:#DCE7F7;border-color:#9DB9E4;color:#0A4FA6;box-shadow:inset 0 1px 2px rgba(0,0,0,.08)}
+.seg{display:flex;background:#E4E4E8;border-radius:7px;padding:2px}
+.seg span{font-size:11px;padding:2px 9px;border-radius:5px;color:#3A3A3F;line-height:15px;white-space:nowrap}
+.seg span.on{background:#FFFFFF;color:#1D1D1F;box-shadow:0 1px 2px rgba(0,0,0,.12)}
+.bar3{display:flex;gap:8px;padding:8px 12px 4px;align-items:center}
+.bar3.second{padding:0 12px 8px}
+.adot{width:10px;height:10px;border-radius:5px;background:#C7420D;flex:0 0 10px}
+.pop{width:460px}
+.side{width:170px;flex:0 0 170px;border-right:1px solid #E3E3E6;background:#F0F0F2;padding:10px 8px;display:flex;flex-direction:column;gap:2px;box-sizing:border-box}
+.srow{padding:6px 8px;border-radius:6px;font-size:12px;display:flex;gap:8px;align-items:center}
+.srow.on{background:#DCE7F7;color:#0A4FA6;font-weight:600}
+.srow.sub{padding-left:26px;color:#3A3A3F}
+.srow.sub.on{color:#0A4FA6}
+.pane{flex:1;min-width:0;padding:14px 16px 16px;display:flex;flex-direction:column;gap:12px;background:#F6F6F7}
+.tbl{width:100%;border-collapse:collapse;font-size:12px}
+.tbl th{font-weight:600;font-size:11px;color:#5E5E64;text-align:center;padding:4px 6px;border-bottom:1px solid #E3E3E6;white-space:nowrap}
+.tbl th:first-child{text-align:left}
+.tbl td{padding:4px 6px;border-top:1px solid #F0F0F2;text-align:center}
+.tbl td:first-child{text-align:left}
+.tbl tr.g td{font-weight:600;font-size:11px;color:#3A3A3F;background:#FAFAFB;text-align:left;padding-top:7px}
+.tbl input{width:14px;height:14px;accent-color:#0A66D6;margin:0;vertical-align:middle}
+.tgl{width:30px;height:18px;border-radius:9px;background:#C9C9CE;position:relative;display:inline-block;flex:0 0 30px}
+.tgl.on{background:#0A66D6}
+.tgl span{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:7px;background:#FFFFFF}
+.tgl.on span{left:14px}
+.ctl{flex:0 0 240px;display:flex;justify-content:flex-end;align-items:center;gap:8px}
+.btn[disabled]{opacity:.45}
+.btn{white-space:nowrap}
+.segtabs{display:flex;justify-content:center;margin:2px 0 6px}
+.segtabs span{font-size:12px;padding:3px 16px;border:1px solid #C9C9CE;background:#FFFFFF;color:#1D1D1F;margin-left:-1px;line-height:16px}
+.segtabs span:first-child{border-radius:6px 0 0 6px;margin-left:0}
+.segtabs span:last-child{border-radius:0 6px 6px 0}
+.segtabs span.on{background:#DCE7F7;border-color:#9DB9E4;color:#0A4FA6;font-weight:600;position:relative}
+.sheet{width:440px;border:1px solid #D6D6DA;border-radius:10px;background:#F6F6F7;box-shadow:0 12px 30px rgba(0,0,0,.18);padding:16px 18px;display:flex;flex-direction:column;gap:12px;box-sizing:border-box}
+.sheet .lrow{display:flex;justify-content:space-between;gap:12px}
+.sheet .lrow .chg{color:#5E5E64;white-space:nowrap}
+.tbl.ro td{padding:3px 6px}
+.tbl.ro .on{color:#0A66D6;font-weight:600}
+.tbl.ro .off{color:#B8B8BE}
 
+.st2{font-size:12px;white-space:nowrap}
+.danger .gh{color:#A0390A}
+.danger .group{border-color:#E3A98F}
+.btn.red{color:#A0390A;border-color:#E3A98F}
+.listbox{border:1px solid #E3E3E6;border-radius:6px;background:#FFFFFF;overflow:hidden}
+.lrow{padding:5px 10px;font-size:12px;border-top:1px solid #F0F0F2}
+.lrow:first-child{border-top:none}
+.xseg span{font-size:11px}
+.xrow{display:flex;justify-content:space-between;align-items:center;position:relative;padding:4px 6px 4px 10px}
+.xrow .sel{padding:2px 8px}
+.menu{position:absolute;right:6px;top:4px;z-index:5;background:#FFFFFF;border:1px solid #C9C9CE;border-radius:6px;box-shadow:0 6px 18px rgba(0,0,0,.18);padding:4px 0;font-size:12px;min-width:200px}
+.menu div{padding:3px 10px 3px 22px}
+.menu .cur{padding-left:8px}
+.lfoot{display:flex;gap:2px;padding:3px 6px;border-top:1px solid #ECECEF;background:#FAFAFB}
+.sq{width:22px;height:20px;border:1px solid #C9C9CE;border-radius:4px;background:#FFFFFF;font:inherit;font-size:13px;line-height:1;color:#1D1D1F;padding:0}
+.alert{width:260px;box-sizing:border-box;padding:18px 16px 16px;border-radius:12px;background:#ECECEE;border:1px solid #D6D6DA;box-shadow:0 14px 34px rgba(0,0,0,.22);display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center}
+.aicon{width:56px;height:56px;border-radius:14px;background:linear-gradient(#3A3A3F,#1D1D1F);margin-bottom:4px}
+.atitle{font-weight:700;font-size:13px;color:#1D1D1F}
+.atext{font-size:11px;color:#3A3A3F;line-height:15px}
+.abtn{width:100%;font:inherit;font-size:12px;padding:5px 0;border-radius:6px;border:1px solid #C9C9CE;background:#FFFFFF;color:#1D1D1F;margin-top:2px}
+.abtn.pri{background:#0A66D6;border-color:#0A66D6;color:#FFFFFF;margin-top:8px}
+.usage{display:flex;align-items:center;gap:6px;padding:6px 16px;border-top:1px solid #E3E3E6;font-size:10px;color:#6E6E76;white-space:nowrap}
+.usage .ul{color:#3A3A3F;font-weight:600}
+.usage .ubar{flex:0 0 64px;height:5px;border-radius:3px;background:#E0E0E4;overflow:hidden}
+.usage .ubar span{display:block;height:100%;border-radius:3px;background:#8A8A90}
+.usage .ubar span.w{background:#C98A00}
+.usage .gap{flex:0 0 10px}
+.nf{display:inline-block;width:56px;box-sizing:border-box;border:1px solid #C9C9CE;border-radius:6px;background:#FFFFFF;padding:3px 6px;font-size:12px;color:#1D1D1F;text-align:right;line-height:16px}
+body{margin:0;padding:24px;background:#e9e9ee}
+.ab{width:max-content;height:auto;overflow:visible;border-radius:8px}
 </style>
 </head>
 <body>
-<div class="sc-host" data-sc-name="Settings"><div style="width: 720px; height: 640px; box-sizing: border-box; background: rgb(246, 246, 247); font-family: -apple-system, system-ui, &quot;Hiragino Sans&quot;, sans-serif; color: rgb(29, 29, 31); font-size: 13px; display: flex; flex-direction: column; border-radius: 10px; overflow: hidden; border: 1px solid rgb(214, 214, 218);">
-
-  <div style="background: rgb(237, 237, 240); border-bottom: 1px solid rgb(214, 214, 218); padding: 8px 12px 6px; display: flex; flex-direction: column; align-items: center; gap: 4px;">
-    <div style="display: flex; align-items: center; width: 100%;">
-      <div aria-hidden="true" style="display: flex; gap: 7px;">
-        <div style="width: 12px; height: 12px; border-radius: 6px; background: rgb(236, 106, 94);"></div>
-        <div style="width: 12px; height: 12px; border-radius: 6px; background: rgb(244, 191, 79);"></div>
-        <div style="width: 12px; height: 12px; border-radius: 6px; background: rgb(97, 197, 84);"></div>
+<div class="ab">
+<section class="scene">
+    <div class="cap">Settings › Accounts: an account selected</div>
+    <div class="win" style="width: 760px">
+      <div class="titlebar">
+        <div class="tl"><div class="dots" aria-hidden="true"><span style="background: #EC6A5E"></span><span style="background: #F4BF4F"></span><span style="background: #61C554"></span></div><div class="wt">Accounts</div><div style="width: 50px"></div></div>
+        <div class="stabs">
+          <button class="stab"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="8" cy="8" r="2.2"></circle><circle cx="8" cy="8" r="6"></circle></svg><span>General</span></button>
+          <button class="stab on"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="5.5" r="3"></circle><path d="M2.5 14c.8-3 3-4.5 5.5-4.5s4.7 1.5 5.5 4.5"></path></svg><span>Accounts</span></button>
+          <button class="stab"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5l3.5 3.5"></path></svg><span>Watching</span></button>
+        </div>
       </div>
-      <div style="flex: 1 1 0%; text-align: center; font-weight: 600; font-size: 13px;"><span id="tab-title">General</span></div>
-      <div style="width: 50px;"></div>
+      <div style="display: flex; min-height: 0">
+        <div class="side">
+          <div class="srow on"><span class="adot" style="background: #C7420D"></span>bufferings-work</div><div class="srow sub ">example-org</div><div class="srow sub">acme-corp</div><div class="srow sub">Public</div><div class="srow"><span class="adot" style="background: #0A66D6"></span>bufferings</div><div class="srow sub">example-person</div><div class="srow sub">Public</div>
+          <div style="flex: 1"></div>
+          <button class="btn" style="width: 100%">Add account…</button>
+        </div>
+        <div class="pane">
+          <div><div class="gh">Account</div><div class="group">
+            <div class="item"><div class="lbl"><span style="font-weight: 600">Token</span><span class="sub">Expires 2026-11-12</span></div><div class="ctl"><span class="st2 warn">Expires in 5 days</span><button class="btn">Edit…</button></div></div>
+            <div class="item"><div class="lbl"><span style="font-weight: 600">Menu bar icon color</span><span class="sub">Tints this account's icon and the dot next to its name.</span></div><div class="ctl"><span class="sel"><span class="sw" style="background: #C7420D"></span>Red &#8964;</span></div></div>
+          </div></div>
+          <div><div class="gh">Owners</div><div class="group">
+            <div class="item"><div class="lbl"><span style="font-weight: 600">example-org</span><span class="sub">Organization</span></div><div class="ctl"><span class="gray">&rsaquo;</span></div></div>
+            <div class="item"><div class="lbl"><span style="font-weight: 600">acme-corp</span><span class="sub">Organization</span></div><div class="ctl"><span class="gray">&rsaquo;</span></div></div>
+            <div class="item"><div class="lbl"><span style="font-weight: 600">Public</span><span class="sub">Public repositories</span></div><div class="ctl"><span class="gray">&rsaquo;</span></div></div>
+            <div style="padding: 8px 14px; border-top: 1px solid #ECECEF; display: flex; justify-content: flex-end"><button class="btn">Add owner…</button></div>
+          </div></div>
+          <div><div class="gh">Remove</div><div class="group"><div class="item"><div class="lbl"><span style="font-weight: 600">Remove this account</span><span class="sub">Deletes this account and its owners from shiibar-gh: token, PRs, Done marks, snoozes and settings. Nothing changes on GitHub.</span></div><div class="ctl"><button class="btn">Remove…</button></div></div></div></div>
+        </div>
+      </div>
     </div>
-    <div style="display: flex; gap: 4px;">
-      
-        <button class="tab tab-on">
-          <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="8" cy="8" r="2.2"></circle><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"></path></svg>
-          
-          
-          
-          <span><span class="sc-interp">General</span></span>
-        </button>
-      
-        <button class="tab">
-          
-          <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="5.5" cy="8" r="3"></circle><path d="M8.5 8h6M12.5 8v2.5M14.5 8v2"></path></svg>
-          
-          
-          <span><span class="sc-interp">Scopes</span></span>
-        </button>
-      
-        <button class="tab">
-          
-          
-          <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M4 11V7a4 4 0 0 1 8 0v4l1.5 1.5h-11z"></path><path d="M6.5 14h3"></path></svg>
-          
-          <span><span class="sc-interp">Notifications</span></span>
-        </button>
-      
-        <button class="tab">
-          
-          
-          
-          <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5l3.5 3.5"></path></svg>
-          <span><span class="sc-interp">Watching</span></span>
-        </button>
-      
-    </div>
-  </div>
-
-  <div style="flex: 1 1 0%; overflow: auto; padding: 18px 28px 24px; display: flex; flex-direction: column; gap: 18px;">
-<div class="panel" data-tab="general" style="display: flex; flex-direction: column; gap: 18px">
-
-    
-      <div>
-        <div class="gh">Startup</div>
-        <div class="group">
-          <div class="item">
-            <label class="lbl" for="login">Launch at login<span class="sub">Runs in the menu bar after you log in to your Mac</span></label>
-            <input id="login" type="checkbox" checked="">
-          </div>
-          <div class="item">
-            <label class="lbl" for="appearance">Appearance<span class="sub">“System” follows the appearance setting of your Mac</span></label>
-            <select id="appearance" class="num" style="width: 140px; text-align: left">
-              <option selected="selected">System</option>
-              <option>Light</option>
-              <option>Dark</option>
-            </select>
-          </div>
-        </div>
-      </div>
-      <div>
-        <div class="gh">Polling</div>
-        <div class="group">
-          <div class="item">
-            <div class="lbl">Notifications API interval<span class="sub">Follows the interval GitHub specifies</span></div>
-            <div class="unit">60 sec</div>
-          </div>
-          <div class="item">
-            <label class="lbl" for="gql">PR status interval<span class="sub">Shorter means you notice sooner, but uses more API quota</span></label>
-            <input id="gql" class="num" type="number" min="1" value="1">
-            <div class="unit">min</div>
-          </div>
-          <div class="item">
-            <label class="lbl" for="rct">Reactions interval<span class="sub">Shorter means you notice sooner, but uses more API quota</span></label>
-            <input id="rct" class="num" type="number" min="1" value="3">
-            <div class="unit">min</div>
-          </div>
-          <div class="item">
-            <label class="lbl" for="cap">GraphQL cost cap (last hour)<span class="sub">Warns at 80% of the cap. At the cap, polling stops until the shown resume time</span></label>
-            <input id="cap" class="num" type="number" min="100" value="1500" style="width: 80px;">
-            <div class="unit">points</div>
-          </div>
-        </div>
-      </div>
-      <div>
-        <div class="gh">API usage</div>
-        <div class="group">
-          <div class="item"><div class="lbl">REST remaining</div><div>4,812 / 5,000</div></div>
-          <div class="item"><div class="lbl">GraphQL remaining<span class="sub">Shared with your other tools</span></div><div>4,630 / 5,000</div></div>
-          <div class="item"><div class="lbl">Cost per poll</div><div>42</div></div>
-        </div>
-      </div>
-    
-
-    
-
-    
-
-    
-
+  </section>
 </div>
-<div class="panel" data-tab="account" style="display: none; flex-direction: column; gap: 18px">
-      <div>
-        <div class="gh">Notifications token (classic PAT)</div>
-        <div class="group">
-          <div class="item">
-            <div class="lbl">••••••••••••<span class="sub">Scopes: notifications, read:org · Expires 2027-01-20</span></div>
-            <span class="ok" style="font-size: 12px">Verified</span>
-          </div>
-          <div class="item">
-            <div class="lbl">SSO authorization required<span class="sub">Shown only when GitHub reports that this token needs SSO authorization</span></div>
-            <a href="https://github.com/settings/tokens" class="warn" style="font-size: 12px">Authorize</a>
-          </div>
-          <div class="item" style="justify-content: flex-end; gap: 8px">
-            <a href="https://github.com/settings/tokens/new?scopes=notifications,read:org&amp;description=shiibar-gh" style="font-size: 12px">Create token</a>
-            <button class="btn">Test again</button>
-            <button class="btn">Replace</button>
-          </div>
-        </div>
-      </div>
-      <div>
-        <div class="gh">Scopes</div>
-        <div class="group">
-          <div class="item">
-            <div class="lbl"><span style="font-weight: 600">example-org (organization)</span><span class="sub">fine-grained PAT •••••••••••• · Expires 2026-11-06</span></div>
-            <span class="warn" style="font-size: 12px">Expires in 5 days</span>
-            <label class="sub" style="display: flex; align-items: center; gap: 4px; margin-left: 8px"><input type="checkbox" checked="checked">Enabled</label>
-            <label class="sub" style="display: flex; align-items: center; gap: 4px; margin-left: 8px"><input type="checkbox" checked="checked">Notifications</label>
-          </div>
-          <div class="item" style="flex-direction: column; align-items: stretch; gap: 6px">
-            <div class="sub">Test fetch results</div>
-            <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 16px; font-size: 12px">
-              <div><span class="ok">OK</span> · PRs, reviews, comments</div>
-              <div><span class="ok">OK</span> · Checks</div>
-              <div><span class="ok">OK</span> · Behind base</div>
-              <div><span class="ok">OK</span> · Team membership</div>
-              <div><span class="ok">OK</span> · Merge queue</div>
-            </div>
-          </div>
-          <div class="item" style="justify-content: flex-end; gap: 8px">
-            <button class="btn">Test again</button>
-            <button class="btn">Replace</button>
-          </div>
-          <div class="item">
-            <div class="lbl"><span style="font-weight: 600">example-person</span><span class="sub">fine-grained PAT •••••••••••• · Expires 2027-03-01</span></div>
-            <span class="ok" style="font-size: 12px">Verified</span>
-            <label class="sub" style="display: flex; align-items: center; gap: 4px; margin-left: 8px"><input type="checkbox" checked="checked">Enabled</label>
-            <label class="sub" style="display: flex; align-items: center; gap: 4px; margin-left: 8px"><input type="checkbox" checked="checked">Notifications</label>
-          </div>
-          <div class="item">
-            <div class="lbl"><span style="font-weight: 600">Public</span><span class="sub">fine-grained PAT •••••••••••• · Public repositories · PRs you’re involved in on public repositories</span></div>
-            <span class="ok" style="font-size: 12px">Verified</span>
-            <label class="sub" style="display: flex; align-items: center; gap: 4px; margin-left: 8px"><input type="checkbox" checked="checked">Enabled</label>
-            <label class="sub" style="display: flex; align-items: center; gap: 4px; margin-left: 8px"><input type="checkbox" checked="checked">Notifications</label>
-          </div>
-        </div>
-      </div>
-      <div style="display: flex; justify-content: space-between; align-items: center">
-        <div class="sub">In GitHub notification settings, “On GitHub” must be on for conversations you participate in</div>
-        <button class="btn">Add scope</button>
-      </div>
-</div>
-<div class="panel" data-tab="notify" style="display: none; flex-direction: column; gap: 18px">
-      <div>
-        <div class="gh">macOS notifications</div>
-        <div class="group">
-          <div class="item"><label class="lbl" for="n1">Review requests, mentions, comments on my PRs, and replies in threads I commented in or was mentioned in</label><input id="n1" type="checkbox" checked="checked"></div>
-          <div class="item"><label class="lbl" for="n2">State changes on my PRs<span class="sub">Checks failed, conflicts, changes requested, removed from merge queue, mergeable</span></label><input id="n2" type="checkbox" checked="checked"></div>
-          <div class="item"><label class="lbl" for="n3">Reactions to my comments<span class="sub">Reactions on the same comment are grouped into one</span></label><input id="n3" type="checkbox" checked="checked"></div>
-        </div>
-      </div>
-      <div>
-        <div class="gh">Snooze</div>
-        <div class="group">
-          <div class="item">
-            <label class="lbl" for="snz">Return time<span class="sub">All snoozed PRs come back every day at this time</span></label>
-            <input id="snz" class="num" type="time" value="09:00" style="width: 90px">
-          </div>
-        </div>
-      </div>
-      <div>
-        <div class="gh">Bot comments</div>
-        <div class="group">
-          <div class="item">
-            <label class="lbl" for="bot">Comments written by bots (CI, coverage, etc.)<span class="sub">“List only” shows them in the list without a notification</span></label>
-            <select id="bot" class="num" style="width: 140px; text-align: left">
-              <option>Notify</option>
-              <option selected="selected">List only</option>
-              <option>Hide</option>
-            </select>
-          </div>
-        </div>
-      </div>
-      <div class="sub" style="padding: 0 4px">Types you turn off still appear in the list. macOS settings such as Focus still apply.</div>
-</div>
-<div class="panel" data-tab="scope" style="display: none; flex-direction: column; gap: 18px">
-      <div>
-        <div class="gh">Review requests</div>
-        <div class="group">
-          <div class="item"><label class="lbl" for="team">Include requests to my teams<span class="sub">When off, only requests addressed to me are shown</span></label><input id="team" type="checkbox" checked="checked"></div>
-        </div>
-      </div>
-      <div>
-        <div class="gh">Reaction watching</div>
-        <div class="group">
-          <div class="item">
-            <label class="lbl" for="closed">Days to keep watching after close</label>
-            <input id="closed" class="num" type="number" value="3" min="0">
-            <div class="unit">days</div>
-          </div>
-          <div class="item">
-            <label class="lbl" for="stale">Days without updates before a PR is dropped</label>
-            <input id="stale" class="num" type="number" value="14" min="1">
-            <div class="unit">days</div>
-          </div>
-        </div>
-      </div>
-      <div class="sub" style="padding: 0 4px">Wider ranges miss less but use more API quota. Check Cost per poll in General.</div>
-</div>
-  </div></div></div>
-<script>
-  const tabs = [...document.querySelectorAll('button.tab')];
-  const ids = ['general', 'account', 'notify', 'scope'];
-  const names = ['General', 'Scopes', 'Notifications', 'Watching'];
-  const title = document.getElementById('tab-title');
-  tabs.forEach((tab, i) => tab.addEventListener('click', () => {
-    tabs.forEach((t, j) => t.classList.toggle('tab-on', i === j));
-    document.querySelectorAll('.panel').forEach((p) => {
-      p.style.display = p.dataset.tab === ids[i] ? 'flex' : 'none';
-    });
-    title.textContent = names[i];
-  }));
-</script>
 </body>
 </html>

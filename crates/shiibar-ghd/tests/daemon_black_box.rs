@@ -9,8 +9,7 @@ use serde_json::{Value, json};
 fn setup() -> (tempfile::TempDir, TestDaemon) {
     let dir = tempfile::tempdir().unwrap();
     let daemon = TestDaemon::start(dir.path());
-    daemon.ok(json!({"cmd":"scope_add","owner":"org"}));
-    daemon.ok(json!({"cmd":"scope_add","owner":"public"}));
+    daemon.setup_account();
     (dir, daemon)
 }
 
@@ -49,10 +48,10 @@ fn everything_saved_comes_back_after_a_restart() {
         ],
         vec![reaction("C_1", "PR_1", t, json!({"HEART":2}))],
     );
-    daemon.ok(json!({"cmd":"done","row":"DONE"}));
-    daemon.ok(json!({"cmd":"seen","row_ids":["SEEN"]}));
-    daemon.ok(json!({"cmd":"snooze","pr":"org/app#3"}));
-    daemon.ok(json!({"cmd":"scope_color","scope":"org","color":"purple"}));
+    daemon.ok(json!({"cmd":"done","row":"1001:DONE","on":true}));
+    daemon.ok(json!({"cmd":"seen","row_ids":["1001:SEEN"]}));
+    daemon.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#3"}));
+    daemon.ok(json!({"cmd":"account_color","account":"me","color":"purple"}));
     daemon.ingest(
         vec![],
         vec![event("HELD2", "PR_3", "mentioned", t + 3)],
@@ -67,11 +66,11 @@ fn everything_saved_comes_back_after_a_restart() {
     assert_eq!(daemon.row("DONE").unwrap()["done"], true);
     assert_eq!(daemon.card("PR_3").unwrap()["snoozed"], true);
     assert_eq!(daemon.row("SEEN").unwrap()["unread"], true);
-    assert_eq!(daemon.scope("org")["dot"], true);
+    assert_eq!(daemon.account("me")["unread"], true);
     assert_eq!(daemon.card("PR_2").unwrap()["added_at"], added);
 
-    // The scope color and the author's avatar.
-    assert_eq!(daemon.scope("org")["color"], "purple");
+    // The account color and the author's avatar.
+    assert_eq!(daemon.account("me")["color"], "purple");
     assert_eq!(
         daemon.card("PR_2").unwrap()["author_avatar_url"],
         "https://avatars.example/alice"
@@ -82,7 +81,7 @@ fn everything_saved_comes_back_after_a_restart() {
     );
 
     // seen_pending: closing now clears the row that was shown before.
-    daemon.ok(json!({"cmd":"popover_closed","scope":"org"}));
+    daemon.ok(json!({"cmd":"popover_closed","account":"me"}));
     assert_eq!(daemon.row("SEEN").unwrap()["unread"], false);
 
     // Watch start: older than T0 stays out.
@@ -126,12 +125,13 @@ fn everything_saved_comes_back_after_a_restart() {
     // SEEN, two Reaction rows and Checks failed. The Done row and the held
     // rows stay out.
     assert_eq!(
-        first["title"], "org · 4 new events",
+        first["title"], "me · 4 new events",
         "undelivered rows are one summary"
     );
+    assert_eq!(first["subtitle"], "org · in 2 PRs");
     daemon.clock(NEXT_0900);
     let summary = app.notification();
-    assert_eq!(summary["title"], "org · Back from Snooze");
+    assert_eq!(summary["title"], "me · Back from Snooze");
     assert_eq!(summary["rows"].as_array().unwrap().len(), 2);
     daemon.stop();
 }
@@ -141,7 +141,7 @@ fn last_release_at_survives_a_restart() {
     let (dir, daemon) = setup();
     daemon.ingest(vec![pr("PR_1", "me")], vec![], vec![]);
     daemon.clock(NEXT_0900 + 60);
-    daemon.ok(json!({"cmd":"snooze","pr":"org/app#1"}));
+    daemon.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#1"}));
     // Restarting after today's release must not release again.
     let daemon = restart(daemon, dir.path(), NEXT_0900 + 120);
     assert_eq!(daemon.card("PR_1").unwrap()["snoozed"], true);
@@ -162,7 +162,7 @@ fn a_notification_written_to_the_app_is_not_sent_again_after_a_restart() {
     );
     let notification = app.notification();
     assert_eq!(notification["type"], "single");
-    assert_eq!(notification["rows"], json!(["E_1"]));
+    assert_eq!(notification["rows"], json!(["1001:E_1"]));
 
     let daemon = restart(daemon, dir.path(), T0 + 50);
     let mut app = daemon.subscribe("app");
@@ -173,7 +173,7 @@ fn a_notification_written_to_the_app_is_not_sent_again_after_a_restart() {
         vec![event("E_2", "PR_1", "comment", T0 + 51)],
         vec![],
     );
-    assert_eq!(app.notification()["rows"], json!(["E_2"]));
+    assert_eq!(app.notification()["rows"], json!(["1001:E_2"]));
     daemon.stop();
 }
 
@@ -192,7 +192,7 @@ fn a_write_to_a_cli_subscriber_is_not_delivery() {
     // One undelivered notification of a scope goes out as it is.
     let summary = app.notification();
     assert_eq!(summary["type"], "single");
-    assert_eq!(summary["title"], "org · Comment");
+    assert_eq!(summary["title"], "me · Comment on my PR");
     assert_eq!(summary["body"], "text E_1");
     assert_eq!(summary["subtitle"], "org/app #1 · Title PR_1");
     daemon.stop();
@@ -210,22 +210,22 @@ fn a_cli_subscriber_sees_notifications_too() {
         vec![event("E_1", "PR_1", "comment", T0 + 1)],
         vec![],
     );
-    assert_eq!(cli.notification()["rows"], json!(["E_1"]));
-    assert_eq!(app.notification()["rows"], json!(["E_1"]));
+    assert_eq!(cli.notification()["rows"], json!(["1001:E_1"]));
+    assert_eq!(app.notification()["rows"], json!(["1001:E_1"]));
     daemon.stop();
 }
 
 #[test]
 fn absence_becomes_one_summary_per_scope_including_snooze_rows() {
     let (_dir, daemon) = setup();
-    daemon.ok(json!({"cmd":"scope_add","owner":"second"}));
+    daemon.ok(json!({"cmd":"dev_owner_add","account":"me","owner":"second","kind":"org"}));
     let second = with(pr("PR_3", "alice"), json!({"owner":"second"}));
     daemon.ingest(
         vec![pr("PR_1", "alice"), pr("PR_2", "alice"), second],
         vec![],
         vec![],
     );
-    daemon.ok(json!({"cmd":"snooze","pr":"org/app#1"}));
+    daemon.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#1"}));
     daemon.ingest(
         vec![],
         vec![
@@ -241,12 +241,18 @@ fn absence_becomes_one_summary_per_scope_including_snooze_rows() {
     let mut app = daemon.subscribe("app");
     app.snapshot();
     let first = app.notification();
-    assert_eq!(first["scope"], "org");
-    assert_eq!(first["title"], "org · 3 new events");
-    assert_eq!(first["body"], "In 2 PRs");
+    assert_eq!(first["account"], ACCOUNT);
+    assert_eq!(first["owner"], daemon.owner("me", "org")["id"]);
+    assert_eq!(first["title"], "me · 3 new events");
+    assert_eq!(first["subtitle"], "org · in 2 PRs");
+    assert_eq!(first["body"], Value::Null);
     assert_eq!(first["rows"].as_array().unwrap().len(), 3);
     let second = app.notification();
-    assert_eq!(second["title"], "second · Comment", "one is individual");
+    assert_eq!(
+        second["title"], "me · Comment on my PR",
+        "one is individual"
+    );
+    assert_eq!(second["owner"], daemon.owner("me", "second")["id"]);
     daemon.stop();
 }
 
@@ -260,7 +266,7 @@ fn a_summary_written_once_does_not_repeat_on_the_next_reconnect() {
     );
     let mut app = daemon.subscribe("app");
     app.snapshot();
-    assert_eq!(app.notification()["rows"], json!(["E_1"]));
+    assert_eq!(app.notification()["rows"], json!(["1001:E_1"]));
     let daemon = restart(daemon, dir.path(), T0 + 50);
     let mut app = daemon.subscribe("app");
     app.snapshot();
@@ -269,7 +275,7 @@ fn a_summary_written_once_does_not_repeat_on_the_next_reconnect() {
         vec![event("E_2", "PR_1", "comment", T0 + 51)],
         vec![],
     );
-    assert_eq!(app.notification()["rows"], json!(["E_2"]));
+    assert_eq!(app.notification()["rows"], json!(["1001:E_2"]));
     daemon.stop();
 }
 
@@ -279,7 +285,7 @@ fn back_from_snooze_goes_to_a_connected_app() {
     let mut app = daemon.subscribe("app");
     app.snapshot();
     daemon.ingest(vec![pr("PR_1", "alice")], vec![], vec![]);
-    daemon.ok(json!({"cmd":"snooze","pr":"org/app#1"}));
+    daemon.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#1"}));
     daemon.ingest(
         vec![],
         vec![event("E_1", "PR_1", "comment", T0 + 1)],
@@ -287,9 +293,9 @@ fn back_from_snooze_goes_to_a_connected_app() {
     );
     daemon.clock(NEXT_0900);
     let notification = app.notification();
-    assert_eq!(notification["title"], "org · Back from Snooze");
-    assert_eq!(notification["body"], "1 PR had new events");
-    assert_eq!(notification["rows"], json!(["E_1"]));
+    assert_eq!(notification["title"], "me · Back from Snooze");
+    assert_eq!(notification["subtitle"], "org · 1 PR had new events");
+    assert_eq!(notification["rows"], json!(["1001:E_1"]));
     daemon.stop();
 }
 
@@ -297,7 +303,7 @@ fn back_from_snooze_goes_to_a_connected_app() {
 fn the_release_runs_at_startup_for_a_sleeping_or_stopped_daemon() {
     let (dir, daemon) = setup();
     daemon.ingest(vec![pr("PR_1", "me")], vec![], vec![]);
-    daemon.ok(json!({"cmd":"snooze","pr":"org/app#1"}));
+    daemon.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#1"}));
     let daemon = restart(daemon, dir.path(), NEXT_0900 + 3 * DAY);
     assert_eq!(daemon.card("PR_1").unwrap()["snoozed"], false);
     daemon.stop();
@@ -311,8 +317,9 @@ fn dev_clock_set_runs_the_periodic_pass_before_answering() {
     cli.snapshot();
     daemon.clock(T0 + 15 * DAY);
     assert!(daemon.card("PR_1").is_none(), "dropped after 14 days");
-    let event = cli.until(|e| e["event"] == "scope_changed" && e["scope"]["id"] == "org");
-    assert_eq!(event["scope"]["badge"], 0);
+    let event = cli.until(|e| e["event"] == "account_changed");
+    assert_eq!(event["account"]["id"], ACCOUNT);
+    assert_eq!(event["account"]["owners"][0]["pr_count"], 0);
     assert_eq!(
         daemon.code(json!({"cmd":"dev_clock_set","now":1,"tz":"Mars/Olympus"})),
         "invalid"
@@ -324,8 +331,8 @@ fn dev_clock_set_runs_the_periodic_pass_before_answering() {
 fn an_ingest_with_a_bad_kind_or_pr_id_applies_nothing() {
     let (_dir, daemon) = setup();
     let ingest = |events: Value| {
-        json!({"cmd":"dev_ingest","ingest":{
-            "viewer":"me","missing_pr_ids":[],"prs":[pr("PR_1","me")],"events":events,"reactions":[]
+        json!({"cmd":"dev_ingest","account":"me","ingest":{
+            "missing_pr_ids":[],"prs":[pr("PR_1","me")],"events":events,"reactions":[]
         }})
     };
     assert_eq!(
@@ -336,6 +343,15 @@ fn an_ingest_with_a_bad_kind_or_pr_id_applies_nothing() {
         daemon.code(ingest(json!([event("E", "PR_9", "comment", T0 + 1)]))),
         "invalid"
     );
+    assert_eq!(
+        daemon.code(ingest(json!([event("E", "PR_1", "bot_comment", T0 + 1)]))),
+        "invalid",
+        "0.1's kinds are gone"
+    );
+    assert_eq!(
+        daemon.code(json!({"cmd":"dev_ingest","account":"nobody","ingest":{}})),
+        "not_found"
+    );
     assert!(daemon.cards().is_empty());
     daemon.ok(ingest(json!([event("E", "PR_1", "comment", T0 + 1)])));
     assert_eq!(daemon.cards().len(), 1);
@@ -343,27 +359,50 @@ fn an_ingest_with_a_bad_kind_or_pr_id_applies_nothing() {
 }
 
 #[test]
-fn the_sample_from_the_brief_is_accepted() {
+fn a_dev_ingest_with_accounts_assignees_and_the_new_kinds_is_accepted() {
     let (_dir, daemon) = setup();
-    daemon.ok(json!({"cmd":"scope_add","owner":"example-org"}));
-    let text = r#"{"cmd":"dev_ingest","ingest":{
-      "viewer":"me",
+    daemon.ok(json!({"cmd":"dev_owner_add","account":"me","owner":"example-org","kind":"org","github_id":7}));
+    let text = r#"{"cmd":"dev_ingest","account":"me","ingest":{
       "missing_pr_ids":[],
-      "prs":[{"id":"PR_1","owner":"example-org","repo":"app","number":1,"url":"https://github.example/1","title":"Fix","author":"me","base":"main","head":"fix","state":"open","is_draft":false,"review":"none","checks":"failed","base_status":"up_to_date","mergeable":false,"failed_check":"build","changes_requested_by":null,"updated_at":1800000000,"is_private":false,"requested_me":false,"links":{"review":"https://github.example/1/r","checks":"https://github.example/1/c","base":"https://github.example/1/b"}}],
-      "events":[{"id":"E_1","pr_id":"PR_1","kind":"comment","occurred_at":1800000000,"url":"https://github.example/1#c","actor":"alice","text":"Looks good","comment_id":"C_1"}],
-      "reactions":[{"comment_id":"C_2","pr_id":"PR_1","url":"https://github.example/1#d","text":"Done","comment_created_at":1800000000,"counts":{"THUMBS_UP":2},"watching":true}]
+      "prs":[{"id":"PR_1","owner":"example-org","repo":"app","number":1,"url":"https://github.example/1","title":"Fix","author":"me","base":"main","head":"fix","state":"open","is_draft":false,"review":"none","checks":"failed","base_status":"up_to_date","mergeable":false,"failed_check":"build","changes_requested_by":null,"updated_at":1800000000,"is_private":false,"requested_me":false,"requested_team":true,"assignees":["me"],"links":{"review":"https://github.example/1/r","checks":"https://github.example/1/c","base":"https://github.example/1/b"}}],
+      "events":[{"id":"E_1","pr_id":"PR_1","kind":"approved","occurred_at":1800000000,"url":"https://github.example/1#r","actor":"alice","text":null,"comment_id":null},
+                {"id":"E_2","pr_id":"PR_1","kind":"team_review_requested","occurred_at":1800000000,"url":"https://github.example/1","actor":"bob","text":"for core team","comment_id":null},
+                {"id":"E_3","pr_id":"PR_1","kind":"team_mentioned","occurred_at":1800000000,"url":"https://github.example/1#c","actor":"carol","text":"hi","comment_id":"C_3"},
+                {"id":"E_4","pr_id":"PR_1","kind":"reply_mentioned","occurred_at":1800000000,"url":"https://github.example/1#d","actor":"dave","text":"ok","comment_id":"C_4"}],
+      "reactions":[{"comment_id":"C_2","pr_id":"PR_1","url":"https://github.example/1#d","text":"Done","comment_created_at":1800000000,"counts":{"THUMBS_UP":2},"watching":true}],
+      "succeeded_owners":["example-org"]
     }}"#.replace('\n', " ");
     assert_eq!(daemon.raw(&text)["ok"], true);
     let card = daemon.card("PR_1").unwrap();
     assert_eq!(card["pr"], "example-org/app#1");
-    assert_eq!(card["state_label"], "open");
-    assert_eq!(card["mine"], true);
-    assert_eq!(card["rows"].as_array().unwrap().len(), 2);
+    assert_eq!(card["account"], ACCOUNT);
+    assert_eq!(card["owner"], daemon.owner("me", "example-org")["id"]);
+    assert_eq!(card["authored_by_me"], true);
+    assert_eq!(card["assigned_to_me"], true);
+    assert_eq!(card["review_requested"], true);
+    let mut kinds: Vec<String> = card["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["kind"].as_str().unwrap().to_string())
+        .collect();
+    kinds.sort();
+    assert_eq!(
+        kinds,
+        [
+            "approved",
+            "reaction",
+            "reply_mentioned",
+            "team_mentioned",
+            "team_review_requested"
+        ]
+    );
+    assert!(daemon.row("E_1:approved").is_some());
     daemon.stop();
 }
 
 #[test]
-fn scope_changed_goes_out_on_value_and_row_changes_only() {
+fn account_changed_goes_out_on_value_and_row_changes_only() {
     let (_dir, daemon) = setup();
     let mut cli = daemon.subscribe("cli");
     cli.snapshot();
@@ -372,36 +411,56 @@ fn scope_changed_goes_out_on_value_and_row_changes_only() {
         vec![event("E_1", "PR_1", "comment", T0 + 1)],
         vec![],
     );
-    let event = cli.until(|e| e["event"] == "scope_changed");
-    assert_eq!(event["scope"]["id"], "org");
-    assert_eq!(event["scope"]["badge"], 1);
-    assert_eq!(event["scope"]["dot"], true);
+    let event = cli.until(|e| e["event"] == "account_changed");
+    assert_eq!(event["account"]["id"], ACCOUNT);
+    assert_eq!(event["account"]["todo_count"], 1);
+    assert_eq!(event["account"]["unread"], true);
 
     // Reads and `seen` change nothing a client shows.
     daemon.ok(json!({"cmd":"list"}));
-    daemon.ok(json!({"cmd":"seen","row_ids":["E_1"]}));
+    daemon.ok(json!({"cmd":"seen","row_ids":["1001:E_1"]}));
     // `done` changes a row. It must be the very next event.
-    daemon.ok(json!({"cmd":"done","row":"E_1"}));
+    daemon.ok(json!({"cmd":"done","row":"1001:E_1","on":true}));
     let event = cli.next().unwrap();
-    assert_eq!(event["event"], "scope_changed");
-    assert_eq!(event["scope"]["badge"], 0);
+    assert_eq!(event["event"], "account_changed");
+    assert_eq!(event["account"]["todo_count"], 0);
     daemon.stop();
 }
 
 #[test]
-fn removing_a_scope_disconnects_subscribers_and_the_next_snapshot_lacks_it() {
+fn removing_an_owner_or_an_account_is_an_event_not_a_disconnect() {
     let (_dir, daemon) = setup();
-    let mut app = daemon.subscribe("app");
+    daemon.ingest(
+        vec![pr("PR_1", "alice")],
+        vec![event("E_1", "PR_1", "comment", T0 + 1)],
+        vec![],
+    );
     let mut cli = daemon.subscribe("cli");
-    assert_eq!(app.snapshot()["scopes"].as_array().unwrap().len(), 2);
-    cli.snapshot();
-    daemon.ok(json!({"cmd":"scope_remove","owner":"org"}));
-    app.until_closed();
-    cli.until_closed();
-    let snapshot = daemon.subscribe("cli").snapshot();
-    let scopes = snapshot["scopes"].as_array().unwrap();
-    assert_eq!(scopes.len(), 1);
-    assert_eq!(scopes[0]["id"], "public");
+    assert_eq!(
+        cli.snapshot()["accounts"][0]["owners"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let response = daemon.ok(json!({"cmd":"owner_remove","account":"me","owner":"ORG"}));
+    assert_eq!(response["account"]["owners"].as_array().unwrap().len(), 1);
+    let event = cli.next().unwrap();
+    assert_eq!(event["event"], "account_changed");
+    assert_eq!(event["account"]["owners"][0]["kind"], "public");
+    assert!(daemon.card("PR_1").is_none(), "its PRs are gone");
+    // Adding it again starts empty.
+    daemon.ok(json!({"cmd":"dev_owner_add","account":"me","owner":"org","kind":"org"}));
+    cli.next().unwrap();
+    assert!(daemon.card("PR_1").is_none());
+
+    daemon.ok(json!({"cmd":"account_remove","account":"me"}));
+    assert_eq!(
+        cli.next().unwrap(),
+        json!({"event":"account_removed","id":ACCOUNT})
+    );
+    assert!(daemon.accounts().is_empty());
+    assert_eq!(daemon.subscribe("cli").snapshot()["accounts"], json!([]));
     daemon.stop();
 }
 
@@ -415,22 +474,22 @@ fn a_disconnecting_app_ends_the_open_state_and_seen_pending_survives() {
     );
     let mut app = daemon.subscribe("app");
     app.snapshot();
-    daemon.ok(json!({"cmd":"popover_opened","scope":"org"}));
-    assert_eq!(daemon.scope("org")["dot"], false);
-    daemon.ok(json!({"cmd":"seen","row_ids":["E_1"]}));
+    daemon.ok(json!({"cmd":"popover_opened","account":"me"}));
+    assert_eq!(daemon.account("me")["unread"], false);
+    daemon.ok(json!({"cmd":"seen","row_ids":["1001:E_1"]}));
     app.close();
 
     // The daemon notices the close on its own task, so retry with new rows
     // until a row raises the dot. Each attempt is a round trip, not a sleep.
     let mut attempt = 0;
-    while daemon.scope("org")["dot"] != true {
+    while daemon.account("me")["unread"] != true {
         attempt += 1;
         assert!(attempt < 10_000, "the open state never ended");
         let id = format!("L_{attempt}");
         daemon.ingest(vec![], vec![event(&id, "PR_1", "merged", T0 + 2)], vec![]);
     }
     assert_eq!(daemon.row("E_1").unwrap()["unread"], true);
-    daemon.ok(json!({"cmd":"popover_closed","scope":"org"}));
+    daemon.ok(json!({"cmd":"popover_closed","account":"me"}));
     assert_eq!(daemon.row("E_1").unwrap()["unread"], false);
     daemon.stop();
 }
@@ -439,10 +498,10 @@ fn a_disconnecting_app_ends_the_open_state_and_seen_pending_survives() {
 fn a_restart_ends_the_open_state() {
     let (dir, daemon) = setup();
     daemon.ingest(vec![pr("PR_1", "alice")], vec![], vec![]);
-    daemon.ok(json!({"cmd":"popover_opened","scope":"org"}));
+    daemon.ok(json!({"cmd":"popover_opened","account":"me"}));
     let daemon = restart(daemon, dir.path(), T0 + 5);
     daemon.ingest(vec![], vec![event("E_1", "PR_1", "merged", T0 + 6)], vec![]);
-    assert_eq!(daemon.scope("org")["dot"], true);
+    assert_eq!(daemon.account("me")["unread"], true);
     daemon.stop();
 }
 
@@ -471,7 +530,7 @@ fn a_slow_client_is_disconnected_and_recovers_by_reconnecting() {
     let received = slow.until_closed();
     assert!(received.len() < 2 * events, "{}", received.len());
     let snapshot = daemon.subscribe("cli").snapshot();
-    assert_eq!(snapshot["scopes"].as_array().unwrap().len(), 2);
+    assert_eq!(snapshot["accounts"].as_array().unwrap().len(), 1);
     daemon.stop();
 }
 
@@ -503,9 +562,9 @@ fn damage_under_a_running_daemon_moves_it_to_the_waiting_state() {
     let snapshot = waiting.snapshot();
     assert_eq!(snapshot["db_unreadable"], true);
     assert_eq!(
-        snapshot["scopes"],
+        snapshot["accounts"],
         json!([]),
-        "no token in the Keychain restores no scope, not even Public"
+        "no account while unreadable"
     );
     daemon.ok(json!({"cmd":"info"}));
 
@@ -518,16 +577,23 @@ fn damage_under_a_running_daemon_moves_it_to_the_waiting_state() {
     assert_eq!(mode(&retired), 0o600);
 
     // Normal operation, from an empty state.
-    assert!(daemon.scopes().is_empty());
+    assert!(daemon.accounts().is_empty());
+    daemon.ok(json!({"cmd":"refresh"}));
+    assert!(
+        daemon.accounts().is_empty(),
+        "no Keychain item restores no account"
+    );
+    daemon.ok(json!({"cmd":"dev_account_add","id":ACCOUNT,"login":ME}));
+    daemon.ok(json!({"cmd":"dev_owner_add","account":"me","owner":"public","kind":"public"}));
     assert!(daemon.cards().is_empty());
-    daemon.ok(json!({"cmd":"scope_add","owner":"public"}));
     let public = with(pr("PR_2", "alice"), json!({"owner":"stranger"}));
     daemon.ingest(
         vec![public],
         vec![event("E_2", "PR_2", "comment", T0 + 1)],
         vec![],
     );
-    assert_eq!(daemon.scope("public")["badge"], 1);
+    assert_eq!(daemon.owner("me", "public")["todo_count"], 1);
+    assert_eq!(daemon.account("me")["todo_count"], 1);
     daemon.stop();
 }
 
@@ -581,18 +647,23 @@ fn activity_order_and_filters_over_the_socket() {
         let response = daemon.ok(request);
         row_ids(&response["rows"])
             .into_iter()
-            .map(String::from)
+            .map(|id| id.trim_start_matches("1001:").to_string())
             .collect::<Vec<_>>()
     };
     assert_eq!(activity(json!({})), ["C", "A", "B", "D"]);
-    assert_eq!(activity(json!({"scope":"public"})), ["D"]);
-    assert_eq!(activity(json!({"mine":true})), ["C"]);
-    assert_eq!(activity(json!({"others":true})), ["A", "B", "D"]);
-    assert_eq!(activity(json!({"needs_action":true})), ["C", "A", "B"]);
-    daemon.ok(json!({"cmd":"snooze","pr":"org/app#2"}));
-    assert_eq!(activity(json!({})), ["C", "D"]);
-    assert_eq!(activity(json!({"snoozed":true})), ["C", "A", "B", "D"]);
-    assert_eq!(activity(json!({"needs_action":true,"snoozed":true})), ["C"]);
+    assert_eq!(activity(json!({"owners":["public"]})), ["D"]);
+    assert_eq!(
+        activity(json!({"owners":["public","org"]})),
+        ["C", "A", "B", "D"]
+    );
+    assert_eq!(activity(json!({"filter":"authored"})), ["C"]);
+    assert_eq!(activity(json!({"account":"me","todo":true})), ["A", "B"]);
+    daemon.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#2"}));
+    assert_eq!(activity(json!({})), ["C", "D"], "no snoozed PR in Activity");
+    assert_eq!(
+        daemon.code(json!({"cmd":"activity","owners":["nobody"]})),
+        "not_found"
+    );
     daemon.stop();
 }
 
@@ -608,48 +679,104 @@ fn error_codes_table() {
         vec![],
     );
     let cases = [
-        (json!({"cmd":"done","row":"nope"}), "not_found"),
-        (json!({"cmd":"undone","row":"nope"}), "not_found"),
-        (json!({"cmd":"snooze","pr":"a/b#1"}), "not_found"),
-        (json!({"cmd":"unsnooze","pr":"a/b#1"}), "not_found"),
-        (json!({"cmd":"status","pr":"a/b#1"}), "not_found"),
-        (json!({"cmd":"open","pr":"a/b#1"}), "not_found"),
-        (json!({"cmd":"open","row":"nope"}), "not_found"),
-        (json!({"cmd":"snooze","pr":"org/app#1"}), "not_found"),
-        (json!({"cmd":"list","scope":"nobody"}), "not_found"),
-        (json!({"cmd":"scope_remove","owner":"nobody"}), "not_found"),
+        (json!({"cmd":"done","row":"nope","on":true}), "not_found"),
+        (json!({"cmd":"todo","row":"nope","on":true}), "not_found"),
         (
-            json!({"cmd":"popover_opened","scope":"nobody"}),
+            json!({"cmd":"snooze","account":"me","pr":"a/b#1"}),
+            "not_found",
+        ),
+        (
+            json!({"cmd":"unsnooze","account":"me","pr":"a/b#1"}),
+            "not_found",
+        ),
+        (
+            json!({"cmd":"status","account":"me","pr":"a/b#1"}),
+            "not_found",
+        ),
+        (
+            json!({"cmd":"status","account":"nobody","pr":"org/app#2"}),
+            "not_found",
+        ),
+        (
+            json!({"cmd":"open","account":"me","pr":"a/b#1"}),
+            "not_found",
+        ),
+        (json!({"cmd":"open","pr":"org/app#2"}), "invalid"),
+        (json!({"cmd":"open","row":"nope"}), "not_found"),
+        (
+            json!({"cmd":"open","account":"nobody","row":"1001:E_1"}),
+            "not_found",
+        ),
+        (
+            json!({"cmd":"snooze","account":"me","pr":"org/app#1"}),
+            "not_found",
+        ),
+        (json!({"cmd":"list","account":"nobody"}), "not_found"),
+        (json!({"cmd":"list","owner":"nobody"}), "not_found"),
+        (
+            json!({"cmd":"owner_remove","account":"me","owner":"nobody"}),
+            "not_found",
+        ),
+        (
+            json!({"cmd":"owner_enable","account":"nobody","owner":"org"}),
+            "not_found",
+        ),
+        (
+            json!({"cmd":"popover_opened","account":"nobody"}),
             "not_found",
         ),
         (json!({"cmd":"config_get","key":"nope"}), "invalid"),
         (
-            json!({"cmd":"config_set","key":"notify_state","value":"nope"}),
-            "invalid",
-        ),
-        (json!({"cmd":"scope_add","owner":"public"}), "invalid"),
-        (json!({"cmd":"scope_add","owner":"PUBLIC"}), "invalid"),
-        (json!({"cmd":"scope_add","owner":"org"}), "invalid"),
-        (
-            json!({"cmd":"scope_add","owner":"Notifications"}),
+            json!({"cmd":"config_set","key":"drop_after_days","value":"nope"}),
             "invalid",
         ),
         (
-            json!({"cmd":"scope_color","scope":"org","color":"red"}),
+            json!({"cmd":"owner_add","account":"me","owner":"public"}),
             "invalid",
         ),
         (
-            json!({"cmd":"scope_color","scope":"nobody","color":"blue"}),
+            json!({"cmd":"owner_add","account":"me","owner":"PUBLIC"}),
+            "invalid",
+        ),
+        (
+            json!({"cmd":"dev_owner_add","account":"me","owner":"ORG","kind":"org"}),
+            "invalid",
+        ),
+        (
+            json!({"cmd":"owner_lookup","account":"me","owner":"-bad-"}),
+            "invalid",
+        ),
+        (
+            json!({"cmd":"account_color","account":"me","color":"pink"}),
+            "invalid",
+        ),
+        (
+            json!({"cmd":"dev_account_add","id":ACCOUNT,"login":"again"}),
+            "invalid",
+        ),
+        (
+            json!({"cmd":"owner_events_set","account":"me","owner":"org","event":"merged","column":"list","on":true}),
+            "invalid",
+        ),
+        (
+            json!({"cmd":"owner_exclusions_set","account":"me","owner":"org","kind":"repo","name":"noslash","state":"hidden"}),
+            "invalid",
+        ),
+        (
+            json!({"cmd":"owner_exclusions_remove","account":"me","owner":"org","kind":"user","name":"nobody"}),
             "not_found",
         ),
+        (json!({"cmd":"token_test"}), "invalid"),
     ];
     for (request, code) in cases {
         assert_eq!(daemon.code(request.clone()), code, "{request}");
     }
-    daemon.ok(json!({"cmd":"done","row":"E_1"}));
-    daemon.ok(json!({"cmd":"seen","row_ids":["nope","E_1"]}));
-    daemon.ok(json!({"cmd":"status","pr":"org/app#1"}));
-    daemon.ok(json!({"cmd":"open","pr":"org/app#1"}));
+    daemon.ok(json!({"cmd":"done","row":"1001:E_1","on":true}));
+    daemon.ok(json!({"cmd":"seen","row_ids":["nope","1001:E_1"]}));
+    daemon.ok(json!({"cmd":"open","row":"1001:E_1"}));
+    daemon.ok(json!({"cmd":"open","account":"ME","row":"1001:E_1"}));
+    daemon.ok(json!({"cmd":"status","account":"me","pr":"org/app#1"}));
+    daemon.ok(json!({"cmd":"open","account":"me","pr":"org/app#1"}));
     daemon.stop();
 }
 
@@ -657,10 +784,14 @@ fn error_codes_table() {
 fn a_long_snapshot_arrives_as_one_line() {
     let (_dir, daemon) = setup();
     for n in 0..300 {
-        daemon.ok(json!({"cmd":"scope_add","owner":format!("owner-{n}-{}", "x".repeat(100))}));
+        daemon.ok(json!({"cmd":"dev_owner_add","account":"me","kind":"org",
+            "owner":format!("owner-{n}-{}", "x".repeat(25))}));
     }
     let snapshot = daemon.subscribe("cli").snapshot();
-    assert_eq!(snapshot["scopes"].as_array().unwrap().len(), 302);
+    assert_eq!(
+        snapshot["accounts"][0]["owners"].as_array().unwrap().len(),
+        302
+    );
     daemon.stop();
 }
 
@@ -705,7 +836,7 @@ fn a_return_time_inside_a_dst_gap_lands_after_the_gap() {
     let after_gap = epoch("2027-03-14 03:30 -0400");
     daemon.clock_in(epoch("2027-03-14 00:00 -0500"), NEW_YORK);
     daemon.ok(json!({"cmd":"config_set","key":"snooze_return_time","value":"02:30"}));
-    daemon.ok(json!({"cmd":"snooze","pr":"org/app#1"}));
+    daemon.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#1"}));
     assert_eq!(daemon.card("PR_1").unwrap()["snoozed_until"], after_gap);
     daemon.clock_in(after_gap - 1, NEW_YORK);
     assert_eq!(daemon.card("PR_1").unwrap()["snoozed"], true);
@@ -722,11 +853,11 @@ fn a_return_time_inside_a_dst_fold_fires_once() {
     let second = epoch("2027-11-07 01:30 -0500");
     daemon.clock_in(first - 3600, NEW_YORK);
     daemon.ok(json!({"cmd":"config_set","key":"snooze_return_time","value":"01:30"}));
-    daemon.ok(json!({"cmd":"snooze","pr":"org/app#1"}));
+    daemon.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#1"}));
     assert_eq!(daemon.card("PR_1").unwrap()["snoozed_until"], first);
     daemon.clock_in(first, NEW_YORK);
     assert_eq!(daemon.card("PR_1").unwrap()["snoozed"], false);
-    daemon.ok(json!({"cmd":"snooze","pr":"org/app#1"}));
+    daemon.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#1"}));
     daemon.clock_in(second, NEW_YORK);
     assert_eq!(daemon.card("PR_1").unwrap()["snoozed"], true);
     daemon.stop();
@@ -736,7 +867,7 @@ fn a_return_time_inside_a_dst_fold_fires_once() {
 fn a_time_zone_change_moves_snoozed_until_for_a_snoozed_pr() {
     let (_dir, daemon) = setup();
     daemon.ingest(vec![pr("PR_1", "me")], vec![], vec![]);
-    daemon.ok(json!({"cmd":"snooze","pr":"org/app#1"}));
+    daemon.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#1"}));
     assert_eq!(daemon.card("PR_1").unwrap()["snoozed_until"], NEXT_0900);
     daemon.clock_in(T0 + 60, "Europe/London");
     assert_eq!(daemon.card("PR_1").unwrap()["snoozed_until"], T0 + 3600);
@@ -747,7 +878,7 @@ fn a_time_zone_change_moves_snoozed_until_for_a_snoozed_pr() {
 fn a_startup_release_without_an_app_is_a_new_events_summary() {
     let (dir, daemon) = setup();
     daemon.ingest(vec![pr("PR_1", "alice")], vec![], vec![]);
-    daemon.ok(json!({"cmd":"snooze","pr":"org/app#1"}));
+    daemon.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#1"}));
     daemon.ingest(
         vec![],
         vec![
@@ -761,8 +892,8 @@ fn a_startup_release_without_an_app_is_a_new_events_summary() {
     let mut app = daemon.subscribe("app");
     app.snapshot();
     let summary = app.notification();
-    assert_eq!(summary["title"], "org · 2 new events");
-    assert_eq!(summary["body"], "In 1 PR");
+    assert_eq!(summary["title"], "me · 2 new events");
+    assert_eq!(summary["subtitle"], "org · in 1 PR");
     // A later row proves no `Back from Snooze` follows the summary.
     daemon.ingest(
         vec![],
@@ -770,7 +901,7 @@ fn a_startup_release_without_an_app_is_a_new_events_summary() {
         vec![],
     );
     let next = app.notification();
-    assert_eq!(next["rows"], json!(["C"]));
+    assert_eq!(next["rows"], json!(["1001:C"]));
     daemon.stop();
 }
 
@@ -817,48 +948,75 @@ fn a_slow_app_loses_no_row_and_gets_none_twice() {
     daemon.stop();
 }
 
-/// `scope_changed` for `org` is the very next event after the action.
+/// `account_changed` for `me` is the very next event after the action.
 #[test]
-fn scope_changed_table() {
+fn account_changed_table() {
     type Step = fn(&TestDaemon);
-    let cases: [(&str, Step, Step); 7] = [
+    let cases: [(&str, Step, Step); 10] = [
         (
             "release at the Return time",
             |d| {
-                d.ok(json!({"cmd":"snooze","pr":"org/app#1"}));
+                d.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#1"}));
             },
             |d| d.clock(NEXT_0900),
         ),
         (
             "manual unsnooze",
             |d| {
-                d.ok(json!({"cmd":"snooze","pr":"org/app#1"}));
+                d.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#1"}));
             },
             |d| {
-                d.ok(json!({"cmd":"unsnooze","pr":"org/app#1"}));
+                d.ok(json!({"cmd":"unsnooze","account":"me","pr":"org/app#1"}));
             },
         ),
         (
             "popover_opened clears the dot",
             |_| {},
             |d| {
-                d.ok(json!({"cmd":"popover_opened","scope":"org"}));
+                d.ok(json!({"cmd":"popover_opened","account":"me"}));
             },
         ),
         (
             "popover_closed reads a row",
             |d| {
-                d.ok(json!({"cmd":"seen","row_ids":["E_1"]}));
+                d.ok(json!({"cmd":"seen","row_ids":["1001:E_1"]}));
             },
             |d| {
-                d.ok(json!({"cmd":"popover_closed","scope":"org"}));
+                d.ok(json!({"cmd":"popover_closed","account":"me"}));
             },
         ),
         (
-            "bot_comments hides a row",
+            "the table's List hides a row",
             |_| {},
             |d| {
-                d.ok(json!({"cmd":"config_set","key":"bot_comments","value":"hide"}));
+                d.ok(
+                    json!({"cmd":"owner_events_set","account":"me","owner":"org",
+                    "event":"comment","column":"list","on":false}),
+                );
+            },
+        ),
+        (
+            "an Exclusion hides a row",
+            |_| {},
+            |d| {
+                d.ok(
+                    json!({"cmd":"owner_exclusions_set","account":"me","owner":"org",
+                    "kind":"user","name":"alice","state":"hidden"}),
+                );
+            },
+        ),
+        (
+            "an owner switch",
+            |_| {},
+            |d| {
+                d.ok(json!({"cmd":"owner_skip_drafts","account":"me","owner":"org","on":false}));
+            },
+        ),
+        (
+            "todo by hand",
+            |_| {},
+            |d| {
+                d.ok(json!({"cmd":"todo","row":"1001:E_1","on":false}));
             },
         ),
         (
@@ -871,7 +1029,7 @@ fn scope_changed_table() {
         (
             "snooze_return_time moves snoozed_until",
             |d| {
-                d.ok(json!({"cmd":"snooze","pr":"org/app#1"}));
+                d.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#1"}));
             },
             |d| {
                 d.ok(json!({"cmd":"config_set","key":"snooze_return_time","value":"10:00"}));
@@ -882,7 +1040,7 @@ fn scope_changed_table() {
         let (_dir, daemon) = setup();
         daemon.ingest(
             vec![pr("PR_1", "alice"), pr("PR_2", "alice")],
-            vec![event("E_1", "PR_2", "bot_comment", T0 + 1)],
+            vec![event("E_1", "PR_2", "comment", T0 + 1)],
             vec![],
         );
         arrange(&daemon);
@@ -890,28 +1048,28 @@ fn scope_changed_table() {
         cli.snapshot();
         act(&daemon);
         let event = cli.next().expect(name);
-        assert_eq!(event["event"], "scope_changed", "{name}");
-        assert_eq!(event["scope"]["id"], "org", "{name}");
+        assert_eq!(event["event"], "account_changed", "{name}");
+        assert_eq!(event["account"]["id"], ACCOUNT, "{name}");
         daemon.stop();
     }
 }
 
 /// Nothing a client shows changed, so the sentinel is the next event.
 #[test]
-fn no_scope_changed_table() {
+fn no_account_changed_table() {
     type Step = fn(&TestDaemon);
     let cases: [(&str, Step); 4] = [
         ("a read", |d| {
             d.ok(json!({"cmd":"activity"}));
         }),
         ("a setting nothing shows", |d| {
-            d.ok(json!({"cmd":"config_set","key":"notify_state","value":false}));
+            d.ok(json!({"cmd":"config_set","key":"reactions_interval_minutes","value":5}));
         }),
         ("opening without a dot", |d| {
-            d.ok(json!({"cmd":"popover_opened","scope":"org"}));
+            d.ok(json!({"cmd":"popover_opened","account":"me"}));
         }),
         ("closing with nothing seen", |d| {
-            d.ok(json!({"cmd":"popover_closed","scope":"org"}));
+            d.ok(json!({"cmd":"popover_closed","account":"me"}));
         }),
     ];
     for (name, act) in cases {
@@ -920,14 +1078,15 @@ fn no_scope_changed_table() {
         let mut cli = daemon.subscribe("cli");
         cli.snapshot();
         act(&daemon);
-        daemon.ok(json!({"cmd":"scope_notify","scope":"public","on":false}));
+        daemon.ok(json!({"cmd":"owner_notify","account":"me","owner":"public","on":false}));
         let mut event = cli.next().expect(name);
-        // A setting is announced as config_changed, never as scope_changed.
+        // A setting is announced as config_changed, never as account_changed.
         if event["event"] == "config_changed" {
-            assert_eq!(event["key"], "notify_state", "{name}");
+            assert_eq!(event["key"], "reactions_interval_minutes", "{name}");
             event = cli.next().expect(name);
         }
-        assert_eq!(event["scope"]["id"], "public", "{name}");
+        assert_eq!(event["event"], "account_changed", "{name}");
+        assert_eq!(event["account"]["owners"][1]["notify"], false, "{name}");
         daemon.stop();
     }
 }
@@ -940,14 +1099,14 @@ fn a_readable_again_pr_raises_the_dot_through_the_daemon() {
         vec![event("E_1", "PR_1", "merged", T0 + 1)],
         vec![],
     );
-    daemon.ok(json!({"cmd":"popover_opened","scope":"org"}));
-    daemon.ok(json!({"cmd":"popover_closed","scope":"org"}));
-    assert_eq!(daemon.scope("org")["dot"], false);
-    daemon.ok(json!({"cmd":"dev_ingest","ingest":{
-        "viewer":"me","missing_pr_ids":["PR_1"],"prs":[],"events":[],"reactions":[]
+    daemon.ok(json!({"cmd":"popover_opened","account":"me"}));
+    daemon.ok(json!({"cmd":"popover_closed","account":"me"}));
+    assert_eq!(daemon.account("me")["unread"], false);
+    daemon.ok(json!({"cmd":"dev_ingest","account":"me","ingest":{
+        "missing_pr_ids":["PR_1"],"prs":[],"events":[],"reactions":[]
     }}));
     daemon.ingest(vec![pr("PR_1", "alice")], vec![], vec![]);
-    assert_eq!(daemon.scope("org")["dot"], true);
+    assert_eq!(daemon.account("me")["unread"], true);
     daemon.stop();
 }
 
@@ -957,14 +1116,14 @@ fn a_pr_key_ignores_the_case_of_owner_and_repository() {
     let (_dir, daemon) = setup();
     daemon.ingest(vec![pr("PR_1", "alice")], vec![], vec![]);
     for key in ["org/app#1", "ORG/APP#1", "Org/App#1", "org/APP#1"] {
-        let card = daemon.ok(json!({"cmd":"status","pr":key}))["card"].clone();
+        let card = daemon.ok(json!({"cmd":"status","account":"me","pr":key}))["card"].clone();
         assert_eq!(card["pr"], "org/app#1", "{key}");
-        daemon.ok(json!({"cmd":"open","pr":key}));
+        daemon.ok(json!({"cmd":"open","account":"me","pr":key}));
     }
-    daemon.ok(json!({"cmd":"snooze","pr":"ORG/App#1"}));
-    daemon.ok(json!({"cmd":"unsnooze","pr":"org/aPP#1"}));
+    daemon.ok(json!({"cmd":"snooze","account":"me","pr":"ORG/App#1"}));
+    daemon.ok(json!({"cmd":"unsnooze","account":"me","pr":"org/aPP#1"}));
     assert_eq!(
-        daemon.code(json!({"cmd":"status","pr":"org/app#2"})),
+        daemon.code(json!({"cmd":"status","account":"me","pr":"org/app#2"})),
         "not_found"
     );
     daemon.stop();

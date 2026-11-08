@@ -6,10 +6,10 @@
 //! `X-OAuth-Scopes`, `X-GitHub-SSO`), "Rate limits" (`x-ratelimit-*`,
 //! `retry-after`) and "REST version".
 
+use crate::model::LimitRec;
 use crate::plan::TokenObs;
 use reqwest::header::HeaderMap;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
 use std::time::Duration;
 
 pub const DEFAULT_BASE: &str = "https://api.github.com";
@@ -33,7 +33,7 @@ pub enum CallError {
         message: String,
     },
     NotFound,
-    /// A primary or secondary limit, or the cost cap: every fetch stops.
+    /// A primary or secondary limit: every fetch of the account stops.
     RateLimited {
         until: i64,
         reason: String,
@@ -95,127 +95,97 @@ pub struct Gql {
     pub errors: Vec<GqlError>,
 }
 
-/// What the responses of one run said, per token record key, plus the rate
-/// limit bookkeeping shared by every call.
+/// What the responses of one run of an account said about its token, and
+/// the rate limit bookkeeping of that account.
 #[derive(Debug, Default)]
 pub struct Recorder {
     pub now: i64,
-    pub cost_cap: i64,
-    /// Every cost of the last hour, earlier runs included.
-    pub costs: Vec<(i64, i64)>,
-    /// The costs this run added.
-    pub added: Vec<(i64, i64)>,
-    pub tokens: BTreeMap<String, TokenObs>,
-    pub rest: Option<(i64, i64)>,
-    pub graphql: Option<(i64, i64)>,
-    pub stop: Option<(i64, String)>,
-    /// Added to while the status part of a run is counted.
-    pub counted: Option<i64>,
+    pub token: TokenObs,
+    pub rest: Option<LimitRec>,
+    pub graphql: Option<LimitRec>,
+    /// Every fetch of the account stops until this time.
+    pub stop: Option<i64>,
+    /// At least one call was answered.
+    pub answered: bool,
 }
 
 impl Recorder {
-    pub fn new(now: i64, cost_cap: i64, costs: Vec<(i64, i64)>) -> Self {
+    pub fn new(now: i64) -> Self {
         Self {
             now,
-            cost_cap,
-            costs,
             ..Self::default()
         }
     }
 
-    fn hour_cost(&self) -> i64 {
-        self.costs
-            .iter()
-            .filter(|(at, _)| *at > self.now - HOUR)
-            .map(|(_, cost)| cost)
-            .sum()
-    }
-
-    /// The time the last hour's cost falls below the cap again.
-    fn cap_lifts_at(&self) -> i64 {
-        let mut recent: Vec<(i64, i64)> = self
-            .costs
-            .iter()
-            .copied()
-            .filter(|(at, _)| *at > self.now - HOUR)
-            .collect();
-        recent.sort();
-        let mut total: i64 = recent.iter().map(|(_, c)| c).sum();
-        for (at, cost) in recent {
-            total -= cost;
-            if total < self.cost_cap {
-                return at + HOUR;
-            }
-        }
-        self.now + HOUR
-    }
-
-    /// Stop everything until `until`. The earliest reason wins.
-    pub fn stop(&mut self, until: i64, reason: &str) -> CallError {
-        if self.stop.is_none() {
-            self.stop = Some((until, reason.to_string()));
-        }
-        let (until, reason) = self.stop.clone().unwrap_or((until, reason.to_string()));
-        CallError::RateLimited { until, reason }
-    }
-
-    /// Refuse a call once the run stopped, or once the cap is reached.
-    fn admit(&mut self, graphql: bool) -> Result<(), CallError> {
-        if let Some((until, reason)) = self.stop.clone() {
-            return Err(CallError::RateLimited { until, reason });
-        }
-        if graphql && self.hour_cost() >= self.cost_cap {
-            let until = self.cap_lifts_at();
-            return Err(self.stop(until, "GraphQL cost cap reached"));
-        }
-        Ok(())
-    }
-
-    fn add_cost(&mut self, cost: i64) {
-        self.costs.push((self.now, cost));
-        self.added.push((self.now, cost));
-        if let Some(counted) = &mut self.counted {
-            *counted += cost;
+    /// Stop everything until `until`. The earliest stop wins.
+    pub fn stop(&mut self, until: i64) -> CallError {
+        let until = *self.stop.get_or_insert(until);
+        CallError::RateLimited {
+            until,
+            reason: "GitHub's limit reached".into(),
         }
     }
 
-    fn token(&mut self, key: &str) -> &mut TokenObs {
-        self.tokens.entry(key.to_string()).or_default()
+    /// Refuse a call once the run stopped.
+    fn admit(&mut self) -> Result<(), CallError> {
+        match self.stop {
+            Some(until) => Err(CallError::RateLimited {
+                until,
+                reason: "GitHub's limit reached".into(),
+            }),
+            None => Ok(()),
+        }
     }
 
-    fn observe(&mut self, key: &str, status: u16, headers: &HeaderMap) {
+    fn observe(&mut self, status: u16, headers: &HeaderMap) {
         let text = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
-        let expires = text("github-authentication-token-expiration").and_then(parse_expiry);
-        let scopes = text("x-oauth-scopes").map(|s| {
-            s.split(',')
-                .map(|scope| scope.trim().to_string())
-                .filter(|scope| !scope.is_empty())
-                .collect::<Vec<_>>()
-        });
-        let sso = text("x-github-sso").map(str::to_string);
-        let token = self.token(key);
-        if expires.is_some() {
-            token.expires_at = expires;
+        self.answered = true;
+        if let Some(expires) = text("github-authentication-token-expiration").and_then(parse_expiry)
+        {
+            self.token.expires_at = Some(expires);
         }
-        if scopes.is_some() {
-            token.scopes = scopes;
+        if let Some(scopes) = text("x-oauth-scopes") {
+            self.token.scopes = Some(
+                scopes
+                    .split(',')
+                    .map(|scope| scope.trim().to_string())
+                    .filter(|scope| !scope.is_empty())
+                    .collect(),
+            );
         }
-        if let Some(sso) = sso {
-            token.sso = true;
-            if let Some(url) = sso_url(&sso)
-                && !token.sso_urls.contains(&url)
+        if let Some(sso) = text("x-github-sso") {
+            self.token.sso = true;
+            for org in sso_orgs(sso) {
+                if !self.token.sso_orgs.contains(&org) {
+                    self.token.sso_orgs.push(org);
+                }
+            }
+            if let Some(url) = sso_url(sso)
+                && !self.token.sso_urls.contains(&url)
             {
-                token.sso_urls.push(url);
+                self.token.sso_urls.push(url);
             }
         }
-        token.invalid = Some(status == 401);
+        self.token.invalid = Some(status == 401);
         let number = |name: &str| text(name).and_then(|v| v.trim().parse::<i64>().ok());
         if let (Some(remaining), Some(limit)) =
             (number("x-ratelimit-remaining"), number("x-ratelimit-limit"))
         {
+            let record = LimitRec {
+                limit,
+                remaining,
+                reset_at: number("x-ratelimit-reset"),
+            };
             match text("x-ratelimit-resource") {
-                Some("graphql") => self.graphql = Some((remaining, limit)),
-                Some("core") | None => self.rest = Some((remaining, limit)),
+                Some("graphql") => self.graphql = Some(record),
+                Some("core") | None => {
+                    self.rest = Some(record);
+                    // DESIGN.md, "Rate limits": the REST budget ran out.
+                    if remaining == 0 && (200..300).contains(&status) {
+                        let reset = record.reset_at.unwrap_or(self.now + HOUR);
+                        self.stop(reset.max(self.now + 1));
+                    }
+                }
                 Some(_) => {}
             }
         }
@@ -224,7 +194,7 @@ impl Recorder {
     /// DESIGN.md, "Rate limits": a primary limit stops until its reset, a
     /// secondary one for `retry-after`, else until the reset when nothing
     /// remains, else one minute.
-    fn limit_from(&mut self, headers: &HeaderMap, secondary: bool) -> CallError {
+    fn limit_from(&mut self, headers: &HeaderMap) -> CallError {
         let number = |name: &str| {
             headers
                 .get(name)
@@ -232,24 +202,31 @@ impl Recorder {
                 .and_then(|v| v.trim().parse::<i64>().ok())
         };
         if let Some(after) = number("retry-after") {
-            return self.stop(self.now + after.max(1), "Secondary rate limit");
+            return self.stop(self.now + after.max(1));
         }
         if number("x-ratelimit-remaining") == Some(0)
             && let Some(reset) = number("x-ratelimit-reset")
         {
-            let reason = if secondary {
-                "Secondary rate limit"
-            } else {
-                "GitHub rate limit reached"
-            };
-            return self.stop(reset.max(self.now + 1), reason);
+            return self.stop(reset.max(self.now + 1));
         }
-        self.stop(self.now + SECONDARY_WAIT, "Secondary rate limit")
+        self.stop(self.now + SECONDARY_WAIT)
     }
 }
 
+/// The organization ids of `partial-results; organizations=21955855,20582480`
+/// (docs.github.com/en/rest/authentication/authenticating-to-the-rest-api).
+pub fn sso_orgs(header: &str) -> Vec<i64> {
+    header
+        .split(';')
+        .map(str::trim)
+        .filter_map(|part| part.strip_prefix("organizations="))
+        .flat_map(|ids| ids.split(','))
+        .filter_map(|id| id.trim().parse().ok())
+        .collect()
+}
+
 /// `https://…` from `required; url=https://…`.
-fn sso_url(header: &str) -> Option<String> {
+pub fn sso_url(header: &str) -> Option<String> {
     header
         .split(';')
         .map(str::trim)
@@ -310,7 +287,6 @@ impl Api {
     async fn send(
         &self,
         rec: &mut Recorder,
-        key: &str,
         request: reqwest::RequestBuilder,
     ) -> Result<(u16, HeaderMap, String), CallError> {
         let response = request
@@ -323,7 +299,7 @@ impl Api {
             .text()
             .await
             .map_err(|e| CallError::Network(describe(&e)))?;
-        rec.observe(key, status, &headers);
+        rec.observe(status, &headers);
         match status {
             401 => Err(CallError::Unauthorized),
             403 | 429 => {
@@ -337,8 +313,7 @@ impl Api {
                         .is_some_and(|v| v.as_bytes() == b"0")
                     || message.to_lowercase().contains("rate limit");
                 if limited {
-                    let secondary = message.to_lowercase().contains("secondary");
-                    return Err(rec.limit_from(&headers, secondary));
+                    return Err(rec.limit_from(&headers));
                 }
                 Err(CallError::Forbidden {
                     accepted: headers
@@ -359,12 +334,11 @@ impl Api {
     pub async fn rest(
         &self,
         rec: &mut Recorder,
-        key: &str,
         token: &str,
         path: &str,
         if_modified_since: Option<&str>,
     ) -> Result<Rest, CallError> {
-        rec.admit(false)?;
+        rec.admit()?;
         let url = if path.starts_with("http") {
             path.to_string()
         } else {
@@ -375,15 +349,15 @@ impl Api {
             .get(url)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", REST_VERSION);
-        // An empty token asks without authentication (`scope_lookup`
-        // before the notifications token is registered).
+        // An empty token asks without authentication (`owner_lookup` of an
+        // account without a token).
         if !token.is_empty() {
             request = request.bearer_auth(token);
         }
         if let Some(since) = if_modified_since {
             request = request.header("If-Modified-Since", since);
         }
-        let (status, headers, body) = self.send(rec, key, request).await?;
+        let (status, headers, body) = self.send(rec, request).await?;
         let body = if body.trim().is_empty() {
             Value::Null
         } else {
@@ -397,23 +371,21 @@ impl Api {
         })
     }
 
-    /// A GraphQL query. Every query asks for `rateLimit { cost }`, which is
-    /// recorded against the cost cap.
+    /// A GraphQL query. Every query asks for `rateLimit`, which is recorded.
     pub async fn graphql(
         &self,
         rec: &mut Recorder,
-        key: &str,
         token: &str,
         query: &str,
         variables: Value,
     ) -> Result<Gql, CallError> {
-        rec.admit(true)?;
+        rec.admit()?;
         let request = self
             .client
             .post(format!("{}/graphql", self.base))
             .bearer_auth(token)
             .json(&json!({"query": query, "variables": variables}));
-        let (_, headers, body) = self.send(rec, key, request).await?;
+        let (_, headers, body) = self.send(rec, request).await?;
         let value: Value = serde_json::from_str(&body)
             .map_err(|e| CallError::Other(format!("unreadable GraphQL answer: {e}")))?;
         let errors: Vec<GqlError> = value["errors"]
@@ -435,24 +407,20 @@ impl Api {
             })
             .collect();
         let rate = &value["data"]["rateLimit"];
-        rec.add_cost(rate["cost"].as_i64().unwrap_or(1));
         if let (Some(remaining), Some(limit)) = (rate["remaining"].as_i64(), rate["limit"].as_i64())
         {
-            rec.graphql = Some((remaining, limit));
+            let reset_at = rate["resetAt"].as_str().and_then(parse_time);
+            rec.graphql = Some(LimitRec {
+                limit,
+                remaining,
+                reset_at,
+            });
             if remaining == 0 {
-                let reset = rate["resetAt"]
-                    .as_str()
-                    .and_then(parse_time)
-                    .unwrap_or(rec.now + HOUR);
-                rec.stop(reset, "GitHub rate limit reached");
+                rec.stop(reset_at.unwrap_or(rec.now + HOUR));
             }
         }
         if errors.iter().any(|e| e.kind == "RATE_LIMITED") {
-            return Err(rec.limit_from(&headers, false));
-        }
-        if rec.hour_cost() >= rec.cost_cap && rec.stop.is_none() {
-            let until = rec.cap_lifts_at();
-            rec.stop(until, "GraphQL cost cap reached");
+            return Err(rec.limit_from(&headers));
         }
         if value["data"].is_null() {
             let message = errors
@@ -522,11 +490,11 @@ mod tests {
     }
 
     #[test]
-    fn the_cap_lifts_when_the_oldest_costs_leave_the_hour() {
-        let mut rec = Recorder::new(10_000, 100, vec![(7_000, 60), (8_000, 50)]);
-        assert!(matches!(
-            rec.admit(true),
-            Err(CallError::RateLimited { until: 10_600, .. })
-        ));
+    fn the_sso_organizations_are_read_from_the_header() {
+        assert_eq!(
+            sso_orgs("partial-results; organizations=21955855,20582480"),
+            vec![21955855, 20582480]
+        );
+        assert!(sso_orgs("required; url=https://github.com/orgs/x/sso").is_empty());
     }
 }

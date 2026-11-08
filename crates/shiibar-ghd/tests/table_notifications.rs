@@ -4,19 +4,12 @@
 
 mod support;
 
-use serde_json::json;
 use shiibar_gh_proto::*;
-use shiibar_ghd::model::NotifyState;
+use shiibar_ghd::model::{NotifyState, OwnerKind};
 use support::*;
 
-/// Name, kind, own PR, setting to apply, whether it notifies.
-type RuleCase = (
-    &'static str,
-    EventKind,
-    bool,
-    Option<(&'static str, serde_json::Value)>,
-    bool,
-);
+/// Name, kind, own PR, table cell to turn off, whether it notifies.
+type RuleCase = (&'static str, IngestKind, bool, Option<EventKind>, bool);
 type ChangeCase = (
     &'static str,
     fn(IngestPr) -> IngestPr,
@@ -27,103 +20,86 @@ type Toggle = (&'static str, fn(&mut H), fn(&mut H));
 
 #[test]
 fn which_rows_notify() {
-    let k = EventKind::Comment;
-    // (name, kind, mine, setting key, setting value, notified)
+    use IngestKind as K;
+    // DESIGN.md, "Row kinds and states": the Notify column of the defaults.
     let cases: Vec<RuleCase> = vec![
+        ("review requested", K::ReviewRequested, false, None, true),
         (
-            "review requested",
-            EventKind::ReviewRequested,
+            "team review requested",
+            K::TeamReviewRequested,
             false,
             None,
             true,
         ),
-        ("mentioned", EventKind::Mentioned, false, None, true),
-        ("comment", k, false, None, true),
-        ("reply", EventKind::Reply, false, None, true),
-        ("merged", EventKind::Merged, true, None, false),
-        ("closed", EventKind::Closed, true, None, false),
+        ("mentioned", K::Mentioned, false, None, true),
+        ("team mentioned", K::TeamMentioned, false, None, true),
+        ("comment", K::Comment, false, None, true),
+        ("reply", K::Reply, false, None, true),
+        (
+            "reply where mentioned",
+            K::ReplyMentioned,
+            false,
+            None,
+            true,
+        ),
+        ("approved", K::Approved, true, None, true),
+        ("merged", K::Merged, true, None, false),
+        ("closed", K::Closed, true, None, false),
         (
             "added to merge queue",
-            EventKind::AddedToMergeQueue,
+            K::MergeQueueAdded,
             true,
             None,
             false,
         ),
         (
             "removed from merge queue, mine",
-            EventKind::RemovedFromMergeQueue,
+            K::MergeQueueRemoved,
             true,
             None,
             true,
         ),
+        // M4: an "Any pull request" kind, no longer only for own PRs.
         (
             "removed from merge queue, others'",
-            EventKind::RemovedFromMergeQueue,
+            K::MergeQueueRemoved,
             false,
             None,
-            false,
-        ),
-        (
-            "bot comment, list only",
-            EventKind::BotComment,
-            false,
-            None,
-            false,
-        ),
-        (
-            "bot comment, notify",
-            EventKind::BotComment,
-            false,
-            Some(("bot_comments", json!("notify"))),
             true,
         ),
         (
-            "bot comment, hide",
-            EventKind::BotComment,
+            "comment, Notify off",
+            K::Comment,
             false,
-            Some(("bot_comments", json!("hide"))),
+            Some(EventKind::Comment),
             false,
         ),
         (
-            "bot comment ignores the kind toggles",
-            EventKind::BotComment,
+            "reply, Notify off",
+            K::Reply,
             false,
-            Some(("bot_comments", json!("notify"))),
+            Some(EventKind::Reply),
+            false,
+        ),
+        (
+            "comment, another kind off",
+            K::Comment,
+            false,
+            Some(EventKind::ChecksFailed),
             true,
         ),
         (
-            "comment, activity off",
-            k,
-            false,
-            Some(("notify_activity", json!(false))),
-            false,
-        ),
-        (
-            "reply, activity off",
-            EventKind::Reply,
-            false,
-            Some(("notify_activity", json!(false))),
-            false,
-        ),
-        (
-            "comment, state off",
-            k,
-            false,
-            Some(("notify_state", json!(false))),
+            "removed from queue, Notify off",
+            K::MergeQueueRemoved,
             true,
-        ),
-        (
-            "removed from queue, state off",
-            EventKind::RemovedFromMergeQueue,
-            true,
-            Some(("notify_state", json!(false))),
+            Some(EventKind::MergeQueueRemoved),
             false,
         ),
     ];
-    for (name, kind, mine, setting, want) in cases {
+    for (name, kind, mine, off, want) in cases {
         let mut h = H::new();
-        if let Some((key, value)) = setting {
-            h.set(key, value);
+        if let Some(event) = off {
+            h.table(event, EventColumn::Notify, false);
         }
         let p = if mine { pr("PR_1") } else { other("PR_1") };
         let e = h.ev("E_1", "PR_1", kind);
@@ -135,27 +111,20 @@ fn which_rows_notify() {
         } else {
             NotifyState::None
         };
-        assert_eq!(h.row("E_1").notify, state, "{name}");
+        let id = if kind == K::Approved {
+            "E_1:approved"
+        } else {
+            "E_1"
+        };
+        assert_eq!(h.row(id).notify, state, "{name}");
     }
 }
 
 #[test]
-fn bot_comments_on_notify_ignore_activity_off() {
-    let mut h = H::new();
-    h.set("bot_comments", json!("notify"));
-    h.set("notify_activity", json!(false));
-    h.set("notify_state", json!(false));
-    h.set("notify_reactions", json!(false));
-    let e = h.ev("E_1", "PR_1", EventKind::BotComment);
-    h.push(vec![other("PR_1")], vec![e], vec![]);
-    assert_eq!(h.delivered().len(), 1);
-}
-
-#[test]
-fn state_changes_notify_under_notify_state() {
+fn state_changes_notify_under_the_checks_failed_notify() {
     let run = |on: bool| {
         let mut h = H::new();
-        h.set("notify_state", json!(on));
+        h.table(EventKind::ChecksFailed, EventColumn::Notify, on);
         h.prs(vec![pr("PR_1")]);
         h.prs(vec![IngestPr {
             checks: Checks::Failed,
@@ -167,7 +136,7 @@ fn state_changes_notify_under_notify_state() {
     assert!(run(false).is_empty());
     let out = run(true);
     assert_eq!(out.len(), 1);
-    assert_eq!(out[0].title, "org · Checks failed");
+    assert_eq!(out[0].title, "me · Checks failed");
     assert_eq!(out[0].body.as_deref(), Some("build"));
     assert_eq!(out[0].url.as_deref(), Some("https://github.example/PR_1/c"));
 }
@@ -181,7 +150,7 @@ fn state_change_titles_and_bodies() {
                 base_status: BaseStatus::Conflicts,
                 ..p
             },
-            "org · Conflicts",
+            "me · Conflicts",
             None,
         ),
         (
@@ -191,7 +160,7 @@ fn state_change_titles_and_bodies() {
                 changes_requested_by: Some("bob".into()),
                 ..p
             },
-            "org · Changes requested",
+            "me · Changes requested",
             Some("bob"),
         ),
         (
@@ -200,7 +169,7 @@ fn state_change_titles_and_bodies() {
                 mergeable: true,
                 ..p
             },
-            "org · Mergeable",
+            "me · Mergeable",
             None,
         ),
     ];
@@ -215,12 +184,12 @@ fn state_change_titles_and_bodies() {
 }
 
 #[test]
-fn scope_notifications_off_silences_everything() {
+fn notify_for_the_owner_off_silences_everything() {
     let mut h = H::new();
-    h.set("bot_comments", json!("notify"));
-    h.engine.scope_notify(ORG, false).unwrap();
-    let a = h.ev("E_1", "PR_1", EventKind::Mentioned);
-    let b = h.ev("E_2", "PR_1", EventKind::BotComment);
+    let owner = h.owner_id(ORG);
+    h.engine.owner_notify(&owner, false);
+    let a = h.ev("E_1", "PR_1", IngestKind::Mentioned);
+    let b = h.ev("E_2", "PR_1", IngestKind::Comment);
     h.push(vec![other("PR_1")], vec![a, b], vec![]);
     assert!(h.delivered().is_empty());
     assert!(h.reconnect().is_empty());
@@ -230,46 +199,46 @@ fn scope_notifications_off_silences_everything() {
 #[test]
 fn the_single_notification_text() {
     let mut h = H::new();
-    let e = h.ev("E_1", "PR_1", EventKind::Mentioned);
+    let e = h.ev("E_1", "PR_1", IngestKind::Mentioned);
     h.push(vec![other("PR_1")], vec![e], vec![]);
     let out = h.delivered();
     let n = &out[0];
     assert_eq!(n.kind, Lenient::Known(NotificationType::Single));
-    assert_eq!(n.scope, "org");
-    assert_eq!(n.rows, ["E_1"]);
+    assert_eq!(n.account, ACCOUNT);
+    assert_eq!(n.owner, h.owner_id(ORG));
+    assert_eq!(n.rows, [full("E_1")]);
     assert_eq!(n.pr.as_deref(), Some("org/app#1"));
     assert_eq!(n.url.as_deref(), Some("https://github.example/E_1"));
-    assert_eq!(n.title, "org · Mentioned");
+    assert_eq!(n.title, "me · Mentioned");
     assert_eq!(n.subtitle.as_deref(), Some("org/app #1 · Title PR_1"));
     assert_eq!(n.body.as_deref(), Some("text E_1"));
 }
 
 #[test]
 fn the_row_kind_labels() {
+    // DESIGN.md, "macOS notifications": the names of the event table.
     let cases = [
-        (EventKind::ReviewRequested, "Review requested"),
-        (EventKind::Mentioned, "Mentioned"),
-        (EventKind::Comment, "Comment"),
-        (EventKind::Reply, "Reply"),
+        (IngestKind::ReviewRequested, "Review requested"),
+        (
+            IngestKind::TeamReviewRequested,
+            "Review requested to my team",
+        ),
+        (IngestKind::Mentioned, "Mentioned"),
+        (IngestKind::TeamMentioned, "My team mentioned"),
+        (IngestKind::Comment, "Comment on my PR"),
+        (IngestKind::Reply, "Reply in a thread I commented in"),
+        (
+            IngestKind::ReplyMentioned,
+            "Reply in a thread I was mentioned in",
+        ),
+        (IngestKind::MergeQueueRemoved, "Removed from merge queue"),
     ];
     for (kind, label) in cases {
         let mut h = H::new();
         let e = h.ev("E_1", "PR_1", kind);
         h.push(vec![other("PR_1")], vec![e], vec![]);
-        assert_eq!(h.delivered()[0].title, format!("org · {label}"));
+        assert_eq!(h.delivered()[0].title, format!("me · {label}"));
     }
-    let mut h = H::new();
-    h.set("bot_comments", json!("notify"));
-    let e = h.ev("E_1", "PR_1", EventKind::BotComment);
-    h.push(vec![other("PR_1")], vec![e], vec![]);
-    assert_eq!(
-        h.delivered()[0].title,
-        "org · Comment",
-        "a bot comment is titled Comment; the row stays bot_comment"
-    );
-    let e = h.ev("E_2", "PR_2", EventKind::RemovedFromMergeQueue);
-    h.push(vec![pr("PR_2")], vec![e], vec![]);
-    assert_eq!(h.delivered()[0].title, "org · Removed from merge queue");
 }
 
 #[test]
@@ -281,7 +250,7 @@ fn reactions_of_one_fetch_on_one_comment_are_one_notification() {
     let out = h.delivered();
     assert_eq!(out.len(), 1, "one comment: one individual notification");
     assert_eq!(out[0].rows.len(), 2);
-    assert_eq!(out[0].title, "org · Reaction");
+    assert_eq!(out[0].title, "me · Reaction to my comment");
     assert_eq!(out[0].body.as_deref(), Some("👍3 🎉1 “comment C_1”"));
     assert_eq!(out[0].url.as_deref(), Some("https://github.example/C_1"));
 }
@@ -298,14 +267,15 @@ fn reactions_on_two_comments_in_one_fetch_are_a_summary() {
     let out = h.delivered();
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].rows.len(), 3, "N counts the rows");
-    assert_eq!(out[0].title, "org · 3 new events");
-    assert_eq!(out[0].body.as_deref(), Some("In 1 PR"));
+    assert_eq!(out[0].title, "me · 3 new events");
+    assert_eq!(out[0].subtitle.as_deref(), Some("org · in 1 PR"));
+    assert_eq!(out[0].body, None);
 }
 
 #[test]
-fn reactions_follow_their_toggle() {
+fn reactions_follow_their_notify_cell() {
     let mut h = H::new();
-    h.set("notify_reactions", json!(false));
+    h.table(EventKind::Reaction, EventColumn::Notify, false);
     h.prs(vec![pr("PR_1")]);
     let a = h.reaction("C_1", "PR_1", &[("THUMBS_UP", 3)]);
     h.push(vec![], vec![], vec![a]);
@@ -337,7 +307,7 @@ fn every_reaction_content_value_has_an_emoji() {
 #[test]
 fn what_was_handed_over_is_not_sent_again() {
     let mut h = H::new();
-    let e = h.ev("E_1", "PR_1", EventKind::Comment);
+    let e = h.ev("E_1", "PR_1", IngestKind::Comment);
     h.push(vec![other("PR_1")], vec![e], vec![]);
     assert_eq!(h.delivered().len(), 1);
     assert!(h.delivered().is_empty());
@@ -345,13 +315,15 @@ fn what_was_handed_over_is_not_sent_again() {
 }
 
 #[test]
-fn undelivered_rows_are_one_summary_per_scope_on_reconnect() {
+fn undelivered_rows_are_one_summary_per_owner_on_reconnect() {
     let mut h = H::new();
-    h.engine.scope_add("second", &h.now).unwrap();
-    let a = h.ev("E_1", "PR_1", EventKind::Comment);
-    let b = h.ev("E_2", "PR_1", EventKind::Reply);
-    let c = h.ev("E_3", "PR_2", EventKind::Comment);
-    let d = h.ev("E_4", "PR_3", EventKind::Comment);
+    h.engine
+        .owner_add(ACCOUNT, "second", OwnerKind::Org, None, &h.now)
+        .unwrap();
+    let a = h.ev("E_1", "PR_1", IngestKind::Comment);
+    let b = h.ev("E_2", "PR_1", IngestKind::Reply);
+    let c = h.ev("E_3", "PR_2", IngestKind::Comment);
+    let d = h.ev("E_4", "PR_3", IngestKind::Comment);
     let second = IngestPr {
         owner: "second".into(),
         ..other("PR_3")
@@ -364,10 +336,11 @@ fn undelivered_rows_are_one_summary_per_scope_on_reconnect() {
     h.offline();
     let out = h.reconnect();
     assert_eq!(out.len(), 2);
-    assert_eq!(out[0].title, "org · 3 new events");
-    assert_eq!(out[0].body.as_deref(), Some("In 2 PRs"));
-    assert_eq!(out[0].subtitle, None);
-    assert_eq!(out[1].title, "second · Comment", "one is individual");
+    assert_eq!(out[0].title, "me · 3 new events");
+    assert_eq!(out[0].subtitle.as_deref(), Some("org · in 2 PRs"));
+    assert_eq!(out[0].body, None);
+    assert_eq!(out[1].title, "me · Comment on my PR", "one is individual");
+    assert_eq!(out[1].owner, h.owner_id("second"));
     assert_eq!(out[1].kind, Lenient::Known(NotificationType::Single));
     assert!(h.reconnect().is_empty(), "sent once");
 }
@@ -375,7 +348,7 @@ fn undelivered_rows_are_one_summary_per_scope_on_reconnect() {
 #[test]
 fn a_failed_write_keeps_rows_for_the_next_reconnect() {
     let mut h = H::new();
-    let e = h.ev("E_1", "PR_1", EventKind::Comment);
+    let e = h.ev("E_1", "PR_1", IngestKind::Comment);
     h.push(vec![other("PR_1")], vec![e], vec![]);
     let out = h.engine.take_notifications(true, &h.now);
     assert!(h.engine.pending_summaries(&h.now).is_empty(), "on its way");
@@ -386,25 +359,35 @@ fn a_failed_write_keeps_rows_for_the_next_reconnect() {
 #[test]
 fn gating_at_hand_over_clears_the_record_for_good() {
     let steps: &[Toggle] = &[
+        // DESIGN.md, "Notification decisions": the hand-over checks the
+        // owner's Notify, enabled and readability; the table's Notify was
+        // decided when the row was made.
         (
-            "scope notifications",
-            |h| h.engine.scope_notify(ORG, false).unwrap(),
-            |h| h.engine.scope_notify(ORG, true).unwrap(),
-        ),
-        (
-            "kind toggle",
-            |h| h.set("notify_activity", json!(false)),
-            |h| h.set("notify_activity", json!(true)),
+            "Notify for the owner",
+            |h| {
+                let owner = h.owner_id(ORG);
+                h.engine.owner_notify(&owner, false)
+            },
+            |h| {
+                let owner = h.owner_id(ORG);
+                h.engine.owner_notify(&owner, true)
+            },
         ),
         (
             "disabled",
-            |h| h.engine.scope_disable(ORG).unwrap(),
-            |h| h.engine.scope_enable(ORG, &h.now.clone()).unwrap(),
+            |h| {
+                let owner = h.owner_id(ORG);
+                h.engine.owner_enable(&owner, false, &h.now.clone())
+            },
+            |h| {
+                let owner = h.owner_id(ORG);
+                h.engine.owner_enable(&owner, true, &h.now.clone())
+            },
         ),
     ];
     for (name, off, on) in steps {
         let mut h = H::new();
-        let e = h.ev("E_1", "PR_1", EventKind::Comment);
+        let e = h.ev("E_1", "PR_1", IngestKind::Comment);
         h.push(vec![other("PR_1")], vec![e], vec![]);
         h.offline();
         off(&mut h);
@@ -419,23 +402,22 @@ fn gating_at_hand_over_clears_the_record_for_good() {
 }
 
 #[test]
-fn bot_comment_gate_at_hand_over_is_the_bot_setting() {
+fn a_table_change_after_the_row_does_not_change_its_notification() {
     let mut h = H::new();
-    h.set("bot_comments", json!("notify"));
-    let e = h.ev("E_1", "PR_1", EventKind::BotComment);
+    let e = h.ev("E_1", "PR_1", IngestKind::Comment);
     h.push(vec![other("PR_1")], vec![e], vec![]);
     h.offline();
-    h.set("bot_comments", json!("list_only"));
-    assert!(h.reconnect().is_empty());
+    h.table(EventKind::Comment, EventColumn::Notify, false);
+    assert_eq!(h.reconnect().len(), 1);
 }
 
 #[test]
 fn turning_a_kind_back_on_does_not_notify_rows_made_while_off() {
     let mut h = H::new();
-    h.set("notify_activity", json!(false));
-    let e = h.ev("E_1", "PR_1", EventKind::Comment);
+    h.table(EventKind::Comment, EventColumn::Notify, false);
+    let e = h.ev("E_1", "PR_1", IngestKind::Comment);
     h.push(vec![other("PR_1")], vec![e], vec![]);
-    h.set("notify_activity", json!(true));
+    h.table(EventKind::Comment, EventColumn::Notify, true);
     assert!(h.delivered().is_empty());
     assert!(h.reconnect().is_empty());
 }
@@ -443,7 +425,7 @@ fn turning_a_kind_back_on_does_not_notify_rows_made_while_off() {
 #[test]
 fn an_unreadable_pr_loses_its_undelivered_record_at_reconnect() {
     let mut h = H::new();
-    let e = h.ev("E_1", "PR_1", EventKind::Comment);
+    let e = h.ev("E_1", "PR_1", IngestKind::Comment);
     h.push(vec![other("PR_1")], vec![e], vec![]);
     h.offline();
     h.missing("PR_1");
@@ -456,7 +438,7 @@ fn a_new_row_on_an_unreadable_pr_neither_notifies_nor_raises_the_dot() {
     let mut h = H::new();
     h.prs(vec![other("PR_1")]);
     h.missing("PR_1");
-    let e = h.ev("E_1", "PR_1", EventKind::Comment);
+    let e = h.ev("E_1", "PR_1", IngestKind::Comment);
     h.events(vec![e]);
     assert!(h.delivered().is_empty());
     assert!(!h.dot());
@@ -466,15 +448,18 @@ fn a_new_row_on_an_unreadable_pr_neither_notifies_nor_raises_the_dot() {
 #[test]
 fn done_rows_stay_out_of_the_reconnect_summary_outside_snooze() {
     let mut h = H::new();
-    let a = h.ev("E_1", "PR_1", EventKind::Comment);
-    let b = h.ev("E_2", "PR_2", EventKind::Comment);
+    let a = h.ev("E_1", "PR_1", IngestKind::Comment);
+    let b = h.ev("E_2", "PR_2", IngestKind::Comment);
     h.push(vec![other("PR_1"), other("PR_2")], vec![a, b], vec![]);
     h.offline();
-    h.engine.done("E_1").unwrap();
+    h.done("E_1");
     let out = h.reconnect();
     assert_eq!(out.len(), 1);
-    assert_eq!(out[0].rows, ["E_2"]);
-    assert_eq!(out[0].title, "org · Comment", "one left: individual");
+    assert_eq!(out[0].rows, [full("E_2")]);
+    assert_eq!(
+        out[0].title, "me · Comment on my PR",
+        "one left: individual"
+    );
     assert_eq!(out[0].body.as_deref(), Some("text E_2"));
     assert_eq!(h.row("E_1").notify, NotifyState::None);
 }
@@ -482,12 +467,12 @@ fn done_rows_stay_out_of_the_reconnect_summary_outside_snooze() {
 #[test]
 fn only_done_rows_mean_no_summary() {
     let mut h = H::new();
-    let a = h.ev("E_1", "PR_1", EventKind::Comment);
+    let a = h.ev("E_1", "PR_1", IngestKind::Comment);
     h.push(vec![other("PR_1")], vec![a], vec![]);
     h.offline();
-    h.engine.done("E_1").unwrap();
+    h.done("E_1");
     assert!(h.reconnect().is_empty());
-    h.engine.undone("E_1").unwrap();
+    h.undone("E_1");
     assert!(
         h.reconnect().is_empty(),
         "the record is gone at the summary"
@@ -497,11 +482,11 @@ fn only_done_rows_mean_no_summary() {
 #[test]
 fn undone_before_the_reconnect_keeps_a_row_in_the_summary() {
     let mut h = H::new();
-    let a = h.ev("E_1", "PR_1", EventKind::Comment);
+    let a = h.ev("E_1", "PR_1", IngestKind::Comment);
     h.push(vec![other("PR_1")], vec![a], vec![]);
     h.offline();
-    h.engine.done("E_1").unwrap();
-    h.engine.undone("E_1").unwrap();
+    h.done("E_1");
+    h.undone("E_1");
     assert_eq!(h.reconnect().len(), 1);
 }
 
@@ -510,12 +495,12 @@ fn a_row_done_after_a_missed_release_stays_out_of_the_summary() {
     let mut h = H::new();
     h.prs(vec![other("PR_1")]);
     h.snooze(&key("PR_1"));
-    let e = h.ev("E_1", "PR_1", EventKind::Comment);
+    let e = h.ev("E_1", "PR_1", IngestKind::Comment);
     h.events(vec![e]);
     h.advance(DAY);
     h.tick();
     h.offline();
-    h.engine.done("E_1").unwrap();
+    h.done("E_1");
     assert!(h.reconnect().is_empty());
 }
 
@@ -524,13 +509,13 @@ fn a_row_done_after_a_missed_release_stays_out_of_the_summary() {
 #[test]
 fn a_single_undelivered_row_comes_back_as_an_individual_notification() {
     let mut h = H::new();
-    let e = h.ev("E_1", "PR_1", EventKind::Mentioned);
+    let e = h.ev("E_1", "PR_1", IngestKind::Mentioned);
     h.push(vec![other("PR_1")], vec![e], vec![]);
     h.offline();
     let out = h.reconnect();
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].kind, Lenient::Known(NotificationType::Single));
-    assert_eq!(out[0].title, "org · Mentioned");
+    assert_eq!(out[0].title, "me · Mentioned");
     assert_eq!(out[0].url.as_deref(), Some("https://github.example/E_1"));
 }
 
@@ -555,7 +540,7 @@ fn reactions_of_one_comment_count_once_on_reconnect() {
     h.offline();
     let out = h.reconnect();
     assert_eq!(
-        out[0].title, "org · 2 new events",
+        out[0].title, "me · 2 new events",
         "two comments: two notifications"
     );
 }
@@ -570,7 +555,7 @@ fn notification_bodies_collapse_line_breaks_and_runs_of_spaces() {
     ];
     for (text, want) in cases {
         let mut h = H::new();
-        let mut e = h.ev("E_1", "PR_1", EventKind::Comment);
+        let mut e = h.ev("E_1", "PR_1", IngestKind::Comment);
         e.text = Some(text.into());
         h.push(vec![other("PR_1")], vec![e], vec![]);
         assert_eq!(h.delivered()[0].body.as_deref(), Some(want), "{text:?}");
