@@ -78,6 +78,7 @@ SHIIBAR_GH_TEST_DAEMON=$PWD/target/debug/shiibar-ghd swift test --package-path a
 
 1. Cargo.toml の `[workspace.package] version` を上げてコミットする
 2. `vX.Y.Z` のタグを push する。`.github/workflows/release.yml` が、タグと版の一致を確かめ、Developer ID で署名し、公証、staple、zip をして、下書きの GitHub Release を作成する
-3. 下書きの zip を実機で確かめてから公開する。公開すると `.github/workflows/bump-cask.yml` が `bufferings/homebrew-tap` の cask を更新する
+3. 下書きの本文を shiibar-cc のリリースと同じ形式に差し替える：リード 1 文（`Shiibar GH X.Y.Z は…`に相当する英文）、利用者の視点の節（機能ごとの見出し、`## Fixed`、`## Changed`。必要なものだけ）、最後に `## Commits` の見出しの下に前のタグからのコミットの件名を新しい順に列挙する（`git log --format='- %s' vA.B.C..vX.Y.Z --no-merges`）。GitHub が自動生成する「What's Changed」と Install の節は載せない。文言は所有者の確認を経てから公開する
+4. 下書きの zip を実機で確かめてから公開する。公開すると `.github/workflows/bump-cask.yml` が `bufferings/homebrew-tap` の cask を更新する
 
 `release.yml` を手動（workflow_dispatch）で実行すると、リリースを作成しない試走になる。署名、公証、staple、zip までを行い、zip をワークフローの成果物に残す。必要な Secrets は `DEVELOPER_ID_CERT_P12`、`DEVELOPER_ID_CERT_PASSWORD`、`APPLE_API_KEY_P8`、`APPLE_API_KEY_ID`、`APPLE_API_ISSUER_ID`、cask の更新には `TAP_PUSH_TOKEN` である。
