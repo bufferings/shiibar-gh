@@ -1,12 +1,16 @@
 //! Shared helpers for the rule tables: a daemon core without sockets or a
 //! database, plus short builders for ingested values.
+//!
+//! The core keys PRs and rows by `<account id>:<node id>`. The helpers take
+//! and give the short node ids of the default account, so the tables read
+//! like the events they feed.
 #![allow(dead_code)]
 
 use serde_json::Value;
 use shiibar_gh_proto::*;
 use shiibar_ghd::clock::Now;
-use shiibar_ghd::engine::{CmdError, Engine};
-use shiibar_ghd::model::RowRec;
+use shiibar_ghd::engine::{ActivityArgs, CmdError, Engine, ListArgs};
+use shiibar_ghd::model::{OwnerKind as Kind, RowRec};
 use std::collections::BTreeMap;
 
 pub const T0: i64 = 1_800_000_000;
@@ -14,8 +18,33 @@ pub const DAY: i64 = 86_400;
 pub const HOUR: i64 = 3_600;
 pub const ORG: &str = "org";
 pub const ME: &str = "me";
+/// The account id of `me`.
+pub const ACCOUNT: &str = "1001";
+/// A second account, for the tables about two accounts.
+pub const OTHER: &str = "1002";
+pub const YOU: &str = "you";
 
-/// An open PR in the `org` scope, authored by the viewer, updated at `T0`.
+/// The full key of a node of the default account. A key that starts with a
+/// numeric account id is already full.
+pub fn full(id: &str) -> String {
+    let full = id.split_once(':').is_some_and(|(account, _)| {
+        !account.is_empty() && account.bytes().all(|b| b.is_ascii_digit())
+    });
+    if full {
+        id.to_string()
+    } else {
+        format!("{ACCOUNT}:{id}")
+    }
+}
+
+/// The short id of a key of the default account.
+pub fn short(id: &str) -> String {
+    id.strip_prefix(&format!("{ACCOUNT}:"))
+        .unwrap_or(id)
+        .to_string()
+}
+
+/// An open PR in the `org` owner, authored by the viewer, updated at `T0`.
 pub fn pr(id: &str) -> IngestPr {
     let number = id.rsplit('_').next().unwrap().parse().unwrap_or(1);
     IngestPr {
@@ -41,6 +70,7 @@ pub fn pr(id: &str) -> IngestPr {
         is_private: false,
         requested_me: false,
         requested_team: false,
+        assignees: vec![],
         links: Links {
             review: format!("https://github.example/{id}/r"),
             checks: format!("https://github.example/{id}/c"),
@@ -56,29 +86,22 @@ pub fn other(id: &str) -> IngestPr {
     }
 }
 
+/// Short ids of rows.
 pub fn ids(rows: &[Row]) -> Vec<String> {
-    rows.iter().map(|r| r.id.clone()).collect()
+    rows.iter().map(|r| short(&r.id)).collect()
 }
 
-pub fn class(row: &Row) -> RowClass {
-    match row.class {
-        Lenient::Known(c) => c,
-        Lenient::Unknown(_) => panic!("unknown class"),
-    }
-}
-
-pub fn show_snoozed() -> Filter {
-    Filter {
-        snoozed: true,
-        ..Filter::default()
-    }
-}
-
-/// A core at a fixed time, with the `org` scope and Public registered at
-/// `T0`.
+/// A core at a fixed time, with the account `me`, its `org` owner and its
+/// Public registered at `T0`.
 pub struct H {
     pub engine: Engine,
     pub now: Now,
+}
+
+impl Default for H {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl H {
@@ -86,11 +109,26 @@ impl H {
     pub fn new() -> Self {
         let now = Now::fixed(T0, "Asia/Tokyo").unwrap();
         let mut engine = Engine::fresh(&now);
-        engine.scope_add(ORG, &now).unwrap();
-        engine.scope_add("public", &now).unwrap();
+        engine.account_create(ACCOUNT, ME).unwrap();
+        engine.token_saved(ACCOUNT);
+        engine
+            .owner_add(ACCOUNT, ORG, Kind::Org, Some(100), &now)
+            .unwrap();
+        engine
+            .owner_add(ACCOUNT, "public", Kind::Public, None, &now)
+            .unwrap();
         let mut h = Self { engine, now };
         h.advance(10);
         h
+    }
+
+    /// A second account `you` with its own `org` owner, registered now.
+    pub fn add_other(&mut self) {
+        self.engine.account_create(OTHER, YOU).unwrap();
+        self.engine.token_saved(OTHER);
+        self.engine
+            .owner_add(OTHER, ORG, Kind::Org, Some(100), &self.now)
+            .unwrap();
     }
 
     pub fn at(&self) -> i64 {
@@ -105,11 +143,11 @@ impl H {
         self.now.at = at;
     }
 
-    pub fn ev(&self, id: &str, pr_id: &str, kind: EventKind) -> IngestEvent {
+    pub fn ev(&self, id: &str, pr_id: &str, kind: IngestKind) -> IngestEvent {
         self.ev_at(id, pr_id, kind, self.now.at)
     }
 
-    pub fn ev_at(&self, id: &str, pr_id: &str, kind: EventKind, at: i64) -> IngestEvent {
+    pub fn ev_at(&self, id: &str, pr_id: &str, kind: IngestKind, at: i64) -> IngestEvent {
         IngestEvent {
             id: id.into(),
             pr_id: pr_id.into(),
@@ -119,7 +157,6 @@ impl H {
             actor: Some("alice".into()),
             text: Some(format!("text {id}")),
             comment_id: None,
-            team: false,
         }
     }
 
@@ -138,7 +175,7 @@ impl H {
         }
     }
 
-    /// Apply one ingest, then move the clock on one second.
+    /// Apply one ingest to `me`, then move the clock on one second.
     pub fn push(
         &mut self,
         prs: Vec<IngestPr>,
@@ -154,15 +191,25 @@ impl H {
         events: Vec<IngestEvent>,
         reactions: Vec<IngestReaction>,
     ) -> Result<(), CmdError> {
+        self.push_to(ACCOUNT, prs, events, reactions)
+    }
+
+    /// Apply one ingest to an account, then move the clock on one second.
+    pub fn push_to(
+        &mut self,
+        account: &str,
+        prs: Vec<IngestPr>,
+        events: Vec<IngestEvent>,
+        reactions: Vec<IngestReaction>,
+    ) -> Result<(), CmdError> {
         let ingest = Ingest {
-            viewer: ME.into(),
             missing_pr_ids: vec![],
             prs,
             events,
             reactions,
-            succeeded_scopes: None,
+            succeeded_owners: None,
         };
-        let result = self.engine.ingest(ingest, &self.now);
+        let result = self.engine.ingest(account, ingest, &self.now);
         self.advance(1);
         result
     }
@@ -177,91 +224,178 @@ impl H {
 
     pub fn missing(&mut self, id: &str) {
         let ingest = Ingest {
-            viewer: ME.into(),
             missing_pr_ids: vec![id.into()],
-            prs: vec![],
-            events: vec![],
-            reactions: vec![],
-            succeeded_scopes: None,
+            ..Ingest::default()
         };
-        self.engine.ingest(ingest, &self.now).unwrap();
+        self.engine.ingest(ACCOUNT, ingest, &self.now).unwrap();
     }
 
     pub fn row(&self, id: &str) -> &RowRec {
         self.engine
-            .row_record(id)
+            .row_record(&full(id))
             .unwrap_or_else(|| panic!("no row {id}"))
     }
 
+    /// Whether a PR of the default account is snoozed.
+    pub fn snoozed(&self, id: &str) -> bool {
+        self.engine
+            .pr_record(&full(id))
+            .is_some_and(|pr| pr.snoozed)
+    }
+
     pub fn has_row(&self, id: &str) -> bool {
-        self.engine.row_record(id).is_some()
+        self.engine.row_record(&full(id)).is_some()
+    }
+
+    /// Every row the lists show, snoozed PRs included.
+    pub fn all_rows(&self) -> Vec<Row> {
+        self.all_cards().into_iter().flat_map(|c| c.rows).collect()
     }
 
     pub fn wire_row(&self, id: &str) -> Option<Row> {
-        self.engine
-            .activity(&show_snoozed(), &self.now)
-            .unwrap()
-            .into_iter()
-            .find(|r| r.id == id)
+        let id = full(id);
+        self.all_rows().into_iter().find(|r| r.id == id)
     }
 
+    /// The card of a PR, snoozed or not.
     pub fn card(&self, pr_key: &str) -> Option<Card> {
-        self.cards(&show_snoozed())
-            .into_iter()
-            .find(|c| c.pr == pr_key)
+        self.all_cards().into_iter().find(|c| c.pr == pr_key)
     }
 
-    pub fn cards(&self, filter: &Filter) -> Vec<Card> {
-        self.engine.list(filter, &self.now).unwrap()
+    pub fn list(&self, args: ListArgs) -> Vec<Card> {
+        self.engine.list(&args, &self.now).unwrap()
     }
 
-    pub fn card_ids(&self, filter: &Filter) -> Vec<String> {
-        self.cards(filter).into_iter().map(|c| c.id).collect()
+    /// The PRs tab: the owner sections.
+    pub fn cards(&self) -> Vec<Card> {
+        self.list(ListArgs::default())
     }
 
+    /// The Snoozed section.
+    pub fn snoozed_cards(&self) -> Vec<Card> {
+        self.list(ListArgs {
+            snoozed: true,
+            ..ListArgs::default()
+        })
+    }
+
+    pub fn all_cards(&self) -> Vec<Card> {
+        let mut cards = self.cards();
+        cards.extend(self.snoozed_cards());
+        cards
+    }
+
+    /// Short ids of the cards a list gives.
+    pub fn card_ids(&self, args: ListArgs) -> Vec<String> {
+        self.list(args).into_iter().map(|c| short(&c.id)).collect()
+    }
+
+    /// The card shows in an owner section.
     pub fn visible(&self, id: &str) -> bool {
-        self.card_ids(&Filter::default()).iter().any(|c| c == id)
+        self.card_ids(ListArgs::default()).iter().any(|c| c == id)
     }
 
-    pub fn scope(&self, id: &str) -> Scope {
+    pub fn todo_ids(&self) -> Vec<String> {
+        self.card_ids(ListArgs {
+            todo: true,
+            ..ListArgs::default()
+        })
+    }
+
+    pub fn activity(&self, args: ActivityArgs) -> Vec<Row> {
+        self.engine.activity(&args, &self.now).unwrap()
+    }
+
+    pub fn account(&self) -> Account {
+        self.account_of(ACCOUNT)
+    }
+
+    pub fn account_of(&self, id: &str) -> Account {
         self.engine
-            .scopes()
+            .account_value(id)
+            .unwrap_or_else(|| panic!("no account {id}"))
+    }
+
+    pub fn owner(&self, name: &str) -> Owner {
+        self.account()
+            .owners
             .into_iter()
-            .find(|s| s.id == id)
-            .unwrap_or_else(|| panic!("no scope {id}"))
+            .find(|o| o.name.eq_ignore_ascii_case(name))
+            .unwrap_or_else(|| panic!("no owner {name}"))
     }
 
+    pub fn owner_id(&self, name: &str) -> String {
+        self.engine.owner_id(ACCOUNT, name).unwrap()
+    }
+
+    /// The Todo PR count of the account: the menu bar number.
     pub fn badge(&self) -> u32 {
-        self.scope(ORG).badge
+        self.account().todo_count
     }
 
+    /// The blue dot of the account.
     pub fn dot(&self) -> bool {
-        self.scope(ORG).dot
+        self.account().unread
     }
 
     pub fn set(&mut self, key: &str, value: Value) {
         self.engine.config_set(key, &value, &self.now).unwrap();
     }
 
+    /// Change one cell of `org`'s event table.
+    pub fn table(&mut self, event: EventKind, column: EventColumn, on: bool) {
+        let owner = self.owner_id(ORG);
+        self.engine
+            .owner_events_set(&owner, event, column, on, &self.now)
+            .unwrap();
+    }
+
+    /// Set an Exclusion of `org`.
+    pub fn exclude(&mut self, kind: ExclusionKind, name: &str, state: ExclusionState) {
+        let owner = self.owner_id(ORG);
+        self.engine
+            .owner_exclusions_set(&owner, kind, name, state, &self.now)
+            .unwrap();
+    }
+
+    pub fn include(&mut self, kind: ExclusionKind, name: &str) {
+        let owner = self.owner_id(ORG);
+        self.engine
+            .owner_exclusions_remove(&owner, kind, name, &self.now)
+            .unwrap();
+    }
+
     pub fn snooze(&mut self, key: &str) {
-        self.engine.snooze(key, &self.now).unwrap();
+        self.engine.snooze(ME, key, &self.now).unwrap();
     }
 
     pub fn unsnooze(&mut self, key: &str) {
-        self.engine.unsnooze(key, &self.now).unwrap();
+        self.engine.unsnooze(ME, key, &self.now).unwrap();
+    }
+
+    pub fn done(&mut self, id: &str) {
+        self.engine.done(&full(id), true).unwrap();
+    }
+
+    pub fn undone(&mut self, id: &str) {
+        self.engine.done(&full(id), false).unwrap();
+    }
+
+    pub fn todo(&mut self, id: &str, on: bool) {
+        self.engine.todo(&full(id), on, &self.now).unwrap();
     }
 
     pub fn seen(&mut self, rows: &[&str]) {
-        let rows: Vec<String> = rows.iter().map(|r| r.to_string()).collect();
+        let rows: Vec<String> = rows.iter().map(|r| full(r)).collect();
         self.engine.seen(&rows);
     }
 
     pub fn close(&mut self) {
-        self.engine.popover_closed(ORG).unwrap();
+        self.engine.popover_closed(ME).unwrap();
     }
 
     pub fn open(&mut self) {
-        self.engine.popover_opened(ORG).unwrap();
+        self.engine.popover_opened(ME).unwrap();
     }
 
     pub fn tick(&mut self) {

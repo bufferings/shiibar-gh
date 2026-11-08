@@ -69,16 +69,30 @@ type Override = Box<dyn Fn(&Req) -> Option<Resp> + Send>;
 pub struct World {
     /// Token to the login it belongs to.
     pub logins: BTreeMap<String, String>,
+    /// Token to the numeric user id (`viewer { databaseId }`); see
+    /// [`default_id`] when absent.
+    pub ids: BTreeMap<String, i64>,
     pub unauthorized: BTreeSet<String>,
+    /// Headers on every answer to this token: `x-oauth-scopes`,
+    /// `github-authentication-token-expiration`, `X-GitHub-SSO`, ...
+    pub token_headers: BTreeMap<String, Vec<(String, String)>>,
+    /// Tokens whose `GET /user/teams` answers 403.
+    pub teams_forbidden: BTreeSet<String>,
+    /// The teams `GET /user/teams` lists: `{"id","slug"}`.
+    pub user_teams: Vec<Value>,
+    /// Token to the PR ids its searches find; every PR when absent.
+    pub visible: BTreeMap<String, BTreeSet<String>>,
     /// Owner login (lowercase) to `Organization` or `User`.
     pub owners: BTreeMap<String, String>,
+    /// Remaining GraphQL points and REST requests every answer reports, of
+    /// 5000 each; 4999 and 4990 when absent.
+    pub limits: Option<(i64, i64)>,
+    /// Owner login (lowercase) to its numeric id; 1000 when absent.
+    pub owner_ids: BTreeMap<String, i64>,
     /// PR status nodes.
     pub prs: Vec<Value>,
     pub timeline: BTreeMap<String, Vec<Value>>,
     pub threads: BTreeMap<String, Vec<Value>>,
-    /// The viewer's teams in an organization: the first page, then the next.
-    pub teams: Vec<Value>,
-    pub more_teams: Vec<Value>,
     /// Reactable id to its node.
     pub reactables: BTreeMap<String, Value>,
     pub notifications: Vec<Value>,
@@ -214,6 +228,39 @@ async fn serve(stream: tokio::net::TcpStream, world: Arc<Mutex<World>>) -> std::
             .find_map(|f| f(&req))
             .unwrap_or_else(|| answer(&world, &req));
         resp.headers.extend(world.extra_headers.clone());
+        if let Some(extra) = world.token_headers.get(&req.token) {
+            resp.headers.extend(extra.clone());
+        }
+        // A classic PAT's answers all carry its scopes (`gh api graphql -i`
+        // showed `X-Oauth-Scopes` on a GraphQL answer, 2026-11-09).
+        if !resp
+            .headers
+            .iter()
+            .any(|(n, _)| n.eq_ignore_ascii_case("x-oauth-scopes"))
+        {
+            resp.headers.push((
+                "X-OAuth-Scopes".into(),
+                "repo, notifications, read:org".into(),
+            ));
+        }
+        if let Some((graphql, rest)) = world.limits {
+            for (name, value) in resp.headers.iter_mut() {
+                if name.eq_ignore_ascii_case("x-ratelimit-remaining") {
+                    *value = if req.path == "/graphql" {
+                        graphql
+                    } else {
+                        rest
+                    }
+                    .to_string();
+                }
+            }
+            if let Ok(mut body) = serde_json::from_str::<Value>(&resp.body)
+                && body["data"]["rateLimit"].is_object()
+            {
+                body["data"]["rateLimit"]["remaining"] = json!(graphql);
+                resp.body = body.to_string();
+            }
+        }
         resp
     };
     let mut text = format!("HTTP/1.1 {} X\r\n", resp.status);
@@ -265,7 +312,7 @@ fn pr_by_id<'a>(world: &'a World, id: &str) -> Option<&'a Value> {
     world.prs.iter().find(|p| p["id"] == id)
 }
 
-fn search(world: &World, query: &str) -> Value {
+fn search(world: &World, token: &str, query: &str) -> Value {
     let words: Vec<&str> = query.split_whitespace().collect();
     let public = words.contains(&"is:public");
     let owner = words
@@ -276,6 +323,11 @@ fn search(world: &World, query: &str) -> Value {
         .prs
         .iter()
         .filter(|p| p["state"] == "OPEN")
+        .filter(|p| {
+            world.visible.get(token).is_none_or(|ids| {
+                ids.contains(p["id"].as_str().unwrap_or_default())
+            })
+        })
         .filter(|p| {
             let login = p["repository"]["owner"]["login"].as_str().unwrap_or_default();
             match &owner {
@@ -358,7 +410,14 @@ fn answer(world: &World, req: &Req) -> Resp {
             resp
         };
         return match req.op.as_deref().unwrap_or_default() {
-            "Viewer" | "Who" => gql(json!({"viewer":{"login":login}})),
+            "Viewer" => {
+                let id = world
+                    .ids
+                    .get(&req.token)
+                    .copied()
+                    .unwrap_or_else(|| default_id(&login));
+                gql(json!({"viewer":{"databaseId":id,"login":login}}))
+            }
             "MergeQueue" => {
                 let id = vars["id"].as_str().unwrap_or_default();
                 let queue: Vec<Value> = world
@@ -376,26 +435,12 @@ fn answer(world: &World, req: &Req) -> Resp {
                     .collect();
                 gql(json!({"node":{"timelineItems":{"nodes":queue}}}))
             }
-            "TeamsPage" => gql(json!({"org":{"teams":{
-                "pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":world.more_teams}}})),
-            "Owner" => {
-                let owner = vars["owner"].as_str().unwrap_or_default();
-                let kind = world.owners.get(&owner.to_lowercase());
-                gql(json!({"owner": kind.map(|k| json!({"__typename":k,"login":owner}))}))
-            }
-            "Scope" => {
-                let mut data = json!({"viewer":{"login":login}});
-                if let Some(owner) = vars["owner"].as_str() {
-                    let kind = world.owners.get(&owner.to_lowercase());
-                    data["owner"] = json!(kind.map(|k| json!({"__typename":k,"login":owner})));
-                    data["org"] = json!({"teams":{
-                        "pageInfo":{"hasNextPage":!world.more_teams.is_empty(),"endCursor":"c1"},
-                        "nodes":world.teams}});
-                }
+            "Search" => {
+                let mut data = json!({});
                 for i in 0..4 {
                     let query = vars[format!("q{i}")].as_str().unwrap_or_default();
                     data[format!("s{i}")] = if i == 0 {
-                        search(world, query)
+                        search(world, &req.token, query)
                     } else {
                         json!({"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]})
                     };
@@ -479,17 +524,7 @@ fn answer(world: &World, req: &Req) -> Resp {
                 });
                 gql(json!({"nodes":nodes}))
             }
-            "Probe" => gql(json!({
-                "viewer":{"login":login,"repositories":{"nodes":[]}},
-                "owner":{"__typename":"Organization","login":vars["owner"],
-                         "repositories":{"nodes":[{"name":"app","owner":{"login":vars["owner"]},
-                         "defaultBranchRef":{"name":"main","target":{"oid":"abc"}}}]}},
-                "involved":{"nodes":[]}
-            })),
-            "Pulls" => gql(json!({"repository":{"pullRequests":{"nodes":[]}}})),
-            "Behind" => gql(json!({"repository":{"defaultBranchRef":{"compare":{"behindBy":0}}}})),
-            "Queue" => gql(json!({"repository":{"mergeQueue":null}})),
-            "Teams" => gql(json!({"organization":{"teams":{"totalCount":0}}})),
+            "OwnerTest" => gql(json!({"search":{"issueCount":0}})),
             _ => gql(json!({})),
         };
     }
@@ -505,8 +540,11 @@ fn answer(world: &World, req: &Req) -> Resp {
             };
             resp.header("X-Poll-Interval", world.poll_interval.to_string())
         }
-        "/user" => rest(json!({"login":login})).header("X-OAuth-Scopes", "notifications, read:org"),
-        "/user/teams" => rest(json!([])),
+        "/user" => rest(json!({"login":login})),
+        "/user/teams" if world.teams_forbidden.contains(&req.token) => {
+            Resp::json(403, json!({"message":"Resource not accessible"}))
+        }
+        "/user/teams" => rest(json!(world.user_teams)),
         // GET /users/{login}: `type` from the owners the world knows.
         p if p.starts_with("/users/") => {
             let name = &p["/users/".len()..];
@@ -515,7 +553,10 @@ fn answer(world: &World, req: &Req) -> Resp {
                 .iter()
                 .find(|(owner, _)| owner.eq_ignore_ascii_case(name))
             {
-                Some((owner, kind)) => rest(json!({"login":owner,"type":kind})),
+                Some((owner, kind)) => {
+                    let id = world.owner_ids.get(owner).copied().unwrap_or(1000);
+                    rest(json!({"login":owner,"type":kind,"id":id}))
+                }
                 None => Resp::json(404, json!({"message":"Not Found","status":"404"})),
             }
         }
@@ -537,7 +578,7 @@ pub fn pr_node(id: &str, owner: &str, number: u64, author: &str, patch: Value) -
         "baseRefName":"main","headRefName":"topic","headRefOid":"abc",
         "reviewDecision":null,"latestOpinionatedReviews":{"nodes":[]},
         "statusCheckRollup":null,"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED",
-        "reviewRequests":{"nodes":[]},"bodyHTML":"","bodyText":""
+        "reviewRequests":{"nodes":[]},"assignees":{"nodes":[]},"bodyHTML":"","bodyText":""
     });
     for (key, value) in patch.as_object().unwrap() {
         node[key] = value.clone();
@@ -555,4 +596,26 @@ pub fn mention_link(login: &str) -> String {
     format!(
         "<a class=\"user-mention notranslate\" href=\"https://github.com/{login}\">@{login}</a>"
     )
+}
+
+/// A submitted review in a timeline, such as `APPROVED`.
+pub fn review(id: &str, author: &str, state: &str, at: i64, body: &str) -> Value {
+    json!({"__typename":"PullRequestReview","id":id,"url":format!("https://github.com/r/{id}"),
+           "createdAt":iso(at),"submittedAt":iso(at),"state":state,"bodyText":body,
+           "bodyHTML":format!("<p>{body}</p>"),"author":{"__typename":"User","login":author}})
+}
+
+/// The numeric user id of a login when a test names none: `me` is 1001 and
+/// `you` 1002, the account ids the harnesses use.
+pub fn default_id(login: &str) -> i64 {
+    match login {
+        "me" => 1001,
+        "you" => 1002,
+        other => {
+            5_000_000
+                + other
+                    .bytes()
+                    .fold(0i64, |sum, b| sum * 31 % 1_000_000 + b as i64)
+        }
+    }
 }

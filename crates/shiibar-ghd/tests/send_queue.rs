@@ -8,9 +8,9 @@ use shiibar_ghd::clock::Clock;
 use shiibar_ghd::daemon::{Daemon, SEND_QUEUE};
 use tokio::sync::oneshot::error::TryRecvError;
 
-/// Each flip changes the scope, so it queues exactly one `scope_changed`.
+/// Each flip changes the setting, so it queues exactly one `config_changed`.
 fn queue_one(daemon: &mut Daemon, on: bool) {
-    let value = json!({"cmd":"scope_notify","scope":"public","on":on});
+    let value = json!({"cmd":"config_set","key":"launch_at_login","value":on});
     let request: Request = serde_json::from_value(value).unwrap();
     let response: Value = serde_json::from_str(&daemon.handle(request)).unwrap();
     assert_eq!(response["ok"], true, "{response}");
@@ -26,8 +26,6 @@ fn a_queue_of_256_stays_and_the_257th_line_cuts_the_client() {
         std::sync::Arc::new(shiibar_ghd::keychain::NoKeychain),
     )
     .unwrap();
-    let add: Request = serde_json::from_value(json!({"cmd":"scope_add","owner":"public"})).unwrap();
-    daemon.handle(add);
     let mut subscribed = daemon.subscribe(ClientKind::Cli);
     assert_eq!(subscribed.rx.len(), 1, "the snapshot");
 

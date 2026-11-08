@@ -1,60 +1,87 @@
-//! The core's side of fetching: what a run may read, applying what it brings
-//! back, the watch period, token records and the scope warnings.
-//! docs/tasks/M2.md, "Fetcher and core".
+//! The core's side of fetching: what a run of one account may read, applying
+//! what it brings back, the watch period, token records and the account
+//! warnings. DESIGN.md, "API usage", "Rate limits", "Fetch success and
+//! failure" and "Showing warnings".
 
-use super::{DAY_SECS, Engine, Result, Timers, not_found};
+use super::{DAY_SECS, Engine, Timers};
 use crate::clock::Now;
 use crate::model::*;
 use crate::plan::*;
 use shiibar_gh_proto as proto;
-use shiibar_gh_proto::{Lenient, TokenRole, WarningKind};
-use std::collections::{BTreeMap, BTreeSet};
+use shiibar_gh_proto::{Lenient, WarningKind};
+use std::collections::BTreeSet;
 
 /// `token_expiring` starts this long before the expiry.
 const EXPIRY_WARNING: i64 = 7 * DAY_SECS;
-/// `cost_near_cap` above this share of the cost cap, in percent.
-const NEAR_CAP_PERCENT: i64 = 80;
-const HOUR: i64 = 3_600;
+/// Near the limit below this share of it remaining, in percent.
+const NEAR_LIMIT_PERCENT: i64 = 20;
 /// Failed event fetches in a row before `events_fetch_failed`.
 const EVENTS_FAILURES_WARNED: u32 = 3;
 /// The poll interval when GitHub has not named one yet.
 pub const DEFAULT_POLL_INTERVAL: i64 = 60;
+/// The classic PAT scopes shiibar-gh needs. DESIGN.md, "Tokens".
+pub const REQUIRED_SCOPES: [&str; 3] = ["repo", "notifications", "read:org"];
+
+/// The required scopes a granted list lacks. GitHub saves a token's scopes
+/// normalized, without the ones a granted scope includes, so `write:org`
+/// and `admin:org` stand for `read:org` (docs.github.com, "Scopes for OAuth
+/// apps": "normalized list"). Unverified that those two include
+/// `read:org`; see the open questions of DESIGN.md.
+pub fn missing_scopes(granted: &[String]) -> Vec<&'static str> {
+    REQUIRED_SCOPES
+        .iter()
+        .copied()
+        .filter(|need| {
+            !granted.iter().any(|g| {
+                g == need || (*need == "read:org" && (g == "write:org" || g == "admin:org"))
+            })
+        })
+        .collect()
+}
 
 fn warning(
     kind: WarningKind,
-    token: Option<TokenRole>,
-    message: &str,
+    account: Option<&str>,
+    owner: Option<&str>,
+    message: String,
     until: Option<i64>,
+    url: Option<String>,
 ) -> proto::Warning {
     proto::Warning {
         kind: Lenient::Known(kind),
-        token: token.map(Lenient::Known),
-        message: message.to_string(),
+        account: account.map(str::to_string),
+        owner: owner.map(str::to_string),
+        message,
         until,
+        url,
+    }
+}
+
+/// `N days`, rounded up, at least one: `Expires in 1 day` under a day.
+fn days_left(until: i64, now: i64) -> String {
+    let days = ((until - now) + DAY_SECS - 1).div_euclid(DAY_SECS).max(1);
+    if days == 1 {
+        "1 day".into()
+    } else {
+        format!("{days} days")
     }
 }
 
 impl Engine {
-    pub fn timers(&self) -> &Timers {
-        &self.timers
-    }
-
-    fn status_due(&self, scope: &str, now: i64) -> bool {
-        now >= self.timers.status.get(scope).copied().unwrap_or(0)
-    }
-
-    /// The time every fetch is stopped until, when it is.
-    pub fn stopped_until(&self, now: i64) -> Option<i64> {
-        self.data.fetch.stopped_until.filter(|until| *until > now)
+    pub fn timers(&self, account: &str) -> Timers {
+        self.timers.get(account).cloned().unwrap_or_default()
     }
 
     /// The card shows, Snooze counted as showing, or disappeared less than
-    /// Days to keep watching after close ago. docs/tasks/M2.md.
+    /// Days to keep watching after close ago.
     pub fn is_watched(&self, pr: &PrRec, now: i64) -> bool {
-        if pr.unreadable || self.enabled_scope_of(pr).is_none() {
+        if pr.unreadable {
             return false;
         }
-        if self.would_show(pr, now) {
+        let Some(owner) = self.enabled_owner_of(pr) else {
+            return false;
+        };
+        if self.would_show(pr, owner, now) {
             return true;
         }
         let keep = self.data.config.keep_watching_days.saturating_mul(DAY_SECS);
@@ -62,153 +89,167 @@ impl Engine {
             .is_some_and(|gone| now.saturating_sub(gone) <= keep)
     }
 
+    fn shows_now(&self, pr: &PrRec, now: i64) -> bool {
+        !pr.unreadable
+            && self
+                .owner_of(pr)
+                .is_some_and(|owner| self.would_show(pr, owner, now))
+    }
+
     /// The periodic pass records when cards disappear, and forgets what was
     /// collected for PRs that left the watch.
     pub(super) fn track_watching(&mut self, now: &Now) {
         let mut changes = Vec::new();
         for pr in self.data.prs.values() {
-            let shows = !pr.unreadable && self.would_show(pr, now.at);
-            let gone_at = match (shows, pr.gone_at) {
+            let gone_at = match (self.shows_now(pr, now.at), pr.gone_at) {
                 (true, _) => None,
                 (false, Some(at)) => Some(at),
                 (false, None) => Some(now.at),
             };
             let collected = pr.collected && self.is_watched(pr, now.at);
             if gone_at != pr.gone_at || collected != pr.collected {
-                changes.push((pr.id.clone(), gone_at, collected));
+                changes.push((pr.key.clone(), gone_at, collected));
             }
         }
-        for (id, gone_at, collected) in changes {
-            if let Some(pr) = self.pr_mut(&id) {
+        for (key, gone_at, collected) in changes {
+            if let Some(pr) = self.pr_mut(&key) {
                 pr.gone_at = gone_at;
                 pr.collected = collected;
             }
         }
         // DESIGN.md, "Reaction rows": what changed outside the watch makes no
-        // row; the first fetch after the return sets the baseline. Any PR out
-        // of the watch, collected or not, starts again from a baseline.
-        let unwatched: BTreeSet<String> = self
+        // row; the first fetch after the return sets the baseline.
+        let unwatched: BTreeSet<(String, String)> = self
             .data
             .prs
             .values()
             .filter(|pr| !self.is_watched(pr, now.at))
-            .map(|pr| pr.id.clone())
+            .map(|pr| (pr.account.clone(), pr.id.clone()))
             .collect();
-        for own in self.data.fetch.own.values_mut() {
-            if own.baseline_done && unwatched.contains(&own.pr_id) {
-                own.baseline_done = false;
-                self.dirty.fetch = true;
+        let mut changed = Vec::new();
+        for account in self.data.accounts.values_mut() {
+            for own in account.fetch.own.values_mut() {
+                if own.baseline_done && unwatched.contains(&(account.id.clone(), own.pr_id.clone()))
+                {
+                    own.baseline_done = false;
+                    changed.push(account.id.clone());
+                }
             }
         }
+        self.dirty.accounts.extend(changed);
     }
 
-    /// Which fetches are due now. `refresh` makes all of them due except the
-    /// notifications, which keep to `X-Poll-Interval`.
-    pub fn due(&self, now: i64, forced: bool) -> Due {
-        let any_scope = self
-            .data
-            .scopes
-            .values()
-            .filter(|s| !s.removed && s.enabled)
-            .any(|s| self.status_due(&s.id, now));
-        Due {
-            status: forced || any_scope,
-            reactions: forced || now >= self.timers.reactions,
-            notifications: now >= self.timers.notifications,
-        }
+    /// Stopped by a rate limit until this time.
+    pub fn stopped_until(&self, account: &str, now: i64) -> Option<i64> {
+        self.data
+            .accounts
+            .get(account)
+            .and_then(|a| a.stopped_until)
+            .filter(|until| *until > now)
     }
 
-    fn token_use(
-        &self,
-        key: &str,
-        now: i64,
-        read: &mut dyn FnMut(&str) -> Option<String>,
-    ) -> TokenUse {
-        let Some(record) = self.data.fetch.tokens.get(key).filter(|t| t.registered) else {
-            return TokenUse::default();
+    fn token_unusable(&self, account: &AccountRec, now: i64) -> bool {
+        account.token.invalid || account.token.expires_at.is_some_and(|at| at <= now)
+    }
+
+    /// Whether a run of the account may start: a registered token, no rate
+    /// limit stop, and a token that is neither rejected nor expired, unless
+    /// `refresh` tries it once more.
+    pub fn may_fetch(&self, account: &str, now: i64, forced: bool) -> bool {
+        let Some(record) = self.data.accounts.get(account) else {
+            return false;
         };
-        let expired = record.expires_at.is_some_and(|at| at <= now);
-        TokenUse {
-            registered: true,
-            token: read(&scope_account(key)),
-            invalid: record.invalid || expired,
-            owner: record.owner.clone(),
+        record.token.registered
+            && self.stopped_until(account, now).is_none()
+            && (forced || !self.token_unusable(record, now))
+    }
+
+    /// Which fetches of the account are due now. `refresh` makes all of them
+    /// due except the notifications, which keep to `X-Poll-Interval`.
+    pub fn due(&self, account: &str, now: i64, forced: bool) -> Due {
+        let timers = self.timers(account);
+        let any_owner = self
+            .data
+            .owners
+            .values()
+            .filter(|o| o.account == account && o.enabled)
+            .any(|o| now >= timers.status.get(&o.id).copied().unwrap_or(0));
+        Due {
+            status: forced || any_owner,
+            reactions: forced || now >= timers.reactions,
+            notifications: now >= timers.notifications,
         }
     }
 
-    /// A copy of what a run needs. `read` gets a token from the Keychain and
-    /// is called only for recorded registrations.
+    /// A copy of what a run of the account needs.
     pub fn fetch_plan(
         &self,
+        account: &str,
         now: &Now,
         due: Due,
         forced: bool,
-        only_scope: Option<String>,
-        read: &mut dyn FnMut(&str) -> Option<String>,
-    ) -> Plan {
-        let notifications = self.token_use(NOTIFICATIONS, now.at, read);
-        let mut scopes = Vec::new();
-        for scope in self.data.scopes.values() {
-            if scope.removed || !scope.enabled {
-                continue;
-            }
-            if only_scope.as_ref().is_some_and(|only| *only != scope.id) {
-                continue;
-            }
-            let public = scope.id == PUBLIC;
-            let key = scope.id.to_lowercase();
-            scopes.push(ScopePlan {
-                status_due: forced || self.status_due(&scope.id, now.at),
-                id: scope.id.clone(),
-                owner: (!public).then(|| scope.name.clone().unwrap_or_else(|| scope.id.clone())),
-                kind: scope.kind,
-                token: self.token_use(&key, now.at, read),
-                token_key: key.clone(),
-                fetched_at: scope.fetched_at,
-                watch_started_at: scope.watch_started_at,
-                teams: self.data.fetch.teams.get(&key).cloned().unwrap_or_default(),
-            });
-        }
+        token: String,
+    ) -> Option<Plan> {
+        let record = self.data.accounts.get(account)?;
+        let timers = self.timers(account);
+        let owners = self
+            .owners_of(account)
+            .into_iter()
+            .map(|o| OwnerPlan {
+                id: o.id.clone(),
+                login: (!o.is_public()).then(|| o.name.clone()),
+                kind: o.kind,
+                enabled: o.enabled,
+                status_due: o.enabled
+                    && (forced || now.at >= timers.status.get(&o.id).copied().unwrap_or(0)),
+                fetched_at: o.fetched_at,
+                watch_started_at: o.watch_started_at,
+                team_requests: o.events.cell(EventKind::TeamReviewRequested).list,
+            })
+            .collect();
         let prs = self
             .data
             .prs
             .values()
+            .filter(|pr| pr.account == account)
             .map(|pr| {
-                let info = PrInfo {
-                    id: pr.id.clone(),
-                    owner: pr.owner.clone(),
-                    repo: pr.repo.clone(),
-                    number: pr.number,
-                    scope: self.enabled_scope_of(pr).map(|s| s.id.clone()),
-                    updated_at: pr.updated_at,
-                    state: pr.state,
-                    mine: pr.mine,
-                    checks: pr.checks,
-                    base_status: pr.base_status,
-                    mergeable: pr.mergeable,
-                    watched: self.is_watched(pr, now.at),
-                    collected: pr.collected,
-                    unreadable: pr.unreadable,
-                };
-                (pr.id.clone(), info)
+                (
+                    pr.id.clone(),
+                    PrInfo {
+                        id: pr.id.clone(),
+                        owner: pr.owner.clone(),
+                        repo: pr.repo.clone(),
+                        number: pr.number,
+                        owner_id: self.enabled_owner_of(pr).map(|o| o.id.clone()),
+                        updated_at: pr.updated_at,
+                        state: pr.state,
+                        mine: self.authored_by_me(pr),
+                        checks: pr.checks,
+                        base_status: pr.base_status,
+                        mergeable: pr.mergeable,
+                        watched: self.is_watched(pr, now.at),
+                        collected: pr.collected,
+                        unreadable: pr.unreadable,
+                    },
+                )
             })
             .collect();
-        let fetch = &self.data.fetch;
-        Plan {
+        let fetch = &record.fetch;
+        Some(Plan {
             now: now.at,
             due,
-            only_scope,
-            forced,
-            notifications,
+            account: account.to_string(),
+            login: record.login.clone(),
+            token,
             notif_last_modified: fetch.notif_last_modified.clone(),
             notif_since: fetch.notif_since.clone(),
-            scopes,
+            owners,
             registered_owners: self
                 .data
-                .scopes
+                .owners
                 .values()
-                .filter(|s| !s.removed && s.id != PUBLIC)
-                .map(|s| s.id.to_lowercase())
+                .filter(|o| o.account == account && !o.is_public())
+                .map(|o| o.name.to_lowercase())
                 .collect(),
             prs,
             pr_ids: fetch.pr_ids.clone(),
@@ -220,109 +261,113 @@ impl Engine {
                 .map(|r| (r.pr_id.clone(), r.since))
                 .collect(),
             pending_signals: fetch.pending_signals.clone(),
-            enabled_scopes: self
-                .data
-                .scopes
-                .values()
-                .filter(|s| !s.removed && s.enabled)
-                .map(|s| s.id.clone())
-                .collect(),
-            mismatched: self
-                .data
-                .scopes
-                .values()
-                .filter(|s| self.owner_mismatch(&s.id))
-                .map(|s| s.id.clone())
-                .collect(),
+            teams: record.teams.clone(),
             status_interval_minutes: self.data.config.status_interval_minutes,
             drop_after_days: self.data.config.drop_after_days,
-            include_team_requests: self.data.config.include_team_requests,
-            cost_cap: self.data.config.graphql_cost_cap,
-            costs: fetch.costs.clone(),
-        }
+        })
     }
 
-    /// Apply what a run brought back, then hand its `Ingest` to the core.
-    pub fn apply_fetch(&mut self, outcome: Outcome, now: &Now) {
-        self.clock_at = now.at;
-        self.dirty.fetch = true;
+    /// Apply what a run of the account brought back, then hand its `Ingest`
+    /// to the core.
+    pub fn apply_fetch(&mut self, account: &str, outcome: Outcome, now: &Now) {
+        self.clock = now.clone();
+        if !self.data.accounts.contains_key(account) {
+            return;
+        }
         let status_interval = self.data.config.status_interval_minutes.max(1) * 60;
         let reactions_interval = self.data.config.reactions_interval_minutes.max(1) * 60;
-        for scope in &outcome.status_ran {
-            self.timers
+        let poll = outcome
+            .poll_interval
+            .or(self.data.accounts[account].fetch.poll_interval)
+            .unwrap_or(DEFAULT_POLL_INTERVAL);
+        let timers = self.timers.entry(account.to_string()).or_default();
+        for owner in &outcome.status_ran {
+            timers
                 .status
-                .insert(scope.clone(), now.at + status_interval);
+                .insert(owner.clone(), now.at + status_interval);
         }
         if outcome.due.reactions {
-            self.timers.reactions = now.at + reactions_interval;
+            timers.reactions = now.at + reactions_interval;
         }
         if outcome.due.notifications {
-            let interval = outcome
-                .poll_interval
-                .or(self.data.fetch.poll_interval)
-                .unwrap_or(DEFAULT_POLL_INTERVAL);
-            self.timers.notifications = now.at + interval.max(1);
-            self.data.fetch.notif_checked_at = Some(now.at);
+            timers.notifications = now.at + poll.max(1);
         }
-        match &outcome.notifications_check {
-            Some(None) => self.notifications_failed = None,
-            Some(Some(message)) => {
-                self.notifications_failed = Some(warning(
-                    WarningKind::FetchFailed,
-                    Some(TokenRole::Notifications),
-                    message,
-                    Some(self.timers.notifications),
-                ));
+        if outcome.ran {
+            match &outcome.failed {
+                Some(message) => {
+                    self.failures.insert(
+                        account.to_string(),
+                        (message.clone(), now.at + status_interval),
+                    );
+                }
+                None => {
+                    self.failures.remove(account);
+                }
             }
-            None => {}
-        }
-        // A 401 is the stop-everything rule, not a failed check.
-        if outcome
-            .tokens
-            .get(NOTIFICATIONS)
-            .is_some_and(|t| t.invalid == Some(true))
-        {
-            self.notifications_failed = None;
         }
 
         if let Some(ingest) = outcome.ingest
-            && let Err(e) = self.ingest(ingest, now)
+            && let Err(e) = self.ingest(account, ingest, now)
         {
             crate::logging::error(format_args!("a fetch result was not applied: {e:?}"));
         }
 
-        let fetch = &mut self.data.fetch;
-        for (key, obs) in outcome.tokens {
-            let Some(token) = fetch.tokens.get_mut(&key).filter(|t| t.registered) else {
-                continue;
-            };
-            if obs.owner.is_some() {
-                token.owner = obs.owner;
-            }
-            if let Some(invalid) = obs.invalid {
-                token.invalid = invalid;
-                token.sso = obs.sso;
-                token.sso_urls = obs.sso_urls;
-            }
-            // Only a header updates these; a response without it keeps them.
-            if obs.expires_at.is_some() {
-                token.expires_at = obs.expires_at;
-            }
-            if obs.scopes.is_some() && key == NOTIFICATIONS {
-                token.scopes = obs.scopes;
-            }
+        self.dirty.accounts.insert(account.to_string());
+        let Some(record) = self.data.accounts.get_mut(account) else {
+            return;
+        };
+        if outcome.ran {
+            record.updated_at = Some(now.at);
+        }
+        if let Some(login) = outcome.login.filter(|l| !l.is_empty()) {
+            record.login = login;
+        }
+        if let Some(teams) = outcome.teams {
+            record.teams = teams;
+        }
+        let obs = outcome.token;
+        if let Some(invalid) = obs.invalid {
+            record.token.invalid = invalid;
+            record.token.sso = obs.sso;
+            record.token.sso_orgs = obs.sso_orgs;
+            record.token.sso_urls = obs.sso_urls;
+        }
+        if obs.expires_at.is_some() {
+            record.token.expires_at = obs.expires_at;
+        }
+        if obs.scopes.is_some() {
+            record.token.scopes = obs.scopes;
+        }
+        for scope in &outcome.checked {
+            record.token.refused.remove(scope);
+        }
+        record.token.refused.extend(outcome.refused);
+        if let Some(limit) = outcome.graphql {
+            record.graphql = Some(limit);
+        }
+        if let Some(limit) = outcome.rest {
+            record.rest = Some(limit);
+        }
+        if let Some(until) = outcome.stop {
+            record.stopped_until = Some(until);
+        }
+        let fetch = &mut record.fetch;
+        if outcome.due.notifications && outcome.notifications_checked {
+            fetch.notif_checked_at = Some(now.at);
         }
         for (key, id) in outcome.pr_ids {
             fetch.pr_ids.insert(key, id);
         }
         for thread in outcome.threads {
-            let from_at = fetch
-                .threads
-                .get(&thread.id)
-                .map_or(thread.from_at, |t| t.from_at.min(thread.from_at));
-            fetch
-                .threads
-                .insert(thread.id.clone(), ThreadRec { from_at, ..thread });
+            let merged = match fetch.threads.get(&thread.id) {
+                Some(old) => ThreadRec {
+                    mine_at: min_opt(old.mine_at, thread.mine_at),
+                    mention_at: min_opt(old.mention_at, thread.mention_at),
+                    ..thread
+                },
+                None => thread,
+            };
+            fetch.threads.insert(merged.id.clone(), merged);
         }
         for own in outcome.own {
             fetch.own.entry(own.id.clone()).or_insert(own);
@@ -359,208 +404,101 @@ impl Engine {
         if outcome.poll_interval.is_some() {
             fetch.poll_interval = outcome.poll_interval;
         }
-        fetch.costs.extend(outcome.costs);
-        fetch.costs.retain(|(at, _)| *at > now.at - HOUR);
-        if let Some((remaining, limit)) = outcome.rest {
-            fetch.usage.rest_remaining = Some(remaining);
-            fetch.usage.rest_limit = Some(limit);
-        }
-        if let Some((remaining, limit)) = outcome.graphql {
-            fetch.usage.graphql_remaining = Some(remaining);
-            fetch.usage.graphql_limit = Some(limit);
-        }
-        if outcome.cost_per_poll.is_some() {
-            fetch.usage.cost_per_poll = outcome.cost_per_poll;
-        }
-        if let Some((until, reason)) = outcome.stop {
-            fetch.stopped_until = Some(until);
-            fetch.stop_reason = Some(reason);
-        }
-
-        for (id, obs) in outcome.scopes {
-            let key = id.to_lowercase();
-            if let Some(teams) = obs.teams {
-                self.data.fetch.teams.insert(key, teams);
-            }
-            if let Some(warnings) = obs.warnings {
-                self.fetch_warnings.insert(id.clone(), warnings);
-            }
-            if (obs.kind.is_some() || obs.name.is_some())
-                && let Some(scope) = self.scope_mut(&id)
-            {
-                if obs.kind.is_some() {
-                    scope.kind = obs.kind;
-                }
-                if obs.name.is_some() {
-                    scope.name = obs.name;
-                }
-            }
-        }
-        for id in outcome.collected {
-            if self.data.prs.contains_key(&id)
-                && let Some(pr) = self.pr_mut(&id)
-            {
+        let collected: Vec<String> = outcome
+            .collected
+            .iter()
+            .map(|id| join_key(account, id))
+            .collect();
+        for key in collected {
+            if let Some(pr) = self.pr_mut(&key) {
                 pr.collected = true;
             }
         }
     }
 
-    /// What `token_test` learned about a scope's owner.
-    pub fn scope_observed(&mut self, scope: &str, kind: Option<ScopeKind>, name: Option<String>) {
-        if let Some(record) = self.scope_mut(scope) {
-            if kind.is_some() {
-                record.kind = kind;
-            }
-            if name.is_some() {
-                record.name = name;
-            }
-        }
-    }
-
-    /// `notifications`, `public` or a registered owner, as the key of its
-    /// token record. An unregistered owner, and Public while it is not added,
-    /// is `not_found`.
-    pub fn token_key(&self, target: &str) -> Result<String> {
-        if target.eq_ignore_ascii_case(NOTIFICATIONS) {
-            return Ok(NOTIFICATIONS.into());
-        }
-        self.registered_scope(target)
-            .map(|scope| scope.id.to_lowercase())
-            .ok_or_else(|| not_found(format!("scope {target}")))
-    }
-
-    /// The scope id a token key belongs to, if any.
-    pub fn scope_of_token(&self, key: &str) -> Option<String> {
-        if key == NOTIFICATIONS {
-            return None;
-        }
-        self.scope_key(key).map(str::to_string)
-    }
-
-    /// A token was saved to the Keychain: record the registration and
-    /// forget everything learned about the token it replaced.
-    pub fn token_saved(&mut self, key: &str) {
-        if key == NOTIFICATIONS {
-            self.notifications_failed = None;
-        }
-        self.data.fetch.tokens.insert(
-            key.to_string(),
-            TokenRec {
-                target: key.to_string(),
+    /// A token was saved for the account: record the registration and
+    /// forget what was learned about the token it replaced.
+    pub fn token_saved(&mut self, account: &str) {
+        self.failures.remove(account);
+        if let Some(record) = self.account_mut(account) {
+            record.token = TokenRec {
                 registered: true,
                 ..TokenRec::default()
-            },
-        );
-        self.dirty.fetch = true;
-    }
-
-    pub fn token_record(&self, key: &str) -> Option<&TokenRec> {
-        self.data.fetch.tokens.get(key).filter(|t| t.registered)
-    }
-
-    /// The scope's token belongs to another account than the notifications
-    /// token. DESIGN.md, "Tokens".
-    pub fn owner_mismatch(&self, scope: &str) -> bool {
-        let owner = self
-            .token_record(&scope.to_lowercase())
-            .and_then(|t| t.owner.clone());
-        match (self.viewer(), owner) {
-            (Some(viewer), Some(owner)) => !viewer.eq_ignore_ascii_case(&owner),
-            _ => false,
+            };
         }
     }
 
-    /// The owner of the notifications token, the reference for every other.
-    pub fn viewer(&self) -> Option<String> {
-        self.token_record(NOTIFICATIONS)
-            .and_then(|t| t.owner.clone())
+    /// The Keychain holds no token for the account.
+    pub fn token_cleared(&mut self, account: &str) {
+        if let Some(record) = self.account_mut(account)
+            && record.token.registered
+        {
+            record.token = TokenRec::default();
+        }
     }
 
-    /// Record what a test of the saved token found.
-    pub fn token_tested(&mut self, key: &str, test: TestRec, obs: TokenObs) {
-        if let Some(token) = self.data.fetch.tokens.get_mut(key).filter(|t| t.registered) {
-            token.last_test = Some(test);
-            if obs.owner.is_some() {
-                token.owner = obs.owner;
-            }
+    /// The account's login as GitHub spells it now.
+    pub fn login_seen(&mut self, account: &str, login: &str) {
+        if !login.is_empty()
+            && let Some(record) = self.account_mut(account)
+        {
+            record.login = login.to_string();
+        }
+    }
+
+    /// Record the result of a test of the saved token.
+    pub fn token_tested(
+        &mut self,
+        account: &str,
+        test: TestRec,
+        obs: TokenObs,
+        login: Option<String>,
+    ) {
+        if let Some(record) = self.account_mut(account) {
+            record.token.last_test = Some(test);
             if obs.expires_at.is_some() {
-                token.expires_at = obs.expires_at;
+                record.token.expires_at = obs.expires_at;
             }
-            if obs.scopes.is_some() && key == NOTIFICATIONS {
-                token.scopes = obs.scopes;
+            if obs.scopes.is_some() {
+                record.token.scopes = obs.scopes;
             }
-            self.dirty.fetch = true;
+            if obs.invalid == Some(false) {
+                record.token.invalid = false;
+            }
+            if let Some(login) = login.filter(|l| !l.is_empty()) {
+                record.login = login;
+            }
         }
     }
 
-    /// The owner of a token, read while testing another.
-    pub fn token_tested_owner(&mut self, key: &str, owner: String) {
-        if let Some(token) = self.data.fetch.tokens.get_mut(key).filter(|t| t.registered) {
-            token.owner = Some(owner);
-            self.dirty.fetch = true;
-        }
-    }
-
-    /// The `settings_status` response. DESIGN.md, "Wire format".
-    pub fn settings_status(&self) -> (proto::ApiUsage, Vec<proto::TokenStatus>) {
-        let fetch = &self.data.fetch;
-        let usage = proto::ApiUsage {
-            rest_remaining: fetch.usage.rest_remaining,
-            rest_limit: fetch.usage.rest_limit,
-            graphql_remaining: fetch.usage.graphql_remaining,
-            graphql_limit: fetch.usage.graphql_limit,
-            cost_per_poll: fetch.usage.cost_per_poll,
-            notifications_poll_interval: fetch.poll_interval,
-        };
-        let mut targets = vec![(NOTIFICATIONS.to_string(), NOTIFICATIONS.to_string())];
-        if self.registered_scope(PUBLIC).is_some() {
-            targets.push((PUBLIC.to_string(), PUBLIC.to_string()));
-        }
-        for scope in self.data.scopes.values() {
-            if !scope.removed && scope.id != PUBLIC {
-                targets.push((self.display_name(&scope.id), scope.id.to_lowercase()));
+    /// Usage a test or lookup ran into: the limits and a stop.
+    pub fn usage_seen(
+        &mut self,
+        account: &str,
+        graphql: Option<LimitRec>,
+        rest: Option<LimitRec>,
+        stop: Option<i64>,
+    ) {
+        if let Some(record) = self.account_mut(account) {
+            if graphql.is_some() {
+                record.graphql = graphql;
+            }
+            if rest.is_some() {
+                record.rest = rest;
+            }
+            if stop.is_some() {
+                record.stopped_until = stop;
             }
         }
-        let tokens = targets
-            .into_iter()
-            .map(|(target, key)| {
-                let record = self.token_record(&key);
-                proto::TokenStatus {
-                    target,
-                    registered: record.is_some(),
-                    owner: record.and_then(|t| t.owner.clone()),
-                    expires_at: record.and_then(|t| t.expires_at),
-                    // Only the classic PAT has scopes.
-                    scopes: record
-                        .filter(|_| key == NOTIFICATIONS)
-                        .and_then(|t| t.scopes.clone()),
-                    last_test: record.and_then(|t| t.last_test.as_ref()).map(|test| {
-                        proto::LastTest {
-                            at: test.at,
-                            results: test.results.iter().map(wire_test_item).collect(),
-                        }
-                    }),
-                    sso_urls: record.map(|t| t.sso_urls.clone()).unwrap_or_default(),
-                    warnings: if key == NOTIFICATIONS {
-                        self.token_state_warnings(&key, TokenRole::Notifications)
-                    } else {
-                        let mut warnings = self.token_state_warnings(&key, TokenRole::Scope);
-                        if let Some(scope) = self.scope_key(&key) {
-                            warnings.extend(self.owner_mismatch_warning(scope));
-                        }
-                        warnings
-                    },
-                }
-            })
-            .collect();
-        (usage, tokens)
     }
 
-    /// The warnings of the scopes a `refresh` covered, without repeats.
-    pub fn refresh_warnings(&self, scope: Option<&str>) -> Vec<proto::Warning> {
+    /// The warnings of the accounts a `refresh` covered, without repeats.
+    pub fn refresh_warnings(&self, account: Option<&str>) -> Vec<proto::Warning> {
         let mut out: Vec<proto::Warning> = Vec::new();
-        for record in self.data.scopes.values() {
-            if record.removed || scope.is_some_and(|s| s != record.id) {
+        let mut list: Vec<&AccountRec> = self.data.accounts.values().collect();
+        list.sort_by_key(|a| a.seq);
+        for record in list {
+            if account.is_some_and(|a| a != record.id) {
                 continue;
             }
             for warning in self.warnings(record) {
@@ -569,180 +507,214 @@ impl Engine {
                 }
             }
         }
+        if out.is_empty() {
+            out.extend(self.keychain_warning());
+        }
         out
     }
 
-    /// DESIGN.md, "Wire format" and "First run, failures and empty states":
-    /// the warnings of one scope, from the saved fetch state and the last run.
-    /// The warnings about one registered token itself, for its scope and for
-    /// `settings_status`. A scope token's owner mismatch is added by the
-    /// caller, which knows the scope.
-    fn token_state_warnings(&self, key: &str, role: TokenRole) -> Vec<proto::Warning> {
-        let now = self.clock_at;
-        let role = Some(role);
+    fn keychain_warning(&self) -> Option<proto::Warning> {
+        match self.keychain {
+            proto::KeychainState::Ok => None,
+            proto::KeychainState::Unavailable => Some(warning(
+                WarningKind::KeychainUnavailable,
+                None,
+                None,
+                "Couldn't read tokens from Keychain".into(),
+                None,
+                None,
+            )),
+            proto::KeychainState::Unreadable => Some(warning(
+                WarningKind::TokensUnreadable,
+                None,
+                None,
+                "Saved tokens are unreadable".into(),
+                None,
+                None,
+            )),
+        }
+    }
+
+    /// DESIGN.md, "Wire format" and "Showing warnings": the warnings of one
+    /// account, in the order of that table.
+    pub(super) fn warnings(&self, account: &AccountRec) -> Vec<proto::Warning> {
+        let now = self.clock.at;
+        let id = Some(account.id.as_str());
         let mut out = Vec::new();
-        let Some(token) = self.token_record(key) else {
-            return out;
-        };
-        let expired = token.expires_at.is_some_and(|at| at <= now);
-        if token.invalid || expired {
-            let message = if expired {
-                "The token has expired"
-            } else {
-                "The token was rejected"
-            };
-            out.push(warning(WarningKind::TokenInvalid, role, message, None));
+        out.extend(self.keychain_warning());
+        let token = &account.token;
+        let keychain_ok = self.keychain == proto::KeychainState::Ok;
+        if !token.registered {
+            if keychain_ok {
+                out.push(warning(
+                    WarningKind::NoToken,
+                    id,
+                    None,
+                    "No token".into(),
+                    None,
+                    None,
+                ));
+            }
+        } else if self.token_unusable(account, now) {
+            out.push(warning(
+                WarningKind::TokenInvalid,
+                id,
+                None,
+                "Token is invalid".into(),
+                None,
+                None,
+            ));
         } else if let Some(at) = token.expires_at.filter(|at| at - now <= EXPIRY_WARNING) {
             out.push(warning(
                 WarningKind::TokenExpiring,
-                role,
-                "The token expires soon",
+                id,
+                None,
+                format!("Token expires in {}", days_left(at, now)),
                 Some(at),
-            ));
-        }
-        if token.sso {
-            out.push(warning(
-                WarningKind::SsoRequired,
-                role,
-                "SSO authorization required",
                 None,
             ));
         }
-        out
-    }
-
-    fn owner_mismatch_warning(&self, scope: &str) -> Option<proto::Warning> {
-        if !self.owner_mismatch(scope) {
-            return None;
+        let usable = token.registered && !self.token_unusable(account, now) && keychain_ok;
+        if usable && let Some((_, until)) = self.failures.get(&account.id) {
+            let minutes = ((until - now) + 59).div_euclid(60).max(1);
+            out.push(warning(
+                WarningKind::FetchFailed,
+                id,
+                None,
+                format!("Couldn't reach GitHub · retrying in {minutes} min"),
+                Some(*until),
+                None,
+            ));
         }
-        let viewer = self.viewer().unwrap_or_default();
-        let owner = self
-            .token_record(&scope.to_lowercase())
-            .and_then(|t| t.owner.clone())
-            .unwrap_or_default();
-        Some(warning(
-            WarningKind::TokenOwnerMismatch,
-            Some(TokenRole::Scope),
-            &format!("The token belongs to {owner}, not {viewer}"),
-            None,
-        ))
-    }
-
-    pub(super) fn warnings(&self, scope: &ScopeRec) -> Vec<proto::Warning> {
-        use TokenRole::{Notifications, Scope};
-        let now = self.clock_at;
-        let mut out = Vec::new();
-        let token_warnings = |key: &str, role: TokenRole, out: &mut Vec<proto::Warning>| {
-            if self.token_record(key).is_none() {
-                out.push(warning(
-                    WarningKind::NoToken,
-                    Some(role),
-                    "Add a token in Settings",
-                    None,
-                ));
-                return;
-            }
-            out.extend(self.token_state_warnings(key, role));
-        };
-        token_warnings(NOTIFICATIONS, Notifications, &mut out);
-        token_warnings(&scope.id.to_lowercase(), Scope, &mut out);
-        out.extend(self.owner_mismatch_warning(&scope.id));
-        if let Some(until) = self.stopped_until(now) {
-            let reason = self
-                .data
-                .fetch
-                .stop_reason
-                .clone()
-                .unwrap_or_else(|| "Rate limited".into());
+        if let Some(until) = self.stopped_until(&account.id, now) {
+            let at = jiff::Timestamp::from_second(until)
+                .map(|t| {
+                    t.to_zoned(self.clock.tz.clone())
+                        .strftime("%H:%M")
+                        .to_string()
+                })
+                .unwrap_or_default();
             out.push(warning(
                 WarningKind::RateLimited,
+                id,
                 None,
-                &reason,
+                format!("Polling paused until {at} · GitHub's limit reached"),
                 Some(until),
+                None,
             ));
         }
-        let cost: i64 = self
-            .data
-            .fetch
-            .costs
-            .iter()
-            .filter(|(at, _)| *at > now - HOUR)
-            .map(|(_, cost)| cost)
-            .sum();
-        let cap = self.data.config.graphql_cost_cap;
-        if cost * 100 > cap * NEAR_CAP_PERCENT {
+        let near = |limit: &Option<LimitRec>| {
+            limit.is_some_and(|l| l.limit > 0 && l.remaining * 100 < l.limit * NEAR_LIMIT_PERCENT)
+        };
+        if near(&account.graphql) {
             out.push(warning(
-                WarningKind::CostNearCap,
+                WarningKind::GraphqlNearLimit,
+                id,
                 None,
-                &format!("GraphQL cost {cost} of {cap} in the last hour"),
+                "GraphQL API usage is over 80% of GitHub's limit".into(),
+                None,
                 None,
             ));
         }
-        // Not while the notifications token is expired or rejected: then
-        // `token_invalid` says why nothing is checked.
-        let usable = self
-            .token_record(NOTIFICATIONS)
-            .is_some_and(|t| !t.invalid && t.expires_at.is_none_or(|at| at > now));
-        if let Some(failed) = self.notifications_failed.as_ref().filter(|_| usable) {
-            out.push(failed.clone());
+        if near(&account.rest) {
+            out.push(warning(
+                WarningKind::RestNearLimit,
+                id,
+                None,
+                "REST API usage is over 80% of GitHub's limit".into(),
+                None,
+                None,
+            ));
         }
-        if let Some(fetch) = self.fetch_warnings.get(&scope.id) {
-            out.extend(fetch.iter().cloned());
+        if token.registered {
+            let mut missing: Vec<&str> = token
+                .scopes
+                .as_deref()
+                .map(missing_scopes)
+                .unwrap_or_default();
+            for scope in REQUIRED_SCOPES {
+                if token.refused.contains(scope) && !missing.contains(&scope) {
+                    missing.push(scope);
+                }
+            }
+            missing.sort_by_key(|s| REQUIRED_SCOPES.iter().position(|r| r == s));
+            if !missing.is_empty() {
+                out.push(warning(
+                    WarningKind::ScopeMissing,
+                    id,
+                    None,
+                    format!("Token is missing {}", missing.join(", ")),
+                    None,
+                    None,
+                ));
+            }
         }
-        let failing: BTreeSet<String> = self
-            .data
+        if token.registered && token.sso {
+            let url = token.sso_urls.first().cloned();
+            let owners: Vec<&OwnerRec> = self
+                .owners_of(&account.id)
+                .into_iter()
+                .filter(|o| o.github_id.is_some_and(|g| token.sso_orgs.contains(&g)))
+                .collect();
+            let unnamed = token.sso_orgs.is_empty()
+                || token
+                    .sso_orgs
+                    .iter()
+                    .any(|g| !owners.iter().any(|o| o.github_id == Some(*g)));
+            for owner in owners {
+                out.push(warning(
+                    WarningKind::SsoRequired,
+                    id,
+                    Some(&owner.id),
+                    format!("SSO authorization required for {}", owner.name),
+                    None,
+                    url.clone(),
+                ));
+            }
+            if unnamed {
+                out.push(warning(
+                    WarningKind::SsoRequired,
+                    id,
+                    None,
+                    "SSO authorization required".into(),
+                    None,
+                    url,
+                ));
+            }
+        }
+        let mut failing: Vec<(String, String)> = account
             .fetch
             .retries
             .values()
             .filter(|r| r.failures >= EVENTS_FAILURES_WARNED)
-            .filter_map(|r| self.data.prs.get(&r.pr_id))
-            .filter(|pr| self.scope_of(pr).is_some_and(|s| s.id == scope.id))
-            .map(PrRec::key)
+            .filter_map(|r| self.data.prs.get(&join_key(&account.id, &r.pr_id)))
+            .filter_map(|pr| {
+                let owner = self.owner_of(pr)?;
+                Some((
+                    owner.id.clone(),
+                    format!("{}/{} #{}", pr.owner, pr.repo, pr.number),
+                ))
+            })
             .collect();
-        for key in failing {
+        failing.sort();
+        failing.dedup();
+        for (owner, pr) in failing {
             out.push(warning(
                 WarningKind::EventsFetchFailed,
-                Some(Scope),
-                &key,
+                id,
+                Some(&owner),
+                format!("Couldn't fetch events for {pr} · retrying"),
+                None,
                 None,
             ));
         }
         out
     }
-
-    /// Lowercase owner keys of every registered token, for the unreadable
-    /// state and tests.
-    pub fn registered_tokens(&self) -> BTreeMap<String, bool> {
-        self.data
-            .fetch
-            .tokens
-            .iter()
-            .map(|(k, t)| (k.clone(), t.registered))
-            .collect()
-    }
 }
 
-fn wire_test_item(item: &TestItem) -> proto::TestResult {
-    let outcome = match item.outcome.as_str() {
-        "ok" => Lenient::Known(proto::TestOutcome::Ok),
-        "failed" => Lenient::Known(proto::TestOutcome::Failed),
-        "unverifiable" => Lenient::Known(proto::TestOutcome::Unverifiable),
-        other => Lenient::Unknown(other.to_string()),
-    };
-    proto::TestResult {
-        item: item.item.clone(),
-        outcome,
-        missing: item.missing.clone(),
-        reason: item.reason.clone(),
-    }
-}
-
-/// The stored form of a test result.
-pub fn stored_test_item(result: &proto::TestResult) -> TestItem {
-    TestItem {
-        item: result.item.clone(),
-        outcome: result.outcome.as_text(),
-        missing: result.missing.clone(),
-        reason: result.reason.clone(),
+fn min_opt(a: Option<i64>, b: Option<i64>) -> Option<i64> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
     }
 }

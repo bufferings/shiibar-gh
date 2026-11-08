@@ -1,12 +1,15 @@
 //! shiibar-gh: command line client of the daemon. Every command is one request
-//! over the socket. DESIGN.md, sections "CLI" and "CLI exit codes".
+//! over the socket. DESIGN.md, sections "CLI (AI integration)" and "CLI exit
+//! codes".
 
 use shiibar_gh_client::{ClientError, request, request_json, socket_path_from_env};
 use shiibar_gh_proto::{
-    AckResponse, ActivityResponse, Card, ConfigResponse, Filter, ListResponse, OpenResponse,
-    RefreshResponse, Request, Row, Scope, ScopeLookupResponse, ScopesResponse,
-    SettingsStatusResponse, StatusResponse, TestResult, TokenTestResponse, Warning,
+    AccountResponse, AccountsResponse, AckResponse, ActivityResponse, Card, ConfigResponse,
+    EventKind, EventsResponse, ExclusionsResponse, ListResponse, OpenResponse, OwnerLookupResponse,
+    PrFilter, RefreshResponse, Request, Row, StatusResponse, TestResult, TokenTestResponse,
+    Warning,
 };
+use std::collections::BTreeMap;
 use std::io::{BufRead, IsTerminal};
 use std::path::Path;
 use std::process::ExitCode;
@@ -15,28 +18,49 @@ const OK: u8 = 0;
 const ERROR: u8 = 1;
 const NOT_FOUND: u8 = 2;
 
-const FILTER_FLAGS: &str =
-    "[--scope <scope>] [--needs-action] [--mine|--others] [--snoozed] [--json]";
-
 /// `(command words, arguments, what it does)`.
-const COMMANDS: [(&str, &str, &str); 23] = [
-    ("list", FILTER_FLAGS, "Print the PR cards"),
+const COMMANDS: [(&str, &str, &str); 30] = [
+    (
+        "list",
+        "[--account <a>] [--owner <o>] [--todo] [--authored|--assigned|--review-requested] [--snoozed] [--json]",
+        "Print the PR cards of the PRs tab; --snoozed prints the Snoozed section",
+    ),
     (
         "status",
-        "<pr> [--json]",
+        "<pr> --account <a> [--json]",
         "Print the state label and Review, Checks and Base of a PR",
     ),
     (
         "activity",
-        FILTER_FLAGS,
+        "[--account <a>] [--owner <o>]... [--todo] [--authored|--assigned|--review-requested] [--json]",
         "Print the rows of the shown cards, newest first",
     ),
-    ("done", "<row>", "Mark a Needs action row as done"),
-    ("undone", "<row>", "Mark a Needs action row as not done"),
-    ("snooze", "<pr>", "Snooze a PR until the next Return time"),
-    ("unsnooze", "<pr>", "End the Snooze of a PR"),
-    ("refresh", "[--scope <scope>]", "Fetch now"),
-    ("open", "<pr|row>", "Print the URL of a PR or row"),
+    (
+        "done",
+        "[--off] <row>",
+        "Mark a Todo row done, or not done with --off",
+    ),
+    (
+        "todo",
+        "[--off] <row>",
+        "Add a row to Todo, or remove it with --off",
+    ),
+    (
+        "snooze",
+        "<pr> --account <a>",
+        "Snooze a PR until the next Return time",
+    ),
+    ("unsnooze", "<pr> --account <a>", "End the Snooze of a PR"),
+    (
+        "refresh",
+        "[--account <a>]",
+        "Fetch now and return once applied; reads the Keychain again when it could not be read",
+    ),
+    (
+        "open",
+        "<pr|row> [--account <a>]",
+        "Print the URL of a PR (needs --account) or of a row",
+    ),
     ("config get", "<key> [--json]", "Print a setting"),
     ("config set", "<key> <value>", "Change a setting"),
     (
@@ -44,57 +68,97 @@ const COMMANDS: [(&str, &str, &str); 23] = [
         "",
         "Set aside an unreadable database and start empty",
     ),
-    ("scope list", "[--json]", "Print the scopes"),
     (
-        "scope add",
-        "<owner>|public",
-        "Register an owner, or Public",
+        "account list",
+        "[--json]",
+        "Print the accounts and their owners",
     ),
     (
-        "scope remove",
-        "<owner>|public",
-        "Remove an owner or Public, keeping its state",
-    ),
-    ("scope enable", "<scope>", "Enable a scope"),
-    ("scope disable", "<scope>", "Disable a scope"),
-    (
-        "scope notify",
-        "<scope> on|off",
-        "Turn the notifications of a scope on or off",
+        "account add",
+        "[--json]",
+        "Add the account the token on standard input belongs to",
     ),
     (
-        "scope lookup",
-        "<owner> [--json]",
-        "Print whether an owner is an organization (org) or a user, without adding it",
+        "account remove",
+        "<account>",
+        "Remove an account, its owners, PRs and its token",
     ),
     (
-        "scope color",
-        "<scope> gray|green|blue|purple|pink|beige",
-        "Set the background color of a scope",
+        "account color",
+        "<account> none|red|orange|yellow|green|blue|purple",
+        "Set the color of an account",
     ),
     (
         "token set",
-        "notifications|<scope>",
-        "Save the token read from the first line of standard input",
+        "--account <a>",
+        "Replace the token with the one on standard input, if it belongs to the account",
     ),
     (
         "token test",
-        "notifications|<scope> [--json]",
-        "Test the token piped to standard input, or the saved one. Without a\n      \
-         token to pipe, run it from a terminal or with </dev/null: an open pipe\n      \
-         that never closes is read until it does",
+        "[--account <a>] [--json]",
+        "Test the token piped to standard input, or the saved one. Without\n      \
+         --account a piped token is required. Without a token to pipe, run it\n      \
+         from a terminal or with </dev/null",
     ),
     (
-        "settings status",
-        "[--json]",
-        "Print API usage and the state of each token",
+        "token reset",
+        "",
+        "Delete the Keychain item: every account is left without a token",
+    ),
+    (
+        "owner lookup",
+        "<owner> --account <a> [--json]",
+        "Print an owner's login, kind (org or user) and id, without adding it",
+    ),
+    (
+        "owner list",
+        "[--account <a>] [--json]",
+        "Print the owners. With --account, --json prints {\"ok\":true,\"owners\":[...]}\n      \
+         for that account; without it, the account_list response",
+    ),
+    (
+        "owner add",
+        "<owner>|public --account <a> [--json]",
+        "Add an owner (looked up on GitHub), or Public",
+    ),
+    (
+        "owner remove",
+        "<owner> --account <a>",
+        "Remove an owner and its PRs, Done marks, snoozes and settings",
+    ),
+    ("owner enable", "<owner> --account <a>", "Enable an owner"),
+    ("owner disable", "<owner> --account <a>", "Disable an owner"),
+    (
+        "owner notify",
+        "<owner> on|off --account <a>",
+        "Notify for the owner",
+    ),
+    (
+        "owner skip-drafts",
+        "<owner> on|off --account <a>",
+        "Skip draft pull requests",
+    ),
+    (
+        "owner events",
+        "<owner> --account <a> [--json] | set <owner> <event> list|todo|notify on|off --account <a> | copy <from-owner> <to-owner> --account <a>",
+        "Print, change or copy the event table",
+    ),
+    (
+        "owner exclusions",
+        "<owner> --account <a> [--json] | set <owner> repo|user <name> hidden|list-only --account <a> | remove <owner> repo|user <name> --account <a>",
+        "Print, set or remove Exclusions",
+    ),
+    (
+        "help",
+        "",
+        "--json prints the daemon's response line unchanged (DESIGN.md, Wire format)",
     ),
 ];
 
 fn usage(prefix: &str) -> String {
     let mut text = String::from("usage:\n");
     for (name, args, about) in COMMANDS {
-        if name == prefix || name.starts_with(&format!("{prefix} ")) || prefix.is_empty() {
+        if prefix.is_empty() || name == prefix || name.starts_with(&format!("{prefix} ")) {
             text.push_str(&format!("  shiibar-gh {name} {args}\n      {about}\n"));
         }
     }
@@ -103,33 +167,43 @@ fn usage(prefix: &str) -> String {
 
 struct UsageError(String);
 
-/// The split of a command's arguments into flags and positionals.
+/// The split of a command's arguments into flags, values and positionals.
+#[derive(Default)]
 struct Parsed {
     flags: Vec<String>,
-    scope: Option<String>,
+    account: Option<String>,
+    owners: Vec<String>,
     positional: Vec<String>,
 }
 
-fn parse(args: &[String], allowed: &[&str], takes_scope: bool) -> Result<Parsed, UsageError> {
-    let mut parsed = Parsed {
-        flags: Vec::new(),
-        scope: None,
-        positional: Vec::new(),
-    };
+/// `allowed` lists the bare flags; `--account` and `--owner` take a value
+/// when listed.
+fn parse(args: &[String], allowed: &[&str]) -> Result<Parsed, UsageError> {
+    let mut parsed = Parsed::default();
     let mut args = args.iter();
     while let Some(arg) = args.next() {
-        if takes_scope && arg == "--scope" {
-            let value = args
-                .next()
-                .ok_or_else(|| UsageError("--scope needs a value".into()))?;
-            parsed.scope = Some(value.clone());
-        } else if arg.starts_with("--") {
-            if !allowed.contains(&arg.as_str()) {
-                return Err(UsageError(format!("unknown flag: {arg}")));
+        match arg.as_str() {
+            "--account" | "--owner" if allowed.contains(&arg.as_str()) => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| UsageError(format!("{arg} needs a value")))?
+                    .clone();
+                if arg == "--account" {
+                    if parsed.account.is_some() {
+                        return Err(UsageError("--account is given twice".into()));
+                    }
+                    parsed.account = Some(value);
+                } else {
+                    parsed.owners.push(value);
+                }
             }
-            parsed.flags.push(arg.clone());
-        } else {
-            parsed.positional.push(arg.clone());
+            flag if flag.starts_with("--") => {
+                if !allowed.contains(&flag) {
+                    return Err(UsageError(format!("unknown flag: {flag}")));
+                }
+                parsed.flags.push(flag.to_string());
+            }
+            _ => parsed.positional.push(arg.clone()),
         }
     }
     Ok(parsed)
@@ -140,11 +214,20 @@ impl Parsed {
         self.flags.iter().any(|f| f == flag)
     }
 
-    fn one(&self, name: &str) -> Result<String, UsageError> {
-        match self.positional.as_slice() {
-            [value] => Ok(value.clone()),
-            _ => Err(UsageError(format!("expected one {name}"))),
-        }
+    fn json(&self) -> bool {
+        self.has("--json")
+    }
+
+    /// DESIGN.md, "CLI": commands about an owner or a PR need `--account`.
+    fn account(&self) -> Result<String, UsageError> {
+        self.account
+            .clone()
+            .ok_or_else(|| UsageError("--account <account> is required".into()))
+    }
+
+    fn args<const N: usize>(&self, names: &str) -> Result<[String; N], UsageError> {
+        <[String; N]>::try_from(self.positional.clone())
+            .map_err(|_| UsageError(format!("expected {names}")))
     }
 
     fn none(&self) -> Result<(), UsageError> {
@@ -153,57 +236,56 @@ impl Parsed {
             Some(extra) => Err(UsageError(format!("unexpected argument: {extra}"))),
         }
     }
-}
 
-fn filter(parsed: &Parsed) -> Result<Filter, UsageError> {
-    parsed.none()?;
-    if parsed.has("--mine") && parsed.has("--others") {
-        return Err(UsageError("--mine and --others exclude each other".into()));
-    }
-    Ok(Filter {
-        scope: parsed.scope.clone(),
-        needs_action: parsed.has("--needs-action"),
-        mine: parsed.has("--mine"),
-        others: parsed.has("--others"),
-        snoozed: parsed.has("--snoozed"),
-    })
-}
-
-const FILTER_ALLOWED: [&str; 5] = [
-    "--needs-action",
-    "--mine",
-    "--others",
-    "--snoozed",
-    "--json",
-];
-
-/// A `<pr>` is `owner/repo#number`; anything else names a row.
-fn open_request(target: String) -> Request {
-    if target.contains('/') && target.contains('#') {
-        Request::Open {
-            pr: Some(target),
-            row: None,
-        }
-    } else {
-        Request::Open {
-            pr: None,
-            row: Some(target),
+    fn filter(&self) -> Result<PrFilter, UsageError> {
+        let chosen: Vec<PrFilter> = [
+            ("--authored", PrFilter::Authored),
+            ("--assigned", PrFilter::Assigned),
+            ("--review-requested", PrFilter::ReviewRequested),
+        ]
+        .into_iter()
+        .filter(|(flag, _)| self.has(flag))
+        .map(|(_, f)| f)
+        .collect();
+        match chosen.as_slice() {
+            [] => Ok(PrFilter::All),
+            [one] => Ok(*one),
+            _ => Err(UsageError(
+                "--authored, --assigned and --review-requested exclude each other".into(),
+            )),
         }
     }
+}
+
+fn on_off(text: &str) -> Result<bool, UsageError> {
+    match text {
+        "on" => Ok(true),
+        "off" => Ok(false),
+        other => Err(UsageError(format!("expected on or off, not {other}"))),
+    }
+}
+
+/// A wire enum from its text, or a usage error.
+fn wire<T: serde::de::DeserializeOwned>(text: &str, what: &str) -> Result<T, UsageError> {
+    serde_json::from_value(serde_json::Value::String(text.to_string()))
+        .map_err(|_| UsageError(format!("unknown {what}: {text}")))
 }
 
 enum Output {
     Nothing,
     Warnings,
     Tests,
-    Settings,
     Cards,
     Rows,
     Card,
     Url,
     Value,
-    Scopes,
+    Accounts,
+    Account,
+    Owners,
     Lookup,
+    Events,
+    Exclusions,
 }
 
 struct Command {
@@ -220,70 +302,18 @@ impl Command {
             json: false,
         }
     }
-}
 
-fn one_arg(args: &[String], name: &str) -> Result<String, UsageError> {
-    parse(args, &[], false)?.one(name)
-}
-
-fn scope_command(sub: &str, rest: &[String]) -> Result<Command, UsageError> {
-    Ok(match sub {
-        "list" => {
-            let parsed = parse(rest, &["--json"], false)?;
-            parsed.none()?;
-            Command {
-                request: Request::ScopeList,
-                output: Output::Scopes,
-                json: parsed.has("--json"),
-            }
+    fn new(request: Request, output: Output, json: bool) -> Self {
+        Self {
+            request,
+            output,
+            json,
         }
-        "add" => Command::quiet(Request::ScopeAdd {
-            owner: one_arg(rest, "owner")?,
-        }),
-        "remove" => Command::quiet(Request::ScopeRemove {
-            owner: one_arg(rest, "owner")?,
-        }),
-        "enable" => Command::quiet(Request::ScopeEnable {
-            scope: one_arg(rest, "scope")?,
-        }),
-        "disable" => Command::quiet(Request::ScopeDisable {
-            scope: one_arg(rest, "scope")?,
-        }),
-        "notify" => match rest {
-            [scope, on] if on == "on" || on == "off" => Command::quiet(Request::ScopeNotify {
-                scope: scope.clone(),
-                on: on == "on",
-            }),
-            _ => return Err(UsageError("expected <scope> on|off".into())),
-        },
-        "lookup" => {
-            let parsed = parse(rest, &["--json"], false)?;
-            Command {
-                request: Request::ScopeLookup {
-                    owner: parsed.one("owner")?,
-                },
-                output: Output::Lookup,
-                json: parsed.has("--json"),
-            }
-        }
-        "color" => match rest {
-            [scope, color] => {
-                // An unknown color is an invalid value: exit 1 like `invalid`.
-                let color = serde_json::from_value(serde_json::Value::String(color.clone()))
-                    .map_err(|_| UsageError(format!("unknown color: {color}")))?;
-                Command::quiet(Request::ScopeColor {
-                    scope: scope.clone(),
-                    color,
-                })
-            }
-            _ => return Err(UsageError("expected <scope> <color>".into())),
-        },
-        other => return Err(UsageError(format!("unknown command: scope {other}"))),
-    })
+    }
 }
 
 /// The first line of standard input, without its line ending. `None` when
-/// nothing came.
+/// nothing came. DESIGN.md, "CLI": tokens come from standard input only.
 fn stdin_token() -> Option<String> {
     let mut line = String::new();
     std::io::stdin().lock().read_line(&mut line).ok()?;
@@ -291,170 +321,361 @@ fn stdin_token() -> Option<String> {
     (!token.is_empty()).then_some(token)
 }
 
-/// docs/tasks/M2.md, "CLI": tokens come from standard input, never from
-/// arguments.
+fn account_command(sub: &str, rest: &[String]) -> Result<Command, UsageError> {
+    Ok(match sub {
+        "list" => {
+            let p = parse(rest, &["--json"])?;
+            p.none()?;
+            Command::new(Request::AccountList, Output::Accounts, p.json())
+        }
+        "add" => {
+            let p = parse(rest, &["--json"])?;
+            p.none()?;
+            let token = stdin_token()
+                .ok_or_else(|| UsageError("pipe the token to standard input".into()))?;
+            Command::new(Request::AccountAdd { token }, Output::Account, p.json())
+        }
+        "remove" => {
+            let p = parse(rest, &[])?;
+            let [account] = p.args("<account>")?;
+            Command::quiet(Request::AccountRemove { account })
+        }
+        "color" => {
+            let p = parse(rest, &[])?;
+            let [account, color] = p.args("<account> <color>")?;
+            Command::quiet(Request::AccountColor {
+                account,
+                color: wire(&color, "color")?,
+            })
+        }
+        other => return Err(UsageError(format!("unknown command: account {other}"))),
+    })
+}
+
 fn token_command(sub: &str, rest: &[String]) -> Result<Command, UsageError> {
     Ok(match sub {
         "set" => {
-            let target = one_arg(rest, "target")?;
+            let p = parse(rest, &["--account"])?;
+            p.none()?;
+            let account = p.account()?;
             let token = stdin_token()
                 .ok_or_else(|| UsageError("pipe the token to standard input".into()))?;
-            Command::quiet(Request::TokenSet { target, token })
+            Command::quiet(Request::TokenSet { account, token })
         }
         "test" => {
-            let parsed = parse(rest, &["--json"], false)?;
-            let target = parsed.one("target")?;
+            let p = parse(rest, &["--account", "--json"])?;
+            p.none()?;
             let token = if std::io::stdin().is_terminal() {
                 None
             } else {
                 stdin_token()
             };
-            Command {
-                request: Request::TokenTest { target, token },
-                output: Output::Tests,
-                json: parsed.has("--json"),
+            if p.account.is_none() && token.is_none() {
+                return Err(UsageError(
+                    "without --account, pipe the token to standard input".into(),
+                ));
             }
+            Command::new(
+                Request::TokenTest {
+                    account: p.account.clone(),
+                    token,
+                },
+                Output::Tests,
+                p.json(),
+            )
+        }
+        "reset" => {
+            parse(rest, &[])?.none()?;
+            Command::quiet(Request::TokenReset)
         }
         other => return Err(UsageError(format!("unknown command: token {other}"))),
     })
 }
 
-fn settings_command(sub: &str, rest: &[String]) -> Result<Command, UsageError> {
+fn owner_command(sub: &str, rest: &[String]) -> Result<Command, UsageError> {
+    let p = parse(rest, &["--account", "--json"])?;
+    if sub == "list" {
+        p.none()?;
+        return Ok(Command::new(Request::AccountList, Output::Owners, p.json()));
+    }
+    let account = p.account()?;
+    let json = p.json();
     Ok(match sub {
-        "status" => {
-            let parsed = parse(rest, &["--json"], false)?;
-            parsed.none()?;
-            Command {
-                request: Request::SettingsStatus,
-                output: Output::Settings,
-                json: parsed.has("--json"),
-            }
+        "lookup" => {
+            let [owner] = p.args("<owner>")?;
+            Command::new(
+                Request::OwnerLookup { account, owner },
+                Output::Lookup,
+                json,
+            )
         }
-        other => return Err(UsageError(format!("unknown command: settings {other}"))),
+        "add" => {
+            let [owner] = p.args("<owner>")?;
+            Command::new(Request::OwnerAdd { account, owner }, Output::Account, json)
+        }
+        "remove" => {
+            let [owner] = p.args("<owner>")?;
+            Command::quiet(Request::OwnerRemove { account, owner })
+        }
+        "enable" => {
+            let [owner] = p.args("<owner>")?;
+            Command::quiet(Request::OwnerEnable { account, owner })
+        }
+        "disable" => {
+            let [owner] = p.args("<owner>")?;
+            Command::quiet(Request::OwnerDisable { account, owner })
+        }
+        "notify" => {
+            let [owner, on] = p.args("<owner> on|off")?;
+            Command::quiet(Request::OwnerNotify {
+                account,
+                owner,
+                on: on_off(&on)?,
+            })
+        }
+        "skip-drafts" => {
+            let [owner, on] = p.args("<owner> on|off")?;
+            Command::quiet(Request::OwnerSkipDrafts {
+                account,
+                owner,
+                on: on_off(&on)?,
+            })
+        }
+        "events" => match p.positional.first().map(String::as_str) {
+            Some("set") => {
+                let [_, owner, event, column, on] =
+                    p.args("set <owner> <event> list|todo|notify on|off")?;
+                Command::new(
+                    Request::OwnerEventsSet {
+                        account,
+                        owner,
+                        event: wire(&event, "event")?,
+                        column: wire(&column, "column")?,
+                        on: on_off(&on)?,
+                    },
+                    Output::Events,
+                    json,
+                )
+            }
+            Some("copy") => {
+                let [_, from_owner, to_owner] = p.args("copy <from-owner> <to-owner>")?;
+                Command::new(
+                    Request::OwnerEventsCopy {
+                        account,
+                        from_owner,
+                        to_owner,
+                    },
+                    Output::Events,
+                    json,
+                )
+            }
+            _ => {
+                let [owner] = p.args("<owner>")?;
+                Command::new(
+                    Request::OwnerEventsGet { account, owner },
+                    Output::Events,
+                    json,
+                )
+            }
+        },
+        "exclusions" => match p.positional.first().map(String::as_str) {
+            Some("set") => {
+                let [_, owner, kind, name, state] =
+                    p.args("set <owner> repo|user <name> hidden|list-only")?;
+                Command::new(
+                    Request::OwnerExclusionsSet {
+                        account,
+                        owner,
+                        kind: wire(&kind, "kind")?,
+                        name,
+                        state: wire(&state.replace('-', "_"), "state")?,
+                    },
+                    Output::Exclusions,
+                    json,
+                )
+            }
+            Some("remove") => {
+                let [_, owner, kind, name] = p.args("remove <owner> repo|user <name>")?;
+                Command::new(
+                    Request::OwnerExclusionsRemove {
+                        account,
+                        owner,
+                        kind: wire(&kind, "kind")?,
+                        name,
+                    },
+                    Output::Exclusions,
+                    json,
+                )
+            }
+            _ => {
+                let [owner] = p.args("<owner>")?;
+                Command::new(
+                    Request::OwnerExclusionsGet { account, owner },
+                    Output::Exclusions,
+                    json,
+                )
+            }
+        },
+        other => return Err(UsageError(format!("unknown command: owner {other}"))),
     })
 }
 
 fn config_command(sub: &str, rest: &[String]) -> Result<Command, UsageError> {
     Ok(match sub {
         "get" => {
-            let parsed = parse(rest, &["--json"], false)?;
-            Command {
-                request: Request::ConfigGet {
-                    key: parsed.one("key")?,
-                },
-                output: Output::Value,
-                json: parsed.has("--json"),
-            }
+            let p = parse(rest, &["--json"])?;
+            let [key] = p.args("<key>")?;
+            Command::new(Request::ConfigGet { key }, Output::Value, p.json())
         }
-        "set" => match rest {
-            [key, value] => Command {
-                request: Request::ConfigSet {
-                    key: key.clone(),
-                    value: serde_json::Value::String(value.clone()),
-                },
-                output: Output::Nothing,
-                json: false,
-            },
-            _ => return Err(UsageError("expected <key> <value>".into())),
-        },
+        "set" => {
+            let p = parse(rest, &[])?;
+            let [key, value] = p.args("<key> <value>")?;
+            Command::quiet(Request::ConfigSet {
+                key,
+                value: serde_json::Value::String(value),
+            })
+        }
         other => return Err(UsageError(format!("unknown command: config {other}"))),
     })
 }
 
+const FILTER_FLAGS: [&str; 7] = [
+    "--account",
+    "--owner",
+    "--todo",
+    "--authored",
+    "--assigned",
+    "--review-requested",
+    "--json",
+];
+
 fn command(name: &str, rest: &[String]) -> Result<Command, UsageError> {
     Ok(match name {
-        "list" | "activity" => {
-            let parsed = parse(rest, &FILTER_ALLOWED, true)?;
-            let filter = filter(&parsed)?;
-            let json = parsed.has("--json");
-            if name == "list" {
-                Command {
-                    request: Request::List { filter },
-                    output: Output::Cards,
-                    json,
-                }
-            } else {
-                Command {
-                    request: Request::Activity { filter },
-                    output: Output::Rows,
-                    json,
-                }
+        "list" => {
+            let mut allowed = FILTER_FLAGS.to_vec();
+            allowed.push("--snoozed");
+            let p = parse(rest, &allowed)?;
+            p.none()?;
+            if p.owners.len() > 1 {
+                return Err(UsageError("list takes one --owner".into()));
             }
+            Command::new(
+                Request::List {
+                    account: p.account.clone(),
+                    owner: p.owners.first().cloned(),
+                    todo: p.has("--todo"),
+                    filter: p.filter()?,
+                    snoozed: p.has("--snoozed"),
+                },
+                Output::Cards,
+                p.json(),
+            )
+        }
+        "activity" => {
+            let p = parse(rest, &FILTER_FLAGS)?;
+            p.none()?;
+            Command::new(
+                Request::Activity {
+                    account: p.account.clone(),
+                    owners: p.owners.clone(),
+                    todo: p.has("--todo"),
+                    filter: p.filter()?,
+                },
+                Output::Rows,
+                p.json(),
+            )
         }
         "status" => {
-            let parsed = parse(rest, &["--json"], false)?;
-            Command {
-                request: Request::Status {
-                    pr: parsed.one("pr")?,
+            let p = parse(rest, &["--account", "--json"])?;
+            let [pr] = p.args("<pr>")?;
+            Command::new(
+                Request::Status {
+                    account: p.account()?,
+                    pr,
                 },
-                output: Output::Card,
-                json: parsed.has("--json"),
-            }
+                Output::Card,
+                p.json(),
+            )
         }
-        "done" => Command::quiet(Request::Done {
-            row: one_arg(rest, "row")?,
-        }),
-        "undone" => Command::quiet(Request::Undone {
-            row: one_arg(rest, "row")?,
-        }),
-        "snooze" => Command::quiet(Request::Snooze {
-            pr: one_arg(rest, "pr")?,
-        }),
-        "unsnooze" => Command::quiet(Request::Unsnooze {
-            pr: one_arg(rest, "pr")?,
-        }),
+        "done" | "todo" => {
+            let p = parse(rest, &["--off"])?;
+            let [row] = p.args("<row>")?;
+            let on = !p.has("--off");
+            Command::quiet(if name == "done" {
+                Request::Done { row, on }
+            } else {
+                Request::Todo { row, on }
+            })
+        }
+        "snooze" | "unsnooze" => {
+            let p = parse(rest, &["--account"])?;
+            let [pr] = p.args("<pr>")?;
+            let account = p.account()?;
+            Command::quiet(if name == "snooze" {
+                Request::Snooze { account, pr }
+            } else {
+                Request::Unsnooze { account, pr }
+            })
+        }
         "refresh" => {
-            let parsed = parse(rest, &[], true)?;
-            parsed.none()?;
-            Command {
-                request: Request::Refresh {
-                    scope: parsed.scope,
+            let p = parse(rest, &["--account"])?;
+            p.none()?;
+            Command::new(
+                Request::Refresh {
+                    account: p.account.clone(),
                 },
-                output: Output::Warnings,
-                json: false,
-            }
+                Output::Warnings,
+                false,
+            )
         }
-        "open" => Command {
-            request: open_request(one_arg(rest, "pr or row")?),
-            output: Output::Url,
-            json: false,
-        },
+        "open" => {
+            let p = parse(rest, &["--account"])?;
+            let [target] = p.args("<pr|row>")?;
+            // A `<pr>` is `owner/repo#number`; anything else names a row.
+            let request = if target.contains('/') && target.contains('#') {
+                Request::Open {
+                    account: Some(p.account()?),
+                    pr: Some(target),
+                    row: None,
+                }
+            } else {
+                Request::Open {
+                    account: p.account.clone(),
+                    pr: None,
+                    row: Some(target),
+                }
+            };
+            Command::new(request, Output::Url, false)
+        }
         "reset" => {
-            parse(rest, &[], false)?.none()?;
+            parse(rest, &[])?.none()?;
             Command::quiet(Request::Reset)
         }
         other => return Err(UsageError(format!("unknown command: {other}"))),
     })
 }
 
-fn state_text(card: &Card) -> String {
-    format!(
-        "review={} checks={} base={}",
-        card.review.as_text(),
-        card.checks.as_text(),
-        card.base_status.as_text()
-    )
-}
-
 fn row_line(row: &Row) -> String {
     let unread = if row.unread { "*" } else { " " };
-    let done = if row.done { " done" } else { "" };
+    let state = match (row.todo, row.done) {
+        (_, true) => " [done]",
+        (true, false) => " [todo]",
+        (false, false) => "",
+    };
     let text = row.text.as_deref().unwrap_or_default().replace('\n', " ");
-    format!(
-        "{unread} {} {} [{}{done}] {text}",
-        row.id,
-        row.kind.as_text(),
-        row.class.as_text()
-    )
+    format!("{unread} {} {}{state} {text}", row.id, row.kind.as_text())
 }
 
-fn print_card(card: &Card) {
+fn print_card(card: &Card, logins: &BTreeMap<String, String>) {
     let snoozed = if card.snoozed { " snoozed" } else { "" };
+    let account = logins.get(&card.account).unwrap_or(&card.account);
     println!(
-        "{} [{}] {}{snoozed} {} ({})",
+        "{} [{}] review={} checks={} base={}{snoozed} {} ({}) account={account}",
         card.pr,
         card.state_label.as_text(),
-        state_text(card),
+        card.review.as_text(),
+        card.checks.as_text(),
+        card.base_status.as_text(),
         card.title,
         card.author
     );
@@ -463,94 +684,35 @@ fn print_card(card: &Card) {
     }
 }
 
-fn print_scope(scope: &Scope) {
-    println!(
-        "{} name={} enabled={} notify={} color={} badge={} dot={}",
-        scope.id,
-        scope.name,
-        scope.enabled,
-        scope.notify,
-        scope.color.as_text(),
-        scope.badge,
-        scope.dot
-    );
-}
-
 fn print_warning(warning: &Warning) {
     let until = warning
         .until
         .map(|at| format!(" (until {at})"))
         .unwrap_or_default();
-    let token = warning
-        .token
-        .as_ref()
-        .map(|t| format!(" [{} token]", t.as_text()))
-        .unwrap_or_default();
     eprintln!(
-        "warning: {}{token} {}{until}",
+        "warning: {} {}{until}",
         warning.kind.as_text(),
         warning.message
     );
 }
 
-/// One `token test` line.
+/// One `token test` line: the board's mark and text.
 fn test_line(result: &TestResult) -> String {
-    let outcome = match result.outcome.as_text().as_str() {
-        "ok" => "OK".to_string(),
-        // A permission when one is missing, else why it failed, such as a
-        // rejected token.
-        "failed" => match (&result.missing, &result.reason) {
-            (Some(missing), _) => format!("Failed (missing {missing})"),
-            (None, Some(reason)) => format!("Failed ({reason})"),
-            (None, None) => "Failed".to_string(),
-        },
-        "unverifiable" => format!(
-            "Can't verify ({})",
-            result.reason.as_deref().unwrap_or("nothing to check")
-        ),
-        other => other.to_string(),
+    let text = match (
+        result.outcome.as_text().as_str(),
+        result.item.as_text().as_str(),
+    ) {
+        ("ok", "account") => result.text.clone(),
+        ("ok", _) => format!("✓ {}", result.text),
+        ("failed", _) => format!("✗ {}", result.text),
+        _ => result.text.clone(),
     };
-    format!("{}: {outcome}", result.item)
-}
-
-fn print_test(result: &TestResult) {
-    println!("{}", test_line(result));
-}
-
-fn optional<T: std::fmt::Display>(value: Option<T>) -> String {
-    value.map_or_else(|| "-".to_string(), |v| v.to_string())
-}
-
-fn print_settings(response: &SettingsStatusResponse) {
-    let usage = &response.api_usage;
-    println!(
-        "REST: {}/{}",
-        optional(usage.rest_remaining),
-        optional(usage.rest_limit)
-    );
-    println!(
-        "GraphQL: {}/{}",
-        optional(usage.graphql_remaining),
-        optional(usage.graphql_limit)
-    );
-    println!("Cost per poll: {}", optional(usage.cost_per_poll));
-    println!(
-        "Notifications poll interval: {}s",
-        optional(usage.notifications_poll_interval)
-    );
-    for token in &response.tokens {
-        println!(
-            "{} registered={} owner={} expires_at={} scopes={}",
-            token.target,
-            token.registered,
-            optional(token.owner.as_deref()),
-            optional(token.expires_at),
-            token
-                .scopes
-                .as_ref()
-                .map_or_else(|| "-".to_string(), |s| s.join(","))
-        );
-    }
+    let url = result
+        .url
+        .as_ref()
+        .map(|u| format!(" ({u})"))
+        .unwrap_or_default();
+    format!("{}: {text}{url}", result.label)
 }
 
 fn print_value(value: &serde_json::Value) {
@@ -558,6 +720,12 @@ fn print_value(value: &serde_json::Value) {
         serde_json::Value::String(text) => println!("{text}"),
         other => println!("{other}"),
     }
+}
+
+fn logins(socket: &Path) -> BTreeMap<String, String> {
+    request::<AccountsResponse>(socket, &Request::AccountList)
+        .map(|r| r.accounts.into_iter().map(|a| (a.id, a.login)).collect())
+        .unwrap_or_default()
 }
 
 fn execute(socket: &Path, command: Command) -> Result<(), ClientError> {
@@ -575,21 +743,16 @@ fn execute(socket: &Path, command: Command) -> Result<(), ClientError> {
         }
         Output::Tests => {
             let response: TokenTestResponse = request(socket, &command.request)?;
-            response.results.iter().for_each(print_test);
-            if let Some(owner) = &response.owner {
-                println!("Owner: {owner}");
+            for result in &response.results {
+                println!("{}", test_line(result));
             }
-            if response.owner_mismatch {
-                println!("Owner mismatch: not the owner of the notifications token");
-            }
-        }
-        Output::Settings => {
-            let response: SettingsStatusResponse = request(socket, &command.request)?;
-            print_settings(&response);
         }
         Output::Cards => {
             let response: ListResponse = request(socket, &command.request)?;
-            response.cards.iter().for_each(print_card);
+            let logins = logins(socket);
+            for card in &response.cards {
+                print_card(card, &logins);
+            }
         }
         Output::Rows => {
             let response: ActivityResponse = request(socket, &command.request)?;
@@ -613,16 +776,95 @@ fn execute(socket: &Path, command: Command) -> Result<(), ClientError> {
             let response: ConfigResponse = request(socket, &command.request)?;
             print_value(&response.value);
         }
-        Output::Scopes => {
-            let response: ScopesResponse = request(socket, &command.request)?;
-            response.scopes.iter().for_each(print_scope);
+        Output::Accounts => {
+            let response: AccountsResponse = request(socket, &command.request)?;
+            for a in &response.accounts {
+                println!(
+                    "{} id={} color={} token={} todo={} unread={}",
+                    a.login,
+                    a.id,
+                    a.color.as_text(),
+                    if a.token.registered { "yes" } else { "no" },
+                    a.todo_count,
+                    a.unread
+                );
+                for w in &a.warnings {
+                    println!("  warning: {} {}", w.kind.as_text(), w.message);
+                }
+                for o in &a.owners {
+                    println!("  {} kind={}", o.name, o.kind.as_text());
+                }
+            }
+        }
+        Output::Account => {
+            let response: AccountResponse = request(socket, &command.request)?;
+            println!("{}", response.account.login);
+        }
+        Output::Owners => {
+            let response: AccountsResponse = request(socket, &command.request)?;
+            for a in &response.accounts {
+                for o in &a.owners {
+                    println!(
+                        "{} {} id={} kind={} enabled={} notify={} skip_drafts={} todo={} prs={}",
+                        a.login,
+                        o.name,
+                        o.id,
+                        o.kind.as_text(),
+                        o.enabled,
+                        o.notify,
+                        o.skip_drafts,
+                        o.todo_count,
+                        o.pr_count
+                    );
+                }
+            }
         }
         Output::Lookup => {
-            let response: ScopeLookupResponse = request(socket, &command.request)?;
-            println!("{} {}", response.owner, response.kind.as_text());
+            let response: OwnerLookupResponse = request(socket, &command.request)?;
+            println!(
+                "{} {} {}",
+                response.owner,
+                response.kind.as_text(),
+                response.id
+            );
+        }
+        Output::Events => {
+            let response: EventsResponse = request(socket, &command.request)?;
+            let mark = |on: bool| if on { "on" } else { "off" };
+            for kind in EventKind::ALL {
+                let name = shiibar_gh_proto::Lenient::Known(kind).as_text();
+                if let Some(cell) = response.events.get(&name) {
+                    println!(
+                        "{name} list={} todo={} notify={}",
+                        mark(cell.list),
+                        mark(cell.todo),
+                        mark(cell.notify)
+                    );
+                }
+            }
+        }
+        Output::Exclusions => {
+            let response: ExclusionsResponse = request(socket, &command.request)?;
+            let state = |s: &shiibar_gh_proto::Lenient<shiibar_gh_proto::ExclusionState>| {
+                s.as_text().replace('_', "-")
+            };
+            for e in &response.exclusions.repos {
+                println!("repo {} {}", e.name, state(&e.state));
+            }
+            for e in &response.exclusions.users {
+                println!("user {} {}", e.name, state(&e.state));
+            }
         }
     }
     Ok(())
+}
+
+/// `owner list --account <a>`: the account is a filter of the printout.
+fn owner_list_filter(command: &Command, rest: &[String]) -> Option<String> {
+    if !matches!(command.output, Output::Owners) {
+        return None;
+    }
+    parse(rest, &["--account", "--json"]).ok()?.account
 }
 
 fn run(args: &[String]) -> u8 {
@@ -633,11 +875,11 @@ fn run(args: &[String]) -> u8 {
         }
         [first, rest @ ..] => (first.as_str(), rest),
     };
-    if first == "--help" {
+    if first == "--help" || first == "help" {
         print!("{}", usage(""));
         return OK;
     }
-    let grouped = matches!(first, "config" | "scope" | "token" | "settings");
+    let grouped = matches!(first, "config" | "account" | "token" | "owner");
     let sub = rest.first().map(String::as_str);
     let help_name = match (grouped, sub) {
         (true, Some(sub)) if sub != "--help" => format!("{first} {sub}"),
@@ -656,11 +898,11 @@ fn run(args: &[String]) -> u8 {
         return OK;
     }
     let parsed = match (first, sub) {
-        ("scope", Some(sub)) => scope_command(sub, &rest[1..]),
+        ("account", Some(sub)) => account_command(sub, &rest[1..]),
         ("config", Some(sub)) => config_command(sub, &rest[1..]),
         ("token", Some(sub)) => token_command(sub, &rest[1..]),
-        ("settings", Some(sub)) => settings_command(sub, &rest[1..]),
-        ("scope" | "config" | "token" | "settings", None) => {
+        ("owner", Some(sub)) => owner_command(sub, &rest[1..]),
+        ("config" | "account" | "token" | "owner", None) => {
             Err(UsageError(format!("{first} needs a subcommand")))
         }
         _ => command(first, rest),
@@ -677,13 +919,54 @@ fn run(args: &[String]) -> u8 {
         eprintln!("shiibar-gh: cannot resolve the state directory");
         return ERROR;
     };
-    match execute(&socket, command) {
+    let result = match owner_list_filter(&command, rest.get(1..).unwrap_or_default()) {
+        Some(login) => owner_list(&socket, &login, command.json),
+        None => execute(&socket, command),
+    };
+    match result {
         Ok(()) => OK,
         Err(e) => {
             eprintln!("shiibar-gh: {e}");
             if e.is_not_found() { NOT_FOUND } else { ERROR }
         }
     }
+}
+
+/// The owners of one account. `--json` prints `{"ok":true,"owners":[...]}`.
+fn owner_list(socket: &Path, login: &str, json: bool) -> Result<(), ClientError> {
+    let response: AccountsResponse = request(socket, &Request::AccountList)?;
+    let Some(account) = response
+        .accounts
+        .into_iter()
+        .find(|a| a.login.eq_ignore_ascii_case(login))
+    else {
+        return Err(ClientError::Remote {
+            code: shiibar_gh_proto::Lenient::Known(shiibar_gh_proto::ErrorCode::NotFound),
+            message: format!("not found: account {login}"),
+        });
+    };
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({"ok": true, "owners": account.owners})
+        );
+        return Ok(());
+    }
+    for o in &account.owners {
+        println!(
+            "{} {} id={} kind={} enabled={} notify={} skip_drafts={} todo={} prs={}",
+            account.login,
+            o.name,
+            o.id,
+            o.kind.as_text(),
+            o.enabled,
+            o.notify,
+            o.skip_drafts,
+            o.todo_count,
+            o.pr_count
+        );
+    }
+    Ok(())
 }
 
 fn main() -> ExitCode {
@@ -694,45 +977,51 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shiibar_gh_proto::{Lenient, TestOutcome};
+    use shiibar_gh_proto::{Lenient, TestItem, TestOutcome};
 
-    fn result(outcome: TestOutcome, missing: Option<&str>, reason: Option<&str>) -> TestResult {
+    fn result(item: TestItem, outcome: TestOutcome, text: &str) -> TestResult {
         TestResult {
-            item: "Checks".into(),
+            item: Lenient::Known(item),
+            label: "Scopes".into(),
+            owner: None,
             outcome: Lenient::Known(outcome),
-            missing: missing.map(str::to_string),
-            reason: reason.map(str::to_string),
+            text: text.into(),
+            url: None,
         }
     }
 
     #[test]
-    fn a_failed_test_names_the_missing_permission_or_else_the_reason() {
+    fn a_test_line_shows_the_mark_of_the_board() {
         let cases = [
             (
-                result(
-                    TestOutcome::Failed,
-                    Some("actions=read"),
-                    Some("permission error"),
-                ),
-                "Checks: Failed (missing actions=read)",
+                result(TestItem::Scopes, TestOutcome::Failed, "Missing (read:org)"),
+                "Scopes: ✗ Missing (read:org)",
             ),
             (
-                result(TestOutcome::Failed, None, Some("the token was rejected")),
-                "Checks: Failed (the token was rejected)",
+                result(TestItem::Scopes, TestOutcome::Ok, "OK"),
+                "Scopes: ✓ OK",
             ),
-            (result(TestOutcome::Failed, None, None), "Checks: Failed"),
-            (result(TestOutcome::Ok, None, None), "Checks: OK"),
             (
-                result(
-                    TestOutcome::Unverifiable,
-                    None,
-                    Some("no commit to check against"),
-                ),
-                "Checks: Can't verify (no commit to check against)",
+                result(TestItem::Account, TestOutcome::Ok, "bufferings"),
+                "Scopes: bufferings",
+            ),
+            (
+                result(TestItem::Owner, TestOutcome::CantCheck, "Can't check"),
+                "Scopes: Can't check",
             ),
         ];
         for (result, line) in cases {
             assert_eq!(test_line(&result), line);
         }
+    }
+
+    #[test]
+    fn a_command_about_an_owner_needs_the_account() {
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(owner_command("enable", &args(&["org"])).is_err());
+        assert!(owner_command("enable", &args(&["org", "--account", "me"])).is_ok());
+        assert!(command("snooze", &args(&["o/r#1"])).is_err());
+        assert!(command("done", &args(&["row"])).is_ok());
+        assert!(command("list", &args(&["--authored", "--assigned"])).is_err());
     }
 }

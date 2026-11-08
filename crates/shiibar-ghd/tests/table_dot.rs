@@ -3,14 +3,13 @@
 
 mod support;
 
-use serde_json::json;
 use shiibar_gh_proto::*;
 use support::*;
 
 type Step = fn(&mut H);
 
 fn comment(h: &mut H) {
-    let e = h.ev("E_1", "PR_1", EventKind::Comment);
+    let e = h.ev("E_1", "PR_1", IngestKind::Comment);
     h.events(vec![e]);
 }
 
@@ -22,7 +21,7 @@ fn dot_table() {
         (
             "a new event row",
             &[|h| {
-                let e = h.ev("E_1", "PR_1", EventKind::Merged);
+                let e = h.ev("E_1", "PR_1", IngestKind::Merged);
                 h.events(vec![e]);
             }],
             true,
@@ -114,13 +113,19 @@ fn dot_table() {
             false,
         ),
         (
-            "hidden bot comments do not",
+            // DESIGN.md, "How unread disappears": no dot for a Hidden row.
+            "a Hidden user does not",
             &[
-                |h| h.set("bot_comments", json!("hide")),
-                |h| {
-                    let e = h.ev("E_1", "PR_1", EventKind::BotComment);
-                    h.events(vec![e]);
-                },
+                |h| h.exclude(ExclusionKind::User, "alice", ExclusionState::Hidden),
+                comment,
+            ],
+            false,
+        ),
+        (
+            "a row whose List is off does not",
+            &[
+                |h| h.table(EventKind::Comment, EventColumn::List, false),
+                comment,
             ],
             false,
         ),
@@ -148,7 +153,7 @@ fn an_app_disconnect_releases_the_open_state_but_keeps_seen_pending() {
         "kept until the next popover_closed"
     );
     assert!(h.row("E_1").unread);
-    let e = h.ev("E_2", "PR_1", EventKind::Comment);
+    let e = h.ev("E_2", "PR_1", IngestKind::Comment);
     h.events(vec![e]);
     assert!(h.dot(), "the dot works again after a crash of the app");
     h.close();
@@ -156,10 +161,12 @@ fn an_app_disconnect_releases_the_open_state_but_keeps_seen_pending() {
 }
 
 #[test]
-fn the_open_state_is_per_scope() {
+fn the_open_state_is_per_account() {
     let mut h = H::new();
+    h.add_other();
     h.prs(vec![pr("PR_1")]);
-    h.engine.popover_opened("public").unwrap();
+    h.engine.popover_opened(YOU).unwrap();
     comment(&mut h);
     assert!(h.dot());
+    assert!(!h.account_of(OTHER).unread);
 }

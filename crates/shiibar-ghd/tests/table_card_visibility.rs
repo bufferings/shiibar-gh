@@ -5,6 +5,8 @@ mod support;
 
 use serde_json::json;
 use shiibar_gh_proto::*;
+use shiibar_ghd::engine::{ActivityArgs, ListArgs};
+use shiibar_ghd::model::OwnerKind;
 use support::*;
 
 #[derive(Clone, Copy)]
@@ -16,11 +18,12 @@ struct Case {
     /// Days since the PR was last updated.
     age: i64,
     /// Make a row of this kind, read unless `unread`.
-    row: Option<EventKind>,
+    row: Option<IngestKind>,
     unread: bool,
     done: bool,
     snoozed: bool,
-    show_snoozed: bool,
+    /// Look in the Snoozed section instead of the owner sections.
+    in_snoozed: bool,
     unreadable: bool,
     want: bool,
 }
@@ -35,13 +38,16 @@ const BASE: Case = Case {
     unread: false,
     done: false,
     snoozed: false,
-    show_snoozed: false,
+    in_snoozed: false,
     unreadable: false,
     want: true,
 };
 
 fn run(c: Case) {
     let mut h = H::new();
+    if c.name.contains("Hidden repository") {
+        h.exclude(ExclusionKind::Repo, "org/app", ExclusionState::Hidden);
+    }
     // Start visible so the PR can be snoozed, then apply the final shape.
     let base = if c.mine { pr("PR_1") } else { other("PR_1") };
     h.prs(vec![base.clone()]);
@@ -57,7 +63,7 @@ fn run(c: Case) {
         h.close();
     }
     if c.done {
-        h.engine.done("E_1").unwrap();
+        h.done("E_1");
     }
     h.set_time(T0 + 100);
     h.prs(vec![IngestPr {
@@ -70,11 +76,11 @@ fn run(c: Case) {
         h.missing("PR_1");
     }
     h.set_time(T0 + 100 + 50);
-    let filter = Filter {
-        snoozed: c.show_snoozed,
-        ..Filter::default()
+    let args = ListArgs {
+        snoozed: c.in_snoozed,
+        ..ListArgs::default()
     };
-    let shown = h.card_ids(&filter).contains(&"PR_1".to_string());
+    let shown = h.card_ids(args).contains(&"PR_1".to_string());
     assert_eq!(shown, c.want, "{}", c.name);
 }
 
@@ -143,20 +149,20 @@ fn card_table() {
         Case {
             name: "someone else's draft with an unread row",
             draft: true,
-            row: Some(EventKind::Merged),
+            row: Some(IngestKind::Merged),
             unread: true,
             ..BASE
         },
         Case {
-            name: "someone else's draft with an open needs action row",
+            name: "someone else's draft with an open Todo row",
             draft: true,
-            row: Some(EventKind::Comment),
+            row: Some(IngestKind::Comment),
             ..BASE
         },
         Case {
             name: "someone else's draft, row done",
             draft: true,
-            row: Some(EventKind::Comment),
+            row: Some(IngestKind::Comment),
             done: true,
             want: false,
             ..BASE
@@ -165,7 +171,7 @@ fn card_table() {
             name: "merged with unread row",
             mine: true,
             state: PrState::Merged,
-            row: Some(EventKind::Merged),
+            row: Some(IngestKind::Merged),
             unread: true,
             ..BASE
         },
@@ -173,20 +179,20 @@ fn card_table() {
             name: "merged, read: confirmed and gone",
             mine: true,
             state: PrState::Merged,
-            row: Some(EventKind::Merged),
+            row: Some(IngestKind::Merged),
             want: false,
             ..BASE
         },
         Case {
             name: "merged with an open comment stays until done",
             state: PrState::Merged,
-            row: Some(EventKind::Comment),
+            row: Some(IngestKind::Comment),
             ..BASE
         },
         Case {
             name: "merged, comment done",
             state: PrState::Merged,
-            row: Some(EventKind::Comment),
+            row: Some(IngestKind::Comment),
             done: true,
             want: false,
             ..BASE
@@ -194,43 +200,43 @@ fn card_table() {
         Case {
             name: "stale PR with unread row",
             age: 30,
-            row: Some(EventKind::Merged),
+            row: Some(IngestKind::Merged),
             unread: true,
             ..BASE
         },
         Case {
-            name: "stale PR with an open needs action row",
+            name: "stale PR with an open Todo row",
             age: 30,
-            row: Some(EventKind::Reply),
+            row: Some(IngestKind::Reply),
             ..BASE
         },
         Case {
-            name: "snoozed, Show snoozed off",
+            name: "snoozed, not in the owner section",
             mine: true,
             snoozed: true,
             want: false,
             ..BASE
         },
         Case {
-            name: "snoozed, Show snoozed on",
+            name: "snoozed, in the Snoozed section",
             mine: true,
             snoozed: true,
-            show_snoozed: true,
+            in_snoozed: true,
             ..BASE
         },
         Case {
-            name: "snoozed with unread, Show snoozed off",
-            row: Some(EventKind::Comment),
+            name: "snoozed with unread, not in the owner section",
+            row: Some(IngestKind::Comment),
             unread: true,
             snoozed: true,
             want: false,
             ..BASE
         },
         Case {
-            name: "snoozed that would otherwise be gone, Show snoozed on",
+            name: "snoozed that would otherwise be gone, in the Snoozed section",
             state: PrState::Closed,
             snoozed: true,
-            show_snoozed: true,
+            in_snoozed: true,
             ..BASE
         },
         Case {
@@ -243,17 +249,31 @@ fn card_table() {
         Case {
             name: "unreadable with unread and open rows",
             mine: true,
-            row: Some(EventKind::Comment),
+            row: Some(IngestKind::Comment),
             unread: true,
             unreadable: true,
             want: false,
             ..BASE
         },
         Case {
-            name: "unreadable and snoozed, Show snoozed on",
+            name: "not snoozed, not in the Snoozed section",
+            mine: true,
+            in_snoozed: true,
+            want: false,
+            ..BASE
+        },
+        Case {
+            name: "someone else's open PR in a Hidden repository",
+            row: Some(IngestKind::Comment),
+            unread: true,
+            want: false,
+            ..BASE
+        },
+        Case {
+            name: "unreadable and snoozed, in the Snoozed section",
             mine: true,
             snoozed: true,
-            show_snoozed: true,
+            in_snoozed: true,
             unreadable: true,
             want: false,
             ..BASE
@@ -275,7 +295,7 @@ fn state_label_table() {
     ];
     for (state, is_draft, mergeable, want) in cases {
         let mut h = H::new();
-        let e = h.ev("E_1", "PR_1", EventKind::Merged);
+        let e = h.ev("E_1", "PR_1", IngestKind::Merged);
         h.push(
             vec![IngestPr {
                 state,
@@ -296,7 +316,7 @@ fn newest_card_first_with_ties_by_id() {
     let mut h = H::new();
     h.prs(vec![pr("PR_2"), pr("PR_1")]);
     h.prs(vec![pr("PR_3")]);
-    assert_eq!(h.card_ids(&Filter::default()), ["PR_3", "PR_1", "PR_2"]);
+    assert_eq!(h.card_ids(ListArgs::default()), ["PR_3", "PR_1", "PR_2"]);
 }
 
 #[test]
@@ -314,10 +334,10 @@ fn added_at_is_when_the_card_first_qualified_and_never_moves() {
     assert_eq!(h.card(&key("PR_1")).unwrap().added_at, Some(ready_at));
 
     h.prs(vec![pr("PR_2")]);
-    let e = h.ev("E_1", "PR_1", EventKind::Comment);
+    let e = h.ev("E_1", "PR_1", IngestKind::Comment);
     h.push(vec![ready.clone()], vec![e], vec![]);
     assert_eq!(
-        h.card_ids(&Filter::default()),
+        h.card_ids(ListArgs::default()),
         ["PR_2", "PR_1"],
         "events do not move cards"
     );
@@ -335,7 +355,7 @@ fn a_dropped_pr_returns_on_a_new_event_at_its_old_position() {
     let added = h.card(&key("PR_1")).unwrap().added_at;
     h.advance(15 * DAY);
     assert!(!h.visible("PR_1"));
-    let e = h.ev("E_1", "PR_1", EventKind::Merged);
+    let e = h.ev("E_1", "PR_1", IngestKind::Merged);
     h.events(vec![e]);
     assert!(h.visible("PR_1"));
     assert_eq!(h.card(&key("PR_1")).unwrap().added_at, added);
@@ -373,7 +393,7 @@ fn a_closed_pr_with_a_new_event_shows_again() {
     };
     h.prs(vec![closed]);
     assert!(!h.visible("PR_1"));
-    let e = h.ev("E_1", "PR_1", EventKind::Comment);
+    let e = h.ev("E_1", "PR_1", IngestKind::Comment);
     h.events(vec![e]);
     assert!(h.visible("PR_1"));
 }
@@ -381,13 +401,13 @@ fn a_closed_pr_with_a_new_event_shows_again() {
 #[test]
 fn an_unreadable_pr_comes_back_with_its_state() {
     let mut h = H::new();
-    let e = h.ev("E_1", "PR_1", EventKind::Comment);
+    let e = h.ev("E_1", "PR_1", IngestKind::Comment);
     h.push(vec![pr("PR_1")], vec![e], vec![]);
     let added = h.card(&key("PR_1")).unwrap().added_at;
-    h.engine.done("E_1").unwrap();
+    h.done("E_1");
     h.missing("PR_1");
     assert!(!h.visible("PR_1"));
-    assert!(not_found(h.engine.status(&key("PR_1"), &h.now)));
+    assert!(not_found(h.engine.status(ME, &key("PR_1"), &h.now)));
     h.prs(vec![pr("PR_1")]);
     assert!(h.visible("PR_1"));
     let card = h.card(&key("PR_1")).unwrap();
@@ -407,40 +427,52 @@ fn a_pr_absent_from_an_ingest_is_unchanged() {
 fn activity_shows_only_rows_of_shown_cards_newest_first_ties_by_id() {
     let mut h = H::new();
     let at = h.at();
-    let a = h.ev_at("E_2", "PR_1", EventKind::Comment, at);
-    let b = h.ev_at("E_1", "PR_2", EventKind::Comment, at);
-    let c = h.ev_at("E_3", "PR_1", EventKind::Comment, at + 5);
+    let a = h.ev_at("E_2", "PR_1", IngestKind::Comment, at);
+    let b = h.ev_at("E_1", "PR_2", IngestKind::Comment, at);
+    let c = h.ev_at("E_3", "PR_1", IngestKind::Comment, at + 5);
     h.push(vec![pr("PR_1"), pr("PR_2")], vec![a, b, c], vec![]);
-    let rows = h.engine.activity(&Filter::default(), &h.now).unwrap();
+    let rows = h.activity(ActivityArgs::default());
     assert_eq!(ids(&rows), ["E_3", "E_1", "E_2"]);
     let card = h.card(&key("PR_1")).unwrap();
     assert_eq!(ids(&card.rows), ["E_3", "E_2"]);
 
+    // DESIGN.md, "Rows shown in Activity": no rows of a snoozed PR.
     h.snooze(&key("PR_1"));
-    let rows = h.engine.activity(&Filter::default(), &h.now).unwrap();
+    let rows = h.activity(ActivityArgs::default());
     assert_eq!(ids(&rows), ["E_1"]);
-    let rows = h.engine.activity(&show_snoozed(), &h.now).unwrap();
-    assert_eq!(ids(&rows), ["E_3", "E_1", "E_2"]);
 }
 
 #[test]
-fn mine_and_others_filters() {
+fn the_authored_by_me_filter() {
     let mut h = H::new();
     h.prs(vec![pr("PR_1"), other("PR_2")]);
-    let mine = Filter {
-        mine: true,
-        ..Filter::default()
+    let authored = ListArgs {
+        filter: PrFilter::Authored,
+        ..ListArgs::default()
     };
-    let others = Filter {
-        others: true,
-        ..Filter::default()
+    assert_eq!(h.card_ids(authored), ["PR_1"]);
+    assert_eq!(h.card_ids(ListArgs::default()).len(), 2);
+}
+
+#[test]
+fn sections_follow_the_registration_order_with_public_last() {
+    let mut h = H::new();
+    h.engine
+        .owner_add(ACCOUNT, "later", OwnerKind::Org, None, &h.now)
+        .unwrap();
+    let public = IngestPr {
+        owner: "elsewhere".into(),
+        ..other("PR_1")
     };
-    assert_eq!(h.card_ids(&mine), ["PR_1"]);
-    assert_eq!(h.card_ids(&others), ["PR_2"]);
-    let both = Filter {
-        mine: true,
-        others: true,
-        ..Filter::default()
+    let later = IngestPr {
+        owner: "later".into(),
+        ..other("PR_2")
     };
-    assert!(invalid(h.engine.list(&both, &h.now)));
+    h.prs(vec![public]);
+    h.prs(vec![later]);
+    h.prs(vec![other("PR_3")]);
+    // org, later, then Public, whatever the order the cards came in.
+    assert_eq!(h.card_ids(ListArgs::default()), ["PR_3", "PR_2", "PR_1"]);
+    let names: Vec<String> = h.account().owners.into_iter().map(|o| o.name).collect();
+    assert_eq!(names, ["org", "later", "Public"]);
 }

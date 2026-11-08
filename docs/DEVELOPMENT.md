@@ -68,7 +68,7 @@ SHIIBAR_GH_TEST_DAEMON=$PWD/target/debug/shiibar-ghd swift test --package-path a
 
 `scripts/dev-install.sh` は、デーモン、CLI、アプリをリリースモードでビルドし、`~/Applications/Shiibar GH.app` を組み立てて、ローカルの固定の署名の ID（`shiibar-gh-local-signing`。初回にログインキーチェーンに作成する）で hardened runtime を付けて署名し、`~/.local/bin/shiibar-gh` を同梱の CLI へのリンクにして、アプリを起動する。実行中のアプリとデーモンは先に止める。`CFBundleVersion` は実行の時刻にする。アイコンのキャッシュが版で区別されるためである。
 
-`scripts/dev-uninstall.sh` は、ログイン項目の登録、アプリ、CLI のリンク、残ったデーモン、署名の ID を削除する。`--purge` を付けると、状態ディレクトリ、アプリの UserDefaults、スコープのトークンも削除する。通知の許可は、システム設定の通知から利用者が削除する。
+`scripts/dev-uninstall.sh` は、ログイン項目の登録、アプリ、CLI のリンク、残ったデーモン、署名の ID を削除する。`--purge` を付けると、状態ディレクトリ、アプリの UserDefaults、Keychain のトークンの項目（`shiibar-gh token reset`）も削除する。0.1 の Keychain の項目（service `shiibar-gh`、account `tokens`）は削除しない。通知の許可は、システム設定の通知から利用者が削除する。
 
 どちらも `~/Applications`、ログイン項目、キーチェーンを変更するので、エージェントは実行しない。
 

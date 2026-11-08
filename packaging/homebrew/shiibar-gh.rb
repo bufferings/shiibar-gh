@@ -42,9 +42,11 @@ cask "shiibar-gh" do
 
   caveats <<~EOS
     Open Shiibar GH once: it asks for the notification permission and
-    registers itself to launch at login. Add your tokens in Settings ›
-    Scopes. The tokens stay in the Keychain (service shiibar-gh) after an
-    uninstall; remove them with `shiibar-gh scope remove` before
-    uninstalling, or in Keychain Access.
+    registers itself to launch at login. Add an account in Settings ›
+    Accounts with a classic personal access token (scopes repo,
+    notifications, read:org). Version 0.2 does not read the tokens of 0.1:
+    add your accounts again. The tokens stay in the Keychain (service
+    shiibar-gh, account accounts) after an uninstall; remove them with
+    `shiibar-gh token reset` before uninstalling, or in Keychain Access.
   EOS
 end

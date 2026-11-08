@@ -1,24 +1,30 @@
-//! Joins the engine, the store and the subscribers. Rule of this file: a change
-//! is saved first, and only then does anything leave for a client.
+//! Joins the engine, the store, the Keychain and the subscribers. Rule of
+//! this file: a change is saved first, and only then does anything leave for
+//! a client.
 
 use crate::clock::{Clock, Now};
-use crate::engine::{CmdError, Engine};
-use crate::keychain::Keychain;
+use crate::engine::{ActivityArgs, CmdError, Engine, ListArgs};
+use crate::github::{CallError, Recorder, Rest};
+use crate::keychain::{Keychain, KeychainError, StoredAccount};
 use crate::logging;
-use crate::model::TestRec;
-use crate::plan::{Outcome, Plan, TokenObs};
+use crate::model::{OwnerKind, PUBLIC, TestRec};
+use crate::plan::{Outcome, Plan};
 use crate::store::{self, OpenOutcome, SaveError, Store};
+use crate::tokentest::{Expect, OwnerProbe};
 use shiibar_gh_proto as proto;
 use shiibar_gh_proto::paths::StateDir;
-use shiibar_gh_proto::{ClientKind, Request, SubscribeEvent, codec};
+use shiibar_gh_proto::{ClientKind, KeychainState, Lenient, Request, SubscribeEvent, codec};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
+
+pub use crate::engine::valid_login;
 
 /// A subscriber with more than this many queued events is disconnected.
 pub const SEND_QUEUE: usize = 256;
 
 const UNREADABLE: &str = "couldn't read saved state; run `shiibar-gh reset`";
+const KEYCHAIN: &str = "Couldn't read tokens from Keychain";
 
 /// One queued line. `ack` names the notification whose delivery a successful
 /// write confirms.
@@ -53,7 +59,7 @@ pub struct Subscribed {
     pub kill: oneshot::Receiver<()>,
 }
 
-type Digest = BTreeMap<String, (proto::Scope, Vec<proto::Card>)>;
+type Digest = BTreeMap<String, (proto::Account, Vec<proto::Card>)>;
 
 pub struct Daemon {
     engine: Engine,
@@ -67,9 +73,15 @@ pub struct Daemon {
     flights: HashMap<String, Flight>,
     digest: Digest,
     keychain: Arc<dyn Keychain>,
-    /// Tokens read from the Keychain, by account. A Keychain read may ask
-    /// the user, so each token is read once.
+    /// Tokens read from the Keychain, by account id. Never logged.
     tokens: HashMap<String, String>,
+    /// The login each account has in the Keychain item, as last read or
+    /// written: a login that differs from the account's is written back.
+    stored_logins: HashMap<String, String>,
+    /// The Keychain item was read since the start (or since `reset`).
+    loaded: bool,
+    /// The Keychain state last sent to subscribers.
+    sent_keychain: KeychainState,
     /// Settings changed by the request being handled, sent once saved.
     config_events: Vec<(String, serde_json::Value)>,
 }
@@ -78,12 +90,14 @@ fn error_line(error: &CmdError) -> String {
     let (code, message) = match error {
         CmdError::NotFound(m) => (proto::ErrorCode::NotFound, m),
         CmdError::Invalid(m) => (proto::ErrorCode::Invalid, m),
+        CmdError::Unreachable(m) => (proto::ErrorCode::Unreachable, m),
+        CmdError::KeychainUnavailable(m) => (proto::ErrorCode::KeychainUnavailable, m),
         CmdError::Internal(m) => (proto::ErrorCode::Internal, m),
     };
     line(&proto::ErrorResponse::new(code, message.clone()))
 }
 
-fn line<T: serde::Serialize>(value: &T) -> String {
+pub fn line<T: serde::Serialize>(value: &T) -> String {
     codec::encode_line(value).unwrap_or_else(|_| {
         "{\"ok\":false,\"code\":\"internal\",\"error\":\"cannot encode the response\"}\n".into()
     })
@@ -94,6 +108,24 @@ pub fn invalid_line(message: impl std::fmt::Display) -> String {
     error_line(&CmdError::Invalid(format!("invalid request: {message}")))
 }
 
+pub fn error_of(error: CmdError) -> String {
+    error_line(&error)
+}
+
+fn keychain_refused() -> CmdError {
+    CmdError::KeychainUnavailable(KEYCHAIN.into())
+}
+
+/// What a call to GitHub that checks a token answered, as a command error.
+pub fn call_error(error: &CallError) -> CmdError {
+    match error {
+        CallError::Unauthorized => CmdError::Invalid("Token is invalid".into()),
+        CallError::Network(_) => CmdError::Unreachable("Couldn't reach GitHub".into()),
+        CallError::RateLimited { .. } => CmdError::Internal("GitHub's limit reached".into()),
+        other => CmdError::Internal(format!("GitHub answered: {other}")),
+    }
+}
+
 impl Daemon {
     /// Open the database and run the first periodic pass. An `Err` means the
     /// daemon must exit; an unreadable database is a running state instead.
@@ -102,9 +134,11 @@ impl Daemon {
         let (mut engine, store) = match Store::open(&dir.db())? {
             OpenOutcome::Ready(store, Some(data)) => (Engine::restore(*data), Some(store)),
             OpenOutcome::Ready(store, None) => (Engine::fresh(&now), Some(store)),
-            OpenOutcome::Corrupt => {
+            OpenOutcome::Unreadable => {
                 logging::error(format_args!("{UNREADABLE}"));
-                (blank_engine(&now, keychain.as_ref()), None)
+                let mut engine = Engine::fresh(&now);
+                engine.clear_dirty();
+                (engine, None)
             }
         };
         engine.set_clock(&now);
@@ -121,6 +155,9 @@ impl Daemon {
             digest,
             keychain,
             tokens: HashMap::new(),
+            stored_logins: HashMap::new(),
+            loaded: false,
+            sent_keychain: KeychainState::Ok,
             config_events: Vec::new(),
         };
         if daemon.store.is_some() {
@@ -132,7 +169,8 @@ impl Daemon {
         Ok(daemon)
     }
 
-    /// Answer one request. `subscribe` and `shutdown` are the server's.
+    /// Answer one request. `subscribe`, `shutdown` and the requests that
+    /// call GitHub are the server's.
     pub fn handle(&mut self, request: Request) -> String {
         let result = match request {
             Request::Info => Ok(line(&proto::InfoResponse {
@@ -141,9 +179,6 @@ impl Daemon {
                 started_at: self.started_at,
             })),
             Request::Reset => self.reset(),
-            Request::Subscribe { .. } | Request::Shutdown => {
-                Err(CmdError::Internal("handled by the server".into()))
-            }
             other => self.run(other),
         };
         result.unwrap_or_else(|e| error_line(&e))
@@ -164,152 +199,253 @@ impl Daemon {
         result
     }
 
+    fn account_of(&self, login: &str) -> Result<String, CmdError> {
+        self.engine.account_id(login)
+    }
+
+    fn owner_of(&self, account: &str, owner: &str) -> Result<(String, String), CmdError> {
+        let account = self.account_of(account)?;
+        let owner = self.engine.owner_id(&account, owner)?;
+        Ok((account, owner))
+    }
+
+    fn account_line(&self, account: &str) -> Result<String, CmdError> {
+        let value = self
+            .engine
+            .account_value(account)
+            .ok_or_else(|| CmdError::NotFound(format!("not found: account {account}")))?;
+        Ok(line(&proto::AccountResponse {
+            ok: true,
+            account: value,
+        }))
+    }
+
     fn apply(&mut self, request: Request, now: &Now) -> Result<String, CmdError> {
         let ack = || line(&proto::AckResponse::new());
-        let engine = &mut self.engine;
         Ok(match request {
-            Request::List { filter } => line(&proto::ListResponse {
+            Request::List {
+                account,
+                owner,
+                todo,
+                filter,
+                snoozed,
+            } => line(&proto::ListResponse {
                 ok: true,
-                cards: engine.list(&filter, now)?,
+                cards: self.engine.list(
+                    &ListArgs {
+                        account,
+                        owner,
+                        todo,
+                        filter,
+                        snoozed,
+                    },
+                    now,
+                )?,
             }),
-            Request::Activity { filter } => line(&proto::ActivityResponse {
+            Request::Activity {
+                account,
+                owners,
+                todo,
+                filter,
+            } => line(&proto::ActivityResponse {
                 ok: true,
-                rows: engine.activity(&filter, now)?,
+                rows: self.engine.activity(
+                    &ActivityArgs {
+                        account,
+                        owners,
+                        todo,
+                        filter,
+                    },
+                    now,
+                )?,
             }),
-            Request::Status { pr } => line(&proto::StatusResponse {
+            Request::Status { account, pr } => line(&proto::StatusResponse {
                 ok: true,
-                card: engine.status(&pr, now)?,
+                card: self.engine.status(&account, &pr, now)?,
             }),
             Request::Seen { row_ids } => {
-                engine.seen(&row_ids);
+                self.engine.seen(&row_ids);
                 ack()
             }
-            Request::PopoverOpened { scope } => {
-                engine.popover_opened(&scope)?;
+            Request::PopoverOpened { account } => {
+                self.engine.popover_opened(&account)?;
                 ack()
             }
-            Request::PopoverClosed { scope } => {
-                engine.popover_closed(&scope)?;
+            Request::PopoverClosed { account } => {
+                self.engine.popover_closed(&account)?;
                 ack()
             }
-            Request::Done { row } => {
-                engine.done(&row)?;
+            Request::Done { row, on } => {
+                self.engine.done(&row, on)?;
                 ack()
             }
-            Request::Undone { row } => {
-                engine.undone(&row)?;
+            Request::Todo { row, on } => {
+                self.engine.todo(&row, on, now)?;
                 ack()
             }
-            Request::Snooze { pr } => {
-                engine.snooze(&pr, now)?;
+            Request::Snooze { account, pr } => {
+                self.engine.snooze(&account, &pr, now)?;
                 ack()
             }
-            Request::Unsnooze { pr } => {
-                engine.unsnooze(&pr, now)?;
+            Request::Unsnooze { account, pr } => {
+                self.engine.unsnooze(&account, &pr, now)?;
                 ack()
             }
-            Request::Refresh { scope } => {
-                // The server fetches and answers; this path only checks.
-                let scope = scope.map(|s| engine.require_scope(&s)).transpose()?;
-                line(&proto::RefreshResponse {
-                    ok: true,
-                    warnings: engine.refresh_warnings(scope.as_deref()),
-                })
-            }
-            Request::Open { pr, row } => {
-                let url = match (pr, row) {
-                    (Some(pr), None) => engine.open_pr(&pr)?,
-                    (None, Some(row)) => engine.open_row(&row)?,
-                    _ => {
-                        return Err(CmdError::Invalid("open takes either pr or row".into()));
+            Request::Open { account, pr, row } => {
+                let url = match (account, pr, row) {
+                    (Some(account), Some(pr), None) => self.engine.open_pr(&account, &pr)?,
+                    (None, Some(_), None) => {
+                        return Err(CmdError::Invalid("open of a PR needs the account".into()));
                     }
+                    (account, None, Some(row)) => self.engine.open_row(account.as_deref(), &row)?,
+                    _ => return Err(CmdError::Invalid("open takes either pr or row".into())),
                 };
                 line(&proto::OpenResponse { ok: true, url })
             }
             Request::ConfigGet { key } => line(&proto::ConfigResponse {
                 ok: true,
-                value: engine.config_get(&key)?,
+                value: self.engine.config_get(&key)?,
             }),
             Request::ConfigSet { key, value } => {
-                let before = engine.config_get(&key).ok();
-                let value = engine.config_set(&key, &value, now)?;
+                let before = self.engine.config_get(&key).ok();
+                let value = self.engine.config_set(&key, &value, now)?;
                 if before.as_ref() != Some(&value) {
                     self.config_events.push((key, value.clone()));
                 }
                 line(&proto::ConfigResponse { ok: true, value })
             }
-            Request::ScopeList => line(&proto::ScopesResponse {
+            Request::AccountList => line(&proto::AccountsResponse {
                 ok: true,
-                scopes: engine.scopes(),
+                accounts: self.engine.accounts(),
             }),
-            Request::ScopeAdd { owner } => {
-                engine.scope_add(&owner, now)?;
-                line(&proto::ScopesResponse {
+            Request::AccountRemove { account } => {
+                let id = self.account_of(&account)?;
+                self.require_keychain()?;
+                // The Keychain goes first: a failure leaves the account.
+                let mut stored = self.read_item()?;
+                let before = stored.len();
+                stored.retain(|a| a.id != id);
+                if stored.len() != before {
+                    self.write_item(&stored)?;
+                }
+                self.tokens.remove(&id);
+                self.engine.account_remove(&id);
+                ack()
+            }
+            Request::AccountColor { account, color } => {
+                self.engine.account_color(&account, color)?;
+                ack()
+            }
+            Request::OwnerRemove { account, owner } => {
+                let (account, owner) = self.owner_of(&account, &owner)?;
+                self.engine.owner_remove(&owner);
+                self.account_line(&account)?
+            }
+            Request::OwnerEnable { account, owner } => {
+                let (_, owner) = self.owner_of(&account, &owner)?;
+                self.engine.owner_enable(&owner, true, now);
+                ack()
+            }
+            Request::OwnerDisable { account, owner } => {
+                let (_, owner) = self.owner_of(&account, &owner)?;
+                self.engine.owner_enable(&owner, false, now);
+                ack()
+            }
+            Request::OwnerNotify { account, owner, on } => {
+                let (_, owner) = self.owner_of(&account, &owner)?;
+                self.engine.owner_notify(&owner, on);
+                ack()
+            }
+            Request::OwnerSkipDrafts { account, owner, on } => {
+                let (_, owner) = self.owner_of(&account, &owner)?;
+                self.engine.owner_skip_drafts(&owner, on);
+                ack()
+            }
+            Request::OwnerEventsGet { account, owner } => {
+                let (_, owner) = self.owner_of(&account, &owner)?;
+                line(&proto::EventsResponse {
                     ok: true,
-                    scopes: engine.scopes(),
+                    events: self.engine.owner_events(&owner),
                 })
             }
-            Request::ScopeRemove { owner } => {
-                // The Keychain entry goes first: a failure leaves the scope.
-                if let Some(account) = engine.scope_token_account(&owner)? {
-                    self.keychain
-                        .delete(&account)
-                        .map_err(|e| CmdError::Internal(e.to_string()))?;
-                    self.tokens.remove(&account);
-                }
-                let engine = &mut self.engine;
-                if engine.scope_remove(&owner)?.is_some() {
-                    engine.token_removed(&owner);
-                }
-                let response = line(&proto::ScopesResponse {
+            Request::OwnerEventsSet {
+                account,
+                owner,
+                event,
+                column,
+                on,
+            } => {
+                let (_, owner) = self.owner_of(&account, &owner)?;
+                self.engine
+                    .owner_events_set(&owner, event, column, on, now)?;
+                line(&proto::EventsResponse {
                     ok: true,
-                    scopes: engine.scopes(),
-                });
-                self.save_now()?;
-                self.disconnect_all();
-                response
-            }
-            Request::ScopeEnable { scope } => {
-                engine.scope_enable(&scope, now)?;
-                ack()
-            }
-            Request::ScopeDisable { scope } => {
-                engine.scope_disable(&scope)?;
-                ack()
-            }
-            Request::ScopeNotify { scope, on } => {
-                engine.scope_notify(&scope, on)?;
-                ack()
-            }
-            Request::ScopeColor { scope, color } => {
-                engine.scope_color(&scope, color)?;
-                ack()
-            }
-            Request::TokenSet { target, token } => {
-                let token = token.trim();
-                if token.is_empty() {
-                    return Err(CmdError::Invalid("the token is empty".into()));
-                }
-                let key = engine.token_key(&target)?;
-                let account = crate::model::scope_account(&key);
-                self.keychain
-                    .set(&account, token)
-                    .map_err(|e| CmdError::Internal(e.to_string()))?;
-                self.tokens.insert(account, token.to_string());
-                self.engine.token_saved(&key);
-                ack()
-            }
-            Request::SettingsStatus => {
-                let (api_usage, tokens) = engine.settings_status();
-                line(&proto::SettingsStatusResponse {
-                    ok: true,
-                    api_usage,
-                    tokens,
+                    events: self.engine.owner_events(&owner),
                 })
+            }
+            Request::OwnerEventsCopy {
+                account,
+                from_owner,
+                to_owner,
+            } => {
+                let (account, from) = self.owner_of(&account, &from_owner)?;
+                let to = self.engine.owner_id(&account, &to_owner)?;
+                self.engine.owner_events_copy(&from, &to, now)?;
+                line(&proto::EventsResponse {
+                    ok: true,
+                    events: self.engine.owner_events(&to),
+                })
+            }
+            Request::OwnerExclusionsGet { account, owner } => {
+                let (_, owner) = self.owner_of(&account, &owner)?;
+                line(&proto::ExclusionsResponse {
+                    ok: true,
+                    exclusions: self.engine.owner_exclusions(&owner),
+                })
+            }
+            Request::OwnerExclusionsSet {
+                account,
+                owner,
+                kind,
+                name,
+                state,
+            } => {
+                let (_, owner) = self.owner_of(&account, &owner)?;
+                self.engine
+                    .owner_exclusions_set(&owner, kind, &name, state, now)?;
+                line(&proto::ExclusionsResponse {
+                    ok: true,
+                    exclusions: self.engine.owner_exclusions(&owner),
+                })
+            }
+            Request::OwnerExclusionsRemove {
+                account,
+                owner,
+                kind,
+                name,
+            } => {
+                let (_, owner) = self.owner_of(&account, &owner)?;
+                self.engine
+                    .owner_exclusions_remove(&owner, kind, &name, now)?;
+                line(&proto::ExclusionsResponse {
+                    ok: true,
+                    exclusions: self.engine.owner_exclusions(&owner),
+                })
+            }
+            Request::OwnerAdd { account, owner } if owner.eq_ignore_ascii_case(PUBLIC) => {
+                let id = self.account_of(&account)?;
+                self.engine
+                    .owner_add(&id, PUBLIC, OwnerKind::Public, None, now)?;
+                self.account_line(&id)?
+            }
+            Request::TokenReset => {
+                self.token_reset()?;
+                ack()
             }
             #[cfg(feature = "dev-ingest")]
-            Request::DevIngest { ingest } => {
-                engine.ingest(ingest, now)?;
+            Request::DevIngest { account, ingest } => {
+                let id = self.account_of(&account)?;
+                self.engine.ingest(&id, ingest, now)?;
                 ack()
             }
             #[cfg(feature = "dev-ingest")]
@@ -320,16 +456,268 @@ impl Daemon {
                 self.commit(&fixed, true)?;
                 ack()
             }
+            #[cfg(feature = "dev-ingest")]
+            Request::DevAccountAdd { id, login, token } => {
+                if let Some(token) = &token {
+                    let mut stored = self.read_item()?;
+                    stored.retain(|a| a.id != id);
+                    stored.push(StoredAccount {
+                        id: id.clone(),
+                        login: login.clone(),
+                        token: token.clone(),
+                    });
+                    self.engine.account_create(&id, &login)?;
+                    if let Err(e) = self.write_item(&stored) {
+                        self.engine.account_remove(&id);
+                        return Err(e);
+                    }
+                    self.tokens.insert(id.clone(), token.clone());
+                    self.engine.token_saved(&id);
+                } else {
+                    self.engine.account_create(&id, &login)?;
+                }
+                self.account_line(&id)?
+            }
+            #[cfg(feature = "dev-ingest")]
+            Request::DevOwnerAdd {
+                account,
+                owner,
+                kind,
+                github_id,
+            } => {
+                let id = self.account_of(&account)?;
+                let name = if kind == proto::OwnerKind::Public {
+                    PUBLIC.to_string()
+                } else {
+                    owner
+                };
+                self.engine
+                    .owner_add(&id, &name, kind.into(), github_id, now)?;
+                self.account_line(&id)?
+            }
             Request::Subscribe { .. }
             | Request::Reset
             | Request::Info
             | Request::Shutdown
-            | Request::TokenTest { .. }
-            | Request::ScopeLookup { .. } => {
+            | Request::Refresh { .. }
+            | Request::AccountAdd { .. }
+            | Request::OwnerLookup { .. }
+            | Request::OwnerAdd { .. }
+            | Request::TokenSet { .. }
+            | Request::TokenTest { .. } => {
                 return Err(CmdError::Internal("handled elsewhere".into()));
             }
         })
     }
+
+    // ------------------------------------------------------------ Keychain
+
+    /// DESIGN.md, "When the Keychain cannot be read": requests that touch
+    /// tokens are refused while the item could not be read.
+    fn require_keychain(&self) -> Result<(), CmdError> {
+        match self.engine.keychain_state() {
+            KeychainState::Ok => Ok(()),
+            _ => Err(keychain_refused()),
+        }
+    }
+
+    fn set_keychain(&mut self, state: KeychainState) {
+        self.engine.set_keychain_state(state);
+    }
+
+    /// Read the item. A success records every token of a known account,
+    /// clears the registration of an account without one, and after `reset`
+    /// brings the accounts back. A failure sets the Keychain state.
+    fn read_item(&mut self) -> Result<Vec<StoredAccount>, CmdError> {
+        // Tried, whatever the outcome: a failure is read again only by
+        // `refresh` and `token_reset` (DESIGN.md, "When the Keychain cannot
+        // be read").
+        self.loaded = true;
+        match self.keychain.load() {
+            Ok(stored) => {
+                let stored = stored.unwrap_or_default();
+                self.stored_logins = stored
+                    .iter()
+                    .map(|a| (a.id.clone(), a.login.clone()))
+                    .collect();
+                self.set_keychain(KeychainState::Ok);
+                self.loaded = true;
+                if self.engine.data().restore_accounts {
+                    self.restore_accounts(&stored);
+                }
+                let ids: Vec<String> = self.engine.data().accounts.keys().cloned().collect();
+                for id in ids {
+                    match stored.iter().find(|a| a.id == id) {
+                        Some(found) => {
+                            self.tokens.insert(id.clone(), found.token.clone());
+                            if !self
+                                .engine
+                                .account_record(&id)
+                                .is_some_and(|a| a.token.registered)
+                            {
+                                self.engine.token_saved(&id);
+                            }
+                        }
+                        None => {
+                            self.tokens.remove(&id);
+                            self.engine.token_cleared(&id);
+                        }
+                    }
+                }
+                Ok(stored)
+            }
+            Err(e) => {
+                logging::error(format_args!("{e}"));
+                self.tokens.clear();
+                self.set_keychain(match e {
+                    KeychainError::Unavailable(_) => KeychainState::Unavailable,
+                    KeychainError::Unreadable(_) => KeychainState::Unreadable,
+                });
+                Err(keychain_refused())
+            }
+        }
+    }
+
+    /// DESIGN.md, "When the database cannot be read": after `reset`, the
+    /// accounts come back from the item (id, login); owners do not.
+    fn restore_accounts(&mut self, stored: &[StoredAccount]) {
+        for account in stored {
+            if self
+                .engine
+                .account_create(&account.id, &account.login)
+                .is_ok()
+            {
+                self.engine.token_saved(&account.id);
+            }
+        }
+        self.engine.restored();
+    }
+
+    fn write_item(&mut self, stored: &[StoredAccount]) -> Result<(), CmdError> {
+        match self.keychain.save(stored) {
+            Ok(()) => {
+                self.stored_logins = stored
+                    .iter()
+                    .map(|a| (a.id.clone(), a.login.clone()))
+                    .collect();
+                Ok(())
+            }
+            Err(e) => {
+                logging::error(format_args!("{e}"));
+                if let KeychainError::Unavailable(_) = e {
+                    self.set_keychain(KeychainState::Unavailable);
+                }
+                Err(keychain_refused())
+            }
+        }
+    }
+
+    /// DESIGN.md, "Tokens": the Keychain item follows the account's login.
+    /// Written only when the login known to be in the item differs, so a
+    /// fetch reads the Keychain only after a login change.
+    fn follow_login(&mut self, account: &str) {
+        let Some(login) = self.account_login(account) else {
+            return;
+        };
+        let differs = self
+            .stored_logins
+            .get(account)
+            .is_some_and(|stored| *stored != login);
+        if !differs || self.engine.keychain_state() != KeychainState::Ok {
+            return;
+        }
+        let Ok(mut stored) = self.read_item() else {
+            return;
+        };
+        if let Some(entry) = stored.iter_mut().find(|a| a.id == account)
+            && entry.login != login
+        {
+            entry.login = login;
+            if let Err(e) = self.write_item(&stored) {
+                logging::error(format_args!("cannot save the new login: {e:?}"));
+            }
+        }
+    }
+
+    /// The first read after the start, or after `reset`: only while there
+    /// is an account (or one to restore), so an empty state never touches
+    /// the Keychain.
+    pub fn load_tokens(&mut self) {
+        if self.loaded || self.store.is_none() || self.check_db().is_err() {
+            return;
+        }
+        let data = self.engine.data();
+        if data.accounts.is_empty() && !data.restore_accounts {
+            return;
+        }
+        // A read that failed is not tried again by the next cycle: only
+        // `refresh` and `token_reset` read again.
+        self.loaded = true;
+        let _ = self.read_item();
+        self.after_keychain_change();
+    }
+
+    /// `refresh` reads the item again, once, while it could not be read,
+    /// with or without accounts: a failed first `account_add` recovers too.
+    /// The cycle that follows does not read it a second time.
+    pub fn reload_tokens(&mut self) {
+        if self.store.is_none() || self.check_db().is_err() {
+            return;
+        }
+        if self.engine.keychain_state() != KeychainState::Ok {
+            self.loaded = true;
+            let _ = self.read_item();
+            self.after_keychain_change();
+        } else {
+            self.load_tokens();
+        }
+    }
+
+    /// After a request that read the Keychain and failed: save and send
+    /// `keychain_changed` before the error answer goes out.
+    fn publish_failure(&mut self) {
+        let now = self.clock.now();
+        if let Err(e) = self.commit(&now, true) {
+            logging::error(format_args!("cannot save after a Keychain failure: {e:?}"));
+        }
+    }
+
+    fn token_reset(&mut self) -> Result<(), CmdError> {
+        if let Err(e) = self.keychain.delete() {
+            logging::error(format_args!("{e}"));
+            self.set_keychain(KeychainState::Unavailable);
+            return Err(keychain_refused());
+        }
+        self.tokens.clear();
+        let ids: Vec<String> = self.engine.data().accounts.keys().cloned().collect();
+        for id in ids {
+            self.engine.token_cleared(&id);
+        }
+        let _ = self.read_item();
+        Ok(())
+    }
+
+    /// Save and tell the subscribers after a Keychain read outside a request.
+    fn after_keychain_change(&mut self) {
+        let now = self.clock.now();
+        if let Err(e) = self.commit(&now, true) {
+            logging::error(format_args!(
+                "cannot save after reading the Keychain: {e:?}"
+            ));
+        }
+    }
+
+    /// A token for the account, from the cache, reading the item when it
+    /// was not read yet.
+    fn saved_token(&mut self, account: &str) -> Result<Option<String>, CmdError> {
+        self.require_keychain()?;
+        if !self.loaded {
+            self.read_item()?;
+        }
+        Ok(self.tokens.get(account).cloned())
+    }
+
+    // ------------------------------------------------------------ database
 
     /// Before any command: `internal` while unreadable, and a file damaged
     /// since the last command moves the daemon to the unreadable state.
@@ -350,7 +738,10 @@ impl Daemon {
             store.abandon();
         }
         let now = self.clock.now();
-        self.engine = blank_engine(&now, self.keychain.as_ref());
+        self.engine = Engine::fresh(&now);
+        self.engine.clear_dirty();
+        self.tokens.clear();
+        self.loaded = false;
         self.digest = self.engine.digest(&now);
         self.flights.clear();
         self.disconnect_all();
@@ -391,39 +782,58 @@ impl Daemon {
             }
             return Err(e);
         }
-        if changed {
-            self.publish_scopes(now);
+        self.publish_keychain();
+        if changed || self.engine.keychain_state() != KeychainState::Ok {
+            self.publish_accounts(now);
         }
         self.send_notifications(notifications, None);
         Ok(())
     }
 
-    fn publish_scopes(&mut self, now: &Now) {
+    fn broadcast(&mut self, text: String) {
+        let ids: Vec<u64> = self.subscribers.keys().copied().collect();
+        for id in ids {
+            self.enqueue(id, text.clone(), None);
+        }
+    }
+
+    fn publish_keychain(&mut self) {
+        let state = self.engine.keychain_state();
+        if state != self.sent_keychain {
+            self.sent_keychain = state;
+            self.broadcast(line(&SubscribeEvent::KeychainChanged {
+                keychain: Lenient::Known(state),
+            }));
+        }
+    }
+
+    fn publish_accounts(&mut self, now: &Now) {
         self.engine.set_clock(now);
         let digest = self.engine.digest(now);
-        let changed: Vec<proto::Scope> = digest
+        let removed: Vec<String> = self
+            .digest
+            .keys()
+            .filter(|id| !digest.contains_key(*id))
+            .cloned()
+            .collect();
+        let changed: Vec<proto::Account> = digest
             .iter()
             .filter(|(id, value)| self.digest.get(*id) != Some(value))
-            .map(|(_, (scope, _))| scope.clone())
+            .map(|(_, (account, _))| account.clone())
             .collect();
         self.digest = digest;
-        for scope in changed {
-            let text = line(&SubscribeEvent::ScopeChanged { scope });
-            let ids: Vec<u64> = self.subscribers.keys().copied().collect();
-            for id in ids {
-                self.enqueue(id, text.clone(), None);
-            }
+        for id in removed {
+            self.broadcast(line(&SubscribeEvent::AccountRemoved { id }));
+        }
+        for account in changed {
+            self.broadcast(line(&SubscribeEvent::AccountChanged { account }));
         }
     }
 
     /// `config_changed` to every subscriber (DESIGN.md, "Launch at login
     /// sync": the app follows a setting changed elsewhere).
     fn publish_config(&mut self, key: String, value: serde_json::Value) {
-        let text = line(&SubscribeEvent::ConfigChanged { key, value });
-        let ids: Vec<u64> = self.subscribers.keys().copied().collect();
-        for id in ids {
-            self.enqueue(id, text.clone(), None);
-        }
+        self.broadcast(line(&SubscribeEvent::ConfigChanged { key, value }));
     }
 
     fn app_connected(&self) -> bool {
@@ -506,12 +916,18 @@ impl Daemon {
                 kill: Some(kill_tx),
             },
         );
+        let unreadable = self.store.is_none();
         let snapshot = SubscribeEvent::Snapshot {
-            scopes: self.engine.scopes(),
-            db_unreadable: self.store.is_none(),
+            accounts: if unreadable {
+                Vec::new()
+            } else {
+                self.engine.accounts()
+            },
+            keychain: Lenient::Known(self.engine.keychain_state()),
+            db_unreadable: unreadable,
         };
         self.enqueue(id, line(&snapshot), None);
-        if client == ClientKind::App && self.store.is_some() {
+        if client == ClientKind::App && !unreadable {
             self.send_summaries(id, &now);
         }
         Subscribed { id, rx, kill }
@@ -603,57 +1019,24 @@ impl Daemon {
         store::retire(&path, now.at).map_err(|e| internal(e.to_string()))?;
         let store = match Store::open(&path).map_err(|e| internal(e.to_string()))? {
             OpenOutcome::Ready(store, _) => store,
-            OpenOutcome::Corrupt => return Err(internal("the new database is damaged".into())),
+            OpenOutcome::Unreadable => {
+                return Err(internal("the new database is damaged".into()));
+            }
         };
         self.store = Some(store);
-        self.engine = Engine::fresh_from_accounts(&now, &accounts(self.keychain.as_ref()));
+        self.engine = Engine::fresh(&now);
+        // The first fetch reads the Keychain and brings the accounts back.
+        self.engine.restore_after_reset();
         self.tokens.clear();
+        self.loaded = false;
         self.save_now()?;
         self.digest = self.engine.digest(&now);
         self.disconnect_all();
         logging::info(format_args!("saved state reset"));
         Ok(line(&proto::AckResponse::new()))
     }
-}
 
-/// What the unreadable state shows: the content `reset` would give, with the
-/// scopes the Keychain holds tokens for.
-fn blank_engine(now: &Now, keychain: &dyn Keychain) -> Engine {
-    let mut engine = Engine::fresh_from_accounts(now, &accounts(keychain));
-    engine.clear_dirty();
-    engine
-}
-
-/// The Keychain accounts, or none when the Keychain cannot be listed.
-fn accounts(keychain: &dyn Keychain) -> Vec<String> {
-    keychain.accounts().unwrap_or_else(|e| {
-        logging::error(format_args!("cannot list the saved tokens: {e}"));
-        Vec::new()
-    })
-}
-
-impl Daemon {
-    /// A token from the cache, else from the Keychain.
-    fn read_token(
-        keychain: &dyn Keychain,
-        cache: &mut HashMap<String, String>,
-        account: &str,
-    ) -> Option<String> {
-        if let Some(token) = cache.get(account) {
-            return Some(token.clone());
-        }
-        match keychain.get(account) {
-            Ok(Some(token)) => {
-                cache.insert(account.to_string(), token.clone());
-                Some(token)
-            }
-            Ok(None) => None,
-            Err(e) => {
-                logging::error(format_args!("{e}"));
-                None
-            }
-        }
-    }
+    // ------------------------------------------------------------ fetching
 
     pub fn now(&self) -> Now {
         self.clock.now()
@@ -663,234 +1046,267 @@ impl Daemon {
         self.clock.is_fixed()
     }
 
-    /// What a fetch run needs, or `None` when nothing is to be fetched: the
-    /// database is unreadable, fetching is stopped, or nothing is due.
-    pub fn fetch_plan(&mut self, forced: bool, only_scope: Option<String>) -> Option<Plan> {
-        if self.check_db().is_err() {
-            return None;
+    /// The runs due now, one per account: not while the database or the
+    /// Keychain cannot be read, and not for an account without a usable
+    /// token or stopped by a rate limit.
+    pub fn fetch_plans(&mut self, forced: bool, only: Option<&str>) -> Vec<Plan> {
+        if self.check_db().is_err() || self.engine.keychain_state() != KeychainState::Ok {
+            return Vec::new();
         }
         let now = self.clock.now();
         self.engine.set_clock(&now);
-        if self.engine.stopped_until(now.at).is_some() {
-            return None;
+        let ids: Vec<String> = self.engine.data().accounts.keys().cloned().collect();
+        let mut plans = Vec::new();
+        for id in ids {
+            if only.is_some_and(|o| o != id) || !self.engine.may_fetch(&id, now.at, forced) {
+                continue;
+            }
+            let due = self.engine.due(&id, now.at, forced);
+            if !due.any() {
+                continue;
+            }
+            let Some(token) = self.tokens.get(&id).cloned() else {
+                continue;
+            };
+            plans.extend(self.engine.fetch_plan(&id, &now, due, forced, token));
         }
-        let due = self.engine.due(now.at, forced);
-        if !due.any() {
-            return None;
-        }
-        let keychain = self.keychain.clone();
-        let cache = &mut self.tokens;
-        let mut read = |account: &str| Self::read_token(keychain.as_ref(), cache, account);
-        Some(
-            self.engine
-                .fetch_plan(&now, due, forced, only_scope, &mut read),
-        )
+        plans
     }
 
     /// Apply a run's outcome, save, then tell the subscribers.
-    pub fn apply_fetch(&mut self, outcome: Outcome) {
+    pub fn apply_fetch(&mut self, account: &str, outcome: Outcome) {
         if self.check_db().is_err() {
             return;
         }
         let now = self.clock.now();
-        self.engine.apply_fetch(outcome, &now);
+        self.engine.apply_fetch(account, outcome, &now);
+        self.follow_login(account);
         if let Err(e) = self.commit(&now, true) {
             logging::error(format_args!("cannot save a fetch: {e:?}"));
         }
     }
 
-    /// Check a `refresh` or `token_test` before the server runs it.
-    pub fn precheck(&mut self, scope: Option<&str>) -> Result<Option<String>, String> {
+    /// Check a `refresh` before the server runs it: the account id it names.
+    pub fn precheck(&mut self, account: Option<&str>) -> Result<Option<String>, String> {
         self.check_db().map_err(|e| error_line(&e))?;
-        scope
-            .map(|s| self.engine.require_scope(s))
+        account
+            .map(|a| self.account_of(a))
             .transpose()
             .map_err(|e| error_line(&e))
     }
 
     /// The `refresh` answer once fetching is done.
-    pub fn refresh_answer(&mut self, scope: Option<&str>) -> String {
+    pub fn refresh_answer(&mut self, account: Option<&str>) -> String {
         let now = self.clock.now();
         self.engine.set_clock(&now);
         line(&proto::RefreshResponse {
             ok: true,
-            warnings: self.engine.refresh_warnings(scope),
+            warnings: self.engine.refresh_warnings(account),
         })
     }
 
-    /// Whether every fetch is stopped now.
-    pub fn stopped(&mut self) -> bool {
-        let now = self.clock.now();
-        self.engine.stopped_until(now.at).is_some()
+    // ------------------------------------------------------------- tokens
+
+    pub fn account_login(&self, id: &str) -> Option<String> {
+        self.engine.account_record(id).map(|a| a.login.clone())
     }
 
-    /// What `token_test` needs: the record key, the token to test (given, or
-    /// the saved one), whether it is the saved one, and the reference owner.
-    /// The token `scope_lookup` asks with: the notifications token when it
-    /// is registered, else none (an empty string).
-    pub fn lookup_token(&mut self, owner: &str) -> Result<String, String> {
+    /// `account_add` before GitHub is asked.
+    pub fn account_add_check(&mut self) -> Result<(), String> {
         self.check_db().map_err(|e| error_line(&e))?;
-        if !valid_login(owner) {
-            return Err(error_line(&CmdError::Invalid(format!(
-                "not a GitHub login: {owner}"
-            ))));
-        }
-        if self
-            .engine
-            .token_record(crate::model::NOTIFICATIONS)
-            .is_none()
-        {
-            return Ok(String::new());
-        }
-        Ok(Self::read_token(
-            self.keychain.as_ref(),
-            &mut self.tokens,
-            crate::model::NOTIFICATIONS,
-        )
-        .unwrap_or_default())
+        self.require_keychain().map_err(|e| error_line(&e))
     }
 
+    /// `account_add` once `viewer` answered: create the account and save the
+    /// token. Returns the account id.
+    pub fn account_add_finish(
+        &mut self,
+        id: &str,
+        login: &str,
+        token: &str,
+    ) -> Result<String, String> {
+        let result = (|| {
+            self.check_db()?;
+            if let Some(existing) = self.engine.account_record(id) {
+                return Err(CmdError::Invalid(format!(
+                    "{} is already added",
+                    existing.login
+                )));
+            }
+            let mut stored = self.read_item()?;
+            stored.retain(|a| a.id != id);
+            stored.push(StoredAccount {
+                id: id.to_string(),
+                login: login.to_string(),
+                token: token.to_string(),
+            });
+            self.engine.account_create(id, login)?;
+            if let Err(e) = self.write_item(&stored) {
+                self.engine.account_remove(id);
+                return Err(e);
+            }
+            self.tokens.insert(id.to_string(), token.to_string());
+            self.engine.token_saved(id);
+            let now = self.clock.now();
+            self.commit(&now, false)?;
+            self.account_line(id)
+        })();
+        if result.is_err() {
+            self.publish_failure();
+        }
+        result.map_err(|e| error_line(&e))
+    }
+
+    /// `token_set` before GitHub is asked: the account id.
+    pub fn token_set_check(&mut self, account: &str) -> Result<String, String> {
+        self.check_db().map_err(|e| error_line(&e))?;
+        let id = self.account_of(account).map_err(|e| error_line(&e))?;
+        self.require_keychain().map_err(|e| error_line(&e))?;
+        Ok(id)
+    }
+
+    /// `token_set` once `viewer` answered with `owner_id`.
+    pub fn token_set_finish(
+        &mut self,
+        account: &str,
+        owner_id: &str,
+        owner_login: &str,
+        token: &str,
+    ) -> Result<String, String> {
+        let result = (|| {
+            self.check_db()?;
+            if owner_id != account {
+                return Err(CmdError::Invalid(format!("Belongs to {owner_login}")));
+            }
+            if self.engine.account_record(account).is_none() {
+                return Err(CmdError::NotFound("not found: account".into()));
+            }
+            // The token's owner may have a new login: the item and the
+            // account take it at once (DESIGN.md, "Tokens").
+            let mut stored = self.read_item()?;
+            stored.retain(|a| a.id != account);
+            stored.push(StoredAccount {
+                id: account.to_string(),
+                login: owner_login.to_string(),
+                token: token.to_string(),
+            });
+            self.write_item(&stored)?;
+            self.tokens.insert(account.to_string(), token.to_string());
+            self.engine.token_saved(account);
+            self.engine.login_seen(account, owner_login);
+            let now = self.clock.now();
+            self.commit(&now, false)?;
+            Ok(line(&proto::AckResponse::new()))
+        })();
+        if result.is_err() {
+            self.publish_failure();
+        }
+        result.map_err(|e| error_line(&e))
+    }
+
+    /// What `token_test` needs. `given` is the token from standard input.
     pub fn test_target(
         &mut self,
-        target: &str,
+        account: Option<&str>,
         given: Option<String>,
     ) -> Result<TestTarget, String> {
-        self.check_db().map_err(|e| error_line(&e))?;
-        let key = self.engine.token_key(target).map_err(|e| error_line(&e))?;
-        let saved = given.is_none();
-        let token = match given {
-            Some(token) => Some(token),
-            None if self.engine.token_record(&key).is_some() => {
-                let account = crate::model::scope_account(&key);
-                Self::read_token(self.keychain.as_ref(), &mut self.tokens, &account)
-            }
-            None => None,
-        };
-        let Some(token) = token.filter(|t| !t.trim().is_empty()) else {
-            return Err(error_line(&CmdError::Invalid(format!(
-                "no token for {target}: pipe one to the command or run `shiibar-gh token set {target}`"
-            ))));
-        };
-        let owner = self
-            .engine
-            .scope_of_token(&key)
-            .filter(|scope| scope != crate::model::PUBLIC)
-            .map(|scope| {
-                self.engine
-                    .scopes()
-                    .into_iter()
-                    .find(|s| s.id == scope)
-                    .map_or(scope, |s| s.name)
-            });
-        let fetch = self.engine.data().fetch.clone();
-        let viewer = self.engine.viewer();
-        // Public's Team membership is checked with the classic PAT.
-        let team_token = if key == crate::model::PUBLIC
-            && self
-                .engine
-                .token_record(crate::model::NOTIFICATIONS)
-                .is_some()
-        {
-            Self::read_token(
-                self.keychain.as_ref(),
-                &mut self.tokens,
-                crate::model::NOTIFICATIONS,
-            )
-        } else {
-            None
-        };
-        // The reference owner, when unknown, is read with the classic PAT.
-        let classic = match (&viewer, key.as_str()) {
-            (None, k)
-                if k != crate::model::NOTIFICATIONS
-                    && self
-                        .engine
-                        .token_record(crate::model::NOTIFICATIONS)
-                        .is_some() =>
-            {
-                Self::read_token(
-                    self.keychain.as_ref(),
-                    &mut self.tokens,
-                    crate::model::NOTIFICATIONS,
-                )
-            }
-            _ => None,
-        };
-        Ok(TestTarget {
-            key,
-            token: token.trim().to_string(),
-            saved,
-            owner,
-            viewer,
-            classic,
-            team_token,
-            now: self.clock.now().at,
-            cost_cap: self.engine.data().config.graphql_cost_cap,
-            costs: fetch.costs,
-        })
+        let result = (|| {
+            self.check_db()?;
+            let given = given
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty());
+            let id = account.map(|a| self.account_of(a)).transpose()?;
+            let saved = given.is_none();
+            let token = match (&id, given) {
+                (_, Some(token)) => token,
+                (Some(id), None) => self.saved_token(id)?.ok_or_else(|| {
+                    CmdError::Invalid(
+                        "no token for the account: pipe one to the command or run `shiibar-gh token set`"
+                            .into(),
+                    )
+                })?,
+                (None, None) => {
+                    return Err(CmdError::Invalid(
+                        "token_test without an account needs a token".into(),
+                    ));
+                }
+            };
+            let (expect, owners) = match &id {
+                Some(id) => (
+                    Expect::Account { id: id.clone() },
+                    self.engine
+                        .owners_of(id)
+                        .into_iter()
+                        .map(|o| OwnerProbe {
+                            id: o.id.clone(),
+                            name: o.name.clone(),
+                            kind: o.kind,
+                            github_id: o.github_id,
+                        })
+                        .collect(),
+                ),
+                None => (
+                    Expect::New {
+                        taken: self
+                            .engine
+                            .data()
+                            .accounts
+                            .values()
+                            .map(|a| (a.id.clone(), a.login.clone()))
+                            .collect(),
+                    },
+                    Vec::new(),
+                ),
+            };
+            Ok(TestTarget {
+                account: id,
+                token,
+                saved,
+                expect,
+                owners,
+                now: self.clock.now().at,
+            })
+        })();
+        if result.is_err() {
+            self.publish_failure();
+        }
+        result.map_err(|e| error_line(&e))
     }
 
     /// Record what a test found and answer it.
     pub fn test_done(
         &mut self,
         target: &TestTarget,
-        report: Result<crate::tokentest::Report, crate::github::CallError>,
-        rec: crate::github::Recorder,
+        report: crate::tokentest::Report,
+        rec: Recorder,
     ) -> String {
         let now = self.clock.now();
-        // A limit the test ran into stops every fetch, like any fetch.
-        let usage = Outcome {
-            costs: rec.added.clone(),
-            rest: rec.rest,
-            graphql: rec.graphql,
-            stop: rec.stop.clone(),
-            ..Outcome::default()
-        };
-        let report = match report {
-            Ok(report) => report,
-            Err(e) => {
-                if self.check_db().is_ok() {
-                    self.engine.apply_fetch(usage, &now);
-                    if let Err(e) = self.commit(&now, true) {
-                        logging::error(format_args!("cannot save a token test: {e:?}"));
-                    }
-                }
-                return test_failed(e);
-            }
-        };
-        let mismatch = target.key != crate::model::NOTIFICATIONS
-            && matches!((&report.owner, &target.viewer), (Some(o), Some(v)) if !o.eq_ignore_ascii_case(v));
-        if self.check_db().is_ok() {
-            if let Some(scope) = self.engine.scope_of_token(&target.key)
-                && scope != crate::model::PUBLIC
+        // DESIGN.md, "Token registration and test": only the saved token's
+        // usage and limits are recorded on the account; a pasted token's
+        // are not, even when it belongs to the account.
+        if self.check_db().is_ok()
+            && let Some(account) = &target.account
+            && target.saved
+        {
+            self.engine
+                .usage_seen(account, rec.graphql, rec.rest, rec.stop);
             {
-                self.engine
-                    .scope_observed(&scope, report.kind, report.name.clone());
-            }
-            if let Some(viewer) = target.viewer.clone().filter(|_| target.classic.is_some()) {
-                self.engine
-                    .token_tested_owner(crate::model::NOTIFICATIONS, viewer);
-            }
-            if target.saved {
-                let obs = rec.tokens.get(&target.key).cloned().unwrap_or_default();
-                let test = TestRec {
-                    at: now.at,
-                    results: report
-                        .results
-                        .iter()
-                        .map(crate::engine::stored_test_item)
-                        .collect(),
-                };
+                let login = report
+                    .viewer
+                    .as_ref()
+                    .filter(|(id, _)| id == account)
+                    .map(|(_, login)| login.clone());
                 self.engine.token_tested(
-                    &target.key,
-                    test,
-                    TokenObs {
-                        owner: report.owner.clone(),
-                        ..obs
+                    account,
+                    TestRec {
+                        at: now.at,
+                        results: report.results.clone(),
                     },
+                    rec.token.clone(),
+                    login,
                 );
             }
-            self.engine.apply_fetch(usage, &now);
+            self.follow_login(account);
             if let Err(e) = self.commit(&now, true) {
                 logging::error(format_args!("cannot save a token test: {e:?}"));
             }
@@ -898,79 +1314,106 @@ impl Daemon {
         line(&proto::TokenTestResponse {
             ok: true,
             results: report.results,
-            owner: report.owner,
-            owner_mismatch: mismatch,
         })
+    }
+
+    /// `owner_lookup` and `owner_add` before GitHub is asked: the account id
+    /// and the token to ask with (empty without one).
+    pub fn lookup_target(
+        &mut self,
+        account: &str,
+        owner: &str,
+        adding: bool,
+    ) -> Result<(String, String), String> {
+        let result = (|| {
+            self.check_db()?;
+            let id = self.account_of(account)?;
+            if !valid_login(owner) || owner.eq_ignore_ascii_case(PUBLIC) {
+                return Err(CmdError::Invalid(format!("not a GitHub login: {owner}")));
+            }
+            if adding && self.engine.owner_id(&id, owner).is_ok() {
+                return Err(CmdError::Invalid(format!("{owner} is already added")));
+            }
+            // DESIGN.md, "Add owner…": asked with the account's token only.
+            let token = self
+                .saved_token(&id)?
+                .ok_or_else(|| CmdError::Invalid("Account has no token".into()))?;
+            Ok((id, token))
+        })();
+        if result.is_err() {
+            self.publish_failure();
+        }
+        result.map_err(|e| error_line(&e))
+    }
+
+    /// `owner_add` once `GET /users/{owner}` answered.
+    pub fn owner_add_finish(&mut self, account: &str, found: Lookup) -> String {
+        let result = (|| {
+            self.check_db()?;
+            let now = self.clock.now();
+            self.engine.set_clock(&now);
+            self.engine
+                .owner_add(account, &found.login, found.kind, Some(found.id), &now)?;
+            self.commit(&now, false)?;
+            self.account_line(account)
+        })();
+        result.unwrap_or_else(|e| error_line(&e))
     }
 }
 
 /// A token about to be tested. Never logged: it holds the token.
 pub struct TestTarget {
-    pub key: String,
+    pub account: Option<String>,
     pub token: String,
     pub saved: bool,
-    /// The owner login of an owner scope.
-    pub owner: Option<String>,
-    pub viewer: Option<String>,
-    /// The classic PAT, when the reference owner has to be read first.
-    pub classic: Option<String>,
-    /// The classic PAT for Public's Team membership item.
-    pub team_token: Option<String>,
+    pub expect: Expect,
+    pub owners: Vec<OwnerProbe>,
     pub now: i64,
-    pub cost_cap: i64,
-    pub costs: Vec<(i64, i64)>,
 }
 
-/// The line for a failed `token_test`.
-/// A GitHub login: letters, digits and single hyphens, not at either end,
-/// at most 39 characters. Anything else is refused before it becomes part of
-/// a URL path.
-pub fn valid_login(owner: &str) -> bool {
-    !owner.is_empty()
-        && owner.len() <= 39
-        && !owner.starts_with('-')
-        && !owner.ends_with('-')
-        && owner.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-}
-
-pub fn lookup_failed(reason: impl std::fmt::Display) -> String {
-    error_line(&CmdError::Internal(format!(
-        "cannot look the owner up: {reason}"
-    )))
+/// What `GET /users/{owner}` said.
+#[derive(Debug, Clone)]
+pub struct Lookup {
+    pub login: String,
+    pub kind: OwnerKind,
+    pub id: i64,
 }
 
 /// The answer of `GET /users/{owner}`: `type` Organization is `org`, User
-/// is `user`; 404 is `not_found`.
-pub fn lookup_answer(answer: Result<crate::github::Rest, crate::github::CallError>) -> String {
-    use crate::github::CallError;
+/// is `user`; 404 is `not_found`, a network failure `unreachable`.
+pub fn lookup_answer(answer: Result<Rest, CallError>) -> Result<Lookup, CmdError> {
     match answer {
         Ok(rest) => {
             let kind = match rest.body["type"].as_str() {
-                Some("Organization") => proto::ScopeKind::Org,
-                Some("User") => proto::ScopeKind::User,
+                Some("Organization") => OwnerKind::Org,
+                Some("User") => OwnerKind::User,
                 other => {
-                    return lookup_failed(format!(
-                        "GitHub gave the type {}",
+                    return Err(CmdError::Internal(format!(
+                        "cannot look the owner up: GitHub gave the type {}",
                         other.unwrap_or("nothing")
-                    ));
+                    )));
                 }
             };
-            line(&proto::ScopeLookupResponse {
-                ok: true,
-                owner: rest.body["login"].as_str().unwrap_or_default().to_string(),
-                kind: proto::Lenient::Known(kind),
+            let id = rest.body["id"].as_i64().ok_or_else(|| {
+                CmdError::Internal("cannot look the owner up: GitHub gave no id".into())
+            })?;
+            Ok(Lookup {
+                login: rest.body["login"].as_str().unwrap_or_default().to_string(),
+                kind,
+                id,
             })
         }
-        Err(CallError::NotFound) => error_line(&CmdError::NotFound(
-            "not found: no such owner on GitHub".into(),
-        )),
-        Err(CallError::Unauthorized) => lookup_failed("GitHub rejected the notifications token"),
-        Err(e) => lookup_failed(e),
+        Err(CallError::NotFound) => Err(CmdError::NotFound("Owner not found".into())),
+        Err(CallError::Network(_)) => Err(CmdError::Unreachable("Couldn't reach GitHub".into())),
+        Err(e) => Err(CmdError::Internal(format!("cannot look the owner up: {e}"))),
     }
 }
 
-pub fn test_failed(error: impl std::fmt::Display) -> String {
-    error_line(&CmdError::Internal(format!(
-        "the test could not run: {error}"
-    )))
+pub fn lookup_line(found: &Lookup) -> String {
+    line(&proto::OwnerLookupResponse {
+        ok: true,
+        owner: found.login.clone(),
+        kind: Lenient::Known(found.kind.into()),
+        id: found.id,
+    })
 }

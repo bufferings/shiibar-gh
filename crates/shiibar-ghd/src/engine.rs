@@ -6,20 +6,23 @@ use crate::clock::{ClockTime, Now};
 use crate::model::*;
 use serde_json::{Value, json};
 use shiibar_gh_proto as proto;
-use shiibar_gh_proto::{Filter, Ingest, IngestEvent, IngestPr, IngestReaction, Lenient};
+use shiibar_gh_proto::{Ingest, IngestEvent, IngestPr, IngestReaction, Lenient, PrFilter};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+mod accounts;
 mod fetch_api;
+pub use accounts::valid_login;
 pub use fetch_api::*;
 
 const DAY_SECS: i64 = 86_400;
+
 /// DESIGN.md, "Row kinds and states": line breaks and runs of white space
 /// become one space, in notification bodies as on screen.
 pub fn collapse_whitespace(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Rows kept per PR among read events and done rows.
+/// Rows kept per PR among read rows and done rows.
 const KEEP_ROWS: usize = 3;
 
 /// `ReactionContent` values in display order, with their emoji.
@@ -38,6 +41,8 @@ const REACTIONS: [(&str, &str); 8] = [
 pub enum CmdError {
     NotFound(String),
     Invalid(String),
+    Unreachable(String),
+    KeychainUnavailable(String),
     Internal(String),
 }
 
@@ -47,11 +52,30 @@ fn not_found(what: impl std::fmt::Display) -> CmdError {
     CmdError::NotFound(format!("not found: {what}"))
 }
 
+/// The arguments of `list`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ListArgs {
+    pub account: Option<String>,
+    pub owner: Option<String>,
+    pub todo: bool,
+    pub filter: PrFilter,
+    pub snoozed: bool,
+}
+
+/// The arguments of `activity`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ActivityArgs {
+    pub account: Option<String>,
+    pub owners: Vec<String>,
+    pub todo: bool,
+    pub filter: PrFilter,
+}
+
 pub struct Engine {
     data: Data,
     dirty: Dirty,
     rows_by_pr: HashMap<String, Vec<String>>,
-    /// Scopes with an open popover or window. Never saved.
+    /// Accounts with an open popover or window. Never saved.
     open: BTreeSet<String>,
     /// Rows with a notification written to a connection but not confirmed.
     in_flight: BTreeSet<String>,
@@ -62,19 +86,17 @@ pub struct Engine {
     notification_seq: u64,
     /// The time warnings are judged against; the daemon sets it before every
     /// command and pass.
-    clock_at: i64,
-    /// Fetch warnings that hold until the scope's next fetch: `fetch_failed`
-    /// and `permission_missing`. Never saved.
-    fetch_warnings: BTreeMap<String, Vec<proto::Warning>>,
-    /// `fetch_failed` of the last notifications check, shown on every scope
-    /// until a check succeeds. Never saved.
-    notifications_failed: Option<proto::Warning>,
-    /// When each kind of fetch is due next. Never saved: a start fetches.
-    timers: Timers,
+    clock: Now,
+    /// What the daemon could make of the Keychain item.
+    keychain: proto::KeychainState,
+    /// `fetch_failed` of each account's last run: message and retry time.
+    failures: BTreeMap<String, (String, i64)>,
+    /// When each kind of fetch is due next, per account. Never saved.
+    timers: BTreeMap<String, Timers>,
 }
 
-/// When each kind of fetch is due next, in epoch seconds. The status fetch
-/// is timed per scope, so `refresh <scope>` leaves the others alone.
+/// When each kind of fetch of one account is due next, in epoch seconds.
+/// The status fetch is timed per owner.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Timers {
     pub status: BTreeMap<String, i64>,
@@ -83,82 +105,52 @@ pub struct Timers {
 }
 
 impl Engine {
-    /// A database without saved state: no scopes, not even Public, which the
-    /// user adds when wanted. DESIGN.md, "Scopes".
+    /// A database without saved state: no accounts.
     pub fn fresh(now: &Now) -> Self {
         let data = Data {
             last_release_at: now.at,
             ..Data::default()
         };
         let mut engine = Self::restore(data);
-        engine.clock_at = now.at;
+        engine.clock = now.clone();
         engine.dirty = Dirty {
             config: true,
             meta: true,
-            fetch: true,
             ..Dirty::default()
         };
         engine
     }
 
-    /// A fresh state with the scopes and token registrations restored from
-    /// the Keychain accounts. DESIGN.md, "When the database cannot be read".
-    pub fn fresh_from_accounts(now: &Now, accounts: &[String]) -> Self {
-        let mut engine = Self::fresh(now);
-        for account in accounts {
-            let target = match account.as_str() {
-                NOTIFICATIONS => account.clone(),
-                // A Public token brings Public back (docs/tasks/M3.md).
-                PUBLIC => {
-                    if engine.scope_add(PUBLIC, now).is_err() {
-                        continue;
-                    }
-                    account.clone()
-                }
-                other => match other.strip_prefix(SCOPE_ACCOUNT_PREFIX) {
-                    Some(owner) if !owner.is_empty() => {
-                        let owner = owner.to_lowercase();
-                        if engine.scope_add(&owner, now).is_err() {
-                            continue;
-                        }
-                        owner
-                    }
-                    _ => continue,
-                },
-            };
-            engine.data.fetch.tokens.insert(
-                target.clone(),
-                TokenRec {
-                    target,
-                    registered: true,
-                    ..TokenRec::default()
-                },
-            );
-        }
-        engine.dirty.fetch = true;
-        engine
-    }
-
     pub fn restore(data: Data) -> Self {
-        // The next notifications check survives a restart: X-Poll-Interval
-        // counts from the last check (owner rule, docs/tasks/M2.md).
-        let timers = Timers {
-            notifications: data.fetch.notif_checked_at.map_or(0, |at| {
-                at + data
-                    .fetch
-                    .poll_interval
-                    .unwrap_or(fetch_api::DEFAULT_POLL_INTERVAL)
-                    .max(1)
-            }),
-            ..Timers::default()
-        };
         let mut rows_by_pr: HashMap<String, Vec<String>> = HashMap::new();
         for row in data.rows.values() {
             rows_by_pr
-                .entry(row.pr_id.clone())
+                .entry(row.pr.clone())
                 .or_default()
                 .push(row.id.clone());
         }
+        // The next notifications check survives a restart: X-Poll-Interval
+        // counts from the last check.
+        let timers = data
+            .accounts
+            .values()
+            .map(|a| {
+                let notifications = a.fetch.notif_checked_at.map_or(0, |at| {
+                    at + a
+                        .fetch
+                        .poll_interval
+                        .unwrap_or(fetch_api::DEFAULT_POLL_INTERVAL)
+                        .max(1)
+                });
+                (
+                    a.id.clone(),
+                    Timers {
+                        notifications,
+                        ..Timers::default()
+                    },
+                )
+            })
+            .collect();
         Self {
             data,
             dirty: Dirty::default(),
@@ -168,16 +160,19 @@ impl Engine {
             fresh: Vec::new(),
             released: Vec::new(),
             notification_seq: 0,
-            clock_at: 0,
-            fetch_warnings: BTreeMap::new(),
-            notifications_failed: None,
+            clock: Now {
+                at: 0,
+                tz: jiff::tz::TimeZone::UTC,
+            },
+            keychain: proto::KeychainState::Ok,
+            failures: BTreeMap::new(),
             timers,
         }
     }
 
     /// The time warnings are judged against.
     pub fn set_clock(&mut self, now: &Now) {
-        self.clock_at = now.at;
+        self.clock = now.clone();
     }
 
     pub fn data(&self) -> &Data {
@@ -192,26 +187,39 @@ impl Engine {
         self.dirty = Dirty::default();
     }
 
+    pub fn keychain_state(&self) -> proto::KeychainState {
+        self.keychain
+    }
+
+    pub fn set_keychain_state(&mut self, state: proto::KeychainState) {
+        self.keychain = state;
+    }
+
     pub fn row_record(&self, id: &str) -> Option<&RowRec> {
         self.data.rows.get(id)
     }
 
-    pub fn pr_snoozed(&self, id: &str) -> bool {
-        self.data.prs.get(id).is_some_and(|pr| pr.snoozed)
+    pub fn pr_record(&self, key: &str) -> Option<&PrRec> {
+        self.data.prs.get(key)
     }
 
     pub fn last_release_at(&self) -> i64 {
         self.data.last_release_at
     }
 
-    fn scope_mut(&mut self, id: &str) -> Option<&mut ScopeRec> {
-        self.dirty.scopes.insert(id.to_string());
-        self.data.scopes.get_mut(id)
+    fn account_mut(&mut self, id: &str) -> Option<&mut AccountRec> {
+        self.dirty.accounts.insert(id.to_string());
+        self.data.accounts.get_mut(id)
     }
 
-    fn pr_mut(&mut self, id: &str) -> Option<&mut PrRec> {
-        self.dirty.prs.insert(id.to_string());
-        self.data.prs.get_mut(id)
+    fn owner_mut(&mut self, id: &str) -> Option<&mut OwnerRec> {
+        self.dirty.owners.insert(id.to_string());
+        self.data.owners.get_mut(id)
+    }
+
+    fn pr_mut(&mut self, key: &str) -> Option<&mut PrRec> {
+        self.dirty.prs.insert(key.to_string());
+        self.data.prs.get_mut(key)
     }
 
     fn row_mut(&mut self, id: &str) -> Option<&mut RowRec> {
@@ -219,64 +227,177 @@ impl Engine {
         self.data.rows.get_mut(id)
     }
 
-    /// The stored key of a scope. Owner logins compare without regard to case,
-    /// and a scope keeps the spelling it was first registered with.
-    fn scope_key(&self, name: &str) -> Option<&str> {
+    fn next_seq(&mut self) -> u64 {
+        self.data.seq += 1;
+        self.dirty.meta = true;
+        self.data.seq
+    }
+
+    // ------------------------------------------------------------ lookups
+
+    /// The id of the account with this login, compared without case.
+    pub fn account_id(&self, login: &str) -> Result<String> {
         self.data
-            .scopes
-            .keys()
-            .find(|key| key.eq_ignore_ascii_case(name))
-            .map(String::as_str)
+            .accounts
+            .values()
+            .find(|a| a.login.eq_ignore_ascii_case(login))
+            .map(|a| a.id.clone())
+            .ok_or_else(|| not_found(format!("account {login}")))
     }
 
-    fn registered_scope(&self, name: &str) -> Option<&ScopeRec> {
-        self.scope_key(name)
-            .and_then(|key| self.data.scopes.get(key))
-            .filter(|s| !s.removed)
+    pub fn account_record(&self, id: &str) -> Option<&AccountRec> {
+        self.data.accounts.get(id)
     }
 
-    /// DESIGN.md, "Scopes": the owner's scope when registered, else Public for
-    /// a public repository while Public is registered, else nothing.
-    fn resolve_scope(&self, owner: &str, is_private: bool) -> Option<&str> {
-        if !owner.eq_ignore_ascii_case(PUBLIC)
-            && let Some(scope) = self.registered_scope(owner)
-        {
-            return Some(scope.id.as_str());
+    pub fn owner_record(&self, id: &str) -> Option<&OwnerRec> {
+        self.data.owners.get(id)
+    }
+
+    /// The owners of an account in section order: registration order,
+    /// Public last.
+    pub fn owners_of(&self, account: &str) -> Vec<&OwnerRec> {
+        let mut owners: Vec<&OwnerRec> = self
+            .data
+            .owners
+            .values()
+            .filter(|o| o.account == account)
+            .collect();
+        owners.sort_by_key(|o| (o.is_public(), o.seq));
+        owners
+    }
+
+    /// The id of an account's owner by login, or Public by `public`.
+    pub fn owner_id(&self, account: &str, name: &str) -> Result<String> {
+        let public = name.eq_ignore_ascii_case(PUBLIC);
+        self.data
+            .owners
+            .values()
+            .find(|o| {
+                o.account == account
+                    && if public {
+                        o.is_public()
+                    } else {
+                        !o.is_public() && o.name.eq_ignore_ascii_case(name)
+                    }
+            })
+            .map(|o| o.id.clone())
+            .ok_or_else(|| not_found(format!("owner {name}")))
+    }
+
+    /// DESIGN.md, "Owners": the account's owner of the repository owner
+    /// when registered, else the account's Public for a public repository,
+    /// else nothing.
+    fn resolve_owner(
+        &self,
+        account: &str,
+        repo_owner: &str,
+        is_private: bool,
+    ) -> Option<&OwnerRec> {
+        let mut public = None;
+        for owner in self.data.owners.values().filter(|o| o.account == account) {
+            if owner.is_public() {
+                public = Some(owner);
+            } else if owner.name.eq_ignore_ascii_case(repo_owner) {
+                return Some(owner);
+            }
         }
-        (!is_private)
-            .then(|| self.registered_scope(PUBLIC))
-            .flatten()
-            .map(|scope| scope.id.as_str())
+        public.filter(|_| !is_private)
     }
 
-    fn scope_of(&self, pr: &PrRec) -> Option<&ScopeRec> {
-        let id = self.resolve_scope(&pr.owner, pr.is_private)?;
-        self.data.scopes.get(id)
+    fn owner_of(&self, pr: &PrRec) -> Option<&OwnerRec> {
+        self.resolve_owner(&pr.account, &pr.owner, pr.is_private)
     }
 
-    fn enabled_scope_of(&self, pr: &PrRec) -> Option<&ScopeRec> {
-        self.scope_of(pr).filter(|s| s.enabled)
+    fn enabled_owner_of(&self, pr: &PrRec) -> Option<&OwnerRec> {
+        self.owner_of(pr).filter(|o| o.enabled)
     }
 
-    fn rows_of(&self, pr_id: &str) -> impl Iterator<Item = &RowRec> {
+    fn login_of(&self, account: &str) -> &str {
+        self.data
+            .accounts
+            .get(account)
+            .map_or("", |a| a.login.as_str())
+    }
+
+    pub fn authored_by_me(&self, pr: &PrRec) -> bool {
+        !pr.author.is_empty() && pr.author.eq_ignore_ascii_case(self.login_of(&pr.account))
+    }
+
+    fn assigned_to_me(&self, pr: &PrRec) -> bool {
+        let login = self.login_of(&pr.account);
+        pr.assignees.iter().any(|a| a.eq_ignore_ascii_case(login))
+    }
+
+    /// DESIGN.md, "What the filters mean": a review is still requested from
+    /// the account, or from its team while the team kind's List is on.
+    fn review_requested(&self, pr: &PrRec, owner: &OwnerRec) -> bool {
+        pr.state == PrState::Open
+            && (pr.requested_me
+                || (pr.requested_team && owner.events.cell(EventKind::TeamReviewRequested).list))
+    }
+
+    fn rows_of(&self, pr: &str) -> impl Iterator<Item = &RowRec> {
         self.rows_by_pr
-            .get(pr_id)
+            .get(pr)
             .into_iter()
             .flatten()
             .filter_map(|id| self.data.rows.get(id))
     }
 
-    /// Bot comments under Hide, and team review requests while Include
-    /// requests to my teams is off: recorded, never shown or counted.
-    fn hidden(&self, row: &RowRec) -> bool {
-        (row.kind == RowKind::BotComment && self.data.config.bot_comments == BotComments::Hide)
-            || (row.team && !self.data.config.include_team_requests)
+    // ---------------------------------------------------------- exclusions
+
+    fn repo_exclusion(&self, pr: &PrRec, owner: &OwnerRec) -> Option<ExclusionState> {
+        let name = pr.repo_name();
+        owner
+            .repos
+            .iter()
+            .find(|e| e.name.eq_ignore_ascii_case(&name))
+            .map(|e| e.state)
     }
 
-    /// The Review requested row that can still be something to do.
-    fn latest_review_request(&self, pr_id: &str) -> Option<&RowRec> {
-        self.rows_of(pr_id)
-            .filter(|r| r.kind == RowKind::ReviewRequested && !self.hidden(r))
+    fn user_exclusion(&self, row: &RowRec, owner: &OwnerRec) -> Option<ExclusionState> {
+        if !row.kind.has_actor() {
+            return None;
+        }
+        let actor = user_key(row.actor.as_deref()?);
+        owner
+            .users
+            .iter()
+            .find(|e| user_key(&e.name) == actor)
+            .map(|e| e.state)
+    }
+
+    /// The stronger of the repository's and the actor's exclusion.
+    fn exclusion(&self, row: &RowRec, pr: &PrRec, owner: &OwnerRec) -> Option<ExclusionState> {
+        match (
+            self.repo_exclusion(pr, owner),
+            self.user_exclusion(row, owner),
+        ) {
+            (Some(ExclusionState::Hidden), _) | (_, Some(ExclusionState::Hidden)) => {
+                Some(ExclusionState::Hidden)
+            }
+            (Some(_), _) | (_, Some(_)) => Some(ExclusionState::ListOnly),
+            _ => None,
+        }
+    }
+
+    /// A row the list shows: not pruned, its kind's List on, not Hidden.
+    fn row_shown(&self, row: &RowRec, pr: &PrRec, owner: &OwnerRec) -> bool {
+        !row.pruned
+            && owner.events.cell(row.kind.event()).list
+            && self.exclusion(row, pr, owner) != Some(ExclusionState::Hidden)
+    }
+
+    fn repo_hidden(&self, pr: &PrRec, owner: &OwnerRec) -> bool {
+        self.repo_exclusion(pr, owner) == Some(ExclusionState::Hidden)
+    }
+
+    // ---------------------------------------------------------------- Todo
+
+    /// The newest shown Review requested row of a PR, of either kind.
+    fn latest_review_request(&self, pr: &PrRec, owner: &OwnerRec) -> Option<&RowRec> {
+        self.rows_of(&pr.key)
+            .filter(|r| r.kind.is_review_request() && self.row_shown_unpruned(r, pr, owner))
             .min_by(|a, b| {
                 b.occurred_at
                     .cmp(&a.occurred_at)
@@ -284,43 +405,59 @@ impl Engine {
             })
     }
 
-    /// DESIGN.md, "Review requested rows" and the row table.
-    fn is_needs_action(&self, row: &RowRec, pr: &PrRec) -> bool {
-        match row.kind {
-            RowKind::Mentioned | RowKind::Comment | RowKind::Reply => true,
-            RowKind::ReviewRequested => {
-                pr.state == PrState::Open
-                    && (pr.requested_me
-                        || (pr.requested_team && self.data.config.include_team_requests))
-                    && self
-                        .latest_review_request(&pr.id)
-                        .is_some_and(|latest| latest.id == row.id)
-            }
-            _ => false,
-        }
+    /// Like [`Self::row_shown`] without the pruning: a pruned request row is
+    /// still the latest one.
+    fn row_shown_unpruned(&self, row: &RowRec, pr: &PrRec, owner: &OwnerRec) -> bool {
+        owner.events.cell(row.kind.event()).list
+            && self.exclusion(row, pr, owner) != Some(ExclusionState::Hidden)
     }
 
-    /// Unread, or Needs action and not done, among the rows shown.
-    fn has_business(&self, pr: &PrRec) -> bool {
-        self.rows_of(&pr.id).any(|row| {
-            !row.pruned
-                && !self.hidden(row)
-                && (row.unread || (!row.done && self.is_needs_action(row, pr)))
+    /// DESIGN.md, "Review requested rows": whether a Review requested row
+    /// is still something to do.
+    fn still_requested(&self, row: &RowRec, pr: &PrRec, owner: &OwnerRec) -> bool {
+        pr.state == PrState::Open
+            && (pr.requested_me
+                || (pr.requested_team && owner.events.cell(EventKind::TeamReviewRequested).todo))
+            && self
+                .latest_review_request(pr, owner)
+                .is_some_and(|latest| latest.id == row.id)
+    }
+
+    /// DESIGN.md, "Row state transitions": the hand value when set, else the
+    /// table's value. Review requested rows follow the table as it is now
+    /// and count only while still requested.
+    fn row_todo(&self, row: &RowRec, pr: &PrRec, owner: &OwnerRec) -> bool {
+        let rr = row.kind.is_review_request();
+        let base = match row.todo_manual {
+            Some(value) => value,
+            None if rr => {
+                owner.events.cell(row.kind.event()).todo && self.exclusion(row, pr, owner).is_none()
+            }
+            None => row.todo_auto,
+        };
+        base && (!rr || self.still_requested(row, pr, owner))
+    }
+
+    /// Unread, or Todo and not done, among the rows shown.
+    fn has_business(&self, pr: &PrRec, owner: &OwnerRec) -> bool {
+        self.rows_of(&pr.key).any(|row| {
+            self.row_shown(row, pr, owner)
+                && (row.unread || (!row.done && self.row_todo(row, pr, owner)))
         })
     }
 
     /// DESIGN.md, "When cards appear and disappear", without the Snooze rule.
-    fn would_show(&self, pr: &PrRec, now: i64) -> bool {
-        if pr.unreadable {
+    fn would_show(&self, pr: &PrRec, owner: &OwnerRec, now: i64) -> bool {
+        if pr.unreadable || self.repo_hidden(pr, owner) {
             return false;
         }
-        if self.has_business(pr) {
+        if self.has_business(pr, owner) {
             return true;
         }
         if pr.state != PrState::Open {
             return false;
         }
-        if pr.mine {
+        if self.authored_by_me(pr) {
             return true;
         }
         if pr.is_draft {
@@ -330,65 +467,58 @@ impl Engine {
         now.saturating_sub(pr.updated_at) <= limit
     }
 
-    fn shows(&self, pr: &PrRec, show_snoozed: bool, now: i64) -> bool {
-        if pr.unreadable {
-            return false;
-        }
-        if pr.snoozed {
-            return show_snoozed;
-        }
-        self.would_show(pr, now)
+    /// The card of an unsnoozed PR shows, or a snoozed one would.
+    fn shows(&self, pr: &PrRec, owner: &OwnerRec, now: i64) -> bool {
+        !pr.unreadable
+            && !self.repo_hidden(pr, owner)
+            && (pr.snoozed || self.would_show(pr, owner, now))
     }
 
-    /// DESIGN.md, "Needs action definition".
-    fn pr_needs_action(&self, pr: &PrRec) -> bool {
-        if pr.snoozed || pr.unreadable {
-            return false;
-        }
-        let red = pr.review == Review::ChangesRequested
-            || pr.checks == Checks::Failed
-            || pr.base_status == BaseStatus::Conflicts;
-        if pr.mine && pr.state == PrState::Open && red {
-            return true;
-        }
-        self.rows_of(&pr.id).any(|row| {
-            !row.pruned && !self.hidden(row) && !row.done && self.is_needs_action(row, pr)
-        })
+    fn has_open_todo(&self, pr: &PrRec, owner: &OwnerRec) -> bool {
+        self.rows_of(&pr.key)
+            .any(|row| self.row_shown(row, pr, owner) && !row.done && self.row_todo(row, pr, owner))
     }
 
-    fn wire_row(&self, row: &RowRec, pr: &PrRec) -> proto::Row {
-        let class = if self.is_needs_action(row, pr) {
-            proto::RowClass::NeedsAction
-        } else {
-            proto::RowClass::Event
-        };
+    /// DESIGN.md, "Todo definition": not snoozed, with an open Todo row.
+    fn pr_todo(&self, pr: &PrRec, owner: &OwnerRec) -> bool {
+        !pr.snoozed
+            && !pr.unreadable
+            && !self.repo_hidden(pr, owner)
+            && self.has_open_todo(pr, owner)
+    }
+
+    // ------------------------------------------------------------ wire
+
+    fn wire_row(&self, row: &RowRec, pr: &PrRec, owner: &OwnerRec) -> proto::Row {
         proto::Row {
             id: row.id.clone(),
-            pr: pr.key(),
+            pr: pr.display_key(),
             pr_title: pr.title.clone(),
+            account: pr.account.clone(),
+            owner: owner.id.clone(),
             kind: Lenient::Known(row.kind.into()),
-            class: Lenient::Known(class),
+            todo: self.row_todo(row, pr, owner),
+            done: row.done,
             text: row.text.clone(),
             counts: row.counts.clone(),
             actor: row.actor.clone(),
             url: row.url.clone(),
             occurred_at: row.occurred_at,
             unread: row.unread,
-            done: row.done,
         }
     }
 
-    fn wire_rows(&self, pr: &PrRec) -> Vec<proto::Row> {
+    fn wire_rows(&self, pr: &PrRec, owner: &OwnerRec) -> Vec<proto::Row> {
         let mut rows: Vec<proto::Row> = self
-            .rows_of(&pr.id)
-            .filter(|row| !row.pruned && !self.hidden(row))
-            .map(|row| self.wire_row(row, pr))
+            .rows_of(&pr.key)
+            .filter(|row| self.row_shown(row, pr, owner))
+            .map(|row| self.wire_row(row, pr, owner))
             .collect();
         sort_rows(&mut rows);
         rows
     }
 
-    fn wire_card(&self, pr: &PrRec, scope: &str, now: &Now) -> proto::Card {
+    fn wire_card(&self, pr: &PrRec, owner: &OwnerRec, now: &Now) -> proto::Card {
         let label = match pr.state {
             PrState::Merged => proto::StateLabel::Merged,
             PrState::Closed => proto::StateLabel::Closed,
@@ -398,14 +528,17 @@ impl Engine {
         };
         let return_time = self.data.config.snooze_return_time;
         proto::Card {
-            id: pr.id.clone(),
-            pr: pr.key(),
-            scope: scope.to_string(),
+            id: pr.key.clone(),
+            pr: pr.display_key(),
+            account: pr.account.clone(),
+            owner: owner.id.clone(),
             title: pr.title.clone(),
             url: pr.url.clone(),
             author: pr.author.clone(),
             author_avatar_url: pr.author_avatar_url.clone(),
-            mine: pr.mine,
+            authored_by_me: self.authored_by_me(pr),
+            assigned_to_me: self.assigned_to_me(pr),
+            review_requested: self.review_requested(pr, owner),
             state_label: Lenient::Known(label),
             review: Lenient::Known(pr.review.into()),
             checks: Lenient::Known(pr.checks.into()),
@@ -420,166 +553,201 @@ impl Engine {
                 checks: pr.link_checks.clone(),
                 base: pr.link_base.clone(),
             },
-            rows: self.wire_rows(pr),
+            rows: self.wire_rows(pr, owner),
         }
     }
 
-    fn matching_prs(&self, filter: &Filter, now: i64) -> Result<Vec<(&PrRec, String)>> {
-        if filter.mine && filter.others {
-            return Err(CmdError::Invalid(
-                "mine and others cannot both be set".into(),
-            ));
+    fn passes(&self, pr: &PrRec, owner: &OwnerRec, filter: PrFilter) -> bool {
+        match filter {
+            PrFilter::All => true,
+            PrFilter::Authored => self.authored_by_me(pr),
+            PrFilter::Assigned => self.assigned_to_me(pr),
+            PrFilter::ReviewRequested => self.review_requested(pr, owner),
         }
-        let wanted = filter
-            .scope
-            .as_deref()
-            .map(|scope| self.require_scope(scope))
-            .transpose()?;
-        let mut out = Vec::new();
-        for pr in self.data.prs.values() {
-            let Some(scope) = self.enabled_scope_of(pr) else {
-                continue;
-            };
-            if wanted.as_ref().is_some_and(|s| *s != scope.id)
-                || !self.shows(pr, filter.snoozed, now)
-                || (filter.mine && !pr.mine)
-                || (filter.others && pr.mine)
-                || (filter.needs_action && !self.pr_needs_action(pr))
-            {
-                continue;
+    }
+
+    /// The accounts a request names: one, or every account.
+    fn accounts_named(&self, account: Option<&str>) -> Result<Vec<String>> {
+        match account {
+            Some(login) => Ok(vec![self.account_id(login)?]),
+            None => Ok(self.data.accounts.keys().cloned().collect()),
+        }
+    }
+
+    /// Owner ids by name across the given accounts; a name no account has
+    /// is `not_found`.
+    fn owners_named(&self, accounts: &[String], names: &[String]) -> Result<BTreeSet<String>> {
+        let mut out = BTreeSet::new();
+        for name in names {
+            let found: Vec<String> = accounts
+                .iter()
+                .filter_map(|a| self.owner_id(a, name).ok())
+                .collect();
+            if found.is_empty() {
+                return Err(not_found(format!("owner {name}")));
             }
-            out.push((pr, scope.id.clone()));
+            out.extend(found);
         }
         Ok(out)
     }
 
-    pub fn list(&self, filter: &Filter, now: &Now) -> Result<Vec<proto::Card>> {
-        let mut cards: Vec<proto::Card> = self
-            .matching_prs(filter, now.at)?
-            .into_iter()
-            .map(|(pr, scope)| self.wire_card(pr, &scope, now))
-            .collect();
-        cards.sort_by(|a, b| b.added_at.cmp(&a.added_at).then_with(|| a.id.cmp(&b.id)));
-        Ok(cards)
+    /// The PRs a `list` or `activity` covers, in section order.
+    fn matching(
+        &self,
+        accounts: &[String],
+        owners: Option<&BTreeSet<String>>,
+        todo: bool,
+        filter: PrFilter,
+        snoozed: bool,
+        now: i64,
+    ) -> Vec<(&PrRec, &OwnerRec)> {
+        let mut out = Vec::new();
+        for pr in self.data.prs.values() {
+            if !accounts.contains(&pr.account) {
+                continue;
+            }
+            let Some(owner) = self.enabled_owner_of(pr) else {
+                continue;
+            };
+            if owners.is_some_and(|set| !set.contains(&owner.id))
+                || !self.shows(pr, owner, now)
+                || pr.snoozed != snoozed
+                || !self.passes(pr, owner, filter)
+            {
+                continue;
+            }
+            // A snoozed PR is never a Todo PR; in the Snoozed section the
+            // Todo filter keeps the PRs with an open Todo row.
+            if todo && !self.has_open_todo(pr, owner) {
+                continue;
+            }
+            out.push((pr, owner));
+        }
+        let account_seq = |id: &str| self.data.accounts.get(id).map_or(0, |a| a.seq);
+        out.sort_by(|(a, ao), (b, bo)| {
+            (account_seq(&a.account), ao.is_public(), ao.seq)
+                .cmp(&(account_seq(&b.account), bo.is_public(), bo.seq))
+                .then_with(|| b.added_at.cmp(&a.added_at))
+                .then_with(|| a.key.cmp(&b.key))
+        });
+        out
     }
 
-    pub fn activity(&self, filter: &Filter, now: &Now) -> Result<Vec<proto::Row>> {
-        let mut rows: Vec<proto::Row> = self
-            .matching_prs(filter, now.at)?
+    pub fn list(&self, args: &ListArgs, now: &Now) -> Result<Vec<proto::Card>> {
+        let accounts = self.accounts_named(args.account.as_deref())?;
+        let owners = args
+            .owner
+            .as_ref()
+            .map(|o| self.owners_named(&accounts, std::slice::from_ref(o)))
+            .transpose()?;
+        Ok(self
+            .matching(
+                &accounts,
+                owners.as_ref(),
+                args.todo,
+                args.filter,
+                args.snoozed,
+                now.at,
+            )
             .into_iter()
-            .flat_map(|(pr, _)| self.wire_rows(pr))
+            .map(|(pr, owner)| self.wire_card(pr, owner, now))
+            .collect())
+    }
+
+    pub fn activity(&self, args: &ActivityArgs, now: &Now) -> Result<Vec<proto::Row>> {
+        let accounts = self.accounts_named(args.account.as_deref())?;
+        let owners = (!args.owners.is_empty())
+            .then(|| self.owners_named(&accounts, &args.owners))
+            .transpose()?;
+        let mut rows: Vec<proto::Row> = self
+            .matching(
+                &accounts,
+                owners.as_ref(),
+                args.todo,
+                args.filter,
+                false,
+                now.at,
+            )
+            .into_iter()
+            .flat_map(|(pr, owner)| self.wire_rows(pr, owner))
             .collect();
         sort_rows(&mut rows);
         Ok(rows)
     }
 
-    /// A PR a command may act on: known, in an enabled scope and readable.
-    fn usable_pr(&self, key: &str) -> Result<&PrRec> {
+    /// A PR a command may act on: known, in an enabled owner and readable.
+    fn usable_pr(&self, account: &str, key: &str) -> Result<&PrRec> {
+        let account = self.account_id(account)?;
         self.data
             .prs
             .values()
-            .find(|pr| same_pr(pr, key))
-            .filter(|pr| !pr.unreadable && self.enabled_scope_of(pr).is_some())
+            .find(|pr| pr.account == account && same_pr(pr, key))
+            .filter(|pr| !pr.unreadable && self.enabled_owner_of(pr).is_some())
             .ok_or_else(|| not_found(format!("PR {key}")))
     }
 
     /// A row a command may act on. A pruned row counts as gone.
-    fn usable_row(&self, id: &str) -> Result<(&RowRec, &PrRec)> {
+    fn usable_row(&self, id: &str) -> Result<(&RowRec, &PrRec, &OwnerRec)> {
         self.data
             .rows
             .get(id)
             .filter(|row| !row.pruned)
-            .and_then(|row| Some((row, self.data.prs.get(&row.pr_id)?)))
-            .filter(|(_, pr)| !pr.unreadable && self.enabled_scope_of(pr).is_some())
+            .and_then(|row| {
+                let pr = self.data.prs.get(&row.pr)?;
+                Some((row, pr, self.enabled_owner_of(pr)?))
+            })
+            .filter(|(_, pr, _)| !pr.unreadable)
             .ok_or_else(|| not_found(format!("row {id}")))
     }
 
-    pub fn status(&self, key: &str, now: &Now) -> Result<proto::Card> {
-        let pr = self.usable_pr(key)?;
-        let scope = self
-            .enabled_scope_of(pr)
-            .map(|s| s.id.clone())
-            .unwrap_or_default();
-        Ok(self.wire_card(pr, &scope, now))
+    pub fn status(&self, account: &str, key: &str, now: &Now) -> Result<proto::Card> {
+        let pr = self.usable_pr(account, key)?;
+        let owner = self
+            .enabled_owner_of(pr)
+            .ok_or_else(|| not_found(format!("PR {key}")))?;
+        Ok(self.wire_card(pr, owner, now))
     }
 
-    pub fn open_pr(&self, key: &str) -> Result<String> {
-        Ok(self.usable_pr(key)?.url.clone())
+    pub fn open_pr(&self, account: &str, key: &str) -> Result<String> {
+        Ok(self.usable_pr(account, key)?.url.clone())
     }
 
-    pub fn open_row(&self, id: &str) -> Result<String> {
-        Ok(self.usable_row(id)?.0.url.clone())
-    }
-
-    fn badge(&self, scope: &ScopeRec) -> u32 {
-        if !scope.enabled {
-            return 0;
+    pub fn open_row(&self, account: Option<&str>, id: &str) -> Result<String> {
+        let (row, _, _) = self.usable_row(id)?;
+        if let Some(login) = account
+            && self.account_id(login)? != row.account
+        {
+            return Err(not_found(format!("row {id}")));
         }
-        self.data
-            .prs
-            .values()
-            .filter(|pr| {
-                self.scope_of(pr).is_some_and(|s| s.id == scope.id) && self.pr_needs_action(pr)
-            })
-            .count() as u32
+        Ok(row.url.clone())
     }
 
-    fn wire_scope(&self, scope: &ScopeRec) -> proto::Scope {
-        let public = scope.id == PUBLIC;
-        let kind = if public {
-            Some(proto::ScopeKind::Public)
-        } else {
-            scope.kind.map(|kind| match kind {
-                ScopeKind::Org => proto::ScopeKind::Org,
-                ScopeKind::User => proto::ScopeKind::User,
-            })
-        };
-        proto::Scope {
-            id: scope.id.clone(),
-            name: self.display_name(&scope.id),
-            kind: kind.map(Lenient::Known),
-            enabled: scope.enabled,
-            notify: scope.notify,
-            color: Lenient::Known(scope.color.into()),
-            badge: self.badge(scope),
-            dot: scope.enabled && scope.dot,
-            warnings: self.warnings(scope),
-            updated_at: scope.updated_at,
-        }
-    }
-
-    pub fn scopes(&self) -> Vec<proto::Scope> {
-        self.data
-            .scopes
-            .values()
-            .filter(|s| !s.removed)
-            .map(|s| self.wire_scope(s))
-            .collect()
-    }
-
-    /// Per scope, its value and everything a client would show for it. Two
-    /// equal digests mean no `scope_changed` is due.
-    pub fn digest(&self, now: &Now) -> BTreeMap<String, (proto::Scope, Vec<proto::Card>)> {
-        let filter = Filter {
-            snoozed: true,
-            ..Filter::default()
-        };
-        let mut digest: BTreeMap<String, (proto::Scope, Vec<proto::Card>)> = self
-            .scopes()
-            .into_iter()
-            .map(|scope| (scope.id.clone(), (scope, Vec::new())))
-            .collect();
-        if let Ok(cards) = self.list(&filter, now) {
-            for card in cards {
-                if let Some(entry) = digest.get_mut(&card.scope) {
-                    entry.1.push(card);
-                }
+    /// Per account, its value and every card a client would show for it.
+    /// Two equal digests mean no `account_changed` is due.
+    pub fn digest(&self, now: &Now) -> BTreeMap<String, (proto::Account, Vec<proto::Card>)> {
+        let mut digest = BTreeMap::new();
+        for account in self.accounts() {
+            let ids = vec![account.id.clone()];
+            let mut cards = Vec::new();
+            for snoozed in [false, true] {
+                cards.extend(
+                    self.matching(&ids, None, false, PrFilter::All, snoozed, now.at)
+                        .into_iter()
+                        .map(|(pr, owner)| self.wire_card(pr, owner, now)),
+                );
             }
+            digest.insert(account.id.clone(), (account, cards));
         }
         digest
     }
 
-    pub fn ingest(&mut self, ingest: Ingest, now: &Now) -> Result<()> {
+    // ------------------------------------------------------------- ingest
+
+    /// Apply what a fetch of one account, or `dev_ingest`, brought.
+    pub fn ingest(&mut self, account: &str, ingest: Ingest, now: &Now) -> Result<()> {
+        if !self.data.accounts.contains_key(account) {
+            return Err(not_found(format!("account {account}")));
+        }
         let incoming: BTreeSet<&str> = ingest.prs.iter().map(|p| p.id.as_str()).collect();
         let referenced = ingest
             .events
@@ -587,68 +755,54 @@ impl Engine {
             .map(|e| e.pr_id.as_str())
             .chain(ingest.reactions.iter().map(|r| r.pr_id.as_str()));
         for pr_id in referenced {
-            if !incoming.contains(pr_id) && !self.data.prs.contains_key(pr_id) {
+            if !incoming.contains(pr_id) && !self.data.prs.contains_key(&join_key(account, pr_id)) {
                 return Err(CmdError::Invalid(format!("unknown pr_id: {pr_id}")));
             }
         }
 
-        let mut touched = BTreeSet::new();
         for id in &ingest.missing_pr_ids {
-            let scope = self
+            let key = join_key(account, id);
+            let owner = self
                 .data
                 .prs
-                .get(id)
-                .and_then(|pr| self.enabled_scope_of(pr))
-                .map(|s| s.id.clone());
-            if let Some(scope) = scope.filter(|_| !incoming.contains(id.as_str())) {
-                if let Some(pr) = self.pr_mut(id) {
-                    pr.unreadable = true;
-                }
-                touched.insert(scope);
+                .get(&key)
+                .and_then(|pr| self.enabled_owner_of(pr))
+                .map(|o| o.id.clone());
+            if owner.is_some()
+                && !incoming.contains(id.as_str())
+                && let Some(pr) = self.pr_mut(&key)
+            {
+                pr.unreadable = true;
             }
         }
 
-        // PRs fetched for the first time since their scope's watch started.
+        // PRs fetched for the first time since their owner's watch started.
         let mut first_fetch = BTreeSet::new();
         for incoming in ingest.prs {
-            let Some(scope) = self.resolve_scope(&incoming.owner, incoming.is_private) else {
+            let Some(owner) = self.resolve_owner(account, &incoming.owner, incoming.is_private)
+            else {
                 continue;
             };
-            let scope = scope.to_string();
-            if !self.data.scopes[&scope].enabled {
+            if !owner.enabled {
                 continue;
             }
-            if self.apply_pr(incoming.clone(), &ingest.viewer, now) {
-                first_fetch.insert(incoming.id);
+            let key = join_key(account, &incoming.id);
+            if self.apply_pr(account, incoming, now) {
+                first_fetch.insert(key);
             }
-            touched.insert(scope);
         }
         for event in ingest.events {
-            if let Some(scope) = self.apply_event(event, &first_fetch) {
-                touched.insert(scope);
-            }
+            self.apply_event(account, event, &first_fetch);
         }
         for reaction in ingest.reactions {
-            if let Some(scope) = self.apply_reaction(reaction, now) {
-                touched.insert(scope);
-            }
+            self.apply_reaction(account, reaction, now);
         }
-        // docs/tasks/M2.md, "Fetcher and core": a fetch names the scopes that
-        // succeeded; a `dev_ingest` without the list keeps the M1 rule.
-        let (succeeded, fetched): (BTreeSet<String>, bool) = match ingest.succeeded_scopes {
-            Some(list) => (
-                list.iter()
-                    .filter_map(|name| self.scope_key(name).map(str::to_string))
-                    .collect(),
-                true,
-            ),
-            None => (touched, false),
-        };
-        for scope in succeeded {
-            if let Some(scope) = self.scope_mut(&scope) {
-                scope.updated_at = Some(now.at);
-                if fetched {
-                    scope.fetched_at = Some(now.at);
+        if let Some(list) = ingest.succeeded_owners {
+            for name in list {
+                if let Ok(id) = self.owner_id(account, &name)
+                    && let Some(owner) = self.owner_mut(&id)
+                {
+                    owner.fetched_at = Some(now.at);
                 }
             }
         }
@@ -657,14 +811,16 @@ impl Engine {
     }
 
     /// Returns true when there was no previous value to compare against.
-    fn apply_pr(&mut self, p: IngestPr, viewer: &str, now: &Now) -> bool {
-        let existing = self.data.prs.get(&p.id);
+    fn apply_pr(&mut self, account: &str, p: IngestPr, now: &Now) -> bool {
+        let key = join_key(account, &p.id);
+        let existing = self.data.prs.get(&key);
         let prev = existing.and_then(|pr| pr.prev);
         let reopened =
             p.state == proto::PrState::Open && existing.is_some_and(|pr| pr.state != PrState::Open);
         let readable_again = existing.is_some_and(|pr| pr.unreadable);
         let record = PrRec {
-            mine: p.author == viewer,
+            key: key.clone(),
+            account: account.to_string(),
             unreadable: false,
             snoozed: existing.is_some_and(|pr| pr.snoozed),
             added_at: existing.and_then(|pr| pr.added_at),
@@ -686,6 +842,7 @@ impl Engine {
             is_private: p.is_private,
             requested_me: p.requested_me,
             requested_team: p.requested_team,
+            assignees: p.assignees,
             gone_at: existing.and_then(|pr| pr.gone_at),
             collected: existing.is_some_and(|pr| pr.collected),
             link_review: p.links.review,
@@ -702,34 +859,35 @@ impl Engine {
             base: p.base,
             head: p.head,
         };
-        let id = record.id.clone();
-        self.dirty.prs.insert(id.clone());
-        self.data.prs.insert(id.clone(), record);
+        self.dirty.prs.insert(key.clone());
+        self.data.prs.insert(key.clone(), record);
         if reopened {
-            self.restore_review_request(&id);
+            self.restore_review_request(&key);
         }
-        if readable_again && !self.pr_snoozed(&id) {
-            self.raise_dot_for_unread(&id);
+        if readable_again && !self.data.prs[&key].snoozed {
+            self.raise_dot_for_unread(&key);
         }
         match prev {
             Some(prev) => {
-                self.state_change_rows(&id, prev, now);
+                self.state_change_rows(&key, prev, now);
                 false
             }
             None => true,
         }
     }
 
-    /// DESIGN.md, "Review requested rows": reopening returns the row to Needs
-    /// action, even from the pruned rows. Only the reopening does: a Done row
-    /// pruned while requested stays pruned.
-    fn restore_review_request(&mut self, pr_id: &str) {
-        let Some(pr) = self.data.prs.get(pr_id) else {
+    /// DESIGN.md, "Review requested rows": reopening returns the row to
+    /// Todo, even from the pruned rows.
+    fn restore_review_request(&mut self, key: &str) {
+        let Some(pr) = self.data.prs.get(key) else {
+            return;
+        };
+        let Some(owner) = self.owner_of(pr) else {
             return;
         };
         let restored = self
-            .latest_review_request(pr_id)
-            .filter(|latest| latest.pruned && self.is_needs_action(latest, pr))
+            .latest_review_request(pr, owner)
+            .filter(|latest| latest.pruned && self.row_todo(latest, pr, owner))
             .map(|latest| latest.id.clone());
         if let Some(row) = restored.and_then(|id| self.row_mut(&id)) {
             row.pruned = false;
@@ -737,11 +895,11 @@ impl Engine {
     }
 
     /// DESIGN.md, "State change rows".
-    fn state_change_rows(&mut self, pr_id: &str, prev: PrevValues, now: &Now) {
-        let Some(pr) = self.data.prs.get(pr_id) else {
+    fn state_change_rows(&mut self, key: &str, prev: PrevValues, now: &Now) {
+        let Some(pr) = self.data.prs.get(key) else {
             return;
         };
-        if !pr.mine || pr.state != PrState::Open {
+        if !self.authored_by_me(pr) || pr.state != PrState::Open {
             return;
         }
         let mut made = Vec::new();
@@ -765,19 +923,18 @@ impl Engine {
         if !prev.mergeable && pr.mergeable {
             made.push((RowKind::Mergeable, None, pr.url.clone()));
         }
+        let account = pr.account.clone();
+        let node = pr.id.clone();
         for (kind, text, url) in made {
-            let id = format!("{pr_id}:{}:{}", kind.as_str(), now.at);
             self.add_row(
                 RowRec {
-                    id,
-                    pr_id: pr_id.to_string(),
+                    id: join_key(&account, &format!("{node}:{}:{}", kind.as_str(), now.at)),
+                    account: account.clone(),
+                    pr: key.to_string(),
                     kind,
                     text,
-                    counts: None,
-                    actor: None,
                     url,
                     occurred_at: now.at,
-                    comment_id: None,
                     ..row_defaults()
                 },
                 false,
@@ -785,58 +942,69 @@ impl Engine {
         }
     }
 
-    /// DESIGN.md, "Events before the watch started". Returns the scope when
+    /// DESIGN.md, "Events before the watch started". Returns the owner when
     /// the event's PR belongs to an enabled one.
     fn apply_event(
         &mut self,
+        account: &str,
         event: IngestEvent,
         first_fetch: &BTreeSet<String>,
     ) -> Option<String> {
-        let pr = self.data.prs.get(&event.pr_id)?;
-        let scope = self.enabled_scope_of(pr)?;
-        let scope_id = scope.id.clone();
+        let key = join_key(account, &event.pr_id);
+        let pr = self.data.prs.get(&key)?;
+        let owner = self.enabled_owner_of(pr)?;
+        let owner_id = owner.id.clone();
         let mut silent = false;
-        if event.occurred_at < scope.watch_started_at {
-            let requested = if event.team {
-                pr.requested_team
-            } else {
-                pr.requested_me
+        if event.occurred_at < owner.watch_started_at {
+            let requested = match event.kind {
+                proto::IngestKind::ReviewRequested => pr.requested_me,
+                proto::IngestKind::TeamReviewRequested => pr.requested_team,
+                _ => false,
             };
-            let kept = event.kind == proto::EventKind::ReviewRequested
-                && requested
-                && first_fetch.contains(&event.pr_id);
-            if !kept {
-                return Some(scope_id);
+            if !(requested && first_fetch.contains(&key)) {
+                return Some(owner_id);
             }
             silent = true;
         }
+        let id = match event.kind {
+            // An approving review with a body also makes a Comment row
+            // keyed by the review itself.
+            proto::IngestKind::Approved => join_key(account, &format!("{}:approved", event.id)),
+            _ => join_key(account, &event.id),
+        };
         self.add_row(
             RowRec {
-                id: event.id,
-                pr_id: event.pr_id,
+                id,
+                account: account.to_string(),
+                pr: key,
                 kind: event.kind.into(),
                 text: event.text,
-                counts: None,
                 actor: event.actor,
                 url: event.url,
                 occurred_at: event.occurred_at,
                 comment_id: event.comment_id,
-                team: event.team && event.kind == proto::EventKind::ReviewRequested,
                 ..row_defaults()
             },
             silent,
         );
-        Some(scope_id)
+        Some(owner_id)
     }
 
     /// DESIGN.md, "Reaction rows".
-    fn apply_reaction(&mut self, reaction: IngestReaction, now: &Now) -> Option<String> {
-        let pr = self.data.prs.get(&reaction.pr_id)?;
-        let scope = self.enabled_scope_of(pr)?;
-        let scope_id = scope.id.clone();
-        let base = match self.data.baselines.get(&reaction.comment_id) {
+    fn apply_reaction(
+        &mut self,
+        account: &str,
+        reaction: IngestReaction,
+        now: &Now,
+    ) -> Option<String> {
+        let key = join_key(account, &reaction.pr_id);
+        let pr = self.data.prs.get(&key)?;
+        let owner = self.enabled_owner_of(pr)?;
+        let owner_id = owner.id.clone();
+        let baseline_key = join_key(account, &reaction.comment_id);
+        let base = match self.data.baselines.get(&baseline_key) {
             Some(baseline) => Some(baseline.counts.clone()),
-            None if reaction.comment_created_at < scope.watch_started_at => None,
+            None if reaction.comment_created_at < owner.watch_started_at => None,
             None => Some(BTreeMap::new()),
         };
         if reaction.watching
@@ -847,15 +1015,17 @@ impl Engine {
                 if delta == 0 {
                     continue;
                 }
-                let id = format!("{}:{content}:{}", reaction.comment_id, now.at);
                 self.add_row(
                     RowRec {
-                        id,
-                        pr_id: reaction.pr_id.clone(),
+                        id: join_key(
+                            account,
+                            &format!("{}:{content}:{}", reaction.comment_id, now.at),
+                        ),
+                        account: account.to_string(),
+                        pr: key.clone(),
                         kind: RowKind::Reaction,
                         text: Some(reaction.text.clone()),
                         counts: Some(BTreeMap::from([(content.clone(), delta)])),
-                        actor: None,
                         url: reaction.url.clone(),
                         occurred_at: now.at,
                         comment_id: Some(reaction.comment_id.clone()),
@@ -865,67 +1035,53 @@ impl Engine {
                 );
             }
         }
-        self.dirty.baselines.insert(reaction.comment_id.clone());
+        self.dirty.baselines.insert(baseline_key.clone());
         self.data.baselines.insert(
-            reaction.comment_id.clone(),
+            baseline_key.clone(),
             Baseline {
-                comment_id: reaction.comment_id,
-                pr_id: reaction.pr_id,
+                key: baseline_key,
+                pr: key,
                 counts: reaction.counts,
             },
         );
-        Some(scope_id)
+        Some(owner_id)
     }
 
-    /// Whether a row of this kind is to be notified under the current settings.
-    /// DESIGN.md, "macOS notifications".
-    fn kind_notifies(&self, row: &RowRec, pr: &PrRec) -> bool {
-        let config = &self.data.config;
-        match row.kind {
-            RowKind::ReviewRequested | RowKind::Mentioned | RowKind::Comment | RowKind::Reply => {
-                config.notify_activity
-            }
-            RowKind::Reaction => config.notify_reactions,
-            RowKind::ChecksFailed
-            | RowKind::Conflicts
-            | RowKind::ChangesRequested
-            | RowKind::Mergeable => config.notify_state,
-            RowKind::RemovedFromMergeQueue => pr.mine && config.notify_state,
-            RowKind::BotComment => config.bot_comments == BotComments::Notify,
-            RowKind::AddedToMergeQueue | RowKind::Merged | RowKind::Closed => false,
-        }
-    }
-
-    /// DESIGN.md, "Row state transitions" and "Notification decisions". The
-    /// same event never makes a second row.
+    /// DESIGN.md, "Applying the table" and "Notification decisions": List,
+    /// Todo and Notify of the owner's table, the Exclusions and Skip draft
+    /// pull requests decide the row when it is made. The same event never
+    /// makes a second row.
     fn add_row(&mut self, mut row: RowRec, silent: bool) {
         if self.data.rows.contains_key(&row.id) {
             return;
         }
-        let Some(pr) = self.data.prs.get(&row.pr_id) else {
+        let Some(pr) = self.data.prs.get(&row.pr) else {
             return;
         };
-        let Some(scope) = self.scope_of(pr) else {
+        let Some(owner) = self.owner_of(pr) else {
             return;
         };
-        let scope_id = scope.id.clone();
-        let hidden = self.hidden(&row);
-        // DESIGN.md, "Include requests to my teams": a team request made while
-        // the setting was off shows as read and is never notified.
-        let silent = silent || (row.team && hidden);
-        let quiet = row.team && row.occurred_at < self.data.fetch.team_requests_on_at;
-        let silent = silent || quiet;
-        row.unread = !hidden && !quiet;
+        let cell = owner.events.cell(row.kind.event());
+        let exclusion = self.exclusion(&row, pr, owner);
+        // Recorded while List is off or the row is Hidden: read, no Todo,
+        // no notification.
+        let quiet = !cell.list || exclusion == Some(ExclusionState::Hidden);
+        row.unread = !quiet;
+        row.todo_auto = !quiet && cell.todo && exclusion.is_none();
+        let notifies = !silent
+            && !quiet
+            && exclusion.is_none()
+            && cell.notify
+            && owner.notify
+            && !(owner.skip_drafts && pr.is_draft)
+            && !pr.unreadable;
         let snoozed = pr.snoozed;
         let unreadable = pr.unreadable;
-        row.notify = if !silent && !unreadable && scope.notify && self.kind_notifies(&row, pr) {
-            if snoozed {
-                NotifyState::Held
-            } else {
-                NotifyState::Pending
-            }
-        } else {
-            NotifyState::None
+        let account = pr.account.clone();
+        row.notify = match (notifies, snoozed) {
+            (false, _) => NotifyState::None,
+            (true, true) => NotifyState::Held,
+            (true, false) => NotifyState::Pending,
         };
         if row.notify == NotifyState::Pending {
             self.fresh.push(row.id.clone());
@@ -933,13 +1089,13 @@ impl Engine {
         if row.unread
             && !snoozed
             && !unreadable
-            && !self.open.contains(&scope_id)
-            && let Some(scope) = self.scope_mut(&scope_id)
+            && !self.open.contains(&account)
+            && let Some(account) = self.account_mut(&account)
         {
-            scope.dot = true;
+            account.dot = true;
         }
         self.rows_by_pr
-            .entry(row.pr_id.clone())
+            .entry(row.pr.clone())
             .or_default()
             .push(row.id.clone());
         self.dirty.rows.insert(row.id.clone());
@@ -948,21 +1104,26 @@ impl Engine {
 
     /// A card gets its fixed position the first time it qualifies.
     fn settle(&mut self, now: &Now) {
-        let mut add = Vec::new();
-        for pr in self.data.prs.values() {
-            if pr.added_at.is_none()
-                && self.enabled_scope_of(pr).is_some()
-                && self.would_show(pr, now.at)
-            {
-                add.push(pr.id.clone());
-            }
-        }
-        for id in add {
-            if let Some(pr) = self.pr_mut(&id) {
+        let add: Vec<String> = self
+            .data
+            .prs
+            .values()
+            .filter(|pr| {
+                pr.added_at.is_none()
+                    && self
+                        .enabled_owner_of(pr)
+                        .is_some_and(|owner| self.would_show(pr, owner, now.at))
+            })
+            .map(|pr| pr.key.clone())
+            .collect();
+        for key in add {
+            if let Some(pr) = self.pr_mut(&key) {
                 pr.added_at = Some(now.at);
             }
         }
     }
+
+    // ------------------------------------------------------- row commands
 
     pub fn seen(&mut self, row_ids: &[String]) {
         for id in row_ids {
@@ -974,43 +1135,36 @@ impl Engine {
         }
     }
 
-    /// The stored id of a registered scope.
-    pub fn require_scope(&self, name: &str) -> Result<String> {
-        self.registered_scope(name)
-            .map(|scope| scope.id.clone())
-            .ok_or_else(|| not_found(format!("scope {name}")))
-    }
-
-    pub fn popover_opened(&mut self, scope: &str) -> Result<()> {
-        let scope = self.require_scope(scope)?;
-        self.open.insert(scope.clone());
-        if let Some(scope) = self.scope_mut(&scope) {
-            scope.dot = false;
+    pub fn popover_opened(&mut self, account: &str) -> Result<()> {
+        let id = self.account_id(account)?;
+        self.open.insert(id.clone());
+        if let Some(account) = self.account_mut(&id) {
+            account.dot = false;
         }
         Ok(())
     }
 
-    pub fn popover_closed(&mut self, scope: &str) -> Result<()> {
-        let scope = self.require_scope(scope)?;
-        self.open.remove(&scope);
+    pub fn popover_closed(&mut self, account: &str) -> Result<()> {
+        let id = self.account_id(account)?;
+        self.open.remove(&id);
         let prs: Vec<String> = self
             .data
             .prs
             .values()
-            .filter(|pr| self.scope_of(pr).is_some_and(|s| s.id == scope))
-            .map(|pr| pr.id.clone())
+            .filter(|pr| pr.account == id)
+            .map(|pr| pr.key.clone())
             .collect();
-        for id in prs {
-            self.close_rows(&id);
+        for key in prs {
+            self.close_rows(&key);
         }
         Ok(())
     }
 
     /// Unread falls on rows that were shown, then the rows of the PR are
     /// pruned. DESIGN.md, "How many rows are kept".
-    fn close_rows(&mut self, pr_id: &str) {
+    fn close_rows(&mut self, key: &str) {
         let shown: Vec<String> = self
-            .rows_of(pr_id)
+            .rows_of(key)
             .filter(|row| row.seen_pending)
             .map(|row| row.id.clone())
             .collect();
@@ -1020,16 +1174,18 @@ impl Engine {
                 row.unread = false;
             }
         }
-        let Some(pr) = self.data.prs.get(pr_id) else {
+        let Some(pr) = self.data.prs.get(key) else {
+            return;
+        };
+        let Some(owner) = self.owner_of(pr) else {
             return;
         };
         let mut candidates: Vec<&RowRec> = self
-            .rows_of(pr_id)
+            .rows_of(key)
             .filter(|row| {
-                !row.pruned
+                self.row_shown(row, pr, owner)
                     && !row.unread
-                    && !self.hidden(row)
-                    && (row.done || !self.is_needs_action(row, pr))
+                    && (row.done || !self.row_todo(row, pr, owner))
             })
             .collect();
         candidates.sort_by(|a, b| {
@@ -1055,41 +1211,49 @@ impl Engine {
         self.open.clear();
     }
 
-    fn set_done(&mut self, id: &str, done: bool) -> Result<()> {
-        let (row, pr) = self.usable_row(id)?;
-        if self.is_needs_action(row, pr)
+    /// `done`: only a Todo row changes. DESIGN.md, "Row state transitions".
+    pub fn done(&mut self, id: &str, on: bool) -> Result<()> {
+        let (row, pr, owner) = self.usable_row(id)?;
+        if self.row_todo(row, pr, owner)
             && let Some(row) = self.row_mut(id)
         {
-            row.done = done;
+            row.done = on;
         }
         Ok(())
     }
 
-    pub fn done(&mut self, id: &str) -> Result<()> {
-        self.set_done(id, true)
+    /// `todo`: the hand value of a row that is not done.
+    pub fn todo(&mut self, id: &str, on: bool, now: &Now) -> Result<()> {
+        let (row, _, _) = self.usable_row(id)?;
+        if !row.done
+            && let Some(row) = self.row_mut(id)
+        {
+            row.todo_manual = Some(on);
+        }
+        self.settle(now);
+        Ok(())
     }
 
-    pub fn undone(&mut self, id: &str) -> Result<()> {
-        self.set_done(id, false)
-    }
-
-    pub fn snooze(&mut self, key: &str, now: &Now) -> Result<()> {
+    pub fn snooze(&mut self, account: &str, key: &str, now: &Now) -> Result<()> {
         self.release_if_due(now);
-        let pr = self.usable_pr(key)?;
-        if !self.would_show(pr, now.at) {
+        let pr = self.usable_pr(account, key)?;
+        let shows = self
+            .enabled_owner_of(pr)
+            .is_some_and(|owner| self.would_show(pr, owner, now.at));
+        if !shows {
             return Err(not_found(format!("no card for PR {key}")));
         }
-        let id = pr.id.clone();
-        if let Some(pr) = self.pr_mut(&id) {
+        let key = pr.key.clone();
+        if let Some(pr) = self.pr_mut(&key) {
             pr.snoozed = true;
         }
-        self.hold_undelivered(&id);
+        self.hold_undelivered(&key);
         Ok(())
     }
 
-    fn hold_undelivered(&mut self, pr_id: &str) {
+    fn hold_undelivered(&mut self, key: &str) {
         let rows: Vec<String> = self
-            .rows_of(pr_id)
+            .rows_of(key)
             .filter(|row| row.notify == NotifyState::Pending && !self.in_flight.contains(&row.id))
             .map(|row| row.id.clone())
             .collect();
@@ -1100,16 +1264,16 @@ impl Engine {
         }
     }
 
-    pub fn unsnooze(&mut self, key: &str, now: &Now) -> Result<()> {
-        let id = self.usable_pr(key)?.id.clone();
-        if !self.pr_snoozed(&id) {
+    pub fn unsnooze(&mut self, account: &str, key: &str, now: &Now) -> Result<()> {
+        let key = self.usable_pr(account, key)?.key.clone();
+        if !self.data.prs[&key].snoozed {
             return Ok(());
         }
-        self.end_snooze(&id);
+        self.end_snooze(&key);
         // DESIGN.md, "Snooze": a manual Unsnooze notifies nothing, and clears
         // what was held as well as what went undelivered before the Snooze.
         let held: Vec<String> = self
-            .rows_of(&id)
+            .rows_of(&key)
             .filter(|row| matches!(row.notify, NotifyState::Held | NotifyState::HeldUndelivered))
             .map(|row| row.id.clone())
             .collect();
@@ -1123,35 +1287,36 @@ impl Engine {
     }
 
     /// Clear the flag and bring back the blue dot for unread rows.
-    fn end_snooze(&mut self, pr_id: &str) {
-        if let Some(pr) = self.pr_mut(pr_id) {
+    fn end_snooze(&mut self, key: &str) {
+        if let Some(pr) = self.pr_mut(key) {
             pr.snoozed = false;
         }
-        self.raise_dot_for_unread(pr_id);
+        self.raise_dot_for_unread(key);
     }
 
     /// The rule shared by a Snooze ending and a PR becoming readable again:
     /// unread rows raise the dot unless the popover or window is open.
-    fn raise_dot_for_unread(&mut self, pr_id: &str) {
-        let Some(pr) = self.data.prs.get(pr_id).filter(|pr| !pr.unreadable) else {
+    fn raise_dot_for_unread(&mut self, key: &str) {
+        let Some(pr) = self.data.prs.get(key).filter(|pr| !pr.unreadable) else {
             return;
         };
-        let Some(scope) = self.scope_of(pr).map(|s| s.id.clone()) else {
+        let Some(owner) = self.owner_of(pr) else {
             return;
         };
         let unread = self
-            .rows_of(pr_id)
-            .any(|row| row.unread && !row.pruned && !self.hidden(row));
+            .rows_of(key)
+            .any(|row| row.unread && self.row_shown(row, pr, owner));
+        let account = pr.account.clone();
         if unread
-            && !self.open.contains(&scope)
-            && let Some(scope) = self.scope_mut(&scope)
+            && !self.open.contains(&account)
+            && let Some(account) = self.account_mut(&account)
         {
-            scope.dot = true;
+            account.dot = true;
         }
     }
 
-    /// The brief's "Snooze release": everything goes when a Return time passed
-    /// since the last release. Waking from sleep lands here too.
+    /// Everything goes when a Return time passed since the last release.
+    /// Waking from sleep lands here too.
     fn release_if_due(&mut self, now: &Now) {
         let latest = now.latest_return_at(self.data.config.snooze_return_time);
         if latest <= self.data.last_release_at {
@@ -1164,12 +1329,12 @@ impl Engine {
             .prs
             .values()
             .filter(|pr| pr.snoozed)
-            .map(|pr| pr.id.clone())
+            .map(|pr| pr.key.clone())
             .collect();
-        for pr_id in snoozed {
-            self.end_snooze(&pr_id);
+        for key in snoozed {
+            self.end_snooze(&key);
             let held: Vec<(String, bool)> = self
-                .rows_of(&pr_id)
+                .rows_of(&key)
                 .filter(|row| {
                     matches!(row.notify, NotifyState::Held | NotifyState::HeldUndelivered)
                 })
@@ -1192,7 +1357,7 @@ impl Engine {
 
     /// The periodic pass.
     pub fn tick(&mut self, now: &Now) {
-        self.clock_at = now.at;
+        self.clock = now.clone();
         self.release_if_due(now);
         self.settle(now);
         self.track_watching(now);
@@ -1211,243 +1376,32 @@ impl Engine {
             self.data.last_release_at = now.at;
             self.dirty.meta = true;
         }
-        let was_hidden = self.data.config.bot_comments == BotComments::Hide;
-        let teams_were_off = !self.data.config.include_team_requests;
         self.data.config = config;
         self.dirty.config = true;
-        if was_hidden && self.data.config.bot_comments != BotComments::Hide {
-            self.mark_bot_comments_read();
-        }
-        if teams_were_off && self.data.config.include_team_requests {
-            self.data.fetch.team_requests_on_at = now.at;
-            self.dirty.fetch = true;
-            self.mark_team_requests_read();
-        }
         self.settle(now);
         self.config_get(key)
     }
 
-    /// Rows hidden by Bot comments return as read.
-    fn mark_bot_comments_read(&mut self) {
-        let rows: Vec<String> = self
-            .data
-            .rows
-            .values()
-            .filter(|row| row.kind == RowKind::BotComment && (row.unread || row.seen_pending))
-            .map(|row| row.id.clone())
-            .collect();
-        for id in rows {
-            if let Some(row) = self.row_mut(&id) {
-                row.unread = false;
-                row.seen_pending = false;
-            }
-        }
-    }
+    // ------------------------------------------------------- notifications
 
-    /// Team review requests recorded while the setting was off return as read.
-    fn mark_team_requests_read(&mut self) {
-        let rows: Vec<String> = self
-            .data
-            .rows
-            .values()
-            .filter(|row| row.team && (row.unread || row.seen_pending))
-            .map(|row| row.id.clone())
-            .collect();
-        for id in rows {
-            if let Some(row) = self.row_mut(&id) {
-                row.unread = false;
-                row.seen_pending = false;
-            }
-        }
-    }
-
-    /// Register an owner, or Public with `public`. A scope removed before
-    /// comes back with its state and color.
-    pub fn scope_add(&mut self, owner: &str, now: &Now) -> Result<()> {
-        if owner.eq_ignore_ascii_case(NOTIFICATIONS) {
-            return Err(CmdError::Invalid("notifications cannot be added".into()));
-        }
-        if owner.is_empty() {
-            return Err(CmdError::Invalid("owner is empty".into()));
-        }
-        if self.registered_scope(owner).is_some() {
-            return Err(CmdError::Invalid(format!("scope {owner} already exists")));
-        }
-        let public = owner.eq_ignore_ascii_case(PUBLIC);
-        let id = if public {
-            PUBLIC.to_string()
-        } else {
-            self.scope_key(owner).unwrap_or(owner).to_string()
-        };
-        self.dirty.scopes.insert(id.clone());
-        if let Some(scope) = self.data.scopes.get_mut(&id) {
-            scope.removed = false;
-        } else {
-            let color = if public {
-                ScopeColor::PUBLIC
-            } else {
-                let color = ScopeColor::nth(self.data.color_seq);
-                self.data.color_seq += 1;
-                self.dirty.meta = true;
-                color
-            };
-            self.data.scopes.insert(
-                id.clone(),
-                ScopeRec {
-                    id: id.clone(),
-                    removed: false,
-                    enabled: true,
-                    notify: true,
-                    watch_started_at: now.at,
-                    updated_at: None,
-                    dot: false,
-                    kind: None,
-                    name: None,
-                    fetched_at: None,
-                    color,
-                },
-            );
-        }
-        self.start_watch(&id, now);
-        self.settle(now);
-        Ok(())
-    }
-
-    /// `scope_color`. DESIGN.md, "Adding a scope and registering a token in
-    /// Settings".
-    pub fn scope_color(&mut self, scope: &str, color: proto::ScopeColor) -> Result<()> {
-        let scope = self.require_scope(scope)?;
-        if let Some(record) = self.scope_mut(&scope) {
-            record.color = color.into();
-        }
-        Ok(())
-    }
-
-    /// The brief's rule: a new watch start forgets the scope's previous values
-    /// and Reaction baselines.
-    fn start_watch(&mut self, scope: &str, now: &Now) {
-        if let Some(record) = self.scope_mut(scope) {
-            record.watch_started_at = now.at;
-        }
-        let prs: Vec<String> = self
-            .data
-            .prs
-            .values()
-            .filter(|pr| self.scope_of(pr).is_some_and(|s| s.id == scope))
-            .map(|pr| pr.id.clone())
-            .collect();
-        for id in &prs {
-            if let Some(pr) = self.pr_mut(id) {
-                pr.prev = None;
-            }
-        }
-        let comments: Vec<String> = self
-            .data
-            .baselines
-            .values()
-            .filter(|b| prs.contains(&b.pr_id))
-            .map(|b| b.comment_id.clone())
-            .collect();
-        for comment in comments {
-            self.data.baselines.remove(&comment);
-            self.dirty.baselines.insert(comment);
-        }
-        // The next Reaction fetch sets the baselines again without rows.
-        for own in self.data.fetch.own.values_mut() {
-            if prs.contains(&own.pr_id) {
-                own.baseline_done = false;
-            }
-        }
-        self.dirty.fetch = true;
-    }
-
-    /// The Keychain account `scope_remove` would delete, without removing.
-    pub fn scope_token_account(&self, owner: &str) -> Result<Option<String>> {
-        let key = self.require_scope(owner)?.to_lowercase();
-        let registered = self
-            .data
-            .fetch
-            .tokens
-            .get(&key)
-            .is_some_and(|token| token.registered);
-        Ok(registered.then(|| scope_account(&key)))
-    }
-
-    /// Returns the Keychain account to delete: only a scope with a recorded
-    /// token registration has one. docs/tasks/M2.md, "Token registration".
-    pub fn scope_remove(&mut self, owner: &str) -> Result<Option<String>> {
-        let id = self.require_scope(owner)?;
-        if let Some(scope) = self.scope_mut(&id) {
-            scope.removed = true;
-        }
-        self.open.remove(&id);
-        let key = id.to_lowercase();
-        let registered = self
-            .data
-            .fetch
-            .tokens
-            .get(&key)
-            .is_some_and(|token| token.registered);
-        Ok(registered.then(|| scope_account(&key)))
-    }
-
-    /// The Keychain entry is gone: forget the registration.
-    pub fn token_removed(&mut self, owner: &str) {
-        if let Some(token) = self.data.fetch.tokens.get_mut(&owner.to_lowercase()) {
-            *token = TokenRec {
-                target: token.target.clone(),
-                ..TokenRec::default()
-            };
-            self.dirty.fetch = true;
-        }
-    }
-
-    pub fn scope_enable(&mut self, scope: &str, now: &Now) -> Result<()> {
-        let scope = self.require_scope(scope)?;
-        if !self.data.scopes[&scope].enabled {
-            if let Some(record) = self.scope_mut(&scope) {
-                record.enabled = true;
-            }
-            self.start_watch(&scope, now);
-            self.settle(now);
-        }
-        Ok(())
-    }
-
-    pub fn scope_disable(&mut self, scope: &str) -> Result<()> {
-        let scope = self.require_scope(scope)?;
-        if let Some(record) = self.scope_mut(&scope) {
-            record.enabled = false;
-        }
-        Ok(())
-    }
-
-    pub fn scope_notify(&mut self, scope: &str, on: bool) -> Result<()> {
-        let scope = self.require_scope(scope)?;
-        if let Some(record) = self.scope_mut(&scope) {
-            record.notify = on;
-        }
-        Ok(())
-    }
-
-    /// The check at hand-over: returns the scope when the row may still be
-    /// notified, and clears the record otherwise.
-    fn gate(&mut self, row_id: &str) -> Option<String> {
+    /// The check at hand-over: returns the account and owner when the row
+    /// may still be notified, and clears the record otherwise.
+    fn gate(&mut self, row_id: &str) -> Option<(String, String)> {
         let row = self.data.rows.get(row_id)?;
         if row.notify != NotifyState::Pending || self.in_flight.contains(row_id) {
             return None;
         }
-        let pr = self.data.prs.get(&row.pr_id)?;
-        let scope = self
-            .enabled_scope_of(pr)
-            .filter(|scope| !pr.unreadable && scope.notify && self.kind_notifies(row, pr))
-            .map(|scope| scope.id.clone());
-        if scope.is_none()
+        let pr = self.data.prs.get(&row.pr)?;
+        let target = self
+            .enabled_owner_of(pr)
+            .filter(|owner| !pr.unreadable && owner.notify)
+            .map(|owner| (pr.account.clone(), owner.id.clone()));
+        if target.is_none()
             && let Some(row) = self.row_mut(row_id)
         {
             row.notify = NotifyState::None;
         }
-        scope
+        target
     }
 
     fn next_notification_id(&mut self, now: &Now) -> String {
@@ -1473,15 +1427,14 @@ impl Engine {
         out
     }
 
-    /// DESIGN.md, "macOS notifications": per scope, one would-be individual
+    /// DESIGN.md, "macOS notifications": per owner, one would-be individual
     /// notification goes out as it is, two or more become one summary. The
     /// Reaction rows of one comment from one fetch are one notification.
     fn deliver(&mut self, ids: Vec<String>, now: &Now) -> Vec<proto::Notification> {
-        let mut groups: Vec<(String, Vec<String>)> = Vec::new();
-        // Gated before grouping, so a row cleared by the gate counts for
-        // nothing below.
+        type Target = (String, String);
+        let mut groups: Vec<(Target, Vec<String>)> = Vec::new();
         for id in ids {
-            let Some(scope) = self.gate(&id) else {
+            let Some(target) = self.gate(&id) else {
                 continue;
             };
             let same_fetch = |row: &RowRec| (row.comment_id.clone(), row.occurred_at);
@@ -1492,8 +1445,8 @@ impl Engine {
                 .filter(|row| row.kind == RowKind::Reaction)
                 .map(same_fetch);
             let group = reaction.as_ref().and_then(|key| {
-                groups.iter_mut().find(|(group_scope, rows)| {
-                    *group_scope == scope
+                groups.iter_mut().find(|(group_target, rows)| {
+                    *group_target == target
                         && rows.first().is_some_and(|first| {
                             self.data.rows.get(first).is_some_and(|row| {
                                 row.kind == RowKind::Reaction && same_fetch(row) == *key
@@ -1503,23 +1456,23 @@ impl Engine {
             });
             match group {
                 Some((_, rows)) => rows.push(id),
-                None => groups.push((scope, vec![id])),
+                None => groups.push((target, vec![id])),
             }
         }
-        let mut by_scope: BTreeMap<String, Vec<Vec<String>>> = BTreeMap::new();
-        for (scope, rows) in groups {
-            by_scope.entry(scope).or_default().push(rows);
+        let mut by_target: BTreeMap<Target, Vec<Vec<String>>> = BTreeMap::new();
+        for (target, rows) in groups {
+            by_target.entry(target).or_default().push(rows);
         }
         let mut out = Vec::new();
-        for (scope, groups) in by_scope {
+        for ((account, owner), groups) in by_target {
             if groups.len() == 1 {
                 let rows = groups.into_iter().next().unwrap_or_default();
-                if let Some(notification) = self.single(&scope, rows, now) {
+                if let Some(notification) = self.single(&account, &owner, rows, now) {
                     out.push(notification);
                 }
             } else {
                 let rows: Vec<String> = groups.into_iter().flatten().collect();
-                out.push(self.summary_of(&scope, rows, now, Summary::NewEvents));
+                out.push(self.summary_of(&account, &owner, rows, now, Summary::NewEvents));
             }
         }
         out
@@ -1533,14 +1486,15 @@ impl Engine {
             .rows
             .values()
             .filter(|row| row.notify == NotifyState::Pending)
-            .map(|row| (row.id.clone(), row.pr_id.clone(), row.done))
+            .map(|row| (row.id.clone(), row.pr.clone(), row.done))
             .collect();
         let mut rows = Vec::new();
-        for (id, pr_id, done) in pending {
+        for (id, pr, done) in pending {
             if self.in_flight.contains(&id) {
                 continue;
             }
-            if self.pr_snoozed(&pr_id) {
+            let snoozed = self.data.prs.get(&pr).is_some_and(|p| p.snoozed);
+            if snoozed {
                 if let Some(row) = self.row_mut(&id) {
                     row.notify = NotifyState::HeldUndelivered;
                 }
@@ -1555,29 +1509,38 @@ impl Engine {
         self.deliver(rows, now)
     }
 
-    /// One summary per scope, in scope order.
+    /// One summary per owner.
     fn summaries(
         &mut self,
         rows: Vec<String>,
         now: &Now,
         summary: Summary,
     ) -> Vec<proto::Notification> {
-        let mut by_scope: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut by_target: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
         for id in rows {
-            if let Some(scope) = self.gate(&id) {
-                by_scope.entry(scope).or_default().push(id);
+            if let Some(target) = self.gate(&id) {
+                by_target.entry(target).or_default().push(id);
             }
         }
-        by_scope
+        by_target
             .into_iter()
-            .map(|(scope, rows)| self.summary_of(&scope, rows, now, summary))
+            .map(|((account, owner), rows)| self.summary_of(&account, &owner, rows, now, summary))
             .collect()
+    }
+
+    fn owner_name(&self, owner: &str) -> String {
+        self.data
+            .owners
+            .get(owner)
+            .map(|o| o.name.clone())
+            .unwrap_or_default()
     }
 
     /// A summary of rows that already passed the gate.
     fn summary_of(
         &mut self,
-        scope: &str,
+        account: &str,
+        owner: &str,
         rows: Vec<String>,
         now: &Now,
         summary: Summary,
@@ -1585,51 +1548,50 @@ impl Engine {
         let prs: BTreeSet<&str> = rows
             .iter()
             .filter_map(|id| self.data.rows.get(id))
-            .map(|row| row.pr_id.as_str())
+            .map(|row| row.pr.as_str())
             .collect();
         let pr_count = prs.len();
-        let name = self.display_name(scope);
-        let (title, body) = match summary {
+        let login = self.login_of(account).to_string();
+        let name = self.owner_name(owner);
+        let (title, subtitle) = match summary {
             Summary::NewEvents => (
-                format!("{name} · {}", plural(rows.len(), "new event", "new events")),
-                format!("In {}", plural(pr_count, "PR", "PRs")),
+                format!(
+                    "{login} · {}",
+                    plural(rows.len(), "new event", "new events")
+                ),
+                format!("{name} · in {}", plural(pr_count, "PR", "PRs")),
             ),
             Summary::BackFromSnooze => (
-                format!("{name} · Back from Snooze"),
-                format!("{} had new events", plural(pr_count, "PR", "PRs")),
+                format!("{login} · Back from Snooze"),
+                format!("{name} · {} had new events", plural(pr_count, "PR", "PRs")),
             ),
         };
         self.in_flight.extend(rows.iter().cloned());
         proto::Notification {
             id: self.next_notification_id(now),
             kind: Lenient::Known(proto::NotificationType::Summary),
-            scope: scope.to_string(),
+            account: account.to_string(),
+            owner: owner.to_string(),
             rows,
             pr: None,
             url: None,
             title,
-            subtitle: None,
-            body: Some(body),
+            subtitle: Some(subtitle),
+            body: None,
         }
-    }
-
-    /// `Public`, or the owner login as GitHub spells it once a fetch read it.
-    fn display_name(&self, scope: &str) -> String {
-        if scope == PUBLIC {
-            return "Public".into();
-        }
-        self.data
-            .scopes
-            .get(scope)
-            .and_then(|s| s.name.clone())
-            .unwrap_or_else(|| scope.to_string())
     }
 
     /// DESIGN.md, "macOS notifications": title, subtitle and body of a row, or
     /// of the Reaction rows of one comment.
-    fn single(&mut self, scope: &str, rows: Vec<String>, now: &Now) -> Option<proto::Notification> {
+    fn single(
+        &mut self,
+        account: &str,
+        owner: &str,
+        rows: Vec<String>,
+        now: &Now,
+    ) -> Option<proto::Notification> {
         let row = self.data.rows.get(rows.first()?)?;
-        let pr = self.data.prs.get(&row.pr_id)?;
+        let pr = self.data.prs.get(&row.pr)?;
         let body = if row.kind == RowKind::Reaction {
             let mut counts: BTreeMap<String, u32> = BTreeMap::new();
             for id in &rows {
@@ -1643,15 +1605,16 @@ impl Engine {
         } else {
             row.text.as_deref().map(collapse_whitespace)
         };
-        let title = format!("{} · {}", self.display_name(scope), row.kind.label());
+        let title = format!("{} · {}", self.login_of(account), row.kind.label());
         let subtitle = format!("{}/{} #{} · {}", pr.owner, pr.repo, pr.number, pr.title);
-        let key = pr.key();
+        let key = pr.display_key();
         let url = row.url.clone();
         self.in_flight.extend(rows.iter().cloned());
         Some(proto::Notification {
             id: self.next_notification_id(now),
             kind: Lenient::Known(proto::NotificationType::Single),
-            scope: scope.to_string(),
+            account: account.to_string(),
+            owner: owner.to_string(),
             rows,
             pr: Some(key),
             url: Some(url),
@@ -1707,7 +1670,8 @@ fn plural(count: usize, one: &str, many: &str) -> String {
 fn row_defaults() -> RowRec {
     RowRec {
         id: String::new(),
-        pr_id: String::new(),
+        account: String::new(),
+        pr: String::new(),
         kind: RowKind::Comment,
         text: None,
         counts: None,
@@ -1720,7 +1684,8 @@ fn row_defaults() -> RowRec {
         done: false,
         pruned: false,
         notify: NotifyState::None,
-        team: false,
+        todo_auto: false,
+        todo_manual: None,
     }
 }
 
@@ -1744,20 +1709,14 @@ fn reaction_summary(counts: &BTreeMap<String, u32>) -> String {
     known.chain(unknown).collect::<Vec<_>>().join(" ")
 }
 
-pub const CONFIG_KEYS: [&str; 13] = [
+pub const CONFIG_KEYS: [&str; 7] = [
     "launch_at_login",
+    "appearance",
     "status_interval_minutes",
     "reactions_interval_minutes",
-    "graphql_cost_cap",
-    "notify_activity",
-    "notify_state",
-    "notify_reactions",
     "snooze_return_time",
-    "bot_comments",
-    "include_team_requests",
     "keep_watching_days",
     "drop_after_days",
-    "appearance",
 ];
 
 pub fn read_config(config: &Config, key: &str) -> Option<Value> {
@@ -1765,17 +1724,11 @@ pub fn read_config(config: &Config, key: &str) -> Option<Value> {
         "launch_at_login" => json!(config.launch_at_login),
         "status_interval_minutes" => json!(config.status_interval_minutes),
         "reactions_interval_minutes" => json!(config.reactions_interval_minutes),
-        "graphql_cost_cap" => json!(config.graphql_cost_cap),
-        "notify_activity" => json!(config.notify_activity),
-        "notify_state" => json!(config.notify_state),
-        "notify_reactions" => json!(config.notify_reactions),
         "snooze_return_time" => {
             let (hour, minute) = config.snooze_return_time;
             json!(format!("{hour:02}:{minute:02}"))
         }
-        "bot_comments" => json!(config.bot_comments.as_str()),
         "appearance" => json!(config.appearance.as_str()),
-        "include_team_requests" => json!(config.include_team_requests),
         "keep_watching_days" => json!(config.keep_watching_days),
         "drop_after_days" => json!(config.drop_after_days),
         _ => return None,
@@ -1793,21 +1746,11 @@ pub fn write_config(
         "launch_at_login" => config.launch_at_login = boolean(key, value)?,
         "status_interval_minutes" => config.status_interval_minutes = integer(key, value, 1)?,
         "reactions_interval_minutes" => config.reactions_interval_minutes = integer(key, value, 1)?,
-        "graphql_cost_cap" => config.graphql_cost_cap = integer(key, value, 100)?,
-        "notify_activity" => config.notify_activity = boolean(key, value)?,
-        "notify_state" => config.notify_state = boolean(key, value)?,
-        "notify_reactions" => config.notify_reactions = boolean(key, value)?,
         "snooze_return_time" => {
             config.snooze_return_time = value
                 .as_str()
                 .and_then(parse_clock_time)
                 .ok_or_else(|| format!("{key} must be HH:MM"))?;
-        }
-        "bot_comments" => {
-            config.bot_comments = value
-                .as_str()
-                .and_then(BotComments::parse)
-                .ok_or_else(|| format!("{key} must be notify, list_only or hide"))?;
         }
         "appearance" => {
             config.appearance = value
@@ -1815,7 +1758,6 @@ pub fn write_config(
                 .and_then(Appearance::parse)
                 .ok_or_else(|| format!("{key} must be system, light or dark"))?;
         }
-        "include_team_requests" => config.include_team_requests = boolean(key, value)?,
         "keep_watching_days" => config.keep_watching_days = integer(key, value, 0)?,
         "drop_after_days" => config.drop_after_days = integer(key, value, 1)?,
         _ => return Err(format!("unknown setting: {key}")),
@@ -1836,7 +1778,9 @@ fn boolean(key: &str, value: &Value) -> std::result::Result<bool, String> {
 fn integer(key: &str, value: &Value, min: i64) -> std::result::Result<i64, String> {
     let number = match value {
         Value::Number(number) => number.as_i64(),
-        Value::String(text) if text.bytes().all(|b| b.is_ascii_digit()) => text.parse().ok(),
+        Value::String(text) if !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()) => {
+            text.parse().ok()
+        }
         _ => None,
     };
     number

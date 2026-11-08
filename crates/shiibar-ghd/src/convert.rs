@@ -2,16 +2,16 @@
 //! returns, so the rule tables in `tests/` feed them responses directly.
 //!
 //! Spec: docs/tasks/M2.md, "PR values", "Failed check names", "Event kinds"
-//! and "Collecting a newly found PR"; DESIGN.md, "Needs action decisions".
+//! and "Collecting a newly found PR"; DESIGN.md, "Row kind decisions".
 
 use crate::github::parse_time;
 use crate::model::{BaseStatus, OwnComment, TeamRec, ThreadRec};
 use serde_json::Value;
 use shiibar_gh_proto as proto;
-use shiibar_gh_proto::{EventKind, IngestEvent, IngestPr, IngestReaction};
+use shiibar_gh_proto::{IngestEvent, IngestKind, IngestPr, IngestReaction};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Who is asking: the viewer's login and the teams the scope can see.
+/// Who is asking: the account's login and its teams.
 #[derive(Debug, Clone, Copy)]
 pub struct Ctx<'a> {
     pub viewer: &'a str,
@@ -27,7 +27,7 @@ impl Ctx<'_> {
         self.teams.iter().find(|t| t.database_id == database_id)
     }
 
-    fn mentions_my_team(&self, html: &str) -> bool {
+    pub fn mentions_my_team(&self, html: &str) -> bool {
         mentioned_teams(html)
             .into_iter()
             .any(|id| self.my_team(id).is_some())
@@ -45,10 +45,6 @@ fn time(value: &Value) -> i64 {
 /// The login of an `Actor`, empty for a deleted account.
 fn login(actor: &Value) -> &str {
     text(&actor["login"])
-}
-
-fn is_bot(actor: &Value) -> bool {
-    actor["__typename"] == "Bot"
 }
 
 fn nodes(connection: &Value) -> &[Value] {
@@ -134,14 +130,11 @@ pub fn changes_requested_by(latest: &Value) -> Option<String> {
     first_and_more(&names)
 }
 
-/// Who a review is requested from now, as seen with this token.
+/// Who a review is requested from now.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Requested {
     pub me: bool,
     pub team: bool,
-    /// Some `requestedReviewer` came back null: the Public token cannot see
-    /// it, and the classic PAT reads it again.
-    pub hidden: bool,
 }
 
 pub fn requested(review_requests: &Value, ctx: Ctx<'_>) -> Requested {
@@ -149,7 +142,6 @@ pub fn requested(review_requests: &Value, ctx: Ctx<'_>) -> Requested {
     for request in nodes(review_requests) {
         let reviewer = &request["requestedReviewer"];
         match reviewer["__typename"].as_str() {
-            None => out.hidden = true,
             Some("User") if ctx.is_me(login(reviewer)) => out.me = true,
             Some("Team")
                 if reviewer["databaseId"]
@@ -170,8 +162,6 @@ pub struct StatusExtra {
     pub behind_by: Option<i64>,
     pub previous: Option<(BaseStatus, bool)>,
     pub failed_check: Option<String>,
-    /// `reviewRequests` read again with the classic PAT.
-    pub review_requests: Option<Value>,
 }
 
 /// A PR node from the status query as an `IngestPr`.
@@ -185,11 +175,7 @@ pub fn pr_values(node: &Value, extra: &StatusExtra, ctx: Ctx<'_>) -> Option<Inge
         extra.behind_by,
         extra.previous,
     );
-    let requests = extra
-        .review_requests
-        .as_ref()
-        .unwrap_or(&node["reviewRequests"]);
-    let asked = requested(requests, ctx);
+    let asked = requested(&node["reviewRequests"], ctx);
     let state = match text(&node["state"]) {
         "MERGED" => proto::PrState::Merged,
         "CLOSED" => proto::PrState::Closed,
@@ -217,6 +203,11 @@ pub fn pr_values(node: &Value, extra: &StatusExtra, ctx: Ctx<'_>) -> Option<Inge
         is_private: node["repository"]["isPrivate"].as_bool().unwrap_or(false),
         requested_me: asked.me,
         requested_team: asked.team,
+        assignees: nodes(&node["assignees"])
+            .iter()
+            .map(|a| login(a).to_string())
+            .filter(|a| !a.is_empty())
+            .collect(),
         links: proto::Links {
             review: url.clone(),
             checks: format!("{url}/checks"),
@@ -351,13 +342,14 @@ struct Post<'a> {
     url: &'a str,
     at: i64,
     author: &'a str,
-    bot: bool,
     html: &'a str,
     body: &'a str,
     /// The review thread of a review comment.
     thread: Option<&'a str>,
     /// A review body: one without text makes no row.
     review: bool,
+    /// The review's `state`, for a review.
+    state: &'a str,
 }
 
 impl<'a> Post<'a> {
@@ -375,11 +367,11 @@ impl<'a> Post<'a> {
             url: text(&node["url"]),
             at,
             author: login(&node["author"]),
-            bot: is_bot(&node["author"]),
             html: text(&node["bodyHTML"]),
             body: text(&node["bodyText"]),
             thread,
             review,
+            state: if review { text(&node["state"]) } else { "" },
         }
     }
 }
@@ -399,8 +391,8 @@ pub struct EventInput<'a> {
     pub since: i64,
     /// Comments of the viewer created after this start from zero.
     pub zero_after: i64,
-    /// Threads recorded earlier: id to the time replies count from.
-    pub recorded: &'a BTreeMap<String, i64>,
+    /// Threads recorded earlier.
+    pub recorded: &'a BTreeMap<String, ThreadRec>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -412,8 +404,48 @@ pub struct EventOutput {
     pub needs_merge_queue: bool,
 }
 
-/// DESIGN.md, "Needs action decisions" and "Comment and Reply sources", for
-/// the events of one PR since `since`.
+/// Merge what a post adds to a thread's record: the account's first comment
+/// and the first mention of the account or its team.
+fn note_thread(
+    recorded: &mut BTreeMap<String, ThreadRec>,
+    thread: &str,
+    pr_id: &str,
+    mine: bool,
+    mentioned: bool,
+    at: i64,
+) {
+    if !mine && !mentioned {
+        return;
+    }
+    let entry = recorded.entry(thread.to_string()).or_insert(ThreadRec {
+        id: thread.to_string(),
+        pr_id: pr_id.to_string(),
+        mine_at: None,
+        mention_at: None,
+    });
+    let earliest = |old: Option<i64>| Some(old.map_or(at, |o| o.min(at)));
+    if mine {
+        entry.mine_at = earliest(entry.mine_at);
+    }
+    if mentioned {
+        entry.mention_at = earliest(entry.mention_at);
+    }
+}
+
+/// The mention kind of a post: the account itself, else one of its teams.
+fn mention_kind(html: &str, ctx: Ctx<'_>) -> Option<IngestKind> {
+    if mentions_user(html, ctx.viewer) {
+        Some(IngestKind::Mentioned)
+    } else if ctx.mentions_my_team(html) {
+        Some(IngestKind::TeamMentioned)
+    } else {
+        None
+    }
+}
+
+/// DESIGN.md, "Row kind decisions" and "Comment and Reply sources", for the
+/// events of one PR since `since`. Bots are not special: their posts are
+/// judged like anyone's.
 pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
     let pr = input.pr;
     let pr_id = text(&pr["id"]).to_string();
@@ -438,27 +470,24 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
             posts.push(Post::from(comment, Some(thread_id), false));
         }
     }
-    // DESIGN.md, "Needs action decisions": a mention is a link to the viewer
-    // in the post itself, or to one of the viewer's teams.
-    let mentions_me = |html: &str| mentions_user(html, ctx.viewer) || ctx.mentions_my_team(html);
 
-    // Threads: the viewer's own, and those the viewer is mentioned in.
-    let mut recorded: BTreeMap<String, i64> = input.recorded.clone();
+    // Threads: those the account commented in, and those it was mentioned in.
+    let mut recorded: BTreeMap<String, ThreadRec> = input.recorded.clone();
     for post in &posts {
         let Some(thread) = post.thread else { continue };
-        let counts = ctx.is_me(post.author) || mentions_me(post.html);
-        if counts {
-            let entry = recorded.entry(thread.to_string()).or_insert(post.at);
-            *entry = (*entry).min(post.at);
-        }
+        let mentioned = mention_kind(post.html, ctx).is_some() && !ctx.is_me(post.author);
+        note_thread(
+            &mut recorded,
+            thread,
+            &pr_id,
+            ctx.is_me(post.author),
+            mentioned,
+            post.at,
+        );
     }
-    for (thread, from_at) in &recorded {
-        if input.recorded.get(thread) != Some(from_at) {
-            out.threads.push(ThreadRec {
-                id: thread.clone(),
-                pr_id: pr_id.clone(),
-                from_at: *from_at,
-            });
+    for (id, thread) in &recorded {
+        if input.recorded.get(id) != Some(thread) {
+            out.threads.push(thread.clone());
         }
     }
 
@@ -480,25 +509,41 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
             }
             continue;
         }
-        if post.at < input.since || (post.review && post.body.trim().is_empty()) {
+        if post.at < input.since {
             continue;
         }
-        let mentioned = mentions_me(post.html);
-        let reply = post
-            .thread
-            .and_then(|t| recorded.get(t))
-            .is_some_and(|from| post.at > *from);
-        let kind = if post.bot {
-            (mentioned || reply || mine).then_some(EventKind::BotComment)
-        } else if mentioned {
-            Some(EventKind::Mentioned)
-        } else if reply {
-            Some(EventKind::Reply)
-        } else if mine {
-            Some(EventKind::Comment)
-        } else {
-            None
-        };
+        let actor = Some(post.author.to_string()).filter(|a| !a.is_empty());
+        // DESIGN.md, "Approved rows": one row per approving review on the
+        // account's PR, without a body; the body makes a Comment row too.
+        if mine && post.review && post.state == "APPROVED" {
+            out.events.push(IngestEvent {
+                id: post.id.to_string(),
+                pr_id: pr_id.clone(),
+                kind: IngestKind::Approved,
+                occurred_at: post.at,
+                url: post.url.to_string(),
+                actor: actor.clone(),
+                text: None,
+                comment_id: None,
+            });
+        }
+        if post.review && post.body.trim().is_empty() {
+            continue;
+        }
+        let thread = post.thread.and_then(|t| recorded.get(t));
+        let after = |at: Option<i64>| at.is_some_and(|from| post.at > from);
+        let kind = mention_kind(post.html, ctx)
+            .or_else(|| {
+                thread
+                    .filter(|t| after(t.mine_at))
+                    .map(|_| IngestKind::Reply)
+            })
+            .or_else(|| {
+                thread
+                    .filter(|t| after(t.mention_at))
+                    .map(|_| IngestKind::ReplyMentioned)
+            })
+            .or_else(|| mine.then_some(IngestKind::Comment));
         if let Some(kind) = kind {
             out.events.push(IngestEvent {
                 id: post.id.to_string(),
@@ -506,31 +551,28 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
                 kind,
                 occurred_at: post.at,
                 url: post.url.to_string(),
-                actor: Some(post.author.to_string()).filter(|a| !a.is_empty()),
+                actor,
                 text: Some(post.body.to_string()),
                 comment_id: Some(post.id.to_string()),
-                team: false,
             });
         }
     }
 
     // A mention in the body of a PR opened in the window.
     let opened = time(&pr["createdAt"]);
-    if opened >= input.since && !mine && mentions_me(text(&pr["bodyHTML"])) {
+    if opened >= input.since
+        && !mine
+        && let Some(kind) = mention_kind(text(&pr["bodyHTML"]), ctx)
+    {
         out.events.push(IngestEvent {
             id: format!("{pr_id}:mention"),
             pr_id: pr_id.clone(),
-            kind: if is_bot(&pr["author"]) {
-                EventKind::BotComment
-            } else {
-                EventKind::Mentioned
-            },
+            kind,
             occurred_at: opened,
             url: pr_url.clone(),
             actor: Some(login(&pr["author"]).to_string()).filter(|a| !a.is_empty()),
             text: Some(text(&pr["bodyText"]).to_string()),
             comment_id: None,
-            team: false,
         });
     }
 
@@ -550,7 +592,6 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
             actor,
             text: body,
             comment_id: None,
-            team: false,
         };
         match item["__typename"].as_str() {
             Some("ReviewRequestedEvent") => {
@@ -559,19 +600,19 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
                 }
             }
             Some("MergedEvent") => out.events.push(event(
-                EventKind::Merged,
+                IngestKind::Merged,
                 text(&item["url"]).to_string(),
                 actor,
                 None,
             )),
             Some("ClosedEvent") => out.events.push(event(
-                EventKind::Closed,
+                IngestKind::Closed,
                 text(&item["url"]).to_string(),
                 actor,
                 None,
             )),
             Some("AddedToMergeQueueEvent") => out.events.push(event(
-                EventKind::AddedToMergeQueue,
+                IngestKind::MergeQueueAdded,
                 pr_url.clone(),
                 actor,
                 None,
@@ -598,7 +639,7 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
                     (None, None) => None,
                 };
                 out.events.push(event(
-                    EventKind::RemovedFromMergeQueue,
+                    IngestKind::MergeQueueRemoved,
                     pr_url.clone(),
                     actor,
                     body,
@@ -638,7 +679,7 @@ pub fn enqueuer(queue: &[Value], removal_id: &str) -> Option<String> {
     None
 }
 
-/// A REVIEW_REQUESTED_EVENT for the viewer or one of the viewer's teams.
+/// A REVIEW_REQUESTED_EVENT for the account or one of its teams.
 fn review_request_event(
     item: &Value,
     pr_id: &str,
@@ -646,32 +687,26 @@ fn review_request_event(
     ctx: Ctx<'_>,
 ) -> Option<IngestEvent> {
     let reviewer = &item["requestedReviewer"];
-    let (body, team) = match reviewer["__typename"].as_str() {
-        Some("User") if ctx.is_me(login(reviewer)) => ("for you".to_string(), false),
+    let (body, kind) = match reviewer["__typename"].as_str() {
+        Some("User") if ctx.is_me(login(reviewer)) => {
+            ("for you".to_string(), IngestKind::ReviewRequested)
+        }
         Some("Team") => {
             let team = ctx.my_team(reviewer["databaseId"].as_i64()?)?;
             let slug = reviewer["slug"].as_str().unwrap_or(&team.slug);
-            (format!("for {slug} team"), true)
+            (format!("for {slug} team"), IngestKind::TeamReviewRequested)
         }
         _ => return None,
     };
     Some(IngestEvent {
         id: text(&item["id"]).to_string(),
         pr_id: pr_id.to_string(),
-        kind: EventKind::ReviewRequested,
+        kind,
         occurred_at: time(&item["createdAt"]),
         url: pr_url.to_string(),
         actor: Some(login(&item["actor"]).to_string()).filter(|a| !a.is_empty()),
         text: Some(body),
         comment_id: None,
-        team,
-    })
-}
-
-/// Whether a timeline or a request list has reviewers this token cannot see.
-pub fn has_hidden_reviewers(items: &[Value]) -> bool {
-    items.iter().any(|item| {
-        item["__typename"] == "ReviewRequestedEvent" && item["requestedReviewer"].is_null()
     })
 }
 
@@ -684,7 +719,7 @@ pub fn has_hidden_reviewers(items: &[Value]) -> bool {
 pub struct Collection {
     pub own: Vec<OwnComment>,
     pub threads: Vec<ThreadRec>,
-    /// Review requests still open, as `review_requested` events of any age.
+    /// Review requests still open, as review requested events of any age.
     pub ongoing: Vec<IngestEvent>,
 }
 
@@ -719,26 +754,17 @@ pub fn collect(pr: &Value, zero_after: i64, ctx: Ctx<'_>) -> Collection {
     }
     for thread in nodes(&pr["reviewThreads"]) {
         let thread_id = text(&thread["id"]);
-        let mut from: Option<i64> = None;
+        let mut recorded = BTreeMap::new();
         for comment in nodes(&thread["comments"]) {
             let post = Post::from(comment, Some(thread_id), false);
-            let counts = if ctx.is_me(post.author) {
+            let me = ctx.is_me(post.author);
+            if me {
                 own(&post, &mut out);
-                true
-            } else {
-                mentions_user(post.html, ctx.viewer) || ctx.mentions_my_team(post.html)
-            };
-            if counts {
-                from = Some(from.map_or(post.at, |f| f.min(post.at)));
             }
+            let mentioned = !me && mention_kind(post.html, ctx).is_some();
+            note_thread(&mut recorded, thread_id, &pr_id, me, mentioned, post.at);
         }
-        if let Some(from_at) = from {
-            out.threads.push(ThreadRec {
-                id: thread_id.to_string(),
-                pr_id: pr_id.clone(),
-                from_at,
-            });
-        }
+        out.threads.extend(recorded.into_values());
     }
 
     // Open requests, each with the newest event that asked that reviewer.
@@ -852,11 +878,11 @@ pub fn next_link(header: &str) -> Option<String> {
 
 // ------------------------------------------------------------------ search
 
-/// The four searches of a scope. DESIGN.md, "API usage"; docs/tasks/M2.md,
-/// "Finding PRs". `qualifier` is `org:x`, `user:x` or `is:public`; `since`
-/// is the `YYYY-MM-DD` of D.
-pub fn search_queries(qualifier: &str, since: &str, include_teams: bool) -> [String; 4] {
-    let requested = if include_teams {
+/// The four searches of an owner. DESIGN.md, "API usage". `qualifier` is
+/// `org:x`, `user:x` or `is:public`; `since` is the `YYYY-MM-DD` of D;
+/// `team_requests` is the List of Review requested to my team.
+pub fn search_queries(qualifier: &str, since: &str, team_requests: bool) -> [String; 4] {
+    let requested = if team_requests {
         "review-requested:@me"
     } else {
         "user-review-requested:@me"

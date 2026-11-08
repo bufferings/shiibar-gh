@@ -11,6 +11,7 @@ dev-ingest = ["shiibar-ghd/dev-ingest"]
 [dependencies]
 shiibar-gh-proto = { path = "../shiibar-gh-proto" }
 shiibar-gh-client = { path = "../shiibar-gh-client" }
+serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]

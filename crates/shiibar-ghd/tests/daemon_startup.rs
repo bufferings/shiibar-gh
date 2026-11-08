@@ -1,9 +1,9 @@
 //! Startup, files and the socket, none of which needs injected events.
 //!
-//! The default build reads the real Keychain when it restores scopes for
-//! `reset` and for the unreadable state, so those tests run only in the
-//! `dev-ingest` build, which has no Keychain unless a test gives it a file
-//! (docs/tasks/M2.md, "How to test").
+//! After `reset` the first fetch reads the Keychain to bring the accounts
+//! back, so the `reset` tests run only in the `dev-ingest` build, which has
+//! no Keychain unless a test gives it a file (docs/tasks/M4.md, "DB and
+//! Keychain").
 
 mod common;
 
@@ -178,9 +178,17 @@ fn malformed_requests_are_invalid() {
         "invalid"
     );
     assert_eq!(
-        daemon.code(json!({"cmd":"list","mine":true,"others":true})),
+        daemon.code(json!({"cmd":"list","filter":"mine"})),
         "invalid"
     );
+    assert_eq!(
+        daemon.code(json!({"cmd":"done","row":"x"})),
+        "invalid",
+        "on is required"
+    );
+    assert_eq!(daemon.code(json!({"cmd":"undone","row":"x"})), "invalid");
+    assert_eq!(daemon.code(json!({"cmd":"scope_list"})), "invalid");
+    assert_eq!(daemon.code(json!({"cmd":"settings_status"})), "invalid");
     daemon.stop();
 }
 
@@ -190,101 +198,88 @@ fn refresh_succeeds_without_fetching() {
     let daemon = start(dir.path());
     daemon.ok(json!({"cmd":"refresh"}));
     assert_eq!(
-        daemon.code(json!({"cmd":"refresh","scope":"public"})),
-        "not_found",
-        "Public is not there until it is added"
-    );
-    daemon.ok(json!({"cmd":"scope_add","owner":"public"}));
-    daemon.ok(json!({"cmd":"refresh","scope":"public"}));
-    assert_eq!(
-        daemon.code(json!({"cmd":"refresh","scope":"nobody"})),
+        daemon.code(json!({"cmd":"refresh","account":"nobody"})),
         "not_found"
     );
     daemon.stop();
 }
 
 #[test]
-fn the_first_snapshot_has_no_scope_and_public_is_added_beige() {
+fn the_first_snapshot_has_no_account() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = start(dir.path());
     let snapshot = daemon.subscribe("cli").snapshot();
-    assert_eq!(snapshot["db_unreadable"], false);
     assert_eq!(
-        snapshot["scopes"],
-        json!([]),
-        "Public does not exist at first"
-    );
-
-    daemon.ok(json!({"cmd":"scope_add","owner":"Public"}));
-    let snapshot = daemon.subscribe("cli").snapshot();
-    // No token yet: both the notifications token and Public's are missing.
-    assert_eq!(
-        snapshot["scopes"],
-        json!([{"id":"public","name":"Public","kind":"public","enabled":true,"notify":true,
-               "color":"beige","badge":0,"dot":false,"warnings":[
-                   {"kind":"no_token","token":"notifications","message":"Add a token in Settings","until":null},
-                   {"kind":"no_token","token":"scope","message":"Add a token in Settings","until":null}
-               ],"updated_at":null}])
+        snapshot,
+        json!({"event":"snapshot","accounts":[],"keychain":"ok","db_unreadable":false})
     );
     daemon.stop();
 }
 
 #[test]
-fn new_scopes_take_the_six_colors_in_turn_and_keep_them() {
+#[cfg(feature = "dev-ingest")]
+fn an_account_value_has_the_shape_of_the_wire_format() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = start(dir.path());
-    daemon.ok(json!({"cmd":"scope_add","owner":"public"}));
-    for n in 0..7 {
-        daemon.ok(json!({"cmd":"scope_add","owner":format!("o{n}")}));
+    daemon.setup_account();
+    daemon.ok(json!({"cmd":"refresh","account":"ME"}));
+    let snapshot = daemon.subscribe("cli").snapshot();
+    let owners = snapshot["accounts"][0]["owners"].clone();
+    let org = owners[0]["id"].clone();
+    let public = owners[1]["id"].clone();
+    assert_eq!(
+        snapshot["accounts"],
+        json!([{"id":"1001","login":"me","color":"none",
+            "token":{"registered":false,"expires_at":null,"last_test":null},
+            "updated_at":null,"todo_count":0,"unread":false,
+            "warnings":[{"kind":"no_token","account":"1001","owner":null,
+                "message":"No token","until":null,"url":null}],
+            "rate_limit":null,
+            "owners":[
+                {"id":org,"name":"org","kind":"org","github_id":100,"enabled":true,
+                 "notify":true,"skip_drafts":true,"todo_count":0,"pr_count":0},
+                {"id":public,"name":"Public","kind":"public","github_id":null,"enabled":true,
+                 "notify":true,"skip_drafts":true,"todo_count":0,"pr_count":0}]}])
+    );
+    assert_ne!(org, public);
+    daemon.stop();
+}
+
+#[test]
+#[cfg(feature = "dev-ingest")]
+fn accounts_take_the_colors_in_turn_and_keep_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path());
+    for n in 0..8 {
+        daemon.ok(
+            json!({"cmd":"dev_account_add","id":format!("{}", 3000 + n),"login":format!("a{n}")}),
+        );
     }
-    let colors = |daemon: &TestDaemon| -> Vec<(String, String)> {
+    let colors = |daemon: &TestDaemon| -> Vec<String> {
         daemon
-            .scopes()
+            .accounts()
             .iter()
-            .map(|s| {
-                (
-                    s["id"].as_str().unwrap().to_string(),
-                    s["color"].as_str().unwrap().to_string(),
-                )
-            })
+            .map(|a| a["color"].as_str().unwrap().to_string())
             .collect()
     };
-    let expected: Vec<(String, String)> = [
-        ("o0", "gray"),
-        ("o1", "green"),
-        ("o2", "blue"),
-        ("o3", "purple"),
-        ("o4", "pink"),
-        ("o5", "beige"),
-        ("o6", "gray"),
-        ("public", "beige"),
-    ]
-    .iter()
-    .map(|(id, color)| (id.to_string(), color.to_string()))
-    .collect();
-    assert_eq!(colors(&daemon), expected, "Public does not take a turn");
-
-    // Removing and adding again restores the color; a new scope continues
-    // the cycle.
-    daemon.ok(json!({"cmd":"scope_color","scope":"O1","color":"pink"}));
-    daemon.ok(json!({"cmd":"scope_remove","owner":"o1"}));
-    daemon.ok(json!({"cmd":"scope_remove","owner":"public"}));
-    assert!(colors(&daemon).iter().all(|(id, _)| id != "public"));
-    daemon.ok(json!({"cmd":"scope_add","owner":"o1"}));
-    daemon.ok(json!({"cmd":"scope_add","owner":"public"}));
+    assert_eq!(
+        colors(&daemon),
+        [
+            "none", "red", "orange", "yellow", "green", "blue", "purple", "red"
+        ],
+        "the first is None, then unused colors, then the cycle again"
+    );
+    daemon.ok(json!({"cmd":"account_color","account":"A1","color":"blue"}));
     daemon.stop();
     let daemon = start(dir.path());
-    daemon.ok(json!({"cmd":"scope_add","owner":"o7"}));
-    let after = colors(&daemon);
-    assert!(after.contains(&("o1".into(), "pink".into())), "{after:?}");
-    assert!(
-        after.contains(&("public".into(), "beige".into())),
-        "{after:?}"
-    );
-    assert!(after.contains(&("o7".into(), "green".into())), "{after:?}");
+    assert_eq!(colors(&daemon)[1], "blue", "kept over a restart");
     assert_eq!(
-        daemon.code(json!({"cmd":"scope_color","scope":"o7","color":"Red"})),
+        daemon.code(json!({"cmd":"account_color","account":"a1","color":"pink"})),
         "invalid"
+    );
+    assert_eq!(
+        daemon.code(json!({"cmd":"account_color","account":"nobody","color":"red"})),
+        "not_found"
     );
     daemon.stop();
 }
@@ -311,7 +306,7 @@ fn a_database_locked_by_another_process_is_an_exit_not_the_waiting_state() {
 }
 
 #[test]
-fn an_older_database_is_migrated() {
+fn a_version_0_database_gets_the_schema() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("state.db");
     // Version 0: a valid SQLite file that has none of the tables.
@@ -320,7 +315,7 @@ fn an_older_database_is_migrated() {
         .unwrap();
     drop(conn);
     let daemon = start(dir.path());
-    assert!(daemon.scopes().is_empty());
+    assert_eq!(daemon.subscribe("cli").snapshot()["accounts"], json!([]));
     daemon.stop();
     let conn = rusqlite::Connection::open(&db).unwrap();
     let version: i64 = conn
@@ -343,29 +338,38 @@ fn a_damaged_file_starts_the_waiting_state_without_touching_it() {
     daemon.ok(json!({"cmd":"info"}));
     let snapshot = daemon.subscribe("cli").snapshot();
     assert_eq!(snapshot["db_unreadable"], true);
-    assert_eq!(snapshot["scopes"], json!([]), "no token restores no scope");
+    assert_eq!(snapshot["accounts"], json!([]));
+    assert_eq!(snapshot["keychain"], "ok");
 
     for request in [
         json!({"cmd":"list"}),
         json!({"cmd":"activity"}),
-        json!({"cmd":"status","pr":"a/b#1"}),
+        json!({"cmd":"status","account":"me","pr":"a/b#1"}),
         json!({"cmd":"seen","row_ids":[]}),
-        json!({"cmd":"popover_opened","scope":"public"}),
-        json!({"cmd":"popover_closed","scope":"public"}),
-        json!({"cmd":"done","row":"x"}),
-        json!({"cmd":"undone","row":"x"}),
-        json!({"cmd":"snooze","pr":"a/b#1"}),
-        json!({"cmd":"unsnooze","pr":"a/b#1"}),
+        json!({"cmd":"popover_opened","account":"me"}),
+        json!({"cmd":"popover_closed","account":"me"}),
+        json!({"cmd":"done","row":"x","on":true}),
+        json!({"cmd":"todo","row":"x","on":true}),
+        json!({"cmd":"snooze","account":"me","pr":"a/b#1"}),
+        json!({"cmd":"unsnooze","account":"me","pr":"a/b#1"}),
         json!({"cmd":"refresh"}),
         json!({"cmd":"open","row":"x"}),
-        json!({"cmd":"config_get","key":"notify_state"}),
-        json!({"cmd":"config_set","key":"notify_state","value":false}),
-        json!({"cmd":"scope_list"}),
-        json!({"cmd":"scope_add","owner":"a"}),
-        json!({"cmd":"scope_remove","owner":"a"}),
-        json!({"cmd":"scope_enable","scope":"public"}),
-        json!({"cmd":"scope_disable","scope":"public"}),
-        json!({"cmd":"scope_notify","scope":"public","on":false}),
+        json!({"cmd":"config_get","key":"drop_after_days"}),
+        json!({"cmd":"config_set","key":"drop_after_days","value":3}),
+        json!({"cmd":"account_list"}),
+        json!({"cmd":"account_add","token":"t"}),
+        json!({"cmd":"account_remove","account":"me"}),
+        json!({"cmd":"account_color","account":"me","color":"red"}),
+        json!({"cmd":"owner_add","account":"me","owner":"public"}),
+        json!({"cmd":"owner_add","account":"me","owner":"org"}),
+        json!({"cmd":"owner_lookup","account":"me","owner":"org"}),
+        json!({"cmd":"owner_remove","account":"me","owner":"org"}),
+        json!({"cmd":"owner_enable","account":"me","owner":"org"}),
+        json!({"cmd":"owner_events_get","account":"me","owner":"org"}),
+        json!({"cmd":"owner_exclusions_get","account":"me","owner":"org"}),
+        json!({"cmd":"token_set","account":"me","token":"t"}),
+        json!({"cmd":"token_test","token":"t"}),
+        json!({"cmd":"token_reset"}),
     ] {
         assert_eq!(daemon.code(request.clone()), "internal", "{request}");
     }
@@ -410,7 +414,7 @@ fn a_damaged_file_starts_the_waiting_state_without_touching_it() {
 
     let snapshot = daemon.subscribe("cli").snapshot();
     assert_eq!(snapshot["db_unreadable"], false);
-    daemon.ok(json!({"cmd":"config_set","key":"notify_state","value":false}));
+    daemon.ok(json!({"cmd":"config_set","key":"drop_after_days","value":3}));
     daemon.stop();
 }
 
@@ -418,7 +422,7 @@ fn a_damaged_file_starts_the_waiting_state_without_touching_it() {
 fn reset_on_a_readable_database_is_invalid_and_changes_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = start(dir.path());
-    daemon.ok(json!({"cmd":"config_set","key":"notify_state","value":false}));
+    daemon.ok(json!({"cmd":"config_set","key":"drop_after_days","value":3}));
     let response = daemon.request(json!({"cmd":"reset"}));
     assert_eq!(response["code"], "invalid");
     assert_eq!(
@@ -426,8 +430,8 @@ fn reset_on_a_readable_database_is_invalid_and_changes_nothing() {
         "saved state is readable; nothing to reset"
     );
     assert_eq!(
-        daemon.ok(json!({"cmd":"config_get","key":"notify_state"}))["value"],
-        false
+        daemon.ok(json!({"cmd":"config_get","key":"drop_after_days"}))["value"],
+        3
     );
     daemon.stop();
 }
@@ -440,7 +444,6 @@ fn settings_survive_a_restart() {
         ("launch_at_login", json!(false)),
         ("status_interval_minutes", json!(9)),
         ("snooze_return_time", json!("07:45")),
-        ("bot_comments", json!("notify")),
         ("drop_after_days", json!(2)),
         ("appearance", json!("dark")),
     ] {
@@ -461,10 +464,6 @@ fn settings_survive_a_restart() {
         "07:45"
     );
     assert_eq!(
-        daemon.ok(json!({"cmd":"config_get","key":"bot_comments"}))["value"],
-        "notify"
-    );
-    assert_eq!(
         daemon.ok(json!({"cmd":"config_get","key":"drop_after_days"}))["value"],
         2
     );
@@ -473,6 +472,94 @@ fn settings_survive_a_restart() {
         "dark"
     );
     daemon.stop();
+}
+
+#[test]
+fn the_settings_of_0_1_are_gone() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path());
+    for key in [
+        "graphql_cost_cap",
+        "notify_activity",
+        "notify_state",
+        "notify_reactions",
+        "bot_comments",
+        "include_team_requests",
+    ] {
+        assert_eq!(
+            daemon.code(json!({"cmd":"config_get","key":key})),
+            "invalid",
+            "{key}"
+        );
+    }
+    daemon.stop();
+}
+
+/// A database with the 0.1 schema, as the tag v0.1.0 left it.
+fn v01_database(dir: &std::path::Path) -> Vec<u8> {
+    let db = dir.join("state.db");
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    conn.execute_batch(include_str!("data/schema_v01.sql"))
+        .unwrap();
+    drop(conn);
+    std::fs::read(&db).unwrap()
+}
+
+#[test]
+fn a_0_1_database_is_the_unreadable_state_and_stays_as_it_is() {
+    let dir = tempfile::tempdir().unwrap();
+    let before = v01_database(dir.path());
+    let daemon = start(dir.path());
+    let snapshot = daemon.subscribe("cli").snapshot();
+    assert_eq!(
+        snapshot,
+        json!({"event":"snapshot","accounts":[],"keychain":"ok","db_unreadable":true})
+    );
+    assert_eq!(daemon.code(json!({"cmd":"account_list"})), "internal");
+    daemon.stop();
+    assert_eq!(
+        std::fs::read(dir.path().join("state.db")).unwrap(),
+        before,
+        "not migrated, not written"
+    );
+}
+
+#[test]
+#[cfg(feature = "dev-ingest")]
+fn reset_sets_a_0_1_database_aside_and_starts_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let before = v01_database(dir.path());
+    let daemon = start(dir.path());
+    daemon.ok(json!({"cmd":"reset"}));
+    let snapshot = daemon.subscribe("cli").snapshot();
+    assert_eq!(snapshot["db_unreadable"], false);
+    assert_eq!(snapshot["accounts"], json!([]));
+    let retired: Vec<String> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .filter(|n| {
+            n.starts_with("state.db.corrupt-") && !n.ends_with("-wal") && !n.ends_with("-shm")
+        })
+        .collect();
+    assert_eq!(retired.len(), 1, "{retired:?}");
+    assert_eq!(std::fs::read(dir.path().join(&retired[0])).unwrap(), before);
+    daemon.stop();
+    let conn = rusqlite::Connection::open(dir.path().join("state.db")).unwrap();
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, shiibar_ghd::store::SCHEMA_VERSION);
+}
+
+#[test]
+fn a_database_one_version_newer_is_an_exit() {
+    let dir = tempfile::tempdir().unwrap();
+    start(dir.path()).stop();
+    let conn = rusqlite::Connection::open(dir.path().join("state.db")).unwrap();
+    conn.pragma_update(None, "user_version", shiibar_ghd::store::SCHEMA_VERSION + 1)
+        .unwrap();
+    drop(conn);
+    assert_eq!(exit_code(command(dir.path())), 1);
 }
 
 #[test]

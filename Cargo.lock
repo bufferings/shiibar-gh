@@ -1000,6 +1000,7 @@ dependencies = [
 name = "shiibar-gh"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "serde_json",
  "shiibar-gh-client",
  "shiibar-gh-proto",

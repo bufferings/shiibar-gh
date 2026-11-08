@@ -1,7 +1,9 @@
 //! Black-box CLI tests: real `shiibar-gh` subprocesses against a real daemon on
 //! a temporary state directory.
 
-use serde_json::{Value, json};
+use serde_json::Value;
+#[cfg(feature = "dev-ingest")]
+use serde_json::json;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -85,6 +87,7 @@ impl Daemon {
         run(self.dir.path(), args)
     }
 
+    #[cfg_attr(not(feature = "dev-ingest"), allow(dead_code))]
     fn send(&self, value: Value) -> Value {
         let mut stream = UnixStream::connect(self.dir.path().join("shiibar-ghd.sock")).unwrap();
         stream.set_read_timeout(Some(WAIT)).unwrap();
@@ -139,13 +142,14 @@ fn run_with_input(state_dir: &Path, args: &[&str], input: &str) -> Run {
 #[test]
 fn every_command_has_help_with_exit_0_and_needs_no_daemon() {
     let dir = tempfile::tempdir().unwrap();
-    let commands: [&[&str]; 24] = [
+    let commands: [&[&str]; 26] = [
         &["--help"],
+        &["help"],
         &["list", "--help"],
         &["status", "--help"],
         &["activity", "--help"],
         &["done", "--help"],
-        &["undone", "--help"],
+        &["todo", "--help"],
         &["snooze", "--help"],
         &["unsnooze", "--help"],
         &["refresh", "--help"],
@@ -153,47 +157,84 @@ fn every_command_has_help_with_exit_0_and_needs_no_daemon() {
         &["config", "get", "--help"],
         &["config", "set", "--help"],
         &["reset", "--help"],
-        &["scope", "list", "--help"],
-        &["scope", "add", "--help"],
-        &["scope", "remove", "--help"],
-        &["scope", "enable", "--help"],
-        &["scope", "disable", "--help"],
-        &["scope", "notify", "--help"],
-        &["scope", "--help"],
+        &["account", "--help"],
+        &["account", "list", "--help"],
+        &["account", "add", "--help"],
+        &["account", "remove", "--help"],
+        &["account", "color", "--help"],
         &["token", "set", "--help"],
         &["token", "test", "--help"],
-        &["token", "--help"],
-        &["settings", "status", "--help"],
+        &["token", "reset", "--help"],
+        &["owner", "--help"],
+        &["owner", "add", "--help"],
+        &["owner", "events", "--help"],
+        &["owner", "exclusions", "--help"],
     ];
     for args in commands {
         let result = run(dir.path(), args);
         assert_eq!(result.code, 0, "{args:?}");
         assert!(result.stdout.contains("usage"), "{args:?}");
     }
+    // Stage 4, S4-2-5: the one `--json` that is not the daemon's line.
+    let owner_list = run(dir.path(), &["owner", "list", "--help"]);
+    assert_eq!(owner_list.code, 0);
+    assert!(
+        owner_list.stdout.contains(r#"{"ok":true,"owners":[...]}"#),
+        "{}",
+        owner_list.stdout
+    );
 }
 
 #[test]
 fn usage_errors_exit_1() {
     let dir = tempfile::tempdir().unwrap();
-    let cases: [&[&str]; 17] = [
+    let cases: [&[&str]; 32] = [
         &[],
         &["nope"],
+        // 0.1 commands are gone.
+        &["undone", "x"],
+        &["scope", "list"],
+        &["settings", "status"],
+        &["list", "--needs-action"],
         // No token on standard input.
-        &["token", "set", "notifications"],
+        &["token", "set", "--account", "me"],
+        &["account", "add"],
+        // `--account` is required.
         &["token", "set"],
+        &["status", "a/b#1"],
+        &["snooze", "a/b#1"],
+        &["unsnooze", "a/b#1"],
+        &["open", "a/b#1"],
+        &["owner", "add", "org"],
+        &["owner", "lookup", "org"],
+        &["owner", "remove", "org"],
+        &["owner", "enable", "org"],
+        &["owner", "notify", "org", "on"],
+        &["owner", "events", "org"],
+        &["owner", "exclusions", "org"],
+        // Without `--account` a piped token is required.
+        &["token", "test"],
         &["token"],
-        &["token", "nope", "x"],
-        &["settings", "status", "extra"],
-        &["list", "--mine", "--others"],
+        &["token", "nope"],
+        &["list", "--authored", "--assigned"],
         &["list", "--bogus"],
         &["list", "extra"],
-        &["list", "--scope"],
+        &["list", "--account"],
         &["done"],
         &["done", "a", "b"],
-        &["status"],
-        &["config", "get"],
-        &["scope", "notify", "public", "maybe"],
-        &["scope"],
+        &["owner", "notify", "org", "maybe", "--account", "me"],
+        &["account", "color", "me", "pink"],
+        &[
+            "owner",
+            "events",
+            "set",
+            "org",
+            "nope",
+            "list",
+            "on",
+            "--account",
+            "me",
+        ],
     ];
     for args in cases {
         assert_eq!(run(dir.path(), args).code, 1, "{args:?}");
@@ -212,47 +253,39 @@ fn no_daemon_exits_1() {
     );
 }
 
+/// Nothing here reads the Keychain or reaches GitHub: no account exists.
 #[test]
-fn exit_codes_without_injected_events() {
+fn exit_codes_without_an_account() {
     let daemon = Daemon::start();
-    let cases: [(&[&str], i32); 15] = [
+    let cases: [(&[&str], i32); 17] = [
         (&["list"], 0),
+        (&["list", "--snoozed", "--todo"], 0),
         (&["activity"], 0),
         (&["refresh"], 0),
-        (&["scope", "list"], 0),
-        (&["scope", "add", "org"], 0),
-        (&["config", "get", "notify_state"], 0),
-        (&["config", "set", "notify_state", "false"], 0),
+        (&["account", "list"], 0),
+        (&["owner", "list"], 0),
+        (&["config", "get", "drop_after_days"], 0),
+        (&["config", "set", "drop_after_days", "5"], 0),
         (&["done", "nope"], 2),
-        (&["status", "a/b#1"], 2),
-        (&["open", "a/b#1"], 2),
-        (&["list", "--scope", "nobody"], 2),
-        (&["scope", "add", "public"], 0),
-        (&["scope", "add", "notifications"], 1),
-        (&["config", "set", "notify_state", "maybe"], 1),
+        (&["todo", "--off", "nope"], 2),
+        (&["status", "a/b#1", "--account", "me"], 2),
+        (&["open", "nope"], 2),
+        (&["list", "--account", "nobody"], 2),
+        (&["refresh", "--account", "nobody"], 2),
+        (&["owner", "enable", "org", "--account", "nobody"], 2),
+        (&["config", "set", "drop_after_days", "0"], 1),
         (&["reset"], 1),
     ];
     for (args, code) in cases {
         let result = daemon.cli(args);
         assert_eq!(result.code, code, "{args:?}: {}", result.stderr);
     }
-    let cases: [(&[&str], i32); 15] = [
-        (&["scope", "add", "Public"], 1),
-        (&["scope", "add", "ORG"], 1),
-        (&["scope", "color", "ORG", "blue"], 0),
-        (&["scope", "color", "org", "red"], 1),
-        (&["scope", "color", "org"], 1),
-        (&["scope", "color", "nobody", "blue"], 2),
-        // Refused before any request: never reaches GitHub in a test.
-        (&["scope", "lookup", "a/b"], 1),
-        (&["scope", "lookup"], 1),
-        (&["scope", "remove", "PUBLIC"], 0),
-        (&["scope", "disable", "ORG"], 0),
-        (&["scope", "remove", "nobody"], 2),
-        (&["scope", "remove", "public"], 2),
-        (&["scope", "add", "org"], 1),
-        (&["config", "get", "nope"], 1),
-        (&["scope", "enable", "nobody"], 2),
+    let cases: [(&[&str], i32); 5] = [
+        (&["account", "remove", "nobody"], 2),
+        (&["account", "color", "nobody", "red"], 2),
+        (&["owner", "add", "public", "--account", "nobody"], 2),
+        (&["owner", "list", "--account", "nobody"], 2),
+        (&["config", "get", "notify_state"], 1),
     ];
     for (args, code) in cases {
         assert_eq!(daemon.cli(args).code, code, "{args:?}");
@@ -304,161 +337,343 @@ fn values_print_as_set() {
     );
 }
 
-#[test]
-fn scope_commands_work_from_the_command_line() {
-    let daemon = Daemon::start();
-    assert_eq!(daemon.cli(&["scope", "add", "org"]).code, 0);
-    assert_eq!(daemon.cli(&["scope", "notify", "org", "off"]).code, 0);
-    assert_eq!(daemon.cli(&["scope", "disable", "org"]).code, 0);
-    let json: Value =
-        serde_json::from_str(&daemon.cli(&["scope", "list", "--json"]).stdout).unwrap();
-    let org = json["scopes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|s| s["id"] == "org")
-        .unwrap();
-    assert_eq!(org["notify"], false);
-    assert_eq!(org["enabled"], false);
-    assert_eq!(org["color"], "gray", "the first color of the cycle");
-    assert_eq!(daemon.cli(&["scope", "color", "org", "pink"]).code, 0);
-    assert!(
-        daemon
-            .cli(&["scope", "list"])
-            .stdout
-            .contains("org name=org enabled=false notify=false color=pink"),
-    );
-    assert_eq!(daemon.cli(&["scope", "add", "public"]).code, 0);
-    assert!(
-        daemon
-            .cli(&["scope", "list"])
-            .stdout
-            .contains("public name=Public")
-    );
-    assert_eq!(daemon.cli(&["scope", "remove", "public"]).code, 0);
-    assert!(!daemon.cli(&["scope", "list"]).stdout.contains("public"));
-    assert_eq!(daemon.cli(&["scope", "enable", "org"]).code, 0);
-    assert_eq!(daemon.cli(&["scope", "remove", "org"]).code, 0);
-    assert!(!daemon.cli(&["scope", "list"]).stdout.contains("org"));
-    assert!(daemon.send(json!({"cmd":"info"}))["ok"] == true);
-}
-
 /// Tokens come from standard input only: an argument is a usage error.
 #[test]
 fn a_token_is_never_an_argument() {
     let dir = tempfile::tempdir().unwrap();
-    let result = run_with_input(
-        dir.path(),
-        &["token", "set", "notifications", "ghp_x"],
-        "ghp_y\n",
-    );
-    assert_eq!(result.code, 1);
-    assert!(!result.stderr.contains("ghp_y"));
+    for args in [
+        &["token", "set", "--account", "me", "ghp_x"][..],
+        &["account", "add", "ghp_x"][..],
+        &["token", "test", "ghp_x"][..],
+    ] {
+        let result = run_with_input(dir.path(), args, "ghp_y\n");
+        assert_eq!(result.code, 1, "{args:?}");
+        assert!(!result.stderr.contains("ghp_y"), "{args:?}");
+    }
+}
+
+#[cfg(feature = "dev-ingest")]
+impl Daemon {
+    /// A `dev-ingest` daemon with a test Keychain at `keychain` (relative
+    /// to the state directory) and no GitHub.
+    fn start_with_keychain(keychain: &str, prepare: impl FnOnce(&Path)) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        prepare(dir.path());
+        let mut command = Command::new(daemon_binary());
+        command
+            .arg("--foreground")
+            .env("SHIIBAR_GH_STATE_DIR", dir.path())
+            .env("SHIIBAR_GH_LOG", "error")
+            .env("SHIIBAR_GH_DEV_NOW", "1800000000")
+            .env("SHIIBAR_GH_DEV_TZ", "Asia/Tokyo")
+            .env("SHIIBAR_GH_DEV_KEYCHAIN", dir.path().join(keychain))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let child = command.spawn().unwrap();
+        let socket = dir.path().join("shiibar-ghd.sock");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while UnixStream::connect(&socket).is_err() {
+            assert!(Instant::now() < deadline, "the daemon never accepted");
+            std::thread::yield_now();
+        }
+        Self { dir, child }
+    }
+
+    fn ok(&self, value: Value) -> Value {
+        let response = self.send(value.clone());
+        assert_eq!(response["ok"], true, "{value} -> {response}");
+        response
+    }
+
+    /// The account `me` with `org` and Public, made without GitHub.
+    fn setup(&self) {
+        self.ok(json!({"cmd":"dev_account_add","id":"1001","login":"me"}));
+        self.ok(json!({"cmd":"dev_owner_add","account":"me","owner":"org","kind":"org","github_id":100}));
+        self.ok(json!({"cmd":"dev_owner_add","account":"me","owner":"public","kind":"public"}));
+    }
 }
 
 #[cfg(feature = "dev-ingest")]
 #[test]
-fn token_set_reads_the_first_line_of_standard_input() {
-    let dir = tempfile::tempdir().unwrap();
-    let keychain = dir.path().join("keychain.json");
-    let mut child = Command::new(daemon_binary())
-        .arg("--foreground")
-        .env("SHIIBAR_GH_STATE_DIR", dir.path())
-        .env("SHIIBAR_GH_LOG", "error")
-        .env("SHIIBAR_GH_DEV_KEYCHAIN", &keychain)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let socket = dir.path().join("shiibar-ghd.sock");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while UnixStream::connect(&socket).is_err() {
-        assert!(Instant::now() < deadline, "the daemon never accepted");
-        std::thread::yield_now();
+fn account_and_owner_commands_work_from_the_command_line() {
+    let daemon = Daemon::start_with_keychain("keychain.json", |_| {});
+    daemon.setup();
+    let accounts = daemon.cli(&["account", "list"]);
+    assert!(
+        accounts
+            .stdout
+            .starts_with("me id=1001 color=none token=no"),
+        "{}",
+        accounts.stdout
+    );
+    assert_eq!(daemon.cli(&["account", "color", "ME", "green"]).code, 0);
+    let json: Value =
+        serde_json::from_str(&daemon.cli(&["account", "list", "--json"]).stdout).unwrap();
+    assert_eq!(json["accounts"][0]["color"], "green");
+    assert_eq!(json["accounts"][0]["owners"][1]["kind"], "public");
+
+    for args in [
+        &["owner", "notify", "ORG", "off", "--account", "me"][..],
+        &["owner", "skip-drafts", "org", "off", "--account", "me"][..],
+        &["owner", "disable", "org", "--account", "me"][..],
+    ] {
+        assert_eq!(daemon.cli(args).code, 0, "{args:?}");
     }
+    let owners = daemon.cli(&["owner", "list", "--account", "me"]).stdout;
+    assert!(
+        owners.contains("me org ")
+            && owners.contains("enabled=false notify=false skip_drafts=false"),
+        "{owners}"
+    );
+    let json: Value = serde_json::from_str(
+        &daemon
+            .cli(&["owner", "list", "--account", "me", "--json"])
+            .stdout,
+    )
+    .unwrap();
+    assert_eq!(json["owners"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        daemon
+            .cli(&["owner", "enable", "org", "--account", "me"])
+            .code,
+        0
+    );
+
+    let events = daemon
+        .cli(&["owner", "events", "org", "--account", "me"])
+        .stdout;
+    assert!(
+        events.starts_with("review_requested list=on todo=on notify=on\n"),
+        "{events}"
+    );
+    assert!(
+        events.contains("merged_closed list=on todo=off notify=off"),
+        "{events}"
+    );
+    let set = daemon.cli(&[
+        "owner",
+        "events",
+        "set",
+        "org",
+        "merged_closed",
+        "notify",
+        "on",
+        "--account",
+        "me",
+    ]);
+    assert_eq!(set.code, 0, "{}", set.stderr);
+    assert!(
+        set.stdout
+            .contains("merged_closed list=on todo=off notify=on")
+    );
+    // Todo while List is off is refused.
+    daemon.cli(&[
+        "owner",
+        "events",
+        "set",
+        "public",
+        "reaction",
+        "list",
+        "off",
+        "--account",
+        "me",
+    ]);
+    assert_eq!(
+        daemon
+            .cli(&[
+                "owner",
+                "events",
+                "set",
+                "public",
+                "reaction",
+                "todo",
+                "on",
+                "--account",
+                "me"
+            ])
+            .code,
+        1
+    );
+    let copied = daemon.cli(&[
+        "owner",
+        "events",
+        "copy",
+        "org",
+        "public",
+        "--account",
+        "me",
+    ]);
+    assert_eq!(copied.code, 0, "{}", copied.stderr);
+    assert!(
+        copied
+            .stdout
+            .contains("merged_closed list=on todo=off notify=on")
+    );
+
+    let set = daemon.cli(&[
+        "owner",
+        "exclusions",
+        "set",
+        "org",
+        "user",
+        "renovate[bot]",
+        "list-only",
+        "--account",
+        "me",
+    ]);
+    assert_eq!(set.code, 0, "{}", set.stderr);
+    daemon.cli(&[
+        "owner",
+        "exclusions",
+        "set",
+        "org",
+        "repo",
+        "org/legacy",
+        "hidden",
+        "--account",
+        "me",
+    ]);
+    assert_eq!(
+        daemon
+            .cli(&["owner", "exclusions", "org", "--account", "me"])
+            .stdout,
+        "repo org/legacy hidden\nuser renovate[bot] list-only\n"
+    );
+    assert_eq!(
+        daemon
+            .cli(&[
+                "owner",
+                "exclusions",
+                "remove",
+                "org",
+                "user",
+                "RENOVATE[bot]",
+                "--account",
+                "me"
+            ])
+            .code,
+        0
+    );
+    assert_eq!(
+        daemon
+            .cli(&[
+                "owner",
+                "exclusions",
+                "remove",
+                "org",
+                "user",
+                "nobody",
+                "--account",
+                "me"
+            ])
+            .code,
+        2
+    );
+    let json: Value = serde_json::from_str(
+        &daemon
+            .cli(&["owner", "exclusions", "org", "--account", "me", "--json"])
+            .stdout,
+    )
+    .unwrap();
+    assert_eq!(
+        json["exclusions"],
+        json!({"repos":[{"name":"org/legacy","state":"hidden"}],"users":[]})
+    );
+
+    // Public needs no GitHub, but it is there already.
+    assert_eq!(
+        daemon
+            .cli(&["owner", "add", "public", "--account", "me"])
+            .code,
+        1
+    );
+    assert_eq!(
+        daemon
+            .cli(&["owner", "remove", "public", "--account", "me"])
+            .code,
+        0
+    );
+    let added = daemon.cli(&["owner", "add", "PUBLIC", "--account", "me"]);
+    assert_eq!(added.code, 0, "{}", added.stderr);
+    assert_eq!(added.stdout, "me\n");
+    // A token test without GitHub cannot run: GitHub is unreachable.
+    let test = run_with_input(daemon.dir.path(), &["token", "test"], "ghp_secret\n");
+    assert_eq!(test.code, 1);
+    assert!(!test.stderr.contains("ghp_secret"));
+    // Without GitHub the owner is not checked, so nothing is saved.
     let set = run_with_input(
-        dir.path(),
-        &["token", "set", "notifications"],
+        daemon.dir.path(),
+        &["token", "set", "--account", "me"],
         "ghp_first_line\r\nsecond line\n",
     );
-    assert_eq!(set.code, 0, "{}", set.stderr);
-    let saved: Value = serde_json::from_str(&std::fs::read_to_string(&keychain).unwrap()).unwrap();
-    assert_eq!(
-        saved,
-        json!({"version":1,"tokens":{"notifications":"ghp_first_line"}})
-    );
-    assert_eq!(
-        run_with_input(dir.path(), &["token", "set", "nobody"], "x\n").code,
-        2,
-        "an unregistered owner"
-    );
-    assert_eq!(
-        run(dir.path(), &["token", "set", "public"]).code,
-        1,
-        "empty input"
-    );
-    assert_eq!(
-        run_with_input(dir.path(), &["token", "set", "public"], "x\n").code,
-        2,
-        "Public is not added yet"
-    );
-    assert_eq!(run(dir.path(), &["scope", "add", "public"]).code, 0);
-    let status = run(dir.path(), &["settings", "status", "--json"]);
-    assert_eq!(status.code, 0, "{}", status.stderr);
-    let status: Value = serde_json::from_str(&status.stdout).unwrap();
-    assert_eq!(status["tokens"][0]["target"], "notifications");
-    assert_eq!(status["tokens"][0]["registered"], true);
-    assert_eq!(status["tokens"][1]["target"], "public");
-    assert_eq!(status["tokens"][1]["registered"], false);
-    let text = run(dir.path(), &["settings", "status"]);
+    assert_eq!(set.code, 1);
     assert!(
-        text.stdout.contains("notifications registered=true"),
+        set.stderr.contains("Couldn't reach GitHub"),
         "{}",
-        text.stdout
+        set.stderr
     );
-    // This build reaches no GitHub, so a test cannot run.
-    let test = run(dir.path(), &["token", "test", "notifications", "--json"]);
-    assert_eq!(test.code, 1);
-    assert!(!test.stderr.contains("ghp_first_line"));
-    // `refresh` prints the scope warnings and succeeds.
-    let refresh = run(dir.path(), &["refresh"]);
+    assert!(!set.stderr.contains("ghp_first_line"));
+    assert!(!daemon.dir.path().join("keychain.json").exists());
+    assert_eq!(daemon.cli(&["account", "remove", "me"]).code, 0);
+    assert_eq!(daemon.cli(&["account", "list"]).stdout, "");
+}
+
+/// A Keychain path that is a directory cannot be read: refused commands exit
+/// with 1 and say why.
+#[cfg(feature = "dev-ingest")]
+#[test]
+fn a_keychain_that_cannot_be_read_exits_1() {
+    let daemon = Daemon::start_with_keychain("keychain", |dir| {
+        std::fs::create_dir(dir.join("keychain")).unwrap();
+    });
+    daemon.setup();
+    // The first fetch reads the Keychain.
+    let refresh = daemon.cli(&["refresh"]);
     assert_eq!(refresh.code, 0);
     assert!(
-        refresh.stderr.contains("warning: no_token [scope token]"),
+        refresh.stderr.contains("warning: keychain_unavailable"),
         "{}",
         refresh.stderr
     );
-    let _ = child.kill();
-    let _ = child.wait();
+    let removed = daemon.cli(&["account", "remove", "me"]);
+    assert_eq!(removed.code, 1);
+    assert!(
+        removed
+            .stderr
+            .contains("Couldn't read tokens from Keychain"),
+        "{}",
+        removed.stderr
+    );
+    assert_eq!(daemon.cli(&["token", "test", "--account", "me"]).code, 1);
+    assert_eq!(
+        daemon
+            .cli(&["owner", "add", "acme", "--account", "me"])
+            .code,
+        1
+    );
+    assert_eq!(
+        daemon
+            .cli(&["owner", "remove", "public", "--account", "me"])
+            .code,
+        0
+    );
+    assert_eq!(daemon.cli(&["account", "list"]).code, 0);
 }
 
-/// The unreadable state restores scopes from the Keychain, so this runs only
-/// in the `dev-ingest` build, which has none (docs/tasks/M2.md).
+/// The unreadable state reads no Keychain, but `reset` makes the first fetch
+/// read it, so this runs only in the `dev-ingest` build.
 #[test]
 #[cfg(feature = "dev-ingest")]
 fn reset_works_from_the_command_line_when_the_database_is_unreadable() {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("state.db"), vec![0xAB; 4096]).unwrap();
-    let mut child = Command::new(daemon_binary())
-        .arg("--foreground")
-        .env("SHIIBAR_GH_STATE_DIR", dir.path())
-        .env("SHIIBAR_GH_LOG", "error")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let socket = dir.path().join("shiibar-ghd.sock");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while UnixStream::connect(&socket).is_err() {
-        assert!(Instant::now() < deadline, "the daemon never accepted");
-        std::thread::yield_now();
-    }
-    assert_eq!(run(dir.path(), &["list"]).code, 1);
-    assert_eq!(run(dir.path(), &["config", "get", "notify_state"]).code, 1);
-    assert_eq!(run(dir.path(), &["reset"]).code, 0);
-    assert_eq!(run(dir.path(), &["list"]).code, 0);
-    let _ = child.kill();
-    let _ = child.wait();
+    let daemon = Daemon::start_with_keychain("keychain.json", |dir| {
+        std::fs::write(dir.join("state.db"), vec![0xAB; 4096]).unwrap();
+    });
+    assert_eq!(daemon.cli(&["list"]).code, 1);
+    assert_eq!(daemon.cli(&["account", "list"]).code, 1);
+    assert_eq!(daemon.cli(&["config", "get", "drop_after_days"]).code, 1);
+    assert_eq!(daemon.cli(&["reset"]).code, 0);
+    assert_eq!(daemon.cli(&["list"]).code, 0);
+    assert_eq!(daemon.cli(&["reset"]).code, 1, "readable now");
 }
 
 #[cfg(feature = "dev-ingest")]
@@ -489,13 +704,13 @@ mod with_events {
     }
 
     fn seeded() -> Daemon {
-        let daemon = Daemon::start();
-        assert_eq!(daemon.cli(&["scope", "add", "org"]).code, 0);
-        let response = daemon.send(json!({"cmd":"dev_ingest","ingest":{
-            "viewer":"me","missing_pr_ids":[],
+        let daemon = Daemon::start_with_keychain("keychain.json", |_| {});
+        daemon.setup();
+        daemon.ok(json!({"cmd":"dev_ingest","account":"me","ingest":{
+            "missing_pr_ids":[],
             "prs":[
                 pr("PR_1", 1, "me", json!({"checks":"failed"})),
-                pr("PR_2", 2, "alice", json!({})),
+                pr("PR_2", 2, "alice", json!({"assignees":["me"]})),
                 pr("PR_3", 3, "alice", json!({"is_draft":true})),
             ],
             "events":[
@@ -504,7 +719,6 @@ mod with_events {
             ],
             "reactions":[]
         }}));
-        assert_eq!(response["ok"], true, "{response}");
         daemon
     }
 
@@ -520,7 +734,11 @@ mod with_events {
         assert_eq!(cards["cards"].as_array().unwrap().len(), 2);
         let text = daemon.cli(&["list"]).stdout;
         assert!(text.contains("org/app#1 [open]"), "{text}");
-        assert!(text.contains("E_1"), "a row id to pass to done: {text}");
+        assert!(text.contains("account=me"), "{text}");
+        assert!(
+            text.contains("1001:E_1"),
+            "a row id to pass to done: {text}"
+        );
 
         let rows = json_of(daemon.cli(&["activity", "--json"]));
         let ids: Vec<&str> = rows["rows"]
@@ -529,86 +747,121 @@ mod with_events {
             .iter()
             .map(|r| r["id"].as_str().unwrap())
             .collect();
-        assert_eq!(ids, ["E_2", "E_1"]);
-        let others = json_of(daemon.cli(&["list", "--others", "--needs-action", "--json"]));
-        assert_eq!(others["cards"][0]["id"], "PR_2");
-        let mine = json_of(daemon.cli(&["activity", "--mine", "--json"]));
-        assert!(mine["rows"].as_array().unwrap().is_empty());
+        assert_eq!(ids, ["1001:E_2", "1001:E_1"]);
+        let todo = json_of(daemon.cli(&["list", "--todo", "--account", "me", "--json"]));
+        assert_eq!(todo["cards"][0]["id"], "1001:PR_2");
+        let assigned = json_of(daemon.cli(&["list", "--assigned", "--owner", "org", "--json"]));
+        assert_eq!(assigned["cards"].as_array().unwrap().len(), 1);
+        let authored = json_of(daemon.cli(&["activity", "--authored", "--json"]));
+        assert!(authored["rows"].as_array().unwrap().is_empty());
+        let public =
+            json_of(daemon.cli(&["activity", "--owner", "public", "--owner", "org", "--json"]));
+        assert_eq!(public["rows"].as_array().unwrap().len(), 2);
     }
 
     #[test]
-    fn done_snooze_and_open_flow() {
+    fn done_todo_snooze_and_open_flow() {
         let daemon = seeded();
-        assert_eq!(daemon.cli(&["done", "E_1"]).code, 0);
+        assert_eq!(daemon.cli(&["done", "1001:E_1"]).code, 0);
         let rows = json_of(daemon.cli(&["activity", "--json"]));
         assert_eq!(rows["rows"][1]["done"], true);
-        assert_eq!(daemon.cli(&["undone", "E_1"]).code, 0);
+        assert_eq!(daemon.cli(&["done", "--off", "1001:E_1"]).code, 0);
         assert_eq!(
-            daemon.cli(&["done", "E_2"]).code,
+            daemon.cli(&["done", "1001:E_2"]).code,
             0,
-            "an event row is ok with no change"
+            "a row that is not Todo is ok with no change"
         );
+        assert_eq!(daemon.cli(&["todo", "1001:E_2"]).code, 0);
+        let rows = json_of(daemon.cli(&["activity", "--json"]));
+        assert_eq!(rows["rows"][0]["todo"], true, "added to Todo by hand");
+        assert_eq!(daemon.cli(&["todo", "--off", "1001:E_2"]).code, 0);
 
-        assert_eq!(daemon.cli(&["snooze", "org/app#2"]).code, 0);
+        assert_eq!(
+            daemon.cli(&["snooze", "org/app#2", "--account", "me"]).code,
+            0
+        );
         let list = json_of(daemon.cli(&["list", "--json"]));
         assert_eq!(list["cards"].as_array().unwrap().len(), 1);
         let list = json_of(daemon.cli(&["list", "--snoozed", "--json"]));
-        assert_eq!(list["cards"].as_array().unwrap().len(), 2);
-        assert_eq!(daemon.cli(&["unsnooze", "org/app#2"]).code, 0);
+        assert_eq!(list["cards"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            daemon
+                .cli(&["unsnooze", "org/app#2", "--account", "me"])
+                .code,
+            0
+        );
 
         assert_eq!(
-            daemon.cli(&["open", "org/app#2"]).stdout,
+            daemon.cli(&["open", "org/app#2", "--account", "me"]).stdout,
             "https://github.example/PR_2\n"
         );
         assert_eq!(
-            daemon.cli(&["open", "E_1"]).stdout,
+            daemon.cli(&["open", "1001:E_1"]).stdout,
             "https://github.example/E_1\n"
         );
-        let status = daemon.cli(&["status", "org/app#1"]);
+        let status = daemon.cli(&["status", "org/app#1", "--account", "me"]);
         assert_eq!(
             status.stdout,
             "org/app#1 open\nReview: none\nChecks: failed\nBase: none\n"
         );
-        let status = json_of(daemon.cli(&["status", "org/app#1", "--json"]));
+        let status = json_of(daemon.cli(&["status", "org/app#1", "--account", "me", "--json"]));
         assert_eq!(status["card"]["checks"], "failed");
     }
 
-    /// DESIGN.md, "CLI": owner and repository compare without regard to case.
+    /// DESIGN.md, "CLI": logins and repositories compare without case.
     #[test]
     fn a_pr_resolves_whatever_the_case_of_owner_and_repository() {
         let daemon = seeded();
-        let status = daemon.cli(&["status", "ORG/App#1"]);
+        let status = daemon.cli(&["status", "ORG/App#1", "--account", "ME"]);
         assert_eq!(status.code, 0, "{}", status.stderr);
         assert!(status.stdout.starts_with("org/app#1 open"));
         assert_eq!(
-            daemon.cli(&["open", "Org/APP#2"]).stdout,
+            daemon.cli(&["open", "Org/APP#2", "--account", "me"]).stdout,
             "https://github.example/PR_2\n"
         );
-        assert_eq!(daemon.cli(&["snooze", "ORG/APP#2"]).code, 0);
-        assert_eq!(daemon.cli(&["unsnooze", "org/App#2"]).code, 0);
-        assert_eq!(daemon.cli(&["status", "org/other#1"]).code, 2);
+        assert_eq!(
+            daemon.cli(&["snooze", "ORG/APP#2", "--account", "me"]).code,
+            0
+        );
+        assert_eq!(
+            daemon
+                .cli(&["unsnooze", "org/App#2", "--account", "me"])
+                .code,
+            0
+        );
+        assert_eq!(
+            daemon
+                .cli(&["status", "org/other#1", "--account", "me"])
+                .code,
+            2
+        );
     }
 
     #[test]
     fn exit_codes_with_prs() {
         let daemon = seeded();
         let cases: [(&[&str], i32); 5] = [
-            (&["snooze", "org/app#3"], 2),
-            (&["status", "org/app#3"], 0),
-            (&["open", "org/app#3"], 0),
-            (&["snooze", "org/app#9"], 2),
-            (&["unsnooze", "org/app#9"], 2),
+            (&["snooze", "org/app#3", "--account", "me"], 2),
+            (&["status", "org/app#3", "--account", "me"], 0),
+            (&["open", "org/app#3", "--account", "me"], 0),
+            (&["snooze", "org/app#9", "--account", "me"], 2),
+            (&["unsnooze", "org/app#9", "--account", "me"], 2),
         ];
         for (args, code) in cases {
             assert_eq!(daemon.cli(args).code, code, "{args:?}");
         }
-        assert_eq!(daemon.cli(&["scope", "disable", "org"]).code, 0);
+        assert_eq!(
+            daemon
+                .cli(&["owner", "disable", "org", "--account", "me"])
+                .code,
+            0
+        );
         let cases: [(&[&str], i32); 5] = [
-            (&["done", "E_1"], 2),
-            (&["snooze", "org/app#1"], 2),
-            (&["unsnooze", "org/app#1"], 2),
-            (&["status", "org/app#1"], 2),
-            (&["open", "E_1"], 2),
+            (&["done", "1001:E_1"], 2),
+            (&["snooze", "org/app#1", "--account", "me"], 2),
+            (&["unsnooze", "org/app#1", "--account", "me"], 2),
+            (&["status", "org/app#1", "--account", "me"], 2),
+            (&["open", "1001:E_1"], 2),
         ];
         for (args, code) in cases {
             assert_eq!(daemon.cli(args).code, code, "{args:?}");

@@ -3,6 +3,7 @@
 
 use crate::clock::Clock;
 use crate::daemon::{self, Daemon, Subscribed};
+use crate::engine::CmdError;
 use crate::github::{Api, Recorder};
 use crate::keychain::Keychain;
 use crate::logging;
@@ -110,8 +111,8 @@ fn bind_socket(path: &Path) -> anyhow::Result<UnixListener> {
     Ok(listener)
 }
 
-/// Runs fetches one at a time: the schedule, `refresh`, `dev_clock_set` and
-/// `token_test` all go through `running`.
+/// Runs fetches one at a time: the schedule, `refresh`, `dev_clock_set`,
+/// `token_test` and the token checks all go through `running`.
 pub struct Fetcher {
     daemon: Shared,
     /// `None` in a `dev-ingest` build without a test server: nothing is
@@ -121,14 +122,16 @@ pub struct Fetcher {
 }
 
 impl Fetcher {
-    /// One run of what is due, or of everything with `forced`.
-    async fn cycle(&self, forced: bool, only_scope: Option<String>) {
+    /// One run of what is due, or of everything with `forced`, account by
+    /// account. The first run reads the Keychain.
+    async fn cycle(&self, forced: bool, only: Option<String>) {
+        lock(&self.daemon).load_tokens();
         let Some(api) = &self.api else { return };
-        let Some(plan) = lock(&self.daemon).fetch_plan(forced, only_scope) else {
-            return;
-        };
-        let outcome = crate::fetch::run(api, &plan).await;
-        lock(&self.daemon).apply_fetch(outcome);
+        let plans = lock(&self.daemon).fetch_plans(forced, only.as_deref());
+        for plan in plans {
+            let outcome = crate::fetch::run(api, &plan).await;
+            lock(&self.daemon).apply_fetch(&plan.account, outcome);
+        }
     }
 
     /// Fetch whatever is due now.
@@ -138,87 +141,135 @@ impl Fetcher {
     }
 
     /// DESIGN.md, "Wire format": `refresh` answers after the fetch and its
-    /// changes are applied. One that arrives during a fetch waits for it.
-    /// While fetching is stopped it answers at once with `rate_limited`.
-    async fn refresh(&self, scope: Option<String>) -> String {
-        let scope = match lock(&self.daemon).precheck(scope.as_deref()) {
-            Ok(scope) => scope,
+    /// changes are applied; one that arrives during a fetch waits for it.
+    /// While the Keychain could not be read it reads it again first.
+    async fn refresh(&self, account: Option<String>) -> String {
+        let account = match lock(&self.daemon).precheck(account.as_deref()) {
+            Ok(account) => account,
             Err(line) => return line,
         };
-        if !lock(&self.daemon).stopped() {
-            match self.running.try_lock() {
-                Ok(_running) => self.cycle(true, scope.clone()).await,
-                Err(_) => {
-                    logging::debug(format_args!("refresh waits for the running fetch"));
-                    drop(self.running.lock().await);
-                }
+        match self.running.try_lock() {
+            Ok(_running) => {
+                lock(&self.daemon).reload_tokens();
+                self.cycle(true, account.clone()).await;
+            }
+            Err(_) => {
+                logging::debug(format_args!("refresh waits for the running fetch"));
+                drop(self.running.lock().await);
             }
         }
-        lock(&self.daemon).refresh_answer(scope.as_deref())
+        lock(&self.daemon).refresh_answer(account.as_deref())
     }
 
-    /// `scope_lookup`: `GET /users/{owner}` with the notifications token when
-    /// one is registered, else without a token (docs/DESIGN.md, "CLI").
-    /// Nothing is registered and nothing the answer says is stored.
-    async fn scope_lookup(&self, owner: String) -> String {
-        let token = match lock(&self.daemon).lookup_token(&owner) {
-            Ok(token) => token,
-            Err(line) => return line,
-        };
+    /// `viewer { databaseId login }` of a token, for `account_add` and
+    /// `token_set`.
+    async fn owner_of_token(&self, token: &str) -> Result<(String, String), String> {
         let Some(api) = &self.api else {
-            return daemon::lookup_failed("this build does not reach GitHub");
+            return Err(daemon::error_of(CmdError::Unreachable(
+                "Couldn't reach GitHub".into(),
+            )));
+        };
+        let now = lock(&self.daemon).now().at;
+        let mut rec = Recorder::new(now);
+        crate::tokentest::viewer(api, &mut rec, token)
+            .await
+            .map_err(|e| daemon::error_of(daemon::call_error(&e)))
+    }
+
+    /// `account_add`: the token's owner becomes the account. Never logged.
+    async fn account_add(&self, token: String) -> (String, Option<String>) {
+        let token = token.trim().to_string();
+        if token.is_empty() {
+            return (
+                daemon::error_of(CmdError::Invalid("the token is empty".into())),
+                None,
+            );
+        }
+        if let Err(line) = lock(&self.daemon).account_add_check() {
+            return (line, None);
+        }
+        let _running = self.running.lock().await;
+        let (id, login) = match self.owner_of_token(&token).await {
+            Ok(found) => found,
+            Err(line) => return (line, None),
+        };
+        match lock(&self.daemon).account_add_finish(&id, &login, &token) {
+            Ok(line) => (line, Some(id)),
+            Err(line) => (line, None),
+        }
+    }
+
+    /// `token_set`: saved only when the token belongs to the account.
+    async fn token_set(&self, account: String, token: String) -> (String, Option<String>) {
+        let token = token.trim().to_string();
+        if token.is_empty() {
+            return (
+                daemon::error_of(CmdError::Invalid("the token is empty".into())),
+                None,
+            );
+        }
+        let id = match lock(&self.daemon).token_set_check(&account) {
+            Ok(id) => id,
+            Err(line) => return (line, None),
         };
         let _running = self.running.lock().await;
-        let now = lock(&self.daemon).now().at;
-        let mut rec = Recorder::new(now, i64::MAX, Vec::new());
-        let path = format!("/users/{owner}");
-        let key = if token.is_empty() {
-            ""
-        } else {
-            crate::model::NOTIFICATIONS
+        let (owner, login) = match self.owner_of_token(&token).await {
+            Ok(found) => found,
+            Err(line) => return (line, None),
         };
-        let answer = api.rest(&mut rec, key, &token, &path, None).await;
-        daemon::lookup_answer(answer)
+        match lock(&self.daemon).token_set_finish(&id, &owner, &login, &token) {
+            Ok(line) => (line, Some(id)),
+            Err(line) => (line, None),
+        }
     }
 
     /// `token_test`: never logged, and the token never leaves this call.
-    async fn token_test(&self, target: String, token: Option<String>) -> String {
-        let mut target = match lock(&self.daemon).test_target(&target, token) {
+    async fn token_test(&self, account: Option<String>, token: Option<String>) -> String {
+        let target = match lock(&self.daemon).test_target(account.as_deref(), token) {
             Ok(target) => target,
             Err(line) => return line,
         };
         let Some(api) = &self.api else {
-            return daemon::test_failed("this build does not reach GitHub");
+            return daemon::error_of(CmdError::Unreachable("Couldn't reach GitHub".into()));
         };
         let _running = self.running.lock().await;
-        let mut rec = Recorder::new(target.now, target.cost_cap, target.costs.clone());
-        if let Some(classic) = target.classic.clone() {
-            let found = api
-                .rest(
-                    &mut rec,
-                    crate::model::NOTIFICATIONS,
-                    &classic,
-                    "/user",
-                    None,
-                )
+        let mut rec = Recorder::new(target.now);
+        let report =
+            crate::tokentest::run(api, &mut rec, &target.token, &target.expect, &target.owners)
                 .await;
-            target.viewer = found
-                .ok()
-                .and_then(|user| user.body["login"].as_str().map(str::to_string));
-            if target.viewer.is_none() {
-                target.classic = None;
-            }
-        }
-        let report = crate::tokentest::Tester {
-            api,
-            rec: &mut rec,
-            key: &target.key,
-            token: &target.token,
-            classic: target.team_token.as_deref(),
-        }
-        .run(&target.key, target.owner.as_deref())
-        .await;
         lock(&self.daemon).test_done(&target, report, rec)
+    }
+
+    /// After `account_add` or `token_set`: the same checks as `token test`
+    /// on the saved token, recorded as its last test (DESIGN.md, "Add
+    /// account… and Edit… sheets").
+    async fn test_saved(&self, account: String) {
+        let login = lock(&self.daemon)
+            .account_login(&account)
+            .unwrap_or_default();
+        let _ = self.token_test(Some(login), None).await;
+    }
+
+    /// `owner_lookup` and `owner_add`: `GET /users/{owner}` with the
+    /// account's token, else without a token.
+    async fn lookup(&self, account: String, owner: String, adding: bool) -> String {
+        let (id, token) = match lock(&self.daemon).lookup_target(&account, &owner, adding) {
+            Ok(found) => found,
+            Err(line) => return line,
+        };
+        let Some(api) = &self.api else {
+            return daemon::error_of(CmdError::Unreachable("Couldn't reach GitHub".into()));
+        };
+        let _running = self.running.lock().await;
+        let now = lock(&self.daemon).now().at;
+        let mut rec = Recorder::new(now);
+        let path = format!("/users/{owner}");
+        let answer = api.rest(&mut rec, &token, &path, None).await;
+        match daemon::lookup_answer(answer) {
+            Ok(found) if adding => lock(&self.daemon).owner_add_finish(&id, found),
+            Ok(found) => daemon::lookup_line(&found),
+            Err(e) => daemon::error_of(e),
+        }
     }
 }
 
@@ -293,7 +344,7 @@ pub async fn run(
 
 /// A line that may carry a token: its decode error never echoes it.
 fn carries_token(text: &str) -> bool {
-    text.contains("token_set") || text.contains("token_test")
+    text.contains("token")
 }
 
 async fn handle_connection(
@@ -317,11 +368,27 @@ async fn handle_connection(
         Err(e) => Err(e.to_string()),
     };
     drop(text);
+    let mut saved = None;
     let response = match request {
         Err(e) => daemon::invalid_line(e),
-        Ok(Request::Refresh { scope }) => fetcher.refresh(scope).await,
-        Ok(Request::TokenTest { target, token }) => fetcher.token_test(target, token).await,
-        Ok(Request::ScopeLookup { owner }) => fetcher.scope_lookup(owner).await,
+        Ok(Request::Refresh { account }) => fetcher.refresh(account).await,
+        Ok(Request::TokenTest { account, token }) => fetcher.token_test(account, token).await,
+        Ok(Request::AccountAdd { token }) => {
+            let (line, id) = fetcher.account_add(token).await;
+            saved = id;
+            line
+        }
+        Ok(Request::TokenSet { account, token }) => {
+            let (line, id) = fetcher.token_set(account, token).await;
+            saved = id;
+            line
+        }
+        Ok(Request::OwnerLookup { account, owner }) => fetcher.lookup(account, owner, false).await,
+        Ok(Request::OwnerAdd { account, owner })
+            if !owner.eq_ignore_ascii_case(crate::model::PUBLIC) =>
+        {
+            fetcher.lookup(account, owner, true).await
+        }
         #[cfg(feature = "dev-ingest")]
         Ok(request @ Request::DevClockSet { .. }) => {
             // The fetches due at the new time run before the answer.
@@ -344,6 +411,12 @@ async fn handle_connection(
         Ok(request) => lock(&daemon).handle(request),
     };
     let _ = write.write_all(response.as_bytes()).await;
+    drop(write);
+    // The saved token is tested after the answer; the app shows Checking…
+    // until `account_changed` brings the new `last_test`.
+    if let Some(account) = saved {
+        fetcher.test_saved(account).await;
+    }
 }
 
 async fn run_subscriber(

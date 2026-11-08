@@ -35,25 +35,26 @@ if [ -d "$APP_PATH" ]; then
   stop_app_and_daemon "$APP_PATH"
 
   if [ "$PURGE" -eq 1 ] && [ -x "$APP_PATH/Contents/Helpers/shiibar-gh" ]; then
-    echo "==> Deleting the saved tokens (scope remove deletes each from the Keychain)"
+    echo "==> Deleting the saved tokens (token reset deletes the Keychain item)"
     # The daemon is the only one that touches the Keychain, so it does it.
     "$APP_PATH/Contents/Helpers/shiibar-ghd" --foreground 2>/dev/null &
     daemon_pid=$!
     for _ in $(seq 1 50); do
-      "$APP_PATH/Contents/Helpers/shiibar-gh" scope list >/dev/null 2>&1 && break
+      "$APP_PATH/Contents/Helpers/shiibar-gh" account list >/dev/null 2>&1 && break
       sleep 0.1
     done
-    # `scope list` prints one scope per line, its id first.
-    "$APP_PATH/Contents/Helpers/shiibar-gh" scope list 2>/dev/null \
-      | awk '{ print $1 }' \
-      | while read -r scope; do
-          "$APP_PATH/Contents/Helpers/shiibar-gh" scope remove "$scope" || true
-        done
+    # `token reset` needs readable saved state; an unreadable database is
+    # set aside first (the state directory goes below anyway).
+    if ! "$APP_PATH/Contents/Helpers/shiibar-gh" token reset; then
+      "$APP_PATH/Contents/Helpers/shiibar-gh" reset >/dev/null 2>&1 || true
+      "$APP_PATH/Contents/Helpers/shiibar-gh" token reset \
+        || echo "    could not delete the Keychain item shiibar-gh / accounts; delete it in Keychain Access"
+    fi
     printf '{"cmd":"shutdown"}\n' | nc -U -w 2 "$STATE_DIR/shiibar-ghd.sock" >/dev/null 2>&1 \
       || kill "$daemon_pid" 2>/dev/null || true
     wait "$daemon_pid" 2>/dev/null || true
-    echo "    the notifications token stays in the Keychain item shiibar-gh / tokens;"
-    echo "    delete that item in Keychain Access if you want it gone"
+    echo "    a 0.1 Keychain item (shiibar-gh / tokens) is not touched;"
+    echo "    delete it in Keychain Access if you want it gone"
   fi
 
   echo "==> Unregistering the login item"

@@ -1,11 +1,12 @@
 //! GitHub answers to `Ingest` values. Every table reads GraphQL or REST JSON
 //! and checks the `Ingest` piece it becomes. docs/tasks/M2.md, "PR values",
-//! "Failed check names", "Event kinds" and "Collecting a newly found PR".
+//! "Failed check names", "Event kinds" and "Collecting a newly found PR";
+//! DESIGN.md (M4), "Row kind decisions".
 
 use serde_json::{Value, json};
-use shiibar_gh_proto::{BaseStatus, Checks, EventKind, Review};
+use shiibar_gh_proto::{BaseStatus, Checks, IngestKind as EventKind, Review};
 use shiibar_ghd::convert::{self, Ctx, EventInput, StatusExtra};
-use shiibar_ghd::model::{self, OwnComment, TeamRec};
+use shiibar_ghd::model::{self, OwnComment, TeamRec, ThreadRec};
 use std::collections::{BTreeMap, BTreeSet};
 
 const ME: &str = "me";
@@ -296,45 +297,42 @@ fn review_requests_split_the_viewer_and_the_viewers_teams() {
     let t = teams();
     let request = |reviewer: Value| json!({"requestedReviewer": reviewer});
     let cases = [
-        (vec![request(user("ME"))], (true, false, false)),
-        (vec![request(user("alice"))], (false, false, false)),
+        (vec![request(user("ME"))], (true, false)),
+        (vec![request(user("alice"))], (false, false)),
         (
             vec![request(
                 json!({"__typename":"Team","databaseId":42,"slug":"core"}),
             )],
-            (false, true, false),
+            (false, true),
         ),
         (
             vec![request(
                 json!({"__typename":"Team","databaseId":7,"slug":"other"}),
             )],
-            (false, false, false),
+            (false, false),
         ),
         (
             vec![request(json!({"__typename":"Bot","login":"x"}))],
-            (false, false, false),
+            (false, false),
         ),
-        (vec![request(json!(null))], (false, false, true)),
+        (vec![request(json!(null))], (false, false)),
     ];
-    for (nodes, (me, team, hidden)) in cases {
+    for (nodes, (me, team)) in cases {
         let r = convert::requested(&json!({"nodes": nodes}), ctx(&t));
-        assert_eq!((r.me, r.team, r.hidden), (me, team, hidden), "{nodes:?}");
+        assert_eq!((r.me, r.team), (me, team), "{nodes:?}");
     }
 }
 
 #[test]
-fn requests_read_again_with_the_classic_token_replace_the_hidden_ones() {
+fn assignees_come_from_the_assignees_connection() {
     let t = teams();
-    let node = status_node(json!({"reviewRequests":{"nodes":[{"requestedReviewer":null}]}}));
-    let extra = StatusExtra {
-        review_requests: Some(
-            json!({"nodes":[{"requestedReviewer":{"__typename":"Team","databaseId":42,"slug":"core"}}]}),
-        ),
-        ..StatusExtra::default()
-    };
-    let pr = convert::pr_values(&node, &extra, ctx(&t)).unwrap();
-    assert!(pr.requested_team);
-    assert!(!pr.requested_me);
+    let node =
+        status_node(json!({"assignees":{"nodes":[{"login":"me"},{"login":"bob"},{"login":null}]}}));
+    let pr = convert::pr_values(&node, &StatusExtra::default(), ctx(&t)).unwrap();
+    assert_eq!(pr.assignees, ["me", "bob"]);
+    let none =
+        convert::pr_values(&status_node(json!({})), &StatusExtra::default(), ctx(&t)).unwrap();
+    assert!(none.assignees.is_empty());
 }
 
 // ------------------------------------------------------ failed check names
@@ -426,10 +424,23 @@ struct Pr {
     threads: Vec<Value>,
     queue: Option<Vec<Value>>,
     since: i64,
-    recorded: BTreeMap<String, i64>,
+    recorded: BTreeMap<String, ThreadRec>,
 }
 
 impl Pr {
+    /// Record a thread: the time of my first comment, of the first mention.
+    fn record(&mut self, id: &str, mine_at: Option<i64>, mention_at: Option<i64>) {
+        self.recorded.insert(
+            id.into(),
+            ThreadRec {
+                id: id.into(),
+                pr_id: "PR_1".into(),
+                mine_at,
+                mention_at,
+            },
+        );
+    }
+
     fn new(author: Value) -> Self {
         Self {
             node: json!({"id":"PR_1","url":"https://github.com/o/r/pull/1","author":author,
@@ -513,7 +524,8 @@ fn comment_kinds_by_author_and_pr() {
     // (PR is mine, author, row)
     let cases = [
         (true, user("alice"), Some(Comment)),
-        (true, bot("ci[bot]"), Some(BotComment)),
+        // DESIGN.md: a bot is judged like anyone.
+        (true, bot("ci[bot]"), Some(Comment)),
         (true, user(ME), None),
         (true, user("Me"), None),
         (false, user("alice"), None),
@@ -534,23 +546,49 @@ fn comment_kinds_by_author_and_pr() {
 #[test]
 fn review_bodies_on_my_pr() {
     use EventKind::*;
-    let cases = [
-        ("APPROVED", "LGTM", Some(Comment)),
-        ("APPROVED", "", None),
-        ("CHANGES_REQUESTED", "Please fix", Some(Comment)),
-        ("CHANGES_REQUESTED", "  ", None),
-        ("COMMENTED", "Hm", Some(Comment)),
-        ("PENDING", "draft", None),
+    let cases: [(&str, &str, &[EventKind]); 6] = [
+        ("APPROVED", "LGTM", &[Approved, Comment]),
+        ("APPROVED", "", &[Approved]),
+        ("CHANGES_REQUESTED", "Please fix", &[Comment]),
+        ("CHANGES_REQUESTED", "  ", &[]),
+        ("COMMENTED", "Hm", &[Comment]),
+        ("PENDING", "draft", &[]),
     ];
     for (state, body, expect) in cases {
         let mut pr = Pr::mine();
         pr.timeline = vec![review("R_1", user("alice"), T0 + 10, state, body)];
         let got: Vec<EventKind> = pr.kinds().into_iter().map(|(_, k)| k).collect();
-        assert_eq!(
-            got,
-            expect.into_iter().collect::<Vec<_>>(),
-            "{state} {body:?}"
-        );
+        assert_eq!(got, expect, "{state} {body:?}");
+    }
+}
+
+#[test]
+fn an_approved_row_per_approving_review_by_someone_else_on_my_pr() {
+    // (PR is mine, reviewer, approved rows)
+    let cases = [
+        (true, user("alice"), 1),
+        (true, bot("ci[bot]"), 1),
+        (true, user(ME), 0),
+        (false, user("alice"), 0),
+    ];
+    for (mine, author, expect) in cases {
+        let mut pr = if mine { Pr::mine() } else { Pr::others() };
+        pr.timeline = vec![
+            review("R_1", author.clone(), T0 + 10, "APPROVED", ""),
+            review("R_2", author.clone(), T0 + 20, "APPROVED", ""),
+        ];
+        let events = pr.run().events;
+        let approved: Vec<_> = events
+            .iter()
+            .filter(|e| e.kind == EventKind::Approved)
+            .collect();
+        assert_eq!(approved.len(), expect * 2, "{mine} {author}");
+        if let Some(first) = approved.first() {
+            assert_eq!(first.id, "R_1");
+            assert_eq!(first.url, "https://r/R_1");
+            assert_eq!(first.text, None, "an Approved row has no body");
+            assert_eq!(first.actor.as_deref(), author["login"].as_str());
+        }
     }
 }
 
@@ -607,10 +645,18 @@ fn a_team_mention_link_of_my_team_is_a_mention() {
     assert_eq!(
         pr.kinds(),
         [
-            ("C_1".to_string(), EventKind::Mentioned),
-            ("I_1".to_string(), EventKind::Mentioned)
+            ("C_1".to_string(), EventKind::TeamMentioned),
+            ("I_1".to_string(), EventKind::TeamMentioned)
         ]
     );
+}
+
+#[test]
+fn a_mention_of_me_and_my_team_is_mentioned_only() {
+    let mut pr = Pr::others();
+    let html = format!("{}{}", mention_link(ME), team_link(42));
+    pr.timeline = vec![comment("C_1", user("alice"), T0 + 10, &html)];
+    assert_eq!(pr.kinds(), [("C_1".to_string(), EventKind::Mentioned)]);
 }
 
 #[test]
@@ -621,7 +667,7 @@ fn a_team_mention_in_the_body_of_a_new_pr_is_a_mention() {
     pr.node["bodyText"] = json!("cc team");
     let e = pr.run().events.remove(0);
     assert_eq!(e.id, "PR_1:mention");
-    assert_eq!(e.kind, EventKind::Mentioned);
+    assert_eq!(e.kind, EventKind::TeamMentioned);
     assert_eq!(e.text.as_deref(), Some("cc team"));
     pr.node["createdAt"] = json!(iso(T0 - 5));
     assert!(
@@ -643,27 +689,38 @@ fn mention_links_are_read_from_the_html() {
 #[test]
 fn replies_count_in_recorded_threads_after_their_start() {
     use EventKind::*;
-    // (recorded from, reply time, PR is mine, row)
+    // (my first comment, first mention, reply time, PR is mine, row)
     let cases = [
-        (None, T0 + 10, false, None),
-        (None, T0 + 10, true, Some(Comment)),
-        (Some(T0 - 100), T0 + 10, false, Some(Reply)),
-        (Some(T0 - 100), T0 + 10, true, Some(Reply)),
-        // A mention starts the thread: only later comments are replies.
-        (Some(T0 + 10), T0 + 10, false, None),
-        (Some(T0 + 20), T0 + 10, false, None),
+        (None, None, T0 + 10, false, None),
+        (None, None, T0 + 10, true, Some(Comment)),
+        (Some(T0 - 100), None, T0 + 10, false, Some(Reply)),
+        (Some(T0 - 100), None, T0 + 10, true, Some(Reply)),
+        (None, Some(T0 - 100), T0 + 10, false, Some(ReplyMentioned)),
+        (None, Some(T0 - 100), T0 + 10, true, Some(ReplyMentioned)),
+        // Both: a thread I commented in wins.
+        (Some(T0 - 50), Some(T0 - 100), T0 + 10, false, Some(Reply)),
+        // Only comments after the start count.
+        (None, Some(T0 + 10), T0 + 10, false, None),
+        (Some(T0 + 20), None, T0 + 10, false, None),
+        (
+            Some(T0 + 20),
+            Some(T0 - 100),
+            T0 + 10,
+            false,
+            Some(ReplyMentioned),
+        ),
     ];
-    for (from, at, mine, expect) in cases {
+    for (mine_at, mention_at, at, mine, expect) in cases {
         let mut pr = if mine { Pr::mine() } else { Pr::others() };
-        if let Some(from) = from {
-            pr.recorded.insert("T_1".into(), from);
+        if mine_at.is_some() || mention_at.is_some() {
+            pr.record("T_1", mine_at, mention_at);
         }
         pr.threads = vec![thread("T_1", vec![inline("I_1", user("alice"), at, "")])];
         let got: Vec<EventKind> = pr.kinds().into_iter().map(|(_, k)| k).collect();
         assert_eq!(
             got,
             expect.into_iter().collect::<Vec<_>>(),
-            "{from:?} {at} {mine}"
+            "{mine_at:?} {mention_at:?} {at} {mine}"
         );
     }
 }
@@ -671,7 +728,7 @@ fn replies_count_in_recorded_threads_after_their_start() {
 #[test]
 fn a_mention_and_a_reply_at_once_is_a_mention() {
     let mut pr = Pr::others();
-    pr.recorded.insert("T_1".into(), T0 - 100);
+    pr.record("T_1", Some(T0 - 100), None);
     pr.threads = vec![thread(
         "T_1",
         vec![inline("I_1", user("alice"), T0 + 10, &mention_link(ME))],
@@ -701,14 +758,17 @@ fn threads_are_recorded_when_i_comment_or_am_mentioned() {
         thread("T_OTHER", vec![inline("F", user("bob"), T0 + 50, "")]),
     ];
     let out = pr.run();
-    let recorded: BTreeMap<&str, i64> = out
+    let recorded: BTreeMap<&str, (Option<i64>, Option<i64>)> = out
         .threads
         .iter()
-        .map(|t| (t.id.as_str(), t.from_at))
+        .map(|t| (t.id.as_str(), (t.mine_at, t.mention_at)))
         .collect();
     assert_eq!(
         recorded,
-        BTreeMap::from([("T_MENTION", T0 + 30), ("T_MINE", T0 + 10)])
+        BTreeMap::from([
+            ("T_MENTION", (None, Some(T0 + 30))),
+            ("T_MINE", (Some(T0 + 10), None))
+        ])
     );
     let kinds: Vec<(String, EventKind)> = out.events.into_iter().map(|e| (e.id, e.kind)).collect();
     assert_eq!(
@@ -716,7 +776,7 @@ fn threads_are_recorded_when_i_comment_or_am_mentioned() {
         [
             ("C".to_string(), EventKind::Reply),
             ("D".to_string(), EventKind::Mentioned),
-            ("E".to_string(), EventKind::Reply)
+            ("E".to_string(), EventKind::ReplyMentioned)
         ],
         "A came before my comment; F is in a thread I am not in"
     );
@@ -745,20 +805,23 @@ fn review_requests_for_me_and_my_teams() {
         event("RR_5", json!(null)),
     ];
     let out = pr.run().events;
-    let got: Vec<(&str, Option<&str>, bool)> = out
+    let got: Vec<(&str, Option<&str>, EventKind)> = out
         .iter()
-        .map(|e| (e.id.as_str(), e.text.as_deref(), e.team))
+        .map(|e| (e.id.as_str(), e.text.as_deref(), e.kind))
         .collect();
     assert_eq!(
         got,
         [
-            ("RR_1", Some("for you"), false),
-            ("RR_2", Some("for core team"), true)
+            ("RR_1", Some("for you"), EventKind::ReviewRequested),
+            (
+                "RR_2",
+                Some("for core team"),
+                EventKind::TeamReviewRequested
+            )
         ]
     );
     assert!(out.iter().all(|e| e.url == "https://github.com/o/r/pull/1"));
     assert!(out.iter().all(|e| e.actor.as_deref() == Some("alice")));
-    assert!(convert::has_hidden_reviewers(&pr.timeline));
 }
 
 #[test]
@@ -816,18 +879,18 @@ fn merge_queue_removals_name_the_reason_and_who_added_the_pr() {
     assert_eq!(
         got,
         [
-            ("A_2", EventKind::AddedToMergeQueue, Some("bob"), None),
+            ("A_2", EventKind::MergeQueueAdded, Some("bob"), None),
             (
                 "X_2",
-                EventKind::RemovedFromMergeQueue,
+                EventKind::MergeQueueRemoved,
                 Some("bob"),
                 Some("Removed manually · added by bob")
             ),
-            ("A_3", EventKind::AddedToMergeQueue, Some("carol"), None),
-            ("A_4", EventKind::AddedToMergeQueue, Some("dave"), None),
+            ("A_3", EventKind::MergeQueueAdded, Some("carol"), None),
+            ("A_4", EventKind::MergeQueueAdded, Some("dave"), None),
             (
                 "X_4",
-                EventKind::RemovedFromMergeQueue,
+                EventKind::MergeQueueRemoved,
                 Some("github-merge-queue"),
                 Some("something_new · added by dave")
             ),
@@ -918,33 +981,36 @@ fn collecting_records_my_comments_threads_and_open_requests() {
         ],
         "my PR body, comment, review with a body and review comment"
     );
-    let threads: BTreeMap<&str, i64> = found
+    let threads: BTreeMap<&str, (Option<i64>, Option<i64>)> = found
         .threads
         .iter()
-        .map(|t| (t.id.as_str(), t.from_at))
+        .map(|t| (t.id.as_str(), (t.mine_at, t.mention_at)))
         .collect();
     assert_eq!(
         threads,
-        BTreeMap::from([("T_1", T0 - 400), ("T_2", T0 - 300), ("T_3", T0 - 200)])
+        BTreeMap::from([
+            ("T_1", (Some(T0 - 400), None)),
+            ("T_2", (None, Some(T0 - 300))),
+            ("T_3", (None, Some(T0 - 200)))
+        ])
     );
-    let ongoing: Vec<(&str, i64, Option<&str>, bool)> = found
+    let ongoing: Vec<(&str, i64, Option<&str>, EventKind)> = found
         .ongoing
         .iter()
-        .map(|e| (e.id.as_str(), e.occurred_at, e.actor.as_deref(), e.team))
+        .map(|e| (e.id.as_str(), e.occurred_at, e.actor.as_deref(), e.kind))
         .collect();
     assert_eq!(
         ongoing,
         [
-            ("RR_NEW", T0 - 3000, Some("y"), false),
-            ("RR_TEAM", T0 - 4000, Some("z"), true)
+            ("RR_NEW", T0 - 3000, Some("y"), EventKind::ReviewRequested),
+            (
+                "RR_TEAM",
+                T0 - 4000,
+                Some("z"),
+                EventKind::TeamReviewRequested
+            )
         ],
         "each open request with its newest event, of any age"
-    );
-    assert!(
-        found
-            .ongoing
-            .iter()
-            .all(|e| e.kind == EventKind::ReviewRequested)
     );
 }
 
@@ -1005,7 +1071,7 @@ fn notified_prs_and_the_newest_update() {
 // ------------------------------------------------------------------ search
 
 #[test]
-fn the_four_searches_of_a_scope() {
+fn the_four_searches_of_an_owner() {
     assert_eq!(
         convert::search_queries("org:acme", "2027-01-01", true),
         [
@@ -1081,7 +1147,7 @@ fn a_link_to_me_in_any_post_is_one_mentioned_row() {
 #[test]
 fn a_mention_on_my_pr_is_mentioned_not_comment_or_reply() {
     let mut pr = Pr::mine();
-    pr.recorded.insert("T_1".into(), T0 - 100);
+    pr.record("T_1", Some(T0 - 100), None);
     pr.timeline = vec![comment("C_1", user("alice"), T0 + 10, &mention_link(ME))];
     pr.threads = vec![thread(
         "T_1",
@@ -1131,9 +1197,9 @@ fn what_is_not_a_mention_of_me() {
         (user("bob"), mention_link("meme"), false, None),
         // The login compares without case.
         (user("bob"), mention_link("ME"), false, Some(Mentioned)),
-        // A bot post is always a bot comment.
-        (bot("ci[bot]"), mention_link(ME), false, Some(BotComment)),
-        (bot("ci[bot]"), mention_link(ME), true, Some(BotComment)),
+        // A bot is not special: its mention of me is a mention.
+        (bot("ci[bot]"), mention_link(ME), false, Some(Mentioned)),
+        (bot("ci[bot]"), mention_link(ME), true, Some(Mentioned)),
         // Plain text `@me` is no link.
         (user("bob"), "<p>@me</p>".to_string(), false, None),
     ];

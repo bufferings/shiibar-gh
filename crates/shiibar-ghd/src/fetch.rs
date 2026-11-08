@@ -1,20 +1,21 @@
-//! One fetch run: notifications, then each scope's search, status and
-//! events, then reactions. Calls run one after another, never in parallel
-//! (docs/tasks/M2.md, "What is fetched"). The run works on a copy of the core
+//! One fetch run of one account: its login and teams, notifications, then
+//! each owner's search, status and events, then reactions. Calls run one
+//! after another, never in parallel. The run works on a copy of the core
 //! state ([`Plan`]) and hands everything back as an [`Outcome`]; it never
-//! changes rows, cards or unread state itself.
+//! changes rows, cards or unread state itself. Every call uses the
+//! account's one classic token (DESIGN.md, "Tokens" and "API usage").
 
 use crate::convert::{self, Ctx, EventInput, StatusExtra};
 use crate::github::{Api, CallError, Gql, Recorder, format_time};
 use crate::logging;
-use crate::model::{NOTIFICATIONS, OwnComment, PUBLIC, ScopeKind, TeamRec};
+use crate::model::{OwnComment, OwnerKind, TeamRec, ThreadRec};
 use crate::plan::*;
 use serde_json::{Value, json};
 use shiibar_gh_proto as proto;
-use shiibar_gh_proto::{Ingest, IngestEvent, IngestPr, Lenient, TokenRole, WarningKind};
+use shiibar_gh_proto::{Ingest, IngestEvent, IngestPr};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// docs/tasks/M2.md, "Collecting a newly found PR": ten pages per connection.
+/// Ten pages per connection.
 const MAX_PAGES: usize = 10;
 const NODES_PER_QUERY: usize = 100;
 /// PRs per events query: each brings up to 100 threads of 100 comments.
@@ -32,6 +33,8 @@ const COMMENT: &str = "id url createdAt bodyText bodyHTML author { __typename lo
 const SEARCH_NODES: &str = "pageInfo { hasNextPage endCursor } nodes { ... on PullRequest { id repository { owner { login } } } }";
 const ITEM_TYPES: &str = "[ISSUE_COMMENT, PULL_REQUEST_REVIEW, REVIEW_REQUESTED_EVENT, \
     MERGED_EVENT, CLOSED_EVENT, ADDED_TO_MERGE_QUEUE_EVENT, REMOVED_FROM_MERGE_QUEUE_EVENT]";
+/// The message of `fetch_failed`.
+pub const UNREACHABLE: &str = "Couldn't reach GitHub";
 
 fn timeline_nodes() -> String {
     format!(
@@ -46,6 +49,7 @@ fn timeline_nodes() -> String {
     )
 }
 
+/// `assignees` is a `UserConnection` of `PullRequest` (public schema).
 fn pr_status_fields() -> String {
     format!(
         "id number url title state isDraft updatedAt isCrossRepository \
@@ -53,7 +57,8 @@ fn pr_status_fields() -> String {
          baseRefName headRefName headRefOid reviewDecision \
          latestOpinionatedReviews(first: 100) {{ nodes {{ state author {{ login }} }} }} \
          statusCheckRollup {{ state }} mergeable mergeStateStatus \
-         reviewRequests(first: 100) {{ nodes {{ {REVIEWER} }} }}"
+         reviewRequests(first: 100) {{ nodes {{ {REVIEWER} }} }} \
+         assignees(first: 100) {{ nodes {{ login }} }}"
     )
 }
 
@@ -70,20 +75,6 @@ fn date_before(now: i64, days: i64) -> String {
     jiff::Timestamp::from_second(at)
         .map(|t| t.strftime("%Y-%m-%d").to_string())
         .unwrap_or_else(|_| "1970-01-01".into())
-}
-
-fn warning(
-    kind: WarningKind,
-    token: TokenRole,
-    message: String,
-    until: Option<i64>,
-) -> proto::Warning {
-    proto::Warning {
-        kind: Lenient::Known(kind),
-        token: Some(Lenient::Known(token)),
-        message,
-        until,
-    }
 }
 
 /// The value at a path of nested objects.
@@ -105,18 +96,12 @@ fn has_next(connection: &Value) -> Option<String> {
         .flatten()
 }
 
-/// A scope's run outcome before it is folded into the [`Outcome`].
-#[derive(Default)]
-struct ScopeRun {
-    warnings: Vec<proto::Warning>,
-    missing: BTreeSet<&'static str>,
-    failed: Option<String>,
-}
-
-impl ScopeRun {
-    fn permission(&mut self, name: &'static str) {
-        self.missing.insert(name);
-    }
+/// Keep going after this error: the rest of the run still makes sense.
+fn stops_the_run(error: &CallError) -> bool {
+    matches!(
+        error,
+        CallError::RateLimited { .. } | CallError::Unauthorized
+    )
 }
 
 pub struct Run<'a> {
@@ -124,7 +109,7 @@ pub struct Run<'a> {
     plan: &'a Plan,
     rec: Recorder,
     out: Outcome,
-    viewer: String,
+    teams: Vec<TeamRec>,
     prs: Vec<IngestPr>,
     events: Vec<IngestEvent>,
     reactions: Vec<proto::IngestReaction>,
@@ -132,16 +117,8 @@ pub struct Run<'a> {
     succeeded: Vec<String>,
     /// Signals this run dealt with or dropped.
     consumed: BTreeSet<String>,
-    /// Owner scopes whose token belongs to someone else this run.
-    mismatched: BTreeSet<String>,
     /// PR ids the run fetched a status for.
     fetched: BTreeSet<String>,
-    /// The classic PAT may not read team membership (`read:org`).
-    public_teams_forbidden: bool,
-    /// Scopes whose token owner was checked in this run.
-    verified: BTreeSet<String>,
-    /// Scopes whose token may not read merge queue events.
-    queue_refused: BTreeSet<String>,
 }
 
 /// Run the fetches the plan names and hand back what they found.
@@ -149,162 +126,175 @@ pub async fn run(api: &Api, plan: &Plan) -> Outcome {
     let mut run = Run {
         api,
         plan,
-        rec: Recorder::new(plan.now, plan.cost_cap, plan.costs.clone()),
+        rec: Recorder::new(plan.now),
         out: Outcome {
             due: plan.due,
             status_ran: plan
-                .scopes
+                .owners
                 .iter()
-                .filter(|s| s.status_due)
-                .map(|s| s.id.clone())
+                .filter(|o| o.status_due)
+                .map(|o| o.id.clone())
                 .collect(),
             ..Outcome::default()
         },
-        viewer: String::new(),
+        teams: plan.teams.clone(),
         prs: Vec::new(),
         events: Vec::new(),
         reactions: Vec::new(),
         missing: Vec::new(),
         succeeded: Vec::new(),
         consumed: BTreeSet::new(),
-        mismatched: BTreeSet::new(),
         fetched: BTreeSet::new(),
-        public_teams_forbidden: false,
-        verified: BTreeSet::new(),
-        queue_refused: BTreeSet::new(),
     };
     run.execute().await;
     run.finish()
 }
 
 impl Run<'_> {
-    async fn gql(
-        &mut self,
-        key: &str,
-        token: &str,
-        query: &str,
-        vars: Value,
-    ) -> Result<Gql, CallError> {
+    async fn gql(&mut self, query: &str, vars: Value) -> Result<Gql, CallError> {
         let query = query.replacen('{', &format!("{{ {RATE} "), 1);
         self.api
-            .graphql(&mut self.rec, key, token, &query, vars)
+            .graphql(&mut self.rec, &self.plan.token, &query, vars)
             .await
+    }
+
+    async fn rest(
+        &mut self,
+        path: &str,
+        if_modified_since: Option<&str>,
+    ) -> Result<crate::github::Rest, CallError> {
+        self.api
+            .rest(&mut self.rec, &self.plan.token, path, if_modified_since)
+            .await
+    }
+
+    fn fail(&mut self, error: &CallError) {
+        logging::info(format_args!("fetch of {} failed: {error}", self.plan.login));
+        self.out.failed = Some(UNREACHABLE.into());
     }
 
     async fn execute(&mut self) {
         let plan = self.plan;
-        let Some(classic) = plan.notifications.usable(plan.forced).map(str::to_string) else {
-            return;
-        };
-        // The owner of the notifications token is the reference for every
-        // scope token (DESIGN.md, "Tokens").
-        let known = plan.notifications.owner.clone();
-        let viewer = if plan.due.status || known.is_none() {
+        if plan.due.status {
+            // DESIGN.md, "Tokens": the login follows GitHub's.
             match self
-                .gql(
-                    NOTIFICATIONS,
-                    &classic,
-                    "query Viewer { viewer { login } }",
-                    json!({}),
-                )
+                .gql("query Viewer { viewer { databaseId login } }", json!({}))
                 .await
             {
-                Ok(answer) => answer.data["viewer"]["login"].as_str().map(str::to_string),
-                Err(CallError::Unauthorized | CallError::RateLimited { .. }) => return,
+                Ok(answer) => {
+                    self.out.login = answer.data["viewer"]["login"].as_str().map(str::to_string);
+                }
+                Err(e) if stops_the_run(&e) => return,
                 Err(e) => {
-                    self.fail_everything(&format!("Couldn't reach GitHub: {e}"));
+                    self.fail(&e);
                     return;
                 }
             }
-        } else {
-            known
-        };
-        let Some(viewer) = viewer else {
-            self.fail_everything("GitHub did not name the token owner");
-            return;
-        };
-        self.out
-            .tokens
-            .entry(NOTIFICATIONS.into())
-            .or_default()
-            .owner = Some(viewer.clone());
-        self.viewer = viewer;
+            match self.read_teams().await {
+                Ok(()) => {}
+                Err(e) if stops_the_run(&e) => return,
+                Err(e) => self.fail(&e),
+            }
+        }
 
         let mut signals: BTreeSet<String> = plan.pending_signals.clone();
         if plan.due.notifications {
-            match self.poll_notifications(&classic).await {
+            match self.poll_notifications().await {
                 Ok(found) => {
-                    self.out.notifications_check = Some(None);
+                    self.out.notifications_checked = true;
+                    self.out.checked.insert("notifications".into());
                     signals.extend(found);
                 }
-                Err(CallError::Unauthorized | CallError::RateLimited { .. }) => {
+                Err(e) if stops_the_run(&e) => {
                     self.out.pending_signals = Some(signals);
                     return;
                 }
-                // Owner rule: a failed check warns every scope and fetching
-                // goes on; a 401 keeps the rule that stops everything.
+                Err(CallError::Forbidden { .. }) => {
+                    self.out.notifications_checked = true;
+                    self.out.refused.insert("notifications".into());
+                }
                 Err(e) => {
-                    logging::info(format_args!("notifications not fetched: {e}"));
-                    self.out.notifications_check =
-                        Some(Some(format!("Couldn't check notifications: {e}")));
+                    self.out.notifications_checked = true;
+                    self.fail(&e);
                 }
             }
         }
 
-        let mut public_teams = None;
-        if plan.scopes.iter().any(|s| s.public() && s.status_due) {
-            public_teams = self.public_teams(&classic).await;
-        }
-
-        for scope in &plan.scopes {
-            if self.rec.stop.is_some() {
-                break;
+        for owner in &plan.owners {
+            if !owner.enabled || self.rec.stop.is_some() {
+                continue;
             }
-            let teams = if scope.public() {
-                public_teams.clone()
-            } else {
-                None
-            };
-            self.scope(scope, &signals, teams).await;
+            if !self.owner(owner, &signals).await {
+                self.out.pending_signals = Some(self.left_signals(&signals));
+                return;
+            }
         }
         if plan.due.reactions && self.rec.stop.is_none() {
             self.reactions().await;
         }
-        // Signals of scopes this run did not reach wait for the next run;
-        // those of disabled or unknown scopes are dropped.
-        let left: BTreeSet<String> = signals
+        self.out.pending_signals = Some(self.left_signals(&signals));
+    }
+
+    /// Signals of owners this run did not reach wait for the next run;
+    /// those of disabled or unknown owners are dropped.
+    fn left_signals(&self, signals: &BTreeSet<String>) -> BTreeSet<String> {
+        signals
             .difference(&self.consumed)
-            .filter(|key| plan.enabled_scopes.contains(&self.scope_of_signal(key)))
+            .filter(|key| {
+                self.owner_of_signal(key)
+                    .is_some_and(|id| self.plan.owners.iter().any(|o| o.id == id && o.enabled))
+            })
             .cloned()
-            .collect();
-        self.out.pending_signals = Some(left);
+            .collect()
     }
 
-    /// Every scope gets `fetch_failed` until the next status interval.
-    fn fail_everything(&mut self, message: &str) {
-        for scope in &self.plan.scopes {
-            self.out
-                .scopes
-                .entry(scope.id.clone())
-                .or_default()
-                .warnings = Some(vec![warning(
-                WarningKind::FetchFailed,
-                TokenRole::Notifications,
-                message.to_string(),
-                Some(self.next_retry()),
-            )]);
+    /// DESIGN.md, "API usage": every team of the account with `GET
+    /// /user/teams` (`read:org`). A refusal keeps the teams read before.
+    async fn read_teams(&mut self) -> Result<(), CallError> {
+        let mut path = "/user/teams?per_page=100".to_string();
+        let mut teams = Vec::new();
+        for page in 1.. {
+            match self.rest(&path, None).await {
+                Ok(answer) => {
+                    teams.extend(
+                        answer
+                            .body
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|team| {
+                                Some(TeamRec {
+                                    database_id: team["id"].as_i64()?,
+                                    slug: team["slug"].as_str()?.to_string(),
+                                })
+                            }),
+                    );
+                    match answer.header("link").and_then(convert::next_link) {
+                        Some(next) if page < MAX_PAGES => path = next,
+                        Some(_) => {
+                            logging::warn(format_args!("more than {MAX_PAGES} pages of teams"));
+                            break;
+                        }
+                        None => break,
+                    }
+                }
+                Err(CallError::Forbidden { .. }) => {
+                    self.out.refused.insert("read:org".into());
+                    return Ok(());
+                }
+                Err(e) => return Err(e),
+            }
         }
-    }
-
-    /// The next status fetch, which is when a failure is retried.
-    fn next_retry(&self) -> i64 {
-        self.plan.now + 60 * self.plan.status_interval_minutes.max(1)
+        self.out.checked.insert("read:org".into());
+        self.teams = teams.clone();
+        self.out.teams = Some(teams);
+        Ok(())
     }
 
     /// DESIGN.md, "Notifications API usage": `all=true`, 50 a page, `since`
     /// the newest seen, `If-Modified-Since` the last `Last-Modified`. The
     /// read state on GitHub is never touched.
-    async fn poll_notifications(&mut self, token: &str) -> Result<BTreeSet<String>, CallError> {
+    async fn poll_notifications(&mut self) -> Result<BTreeSet<String>, CallError> {
         let plan = self.plan;
         let mut path = String::from("/notifications?all=true&per_page=50");
         if let Some(since) = &plan.notif_since {
@@ -316,14 +306,7 @@ impl Run<'_> {
         let mut pages = 0;
         loop {
             let answer = self
-                .api
-                .rest(
-                    &mut self.rec,
-                    NOTIFICATIONS,
-                    token,
-                    &path,
-                    if first { modified.as_deref() } else { None },
-                )
+                .rest(&path, if first { modified.as_deref() } else { None })
                 .await?;
             if let Some(interval) = answer
                 .header("x-poll-interval")
@@ -363,105 +346,33 @@ impl Run<'_> {
         Ok(found)
     }
 
-    /// The viewer's teams across organizations, read with the classic PAT
-    /// (`read:org`) for Public.
-    async fn public_teams(&mut self, token: &str) -> Option<Vec<TeamRec>> {
-        let mut path = "/user/teams?per_page=100".to_string();
-        let mut teams = Vec::new();
-        for page in 1.. {
-            match self
-                .api
-                .rest(&mut self.rec, NOTIFICATIONS, token, &path, None)
-                .await
-            {
-                Ok(answer) => {
-                    teams.extend(
-                        answer
-                            .body
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(|team| {
-                                Some(TeamRec {
-                                    database_id: team["id"].as_i64()?,
-                                    slug: team["slug"].as_str()?.to_string(),
-                                })
-                            }),
-                    );
-                    match answer.header("link").and_then(convert::next_link) {
-                        Some(next) if page < MAX_PAGES => path = next,
-                        Some(_) => {
-                            logging::warn(format_args!("more than {MAX_PAGES} pages of teams"));
-                            break;
-                        }
-                        None => break,
-                    }
-                }
-                Err(CallError::Forbidden { .. }) => {
-                    self.public_teams_forbidden = true;
-                    return None;
-                }
-                Err(e) => {
-                    logging::info(format_args!(
-                        "teams of the notifications token not read: {e}"
-                    ));
-                    return None;
-                }
-            }
-        }
-        Some(teams)
-    }
-
-    /// DESIGN.md, "Tokens": the owner is checked on every run. A run without
-    /// the status fetch asks the token who it belongs to.
-    async fn owner_matches(&mut self, sp: &ScopePlan, token: &str) -> Result<bool, CallError> {
-        if !self.verified.contains(&sp.id) {
-            let answer = self
-                .gql(
-                    &sp.token_key,
-                    token,
-                    "query Who { viewer { login } }",
-                    json!({}),
-                )
-                .await?;
-            let login = answer.data["viewer"]["login"].as_str().map(str::to_string);
-            self.out
-                .tokens
-                .entry(sp.token_key.clone())
-                .or_default()
-                .owner = login.clone();
-            self.verified.insert(sp.id.clone());
-            if login.is_some_and(|l| !l.eq_ignore_ascii_case(&self.viewer)) {
-                self.mismatched.insert(sp.id.clone());
-            }
-        }
-        Ok(!self.mismatched.contains(&sp.id))
-    }
-
-    fn scope_of_signal(&self, key: &str) -> String {
-        let owner = key.split('/').next().unwrap_or_default();
-        if self.plan.registered_owners.contains(owner) {
-            self.plan
-                .enabled_scopes
+    /// The owner a notified PR belongs to: the registered owner of its
+    /// repository owner, else Public.
+    fn owner_of_signal(&self, key: &str) -> Option<String> {
+        let login = key.split('/').next().unwrap_or_default();
+        let named = self.plan.owners.iter().find(|o| {
+            o.login
+                .as_deref()
+                .is_some_and(|l| l.eq_ignore_ascii_case(login))
+        });
+        match named {
+            Some(owner) => Some(owner.id.clone()),
+            None => self
+                .plan
+                .owners
                 .iter()
-                .find(|id| id.eq_ignore_ascii_case(owner))
-                .cloned()
-                .unwrap_or_else(|| owner.to_string())
-        } else {
-            PUBLIC.to_string()
+                .find(|o| o.public())
+                .map(|o| o.id.clone()),
         }
     }
 
-    async fn scope(
-        &mut self,
-        sp: &ScopePlan,
-        signals: &BTreeSet<String>,
-        public_teams: Option<Vec<TeamRec>>,
-    ) {
+    /// One owner. Returns false when the run has to stop (a 401 or a rate
+    /// limit).
+    async fn owner(&mut self, op: &OwnerPlan, signals: &BTreeSet<String>) -> bool {
         let plan = self.plan;
         let mine: Vec<String> = signals
             .iter()
-            .filter(|key| self.scope_of_signal(key) == sp.id)
+            .filter(|key| self.owner_of_signal(key).as_deref() == Some(&op.id))
             .cloned()
             .collect();
         let retries: Vec<String> = plan
@@ -470,216 +381,69 @@ impl Run<'_> {
             .filter(|id| {
                 plan.prs
                     .get(*id)
-                    .is_some_and(|pr| pr.scope.as_deref() == Some(&sp.id))
+                    .is_some_and(|pr| pr.owner_id.as_deref() == Some(&op.id))
             })
             .cloned()
             .collect();
-        let Some(token) = sp.token.usable(plan.forced).map(str::to_string) else {
-            // DESIGN.md, "Fetch success and failure": a scope that cannot be
-            // fetched ignores its notifications.
-            self.consumed.extend(mine);
-            return;
-        };
-        if !sp.status_due && mine.is_empty() && retries.is_empty() {
-            return;
+        if !op.status_due && mine.is_empty() && retries.is_empty() {
+            return true;
         }
-        let mut run = ScopeRun::default();
-        if sp.status_due {
-            self.rec.counted = Some(0);
-        }
-        let result = self
-            .scope_inner(sp, &token, &mine, &retries, public_teams, &mut run)
-            .await;
-        if let Some(cost) = self.rec.counted.take() {
-            *self.out.cost_per_poll.get_or_insert(0) += cost;
-        }
-        match result {
-            // Notified PRs of a failed scope wait for the next run, like PRs
-            // whose events are fetched again.
+        match self.owner_inner(op, &mine, &retries).await {
             Ok(()) => self.consumed.extend(mine),
-            Err(CallError::RateLimited { .. }) => return,
-            Err(CallError::Unauthorized) => {
-                // A stopped scope ignores its notifications.
-                self.consumed.extend(mine);
-                self.out.scopes.entry(sp.id.clone()).or_default().warnings = Some(Vec::new());
-                return;
+            Err(e) if stops_the_run(&e) => return false,
+            // Notified PRs of a failed owner wait for the next run.
+            Err(e) => {
+                self.fail(&e);
+                return true;
             }
-            Err(e) => run.failed = Some(format!("Couldn't reach GitHub: {e}")),
         }
-        if self.queue_refused.contains(&sp.id) {
-            run.permission("Merge queue");
+        if op.status_due {
+            self.succeeded.push(
+                op.login
+                    .clone()
+                    .unwrap_or_else(|| crate::model::PUBLIC.to_string()),
+            );
         }
-        let mut warnings = run.warnings;
-        // Public's team membership is read with the classic PAT.
-        if sp.public() && self.public_teams_forbidden {
-            warnings.push(warning(
-                WarningKind::PermissionMissing,
-                TokenRole::Notifications,
-                "Missing permission: read:org".into(),
-                None,
-            ));
-        }
-        if !run.missing.is_empty() {
-            let names: Vec<&str> = run.missing.iter().copied().collect();
-            warnings.push(warning(
-                WarningKind::PermissionMissing,
-                TokenRole::Scope,
-                format!("Missing permission: {}", names.join(", ")),
-                None,
-            ));
-        }
-        if let Some(message) = run.failed {
-            warnings.push(warning(
-                WarningKind::FetchFailed,
-                TokenRole::Scope,
-                message,
-                Some(self.next_retry()),
-            ));
-        } else if sp.status_due && !self.mismatched.contains(&sp.id) {
-            self.succeeded.push(sp.id.clone());
-        }
-        if sp.status_due || !warnings.is_empty() {
-            self.out.scopes.entry(sp.id.clone()).or_default().warnings = Some(warnings);
-        }
+        true
     }
 
-    async fn scope_inner(
+    async fn owner_inner(
         &mut self,
-        sp: &ScopePlan,
-        token: &str,
+        op: &OwnerPlan,
         signals: &[String],
         retries: &[String],
-        public_teams: Option<Vec<TeamRec>>,
-        run: &mut ScopeRun,
     ) -> Result<(), CallError> {
         let plan = self.plan;
-        let key = sp.token_key.clone();
-        let mut kind = sp.kind;
-        let mut teams = sp.teams.clone();
-        if let Some(found) = public_teams {
-            teams = found.clone();
-            self.out.scopes.entry(sp.id.clone()).or_default().teams = Some(found);
-        }
-
-        // The owner's kind decides the search qualifier: resolve it first.
-        if let Some(owner) = sp.owner.clone().filter(|_| kind.is_none()) {
-            let answer = self
-                .gql(
-                    &key,
-                    token,
-                    "query Owner($owner: String!) { owner: repositoryOwner(login: $owner) { __typename login } }",
-                    json!({"owner": owner}),
-                )
-                .await?;
-            kind = owner_kind(&answer.data["owner"]);
-            let obs = self.out.scopes.entry(sp.id.clone()).or_default();
-            obs.kind = kind;
-            obs.name = answer.data["owner"]["login"].as_str().map(str::to_string);
-            if kind.is_none() {
-                return Err(CallError::Other(format!("owner {owner} not found")));
-            }
-        }
-
         let mut targets: BTreeSet<String> = BTreeSet::new();
-        let mut found: BTreeSet<String> = BTreeSet::new();
-        if sp.status_due {
-            let qualifier = match (&sp.owner, kind) {
+        if op.status_due {
+            let qualifier = match (&op.login, op.kind) {
                 (None, _) => "is:public".to_string(),
-                (Some(owner), Some(ScopeKind::User)) => format!("user:{owner}"),
-                (Some(owner), _) => format!("org:{owner}"),
+                (Some(login), OwnerKind::User) => format!("user:{login}"),
+                (Some(login), _) => format!("org:{login}"),
             };
             let since = date_before(plan.now, plan.drop_after_days);
-            let queries = convert::search_queries(&qualifier, &since, plan.include_team_requests);
-            let with_teams = sp.owner.is_some() && kind == Some(ScopeKind::Org);
-            let mut text =
-                String::from("query Scope($q0: String!, $q1: String!, $q2: String!, $q3: String!");
-            if sp.owner.is_some() {
-                text.push_str(", $owner: String!");
-            }
-            if with_teams {
-                text.push_str(", $viewer: String!");
-            }
-            text.push_str(") { viewer { login } ");
-            if sp.owner.is_some() {
-                text.push_str("owner: repositoryOwner(login: $owner) { __typename login } ");
-            }
-            if with_teams {
-                text.push_str(
-                    "org: organization(login: $owner) { teams(first: 100, userLogins: [$viewer]) { pageInfo { hasNextPage endCursor } nodes { databaseId slug } } } ",
-                );
-            }
+            let queries = convert::search_queries(&qualifier, &since, op.team_requests);
+            let mut text = String::from(
+                "query Search($q0: String!, $q1: String!, $q2: String!, $q3: String!) { ",
+            );
             for i in 0..4 {
                 text.push_str(&format!(
                     "s{i}: search(type: ISSUE, query: $q{i}, first: 100) {{ {SEARCH_NODES} }} "
                 ));
             }
             text.push('}');
-            let mut vars =
+            let vars =
                 json!({"q0": queries[0], "q1": queries[1], "q2": queries[2], "q3": queries[3]});
-            if let Some(owner) = &sp.owner {
-                vars["owner"] = json!(owner);
-            }
-            if with_teams {
-                vars["viewer"] = json!(self.viewer);
-            }
-            let answer = self.gql(&key, token, &text, vars).await?;
-            let login = answer.data["viewer"]["login"].as_str().map(str::to_string);
-            self.out.tokens.entry(key.clone()).or_default().owner = login.clone();
-            self.verified.insert(sp.id.clone());
-            if login.is_some_and(|l| !l.eq_ignore_ascii_case(&self.viewer)) {
-                // DESIGN.md, "Tokens": a token of another account stops the scope.
-                self.mismatched.insert(sp.id.clone());
-                return Ok(());
-            }
-            if sp.owner.is_some() {
-                let obs = self.out.scopes.entry(sp.id.clone()).or_default();
-                if let Some(name) = answer.data["owner"]["login"].as_str() {
-                    obs.name = Some(name.to_string());
-                }
-                let k = owner_kind(&answer.data["owner"]);
-                if k.is_some() {
-                    obs.kind = k;
-                }
-            }
-            if with_teams {
-                if answer
-                    .errors
-                    .iter()
-                    .any(|e| e.is_permission() && e.path.first().is_some_and(|p| p == "org"))
-                {
-                    run.permission("Members");
-                } else {
-                    let first = answer.data["org"]["teams"].clone();
-                    let text = "query TeamsPage($owner: String!, $viewer: String!, $after: String!) { org: organization(login: $owner) { teams(first: 100, after: $after, userLogins: [$viewer]) { pageInfo { hasNextPage endCursor } nodes { databaseId slug } } } }";
-                    let vars = json!({"owner": sp.owner, "viewer": self.viewer});
-                    let all = self
-                        .pages_at(&key, token, text, vars, &["org", "teams"], &first)
-                        .await?;
-                    let list: Vec<TeamRec> = all
-                        .iter()
-                        .filter_map(|t| {
-                            Some(TeamRec {
-                                database_id: t["databaseId"].as_i64()?,
-                                slug: t["slug"].as_str()?.to_string(),
-                            })
-                        })
-                        .collect();
-                    teams = list.clone();
-                    self.out.scopes.entry(sp.id.clone()).or_default().teams = Some(list);
-                }
-            }
-            if let Some(e) = answer
-                .errors
-                .iter()
-                .find(|e| e.path.first().is_some_and(|p| p.starts_with('s')) && !e.is_permission())
-            {
+            let answer = self.gql(&text, vars).await?;
+            if let Some(e) = answer.errors.iter().find(|e| !e.is_permission()) {
                 return Err(CallError::Other(format!("search failed: {}", e.message)));
             }
-            let exclude = if sp.public() {
+            let exclude = if op.public() {
                 plan.registered_owners.clone()
             } else {
                 BTreeSet::new()
             };
+            let mut found: BTreeSet<String> = BTreeSet::new();
             for (i, query) in queries.iter().enumerate() {
                 let connection = answer.data[format!("s{i}")].clone();
                 found.extend(convert::search_ids(&connection, &exclude));
@@ -688,15 +452,13 @@ impl Run<'_> {
                 while let Some(after) = cursor {
                     if pages >= MAX_PAGES {
                         logging::warn(format_args!(
-                            "search of {} has more than {MAX_PAGES} pages",
-                            sp.id
+                            "a search of {} has more than {MAX_PAGES} pages",
+                            op.id
                         ));
                         break;
                     }
                     let page = self
                         .gql(
-                            &key,
-                            token,
                             &format!("query SearchPage($q: String!, $after: String!) {{ s: search(type: ISSUE, query: $q, first: 100, after: $after) {{ {SEARCH_NODES} }} }}"),
                             json!({"q": query, "after": after}),
                         )
@@ -706,14 +468,12 @@ impl Run<'_> {
                     pages += 1;
                 }
             }
-            targets.extend(found.iter().cloned());
+            targets.extend(found);
             for pr in plan.prs.values() {
-                if pr.scope.as_deref() == Some(&sp.id) && (pr.watched || pr.unreadable) {
+                if pr.owner_id.as_deref() == Some(&op.id) && (pr.watched || pr.unreadable) {
                     targets.insert(pr.id.clone());
                 }
             }
-        } else if !self.owner_matches(sp, token).await? {
-            return Ok(());
         }
 
         // Notified PRs: their ids, resolved once and remembered.
@@ -753,7 +513,7 @@ impl Run<'_> {
                 continue;
             }
             let text = format!("{}) {{ {body} }}", text.trim_end_matches(", "));
-            let answer = self.gql(&key, token, &text, vars).await?;
+            let answer = self.gql(&text, vars).await?;
             for (i, key_text) in chunk.iter().enumerate() {
                 if let Some(id) = answer.data[format!("p{i}")]["pullRequest"]["id"].as_str() {
                     self.out.pr_ids.push((key_text.clone(), id.to_string()));
@@ -772,14 +532,10 @@ impl Run<'_> {
                 "query Status($ids: [ID!]!) {{ nodes(ids: $ids) {{ ... on PullRequest {{ {} }} }} }}",
                 pr_status_fields()
             );
-            let answer = self.gql(&key, token, &text, json!({"ids": chunk})).await?;
+            let answer = self.gql(&text, json!({"ids": chunk})).await?;
             for e in &answer.errors {
                 if e.is_permission() {
-                    match e.path.get(2).map(String::as_str) {
-                        Some("statusCheckRollup") => run.permission("Commit statuses"),
-                        Some("baseRef") => run.permission("Contents"),
-                        _ => run.permission("Pull requests"),
-                    }
+                    logging::info(format_args!("status not readable: {}", e.message));
                 } else if !e.is_not_found() {
                     return Err(CallError::Other(format!("status failed: {}", e.message)));
                 }
@@ -794,8 +550,7 @@ impl Run<'_> {
             }
         }
         // Behind base: one aliased `compare` per open PR, against the head
-        // commit, which works for forks too (checked by the orchestrator with
-        // gh on rust-lang/rust#157885: behindBy matched REST).
+        // commit, which works for forks too.
         let comparable: Vec<(String, String)> = nodes
             .iter()
             .filter(|(_, n)| n["state"] == "OPEN")
@@ -820,10 +575,7 @@ impl Run<'_> {
                 vars[format!("h{i}")] = json!(head);
             }
             let text = format!("{}) {{ {body} }}", text.trim_end_matches(", "));
-            let answer = self.gql(&key, token, &text, vars).await?;
-            if answer.errors.iter().any(|e| e.is_permission()) {
-                run.permission("Contents");
-            }
+            let answer = self.gql(&text, vars).await?;
             for (i, (id, _)) in chunk.iter().enumerate() {
                 if let Some(n) =
                     answer.data[format!("c{i}")]["baseRef"]["compare"]["behindBy"].as_i64()
@@ -832,26 +584,14 @@ impl Run<'_> {
                 }
             }
         }
-        // Public: reviewers the fine-grained PAT cannot see, read again with
-        // the classic PAT (docs/tasks/M2.md, "Team review requests").
-        let viewer = self.viewer.clone();
+        let login = plan.login.clone();
+        let teams = self.teams.clone();
         let ctx = Ctx {
-            viewer: &viewer,
+            viewer: &login,
             teams: &teams,
         };
-        let mut reread: BTreeMap<String, Value> = BTreeMap::new();
-        if sp.public() {
-            let hidden: Vec<String> = nodes
-                .iter()
-                .filter(|(_, n)| convert::requested(&n["reviewRequests"], ctx).hidden)
-                .map(|(id, _)| id.clone())
-                .collect();
-            if !hidden.is_empty() {
-                reread = self.reread_requests(&hidden).await?;
-            }
-        }
 
-        // Failed check names, for the viewer's open PRs that just failed.
+        // Failed check names, for the account's open PRs that just failed.
         let mut failed_names: BTreeMap<String, Option<String>> = BTreeMap::new();
         let newly_failed: Vec<(String, Value)> = nodes
             .iter()
@@ -870,11 +610,9 @@ impl Run<'_> {
             .map(|(id, n)| (id.clone(), n.clone()))
             .collect();
         if !newly_failed.is_empty() {
-            let contexts = self.contexts(&key, token, &newly_failed).await?;
+            let contexts = self.contexts(&newly_failed).await?;
             for (id, node) in &newly_failed {
-                let name = self
-                    .failed_check(&key, token, node, contexts.get(id), run)
-                    .await?;
+                let name = self.failed_check(node, contexts.get(id)).await?;
                 failed_names.insert(id.clone(), name);
             }
         }
@@ -885,7 +623,6 @@ impl Run<'_> {
                 behind_by: behind.get(id).copied(),
                 previous,
                 failed_check: failed_names.get(id).cloned().flatten(),
-                review_requests: reread.get(id).map(|r| r["reviewRequests"].clone()),
             };
             if let Some(pr) = convert::pr_values(node, &extra, ctx) {
                 self.fetched.insert(pr.id.clone());
@@ -911,52 +648,19 @@ impl Run<'_> {
             }
         }
         wanted.retain(|id| nodes.contains_key(id));
-        self.events_of(sp, &key, token, &wanted, &reread, ctx, run)
-            .await?;
-        Ok(())
+        // A PR whose events failed is fetched again; the owner still
+        // succeeded (DESIGN.md, "Fetch success and failure").
+        self.events_of(op, &wanted, ctx).await
     }
 
-    async fn reread_requests(
-        &mut self,
-        ids: &[String],
-    ) -> Result<BTreeMap<String, Value>, CallError> {
-        let Some(classic) = self
-            .plan
-            .notifications
-            .usable(self.plan.forced)
-            .map(str::to_string)
-        else {
-            return Ok(BTreeMap::new());
-        };
-        let mut out = BTreeMap::new();
-        for chunk in ids.chunks(NODES_PER_QUERY) {
-            let text = format!(
-                "query Requests($ids: [ID!]!) {{ nodes(ids: $ids) {{ ... on PullRequest {{ id reviewRequests(first: 100) {{ nodes {{ {REVIEWER} }} }} {} }} }} }}",
-                request_events()
-            );
-            let answer = self
-                .gql(NOTIFICATIONS, &classic, &text, json!({"ids": chunk}))
-                .await?;
-            for node in answer.data["nodes"].as_array().into_iter().flatten() {
-                if let Some(id) = node["id"].as_str() {
-                    out.insert(id.to_string(), node.clone());
-                }
-            }
-        }
-        Ok(out)
-    }
-
-    /// `StatusContext` entries of the rollups. CheckRun entries are
-    /// FORBIDDEN for a fine-grained PAT; those errors are expected here.
+    /// `StatusContext` entries of the rollups.
     async fn contexts(
         &mut self,
-        key: &str,
-        token: &str,
         prs: &[(String, Value)],
     ) -> Result<BTreeMap<String, Value>, CallError> {
         let ids: Vec<&String> = prs.iter().map(|(id, _)| id).collect();
         let text = "query Contexts($ids: [ID!]!) { nodes(ids: $ids) { ... on PullRequest { id statusCheckRollup { contexts(first: 100) { nodes { __typename ... on StatusContext { context state } } } } } } }";
-        let answer = self.gql(key, token, text, json!({"ids": ids})).await?;
+        let answer = self.gql(text, json!({"ids": ids})).await?;
         let mut out = BTreeMap::new();
         for node in answer.data["nodes"].as_array().into_iter().flatten() {
             if let Some(id) = node["id"].as_str() {
@@ -969,14 +673,12 @@ impl Run<'_> {
         Ok(out)
     }
 
-    /// docs/tasks/M2.md, "Failed check names".
+    /// DESIGN.md, "State change rows": failed GitHub Actions jobs, then
+    /// failed Commit statuses.
     async fn failed_check(
         &mut self,
-        key: &str,
-        token: &str,
         node: &Value,
         contexts: Option<&Value>,
-        run: &mut ScopeRun,
     ) -> Result<Option<String>, CallError> {
         let owner = node["repository"]["owner"]["login"]
             .as_str()
@@ -985,22 +687,14 @@ impl Run<'_> {
         let sha = node["headRefOid"].as_str().unwrap_or_default();
         let base = format!("/repos/{}/{}/actions/runs", encode(owner), encode(repo));
         let runs = match self
-            .api
             .rest(
-                &mut self.rec,
-                key,
-                token,
                 &format!("{base}?head_sha={}&per_page=100", encode(sha)),
                 None,
             )
             .await
         {
             Ok(answer) => answer.body,
-            Err(CallError::Forbidden { .. }) => {
-                run.permission("Actions");
-                Value::Null
-            }
-            Err(e @ (CallError::RateLimited { .. } | CallError::Unauthorized)) => return Err(e),
+            Err(e) if stops_the_run(&e) => return Err(e),
             Err(e) => {
                 logging::info(format_args!("workflow runs not read: {e}"));
                 Value::Null
@@ -1009,21 +703,11 @@ impl Run<'_> {
         let mut jobs = Vec::new();
         for run_id in convert::runs_to_read(&runs) {
             match self
-                .api
-                .rest(
-                    &mut self.rec,
-                    key,
-                    token,
-                    &format!("{base}/{run_id}/jobs?per_page=100"),
-                    None,
-                )
+                .rest(&format!("{base}/{run_id}/jobs?per_page=100"), None)
                 .await
             {
                 Ok(answer) => jobs.push((run_id, answer.body)),
-                Err(CallError::Forbidden { .. }) => run.permission("Actions"),
-                Err(e @ (CallError::RateLimited { .. } | CallError::Unauthorized)) => {
-                    return Err(e);
-                }
+                Err(e) if stops_the_run(&e) => return Err(e),
                 Err(e) => logging::info(format_args!("jobs not read: {e}")),
             }
         }
@@ -1034,29 +718,19 @@ impl Run<'_> {
         ))
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn events_of(
         &mut self,
-        sp: &ScopePlan,
-        key: &str,
-        token: &str,
+        op: &OwnerPlan,
         wanted: &BTreeSet<String>,
-        reread: &BTreeMap<String, Value>,
         ctx: Ctx<'_>,
-        run: &mut ScopeRun,
     ) -> Result<(), CallError> {
         let plan = self.plan;
-        let scope_since = sp.since();
-        let zero_after = sp.reaction_zero_after();
-        let mut recorded: BTreeMap<String, i64> = plan
-            .threads
-            .values()
-            .map(|t| (t.id.clone(), t.from_at))
-            .collect();
+        let owner_since = op.since();
+        let zero_after = op.reaction_zero_after();
+        let mut recorded: BTreeMap<String, ThreadRec> = plan.threads.clone();
 
         // Collect what a newly found or returning PR already holds.
         for id in wanted {
-            // A new PR, or a watched one that came back: docs/tasks/M2.md.
             let collect = plan
                 .prs
                 .get(id)
@@ -1064,24 +738,11 @@ impl Run<'_> {
             if !collect {
                 continue;
             }
-            match self.collect(key, token, id).await {
-                Ok(Some(mut node)) => {
-                    if let Some(again) = reread.get(id) {
-                        node["reviewRequests"] = again["reviewRequests"].clone();
-                        node["requestEvents"] = again["requestEvents"].clone();
-                    } else if sp.public()
-                        && convert::has_hidden_reviewers(&nodes_of(&node["requestEvents"]))
-                    {
-                        let again = self.reread_requests(std::slice::from_ref(id)).await?;
-                        if let Some(again) = again.get(id) {
-                            node["reviewRequests"] = again["reviewRequests"].clone();
-                            node["requestEvents"] = again["requestEvents"].clone();
-                        }
-                    }
+            match self.collect(id).await {
+                Ok(Some(node)) => {
                     let found = convert::collect(&node, zero_after, ctx);
                     for thread in &found.threads {
-                        let entry = recorded.entry(thread.id.clone()).or_insert(thread.from_at);
-                        *entry = (*entry).min(thread.from_at);
+                        merge_thread(&mut recorded, thread);
                     }
                     self.out.threads.extend(found.threads);
                     self.out.own.extend(found.own);
@@ -1089,14 +750,12 @@ impl Run<'_> {
                     self.out.collected.push(id.clone());
                 }
                 Ok(None) => {}
-                Err(e @ (CallError::RateLimited { .. } | CallError::Unauthorized)) => {
-                    return Err(e);
-                }
+                Err(e) if stops_the_run(&e) => return Err(e),
                 Err(e) => {
                     logging::info(format_args!("comments of {id} not collected: {e}"));
                     self.out
                         .retries_failed
-                        .push((id.clone(), self.since_of(id, scope_since)));
+                        .push((id.clone(), self.since_of(id, owner_since)));
                 }
             }
         }
@@ -1105,7 +764,7 @@ impl Run<'_> {
         let mut by_since: BTreeMap<i64, Vec<String>> = BTreeMap::new();
         for id in wanted {
             by_since
-                .entry(self.since_of(id, scope_since))
+                .entry(self.since_of(id, owner_since))
                 .or_default()
                 .push(id.clone());
         }
@@ -1120,18 +779,11 @@ impl Run<'_> {
                     timeline_nodes()
                 );
                 let answer = match self
-                    .gql(
-                        key,
-                        token,
-                        &text,
-                        json!({"ids": chunk, "since": format_time(since)}),
-                    )
+                    .gql(&text, json!({"ids": chunk, "since": format_time(since)}))
                     .await
                 {
                     Ok(answer) => answer,
-                    Err(e @ (CallError::RateLimited { .. } | CallError::Unauthorized)) => {
-                        return Err(e);
-                    }
+                    Err(e) if stops_the_run(&e) => return Err(e),
                     Err(e) => {
                         logging::info(format_args!("events not fetched: {e}"));
                         for id in chunk {
@@ -1140,15 +792,6 @@ impl Run<'_> {
                         continue;
                     }
                 };
-                // M2.md, "Tokens and the Keychain": what the token may not
-                // read is a warning, and the rest is still used.
-                for e in answer.errors.iter().filter(|e| e.is_permission()) {
-                    run.permission(if e.path.iter().any(|p| p == "timelineItems") {
-                        "Merge queue"
-                    } else {
-                        "Pull requests"
-                    });
-                }
                 let list = answer.data["nodes"].as_array().cloned().unwrap_or_default();
                 for (index, (id, node)) in chunk.iter().zip(list).enumerate() {
                     let broken = answer.errors.iter().any(|e| {
@@ -1163,32 +806,19 @@ impl Run<'_> {
                         continue;
                     }
                     match self
-                        .events_of_pr(
-                            sp,
-                            key,
-                            token,
-                            node,
-                            since,
-                            zero_after,
-                            &recorded,
-                            reread.get(id),
-                            ctx,
-                        )
+                        .events_of_pr(node, since, zero_after, &recorded, ctx)
                         .await
                     {
                         Ok(output) => {
                             for thread in &output.threads {
-                                recorded.insert(thread.id.clone(), thread.from_at);
+                                merge_thread(&mut recorded, thread);
                             }
                             self.out.threads.extend(output.threads);
                             self.out.own.extend(output.own);
                             self.events.extend(output.events);
                             self.out.retries_ok.push(id.clone());
                         }
-                        Err(e @ (CallError::RateLimited { .. } | CallError::Unauthorized)) => {
-                            return Err(e);
-                        }
-                        Err(CallError::Forbidden { .. }) => run.permission("Merge queue"),
+                        Err(e) if stops_the_run(&e) => return Err(e),
                         Err(e) => {
                             logging::info(format_args!("events of {id} not fetched: {e}"));
                             self.out.retries_failed.push((id.clone(), since));
@@ -1200,24 +830,19 @@ impl Run<'_> {
         Ok(())
     }
 
-    fn since_of(&self, id: &str, scope_since: i64) -> i64 {
+    fn since_of(&self, id: &str, owner_since: i64) -> i64 {
         self.plan
             .retries
             .get(id)
-            .map_or(scope_since, |since| (*since).min(scope_since))
+            .map_or(owner_since, |since| (*since).min(owner_since))
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn events_of_pr(
         &mut self,
-        sp: &ScopePlan,
-        key: &str,
-        token: &str,
         node: Value,
         since: i64,
         zero_after: i64,
-        recorded: &BTreeMap<String, i64>,
-        reread: Option<&Value>,
+        recorded: &BTreeMap<String, ThreadRec>,
         ctx: Ctx<'_>,
     ) -> Result<convert::EventOutput, CallError> {
         let id = node["id"].as_str().unwrap_or_default().to_string();
@@ -1238,8 +863,6 @@ impl Run<'_> {
             );
             let page = self
                 .gql(
-                    key,
-                    token,
                     &text,
                     json!({"id": id, "since": format_time(since), "after": after}),
                 )
@@ -1263,32 +886,11 @@ impl Run<'_> {
                 "query ThreadsPage($id: ID!, $after: String!) {{ node(id: $id) {{ ... on PullRequest {{ \
                  reviewThreads(first: 100, after: $after) {{ pageInfo {{ hasNextPage endCursor }} nodes {{ id comments(last: 100) {{ nodes {{ {COMMENT} }} }} }} }} }} }} }}"
             );
-            let page = self
-                .gql(key, token, &text, json!({"id": id, "after": after}))
-                .await?;
+            let page = self.gql(&text, json!({"id": id, "after": after})).await?;
             let connection = &page.data["node"]["reviewThreads"];
             threads.extend(nodes_of(connection));
             cursor = has_next(connection);
             pages += 1;
-        }
-
-        // Public: review requests the fine-grained PAT returned without a
-        // reviewer come from the classic PAT.
-        if sp.public() && convert::has_hidden_reviewers(&timeline) {
-            let again = match reread {
-                Some(again) => Some(again.clone()),
-                None => self
-                    .reread_requests(std::slice::from_ref(&id))
-                    .await?
-                    .remove(&id),
-            };
-            if let Some(again) = again {
-                timeline.retain(|item| item["__typename"] != "ReviewRequestedEvent");
-                timeline.extend(nodes_of(&again["requestEvents"]).into_iter().map(|mut e| {
-                    e["__typename"] = json!("ReviewRequestedEvent");
-                    e
-                }));
-            }
         }
 
         let mut input = EventInput {
@@ -1305,14 +907,10 @@ impl Run<'_> {
             return Ok(output);
         }
         let text = "query MergeQueue($id: ID!) { node(id: $id) { ... on PullRequest { timelineItems(first: 100, itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT, REMOVED_FROM_MERGE_QUEUE_EVENT]) { nodes { __typename ... on AddedToMergeQueueEvent { id createdAt actor { login } } ... on RemovedFromMergeQueueEvent { id createdAt actor { login } reason } } } } } }";
-        // A refused queue read is a permission warning: the other events
-        // stay, and only the removals that needed the queue are left out.
-        let answer = match self.gql(key, token, text, json!({"id": id})).await {
+        // A refused queue read leaves out only the removals that needed it.
+        let answer = match self.gql(text, json!({"id": id})).await {
             Ok(answer) if !answer.errors.iter().any(|e| e.is_permission()) => answer,
-            Ok(_) | Err(CallError::Forbidden { .. }) => {
-                self.queue_refused.insert(sp.id.clone());
-                return Ok(output);
-            }
+            Ok(_) | Err(CallError::Forbidden { .. }) => return Ok(output),
             Err(e) => return Err(e),
         };
         let queue = nodes_of(&answer.data["node"]["timelineItems"]);
@@ -1320,14 +918,9 @@ impl Run<'_> {
         Ok(convert::events(&input, ctx))
     }
 
-    /// docs/tasks/M2.md, "Collecting a newly found PR": every connection
-    /// without `since`, pages followed up to ten per connection.
-    async fn collect(
-        &mut self,
-        key: &str,
-        token: &str,
-        id: &str,
-    ) -> Result<Option<Value>, CallError> {
+    /// Every connection without `since`, pages followed up to ten per
+    /// connection.
+    async fn collect(&mut self, id: &str) -> Result<Option<Value>, CallError> {
         let text = format!(
             "query Collect($id: ID!) {{ node(id: $id) {{ ... on PullRequest {{ \
              id url createdAt bodyHTML bodyText author {ACTOR} \
@@ -1337,7 +930,7 @@ impl Run<'_> {
              reviewRequests(first: 100) {{ nodes {{ {REVIEWER} }} }} {} }} }} }}",
             request_events()
         );
-        let answer = self.gql(key, token, &text, json!({"id": id})).await?;
+        let answer = self.gql(&text, json!({"id": id})).await?;
         let mut node = answer.data["node"].clone();
         if node.is_null() {
             return Ok(None);
@@ -1356,7 +949,7 @@ impl Run<'_> {
             ),
         ] {
             let more = self
-                .pages(key, token, id, "PullRequest", field, &fields, &node[field])
+                .pages(id, "PullRequest", field, &fields, &node[field])
                 .await?;
             node[field]["nodes"] = json!(more);
         }
@@ -1366,8 +959,6 @@ impl Run<'_> {
             let thread_id = thread["id"].as_str().unwrap_or_default().to_string();
             let comments = self
                 .pages(
-                    key,
-                    token,
                     &thread_id,
                     "PullRequestReviewThread",
                     "comments",
@@ -1383,11 +974,8 @@ impl Run<'_> {
     }
 
     /// Every node of a connection, following `endCursor` from `first`.
-    #[allow(clippy::too_many_arguments)]
     async fn pages(
         &mut self,
-        key: &str,
-        token: &str,
         owner_id: &str,
         owner_type: &str,
         field: &str,
@@ -1409,7 +997,7 @@ impl Run<'_> {
                  {field}(first: 100, after: $after) {{ pageInfo {{ hasNextPage endCursor }} nodes {{ {fields} }} }} }} }} }}"
             );
             let page = self
-                .gql(key, token, &text, json!({"id": owner_id, "after": after}))
+                .gql(&text, json!({"id": owner_id, "after": after}))
                 .await?;
             let connection = at(&page.data, &["node", field]).clone();
             all.extend(nodes_of(&connection));
@@ -1419,92 +1007,43 @@ impl Run<'_> {
         Ok(all)
     }
 
-    /// Every node of a connection at `path` of a query that takes `$after`,
-    /// following `endCursor` from `first`, ten pages at most.
-    async fn pages_at(
-        &mut self,
-        key: &str,
-        token: &str,
-        query: &str,
-        vars: Value,
-        path: &[&str],
-        first: &Value,
-    ) -> Result<Vec<Value>, CallError> {
-        let mut all = nodes_of(first);
-        let mut cursor = has_next(first);
-        let mut pages = 1;
-        while let Some(after) = cursor {
-            if pages >= MAX_PAGES {
-                logging::warn(format_args!(
-                    "{} has more than {MAX_PAGES} pages; the rest is not read",
-                    path.join(".")
-                ));
-                break;
-            }
-            let mut vars = vars.clone();
-            vars["after"] = json!(after);
-            let page = self.gql(key, token, query, vars).await?;
-            let connection = at(&page.data, path).clone();
-            all.extend(nodes_of(&connection));
-            cursor = has_next(&connection);
-            pages += 1;
-        }
-        Ok(all)
-    }
-
-    /// DESIGN.md, "Reaction rows": the viewer's comments on watched PRs.
+    /// DESIGN.md, "Reaction rows": the account's comments on watched PRs.
     async fn reactions(&mut self) {
         let plan = self.plan;
-        for sp in &plan.scopes {
-            if self.mismatched.contains(&sp.id) || self.rec.stop.is_some() {
-                continue;
-            }
-            let Some(token) = sp.token.usable(plan.forced).map(str::to_string) else {
-                continue;
-            };
-            match self.owner_matches(sp, &token).await {
-                Ok(true) => {}
-                Ok(false) => continue,
+        let own: Vec<&OwnComment> = plan
+            .own
+            .values()
+            .filter(|own| {
+                plan.prs
+                    .get(&own.pr_id)
+                    .is_some_and(|pr| pr.watched && pr.owner_id.is_some())
+            })
+            .collect();
+        for chunk in own.chunks(NODES_PER_QUERY) {
+            let ids: Vec<&str> = chunk.iter().map(|own| own.id.as_str()).collect();
+            let text = "query Reactions($ids: [ID!]!) { nodes(ids: $ids) { __typename ... on Reactable { id reactionGroups { content viewerHasReacted reactors(first: 1) { totalCount } } } } }";
+            let answer = match self.gql(text, json!({"ids": ids})).await {
+                Ok(answer) => answer,
                 Err(e) => {
-                    logging::info(format_args!("reactions of {} not fetched: {e}", sp.id));
+                    logging::info(format_args!("reactions not fetched: {e}"));
+                    if !stops_the_run(&e) {
+                        self.out.failed = Some(UNREACHABLE.into());
+                    }
+                    break;
+                }
+            };
+            let list = answer.data["nodes"].as_array().cloned().unwrap_or_default();
+            for (own, node) in chunk.iter().zip(list) {
+                if node.is_null() {
+                    if answer.errors.iter().any(|e| e.is_not_found()) {
+                        self.out.own_gone.push(own.id.clone());
+                    }
                     continue;
                 }
-            }
-            let own: Vec<&OwnComment> = plan
-                .own
-                .values()
-                .filter(|own| {
-                    plan.prs
-                        .get(&own.pr_id)
-                        .is_some_and(|pr| pr.watched && pr.scope.as_deref() == Some(&sp.id))
-                })
-                .collect();
-            for chunk in own.chunks(NODES_PER_QUERY) {
-                let ids: Vec<&str> = chunk.iter().map(|own| own.id.as_str()).collect();
-                let text = "query Reactions($ids: [ID!]!) { nodes(ids: $ids) { __typename ... on Reactable { id reactionGroups { content viewerHasReacted reactors(first: 1) { totalCount } } } } }";
-                let answer = match self
-                    .gql(&sp.token_key, &token, text, json!({"ids": ids}))
-                    .await
-                {
-                    Ok(answer) => answer,
-                    Err(e) => {
-                        logging::info(format_args!("reactions of {} not fetched: {e}", sp.id));
-                        break;
-                    }
-                };
-                let list = answer.data["nodes"].as_array().cloned().unwrap_or_default();
-                for (own, node) in chunk.iter().zip(list) {
-                    if node.is_null() {
-                        if answer.errors.iter().any(|e| e.is_not_found()) {
-                            self.out.own_gone.push(own.id.clone());
-                        }
-                        continue;
-                    }
-                    self.reactions
-                        .push(convert::reaction(&node, own, own.baseline_done));
-                    if !own.baseline_done {
-                        self.out.baselines_set.push(own.id.clone());
-                    }
+                self.reactions
+                    .push(convert::reaction(&node, own, own.baseline_done));
+                if !own.baseline_done {
+                    self.out.baselines_set.push(own.id.clone());
                 }
             }
         }
@@ -1521,26 +1060,22 @@ impl Run<'_> {
             .collect();
         self.events.retain(|e| known.contains(&e.pr_id));
         self.reactions.retain(|r| known.contains(&r.pr_id));
+        // An approving review with a body is an Approved row and a Comment
+        // row of the same review id; the core keys them apart.
         let mut seen = BTreeSet::new();
-        self.events.retain(|e| seen.insert(e.id.clone()));
-        if !self.viewer.is_empty() {
+        self.events
+            .retain(|e| seen.insert((e.id.clone(), e.kind == proto::IngestKind::Approved)));
+        self.out.ran = self.rec.answered || self.out.failed.is_some();
+        if self.out.ran {
             self.out.ingest = Some(Ingest {
-                viewer: self.viewer.clone(),
                 missing_pr_ids: self.missing,
                 prs: self.prs,
                 events: self.events,
                 reactions: self.reactions,
-                succeeded_scopes: Some(self.succeeded),
+                succeeded_owners: Some(self.succeeded),
             });
         }
-        for (key, obs) in std::mem::take(&mut self.rec.tokens) {
-            let entry = self.out.tokens.entry(key).or_default();
-            entry.expires_at = obs.expires_at.or(entry.expires_at);
-            entry.scopes = obs.scopes.or(entry.scopes.take());
-            entry.sso = obs.sso;
-            entry.sso_urls = obs.sso_urls;
-            entry.invalid = obs.invalid;
-        }
+        self.out.token = std::mem::take(&mut self.rec.token);
         // One failure per PR per run, from its earliest window; a PR that
         // failed anywhere in the run is not a success.
         let mut failed: BTreeMap<String, i64> = BTreeMap::new();
@@ -1552,7 +1087,6 @@ impl Run<'_> {
         self.out.retries_ok.sort();
         self.out.retries_ok.dedup();
         self.out.retries_failed = failed.into_iter().collect();
-        self.out.costs = std::mem::take(&mut self.rec.added);
         self.out.rest = self.rec.rest;
         self.out.graphql = self.rec.graphql;
         self.out.stop = self.rec.stop.take();
@@ -1560,13 +1094,16 @@ impl Run<'_> {
     }
 }
 
-/// `org` or `user` from `repositoryOwner { __typename }`.
-pub fn owner_kind(owner: &Value) -> Option<ScopeKind> {
-    match owner["__typename"].as_str() {
-        Some("Organization") => Some(ScopeKind::Org),
-        Some("User") => Some(ScopeKind::User),
-        _ => None,
-    }
+fn merge_thread(recorded: &mut BTreeMap<String, ThreadRec>, thread: &ThreadRec) {
+    let min = |a: Option<i64>, b: Option<i64>| match (a, b) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    };
+    let entry = recorded
+        .entry(thread.id.clone())
+        .or_insert_with(|| thread.clone());
+    entry.mine_at = min(entry.mine_at, thread.mine_at);
+    entry.mention_at = min(entry.mention_at, thread.mention_at);
 }
 
 /// Percent-encode a path or query component.

@@ -18,6 +18,14 @@ pub const NEXT_0900: i64 = T0 + 16 * 3600;
 /// The bound on every wait in the harness: past it a test fails, it never
 /// hangs.
 pub const WAIT: Duration = Duration::from_secs(30);
+/// The account the harness sets up, and its login.
+pub const ACCOUNT: &str = "1001";
+pub const ME: &str = "me";
+
+/// The full id of a node of `me`: `1001:<id>`.
+pub fn rid(id: &str) -> String {
+    format!("{ACCOUNT}:{id}")
+}
 
 /// Wait for a process, killing it and failing the test past the limit.
 pub fn wait_within(child: &mut Child, limit: Duration, what: &str) -> ExitStatus {
@@ -150,9 +158,29 @@ impl TestDaemon {
         response["code"].as_str().unwrap().to_string()
     }
 
+    /// The account `me` (id `1001`) with its `org` owner and Public, made
+    /// without GitHub (`dev-ingest`).
+    pub fn setup_account(&self) {
+        self.ok(json!({"cmd":"dev_account_add","id":ACCOUNT,"login":ME}));
+        self.ok(
+            json!({"cmd":"dev_owner_add","account":ME,"owner":"org","kind":"org","github_id":100}),
+        );
+        self.ok(json!({"cmd":"dev_owner_add","account":ME,"owner":"public","kind":"public"}));
+    }
+
     pub fn ingest(&self, prs: Vec<Value>, events: Vec<Value>, reactions: Vec<Value>) {
-        self.ok(json!({"cmd":"dev_ingest","ingest":{
-            "viewer":"me","missing_pr_ids":[],"prs":prs,"events":events,"reactions":reactions
+        self.ingest_to(ME, prs, events, reactions);
+    }
+
+    pub fn ingest_to(
+        &self,
+        account: &str,
+        prs: Vec<Value>,
+        events: Vec<Value>,
+        reactions: Vec<Value>,
+    ) {
+        self.ok(json!({"cmd":"dev_ingest","account":account,"ingest":{
+            "missing_pr_ids":[],"prs":prs,"events":events,"reactions":reactions
         }}));
     }
 
@@ -164,38 +192,58 @@ impl TestDaemon {
         self.ok(json!({"cmd":"dev_clock_set","now":now,"tz":tz}));
     }
 
-    pub fn scopes(&self) -> Vec<Value> {
-        self.ok(json!({"cmd":"scope_list"}))["scopes"]
+    pub fn accounts(&self) -> Vec<Value> {
+        self.ok(json!({"cmd":"account_list"}))["accounts"]
             .as_array()
             .unwrap()
             .clone()
     }
 
-    pub fn scope(&self, id: &str) -> Value {
-        self.scopes()
+    pub fn account(&self, login: &str) -> Value {
+        self.accounts()
             .into_iter()
-            .find(|s| s["id"] == id)
-            .unwrap_or_else(|| panic!("no scope {id}"))
+            .find(|a| a["login"] == login)
+            .unwrap_or_else(|| panic!("no account {login}"))
     }
 
-    pub fn cards(&self) -> Vec<Value> {
-        self.ok(json!({"cmd":"list","snoozed":true}))["cards"]
-            .as_array()
-            .unwrap()
-            .clone()
-    }
-
-    pub fn card(&self, id: &str) -> Option<Value> {
-        self.cards().into_iter().find(|c| c["id"] == id)
-    }
-
-    pub fn row(&self, id: &str) -> Option<Value> {
-        self.ok(json!({"cmd":"activity","snoozed":true}))["rows"]
+    pub fn owner(&self, login: &str, name: &str) -> Value {
+        self.account(login)["owners"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|r| r["id"] == id)
+            .find(|o| o["name"].as_str().unwrap().eq_ignore_ascii_case(name))
             .cloned()
+            .unwrap_or_else(|| panic!("no owner {name}"))
+    }
+
+    /// Every card: the owner sections, then the Snoozed section.
+    pub fn cards(&self) -> Vec<Value> {
+        let mut cards = self.ok(json!({"cmd":"list"}))["cards"]
+            .as_array()
+            .unwrap()
+            .clone();
+        cards.extend(
+            self.ok(json!({"cmd":"list","snoozed":true}))["cards"]
+                .as_array()
+                .unwrap()
+                .clone(),
+        );
+        cards
+    }
+
+    /// A card by the short PR id of `me`.
+    pub fn card(&self, id: &str) -> Option<Value> {
+        let id = rid(id);
+        self.cards().into_iter().find(|c| c["id"] == id)
+    }
+
+    /// A row by the short event id of `me`, on any card.
+    pub fn row(&self, id: &str) -> Option<Value> {
+        let id = rid(id);
+        self.cards()
+            .iter()
+            .flat_map(|c| c["rows"].as_array().unwrap().clone())
+            .find(|r| r["id"] == id)
     }
 
     pub fn subscribe(&self, client: &str) -> Subscriber {
@@ -260,6 +308,30 @@ impl Subscriber {
             let event = self.next().expect("the wanted event before the close");
             if what(&event) {
                 return event;
+            }
+        }
+    }
+
+    /// Skip events until one matches, failing the test if none comes
+    /// within `limit`.
+    pub fn until_within(&mut self, limit: Duration, what: impl Fn(&Value) -> bool) -> Value {
+        let deadline = Instant::now() + limit;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            assert!(!left.is_zero(), "no matching event within {limit:?}");
+            self.reader.get_ref().set_read_timeout(Some(left)).unwrap();
+            let mut text = String::new();
+            let read = self.reader.read_line(&mut text);
+            self.reader.get_ref().set_read_timeout(Some(WAIT)).unwrap();
+            match read {
+                Ok(n) if n > 0 && text.ends_with('\n') => {
+                    let event: Value = serde_json::from_str(&text).unwrap();
+                    if what(&event) {
+                        return event;
+                    }
+                }
+                Ok(_) => panic!("the connection closed before the wanted event"),
+                Err(e) => panic!("no matching event within {limit:?}: {e}"),
             }
         }
     }

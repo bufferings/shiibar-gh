@@ -14,31 +14,72 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-pub const SCHEMA_VERSION: i64 = 3;
+/// M4 (0.2). Versions 1 to 3 are the 0.1 schema, which is not migrated: such
+/// a database is treated like an unreadable one (DESIGN.md, "Saved state").
+pub const SCHEMA_VERSION: i64 = 4;
+/// The newest version of the 0.1 schema.
+const LAST_V01_VERSION: i64 = 3;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 const FILE_MODE: u32 = 0o600;
 const SIDE_FILES: [&str; 2] = ["-wal", "-shm"];
 
-const SCHEMA_V1: &str = "
+const SCHEMA_V4: &str = "
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-CREATE TABLE scopes (
+CREATE TABLE accounts (
     id TEXT PRIMARY KEY,
-    removed INTEGER NOT NULL,
+    login TEXT NOT NULL,
+    color TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    token TEXT NOT NULL,
+    updated_at INTEGER,
+    dot INTEGER NOT NULL,
+    teams TEXT NOT NULL,
+    graphql_limit TEXT,
+    rest_limit TEXT,
+    stopped_until INTEGER,
+    fetch TEXT NOT NULL
+);
+CREATE TABLE owners (
+    id TEXT PRIMARY KEY,
+    account TEXT NOT NULL,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    github_id INTEGER,
+    seq INTEGER NOT NULL,
     enabled INTEGER NOT NULL,
     notify INTEGER NOT NULL,
+    skip_drafts INTEGER NOT NULL,
     watch_started_at INTEGER NOT NULL,
-    updated_at INTEGER,
-    dot INTEGER NOT NULL
+    fetched_at INTEGER
+);
+CREATE TABLE owner_events (
+    owner TEXT NOT NULL,
+    event TEXT NOT NULL,
+    list INTEGER NOT NULL,
+    todo INTEGER NOT NULL,
+    notify INTEGER NOT NULL,
+    PRIMARY KEY (owner, event)
+);
+CREATE TABLE exclusions (
+    owner TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    state TEXT NOT NULL,
+    PRIMARY KEY (owner, kind, position)
 );
 CREATE TABLE prs (
-    id TEXT PRIMARY KEY,
+    key TEXT PRIMARY KEY,
+    account TEXT NOT NULL,
+    id TEXT NOT NULL,
     owner TEXT NOT NULL,
     repo TEXT NOT NULL,
     number INTEGER NOT NULL,
     url TEXT NOT NULL,
     title TEXT NOT NULL,
     author TEXT NOT NULL,
+    author_avatar_url TEXT,
     base TEXT NOT NULL,
     head TEXT NOT NULL,
     state TEXT NOT NULL,
@@ -52,21 +93,25 @@ CREATE TABLE prs (
     updated_at INTEGER NOT NULL,
     is_private INTEGER NOT NULL,
     requested_me INTEGER NOT NULL,
+    requested_team INTEGER NOT NULL,
+    assignees TEXT NOT NULL,
     link_review TEXT NOT NULL,
     link_checks TEXT NOT NULL,
     link_base TEXT NOT NULL,
-    mine INTEGER NOT NULL,
     unreadable INTEGER NOT NULL,
     snoozed INTEGER NOT NULL,
     added_at INTEGER,
     prev_review TEXT,
     prev_checks TEXT,
     prev_base_status TEXT,
-    prev_mergeable INTEGER
+    prev_mergeable INTEGER,
+    gone_at INTEGER,
+    collected INTEGER NOT NULL
 );
 CREATE TABLE pr_rows (
     id TEXT PRIMARY KEY,
-    pr_id TEXT NOT NULL,
+    account TEXT NOT NULL,
+    pr TEXT NOT NULL,
     kind TEXT NOT NULL,
     text TEXT,
     counts TEXT,
@@ -78,101 +123,23 @@ CREATE TABLE pr_rows (
     seen_pending INTEGER NOT NULL,
     done INTEGER NOT NULL,
     pruned INTEGER NOT NULL,
-    notify TEXT NOT NULL
+    notify TEXT NOT NULL,
+    todo_auto INTEGER NOT NULL,
+    todo_manual INTEGER
 );
 CREATE TABLE reaction_baselines (
-    comment_id TEXT PRIMARY KEY,
-    pr_id TEXT NOT NULL,
+    key TEXT PRIMARY KEY,
+    pr TEXT NOT NULL,
     counts TEXT NOT NULL
 );
 ";
-
-/// M2: what the fetcher keeps. docs/tasks/M2.md, "Fetcher and core".
-const SCHEMA_V2: &str = "
-ALTER TABLE scopes ADD COLUMN kind TEXT;
-ALTER TABLE scopes ADD COLUMN name TEXT;
-ALTER TABLE scopes ADD COLUMN fetched_at INTEGER;
-ALTER TABLE prs ADD COLUMN requested_team INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE prs ADD COLUMN gone_at INTEGER;
-ALTER TABLE prs ADD COLUMN collected INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE pr_rows ADD COLUMN team INTEGER NOT NULL DEFAULT 0;
-CREATE TABLE tokens (
-    target TEXT PRIMARY KEY,
-    registered INTEGER NOT NULL,
-    invalid INTEGER NOT NULL,
-    owner TEXT,
-    expires_at INTEGER,
-    scopes TEXT,
-    sso INTEGER NOT NULL,
-    sso_urls TEXT NOT NULL,
-    last_test TEXT
-);
-CREATE TABLE pr_ids (key TEXT PRIMARY KEY, pr_id TEXT NOT NULL);
-CREATE TABLE own_comments (
-    id TEXT PRIMARY KEY,
-    pr_id TEXT NOT NULL,
-    url TEXT NOT NULL,
-    text TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
-    baseline_done INTEGER NOT NULL
-);
-CREATE TABLE threads (id TEXT PRIMARY KEY, pr_id TEXT NOT NULL, from_at INTEGER NOT NULL);
-CREATE TABLE teams (
-    scope TEXT NOT NULL,
-    database_id INTEGER NOT NULL,
-    slug TEXT NOT NULL,
-    PRIMARY KEY (scope, database_id)
-);
-CREATE TABLE retries (pr_id TEXT PRIMARY KEY, since INTEGER NOT NULL, failures INTEGER NOT NULL);
-CREATE TABLE fetch_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-";
-
-/// M3: the scope background color and the author's avatar. Scopes saved
-/// before get their colors in `assign_colors`. docs/tasks/M3.md, "Daemon and
-/// CLI changes".
-const SCHEMA_V3: &str = "
-ALTER TABLE scopes ADD COLUMN color TEXT;
-ALTER TABLE prs ADD COLUMN author_avatar_url TEXT;
-";
-
-/// Migrations by the version they produce.
-const MIGRATIONS: [(i64, &str); 3] = [(1, SCHEMA_V1), (2, SCHEMA_V2), (3, SCHEMA_V3)];
-
-/// Give the scopes of an older database their colors: Public beige, owners
-/// through the cycle in the order of their ids, which is the closest record
-/// of the order they were added in.
-fn assign_colors(tx: &Transaction<'_>) -> rusqlite::Result<()> {
-    let ids: Vec<String> = tx
-        .prepare("SELECT id FROM scopes WHERE color IS NULL ORDER BY id")?
-        .query_map([], |row| row.get(0))?
-        .collect::<rusqlite::Result<_>>()?;
-    let mut seq = 0u32;
-    for id in ids {
-        let color = if id == PUBLIC {
-            ScopeColor::PUBLIC
-        } else {
-            let color = ScopeColor::nth(seq);
-            seq += 1;
-            color
-        };
-        tx.execute(
-            "UPDATE scopes SET color = ?1 WHERE id = ?2",
-            params![color.as_str(), id],
-        )?;
-    }
-    tx.execute(
-        "INSERT OR REPLACE INTO meta (key, value) VALUES ('color_seq', ?1)",
-        params![seq.to_string()],
-    )?;
-    Ok(())
-}
 
 #[derive(Debug)]
 pub enum OpenOutcome {
     /// The saved state, or `None` for a database without any.
     Ready(Store, Option<Box<Data>>),
-    /// The file is damaged. Nothing was changed.
-    Corrupt,
+    /// The file is damaged, or holds the 0.1 schema. Nothing was changed.
+    Unreadable,
 }
 
 pub struct Store {
@@ -258,7 +225,7 @@ fn immutable_uri(path: &Path) -> String {
 /// apply because only this daemon writes, under the lock file, and never at
 /// the same time as this check. A WAL with content holds saved state, so it
 /// has to be read the normal way.
-fn verify(path: &Path) -> rusqlite::Result<bool> {
+fn read_only(path: &Path) -> rusqlite::Result<Connection> {
     let wal_has_content = std::fs::metadata(side_file(path, "-wal")).is_ok_and(|wal| wal.len() > 0);
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
     let conn = if wal_has_content {
@@ -267,8 +234,18 @@ fn verify(path: &Path) -> rusqlite::Result<bool> {
         Connection::open_with_flags(immutable_uri(path), flags | OpenFlags::SQLITE_OPEN_URI)?
     };
     conn.busy_timeout(BUSY_TIMEOUT)?;
+    Ok(conn)
+}
+
+fn verify(path: &Path) -> rusqlite::Result<bool> {
+    let conn = read_only(path)?;
     let result: String = conn.query_row("PRAGMA quick_check(1)", [], |row| row.get(0))?;
     Ok(result == "ok")
+}
+
+/// The schema version, read without writing anything.
+fn stored_version(path: &Path) -> rusqlite::Result<i64> {
+    read_only(path)?.query_row("PRAGMA user_version", [], |row| row.get(0))
 }
 
 impl Store {
@@ -295,16 +272,32 @@ impl Store {
         if !empty {
             match verify(path) {
                 Ok(true) => {}
-                Ok(false) => return Ok(OpenOutcome::Corrupt),
-                Err(e) if is_corruption(&e) => return Ok(OpenOutcome::Corrupt),
+                Ok(false) => return Ok(OpenOutcome::Unreadable),
+                Err(e) if is_corruption(&e) => return Ok(OpenOutcome::Unreadable),
                 Err(e) => return Err(e).context("cannot read the database"),
+            }
+        }
+
+        if !empty {
+            // DESIGN.md, "Saved state": a 0.1 database is not carried over,
+            // and is left exactly as it is until `reset` moves it aside.
+            let version = stored_version(path).context("cannot read the database")?;
+            anyhow::ensure!(
+                version <= SCHEMA_VERSION,
+                "the database has schema version {version}, newer than {SCHEMA_VERSION}"
+            );
+            if (1..=LAST_V01_VERSION).contains(&version) {
+                crate::logging::error(format_args!(
+                    "the database has the 0.1 schema (version {version}); it is not read"
+                ));
+                return Ok(OpenOutcome::Unreadable);
             }
         }
 
         match Self::open_verified(path) {
             Ok(opened) => Ok(opened),
             Err(e) => match e.downcast_ref::<rusqlite::Error>() {
-                Some(sqlite) if is_corruption(sqlite) => Ok(OpenOutcome::Corrupt),
+                Some(sqlite) if is_corruption(sqlite) => Ok(OpenOutcome::Unreadable),
                 _ => Err(e),
             },
         }
@@ -323,14 +316,17 @@ impl Store {
             version <= SCHEMA_VERSION,
             "the database has schema version {version}, newer than {SCHEMA_VERSION}"
         );
-        for (target, sql) in MIGRATIONS {
-            if target > version {
-                tx.execute_batch(sql)?;
-                if target == 3 && version > 0 {
-                    assign_colors(&tx)?;
-                }
-                tx.pragma_update(None, "user_version", target)?;
-            }
+        if (1..=LAST_V01_VERSION).contains(&version) {
+            // DESIGN.md, "Saved state": a 0.1 database is not carried over.
+            drop(tx);
+            crate::logging::error(format_args!(
+                "the database has the 0.1 schema (version {version}); it is not read"
+            ));
+            return Ok(OpenOutcome::Unreadable);
+        }
+        if version == 0 {
+            tx.execute_batch(SCHEMA_V4)?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         tx.commit()?;
 
@@ -378,14 +374,16 @@ impl Store {
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         if dirty.meta {
-            tx.execute(
-                "INSERT OR REPLACE INTO meta (key, value) VALUES ('last_release_at', ?1)",
-                params![data.last_release_at.to_string()],
-            )?;
-            tx.execute(
-                "INSERT OR REPLACE INTO meta (key, value) VALUES ('color_seq', ?1)",
-                params![data.color_seq.to_string()],
-            )?;
+            for (key, value) in [
+                ("last_release_at", data.last_release_at.to_string()),
+                ("seq", data.seq.to_string()),
+                ("restore_accounts", data.restore_accounts.to_string()),
+            ] {
+                tx.execute(
+                    "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
+                    params![key, value],
+                )?;
+            }
         }
         if dirty.config {
             for key in crate::engine::CONFIG_KEYS {
@@ -397,44 +395,56 @@ impl Store {
                 }
             }
         }
-        for id in &dirty.scopes {
-            if let Some(scope) = data.scopes.get(id) {
-                save_scope(&tx, scope)?;
+        for id in &dirty.accounts {
+            match data.accounts.get(id) {
+                Some(account) => save_account(&tx, account)?,
+                None => {
+                    tx.execute("DELETE FROM accounts WHERE id = ?1", params![id])?;
+                }
             }
         }
-        for id in &dirty.prs {
-            if let Some(pr) = data.prs.get(id) {
-                save_pr(&tx, pr)?;
+        for id in &dirty.owners {
+            tx.execute("DELETE FROM owner_events WHERE owner = ?1", params![id])?;
+            tx.execute("DELETE FROM exclusions WHERE owner = ?1", params![id])?;
+            match data.owners.get(id) {
+                Some(owner) => save_owner(&tx, owner)?,
+                None => {
+                    tx.execute("DELETE FROM owners WHERE id = ?1", params![id])?;
+                }
+            }
+        }
+        for key in &dirty.prs {
+            match data.prs.get(key) {
+                Some(pr) => save_pr(&tx, pr)?,
+                None => {
+                    tx.execute("DELETE FROM prs WHERE key = ?1", params![key])?;
+                }
             }
         }
         for id in &dirty.rows {
-            if let Some(row) = data.rows.get(id) {
-                save_row(&tx, row)?;
+            match data.rows.get(id) {
+                Some(row) => save_row(&tx, row)?,
+                None => {
+                    tx.execute("DELETE FROM pr_rows WHERE id = ?1", params![id])?;
+                }
             }
         }
-        for id in &dirty.baselines {
-            match data.baselines.get(id) {
+        for key in &dirty.baselines {
+            match data.baselines.get(key) {
                 Some(baseline) => {
                     tx.execute(
-                        "INSERT OR REPLACE INTO reaction_baselines (comment_id, pr_id, counts)
+                        "INSERT OR REPLACE INTO reaction_baselines (key, pr, counts)
                          VALUES (?1, ?2, ?3)",
-                        params![
-                            baseline.comment_id,
-                            baseline.pr_id,
-                            counts_text(&baseline.counts)
-                        ],
+                        params![baseline.key, baseline.pr, counts_text(&baseline.counts)],
                     )?;
                 }
                 None => {
                     tx.execute(
-                        "DELETE FROM reaction_baselines WHERE comment_id = ?1",
-                        params![id],
+                        "DELETE FROM reaction_baselines WHERE key = ?1",
+                        params![key],
                     )?;
                 }
             }
-        }
-        if dirty.fetch {
-            save_fetch(&tx, &data.fetch)?;
         }
         tx.commit()
     }
@@ -483,46 +493,105 @@ fn counts_text(counts: &BTreeMap<String, u32>) -> String {
     serde_json::to_value(counts).map_or_else(|_| "{}".into(), |v| v.to_string())
 }
 
-fn parse_counts(text: &str) -> rusqlite::Result<BTreeMap<String, u32>> {
-    serde_json::from_str(text).map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+fn json_err(e: serde_json::Error) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+}
+
+fn to_json<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "null".into())
+}
+
+fn from_json<T: serde::de::DeserializeOwned>(text: &str) -> rusqlite::Result<T> {
+    serde_json::from_str(text).map_err(json_err)
+}
+
+fn stored<T>(column: usize, text: &str, parse: fn(&str) -> Option<T>) -> rusqlite::Result<T> {
+    parse(text).ok_or_else(|| {
+        rusqlite::Error::FromSqlConversionFailure(
+            column,
+            rusqlite::types::Type::Text,
+            format!("unknown stored value: {text}").into(),
+        )
     })
 }
 
-fn save_scope(tx: &Transaction<'_>, scope: &ScopeRec) -> rusqlite::Result<usize> {
+fn save_account(tx: &Transaction<'_>, a: &AccountRec) -> rusqlite::Result<()> {
     tx.execute(
-        "INSERT OR REPLACE INTO scopes
-         (id, removed, enabled, notify, watch_started_at, updated_at, dot, kind, name, fetched_at,
-          color)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        "INSERT OR REPLACE INTO accounts
+         (id, login, color, seq, token, updated_at, dot, teams, graphql_limit, rest_limit,
+          stopped_until, fetch)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
-            scope.id,
-            scope.removed,
-            scope.enabled,
-            scope.notify,
-            scope.watch_started_at,
-            scope.updated_at,
-            scope.dot,
-            scope.kind.map(ScopeKind::as_str),
-            scope.name,
-            scope.fetched_at,
-            scope.color.as_str()
+            a.id,
+            a.login,
+            a.color.as_str(),
+            a.seq as i64,
+            to_json(&a.token),
+            a.updated_at,
+            a.dot,
+            to_json(&a.teams),
+            a.graphql.as_ref().map(to_json),
+            a.rest.as_ref().map(to_json),
+            a.stopped_until,
+            to_json(&a.fetch),
         ],
-    )
+    )?;
+    Ok(())
 }
 
-fn save_pr(tx: &Transaction<'_>, pr: &PrRec) -> rusqlite::Result<usize> {
+fn save_owner(tx: &Transaction<'_>, o: &OwnerRec) -> rusqlite::Result<()> {
+    tx.execute(
+        "INSERT OR REPLACE INTO owners
+         (id, account, name, kind, github_id, seq, enabled, notify, skip_drafts,
+          watch_started_at, fetched_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![
+            o.id,
+            o.account,
+            o.name,
+            o.kind.as_str(),
+            o.github_id,
+            o.seq as i64,
+            o.enabled,
+            o.notify,
+            o.skip_drafts,
+            o.watch_started_at,
+            o.fetched_at,
+        ],
+    )?;
+    for (kind, cell) in &o.events.0 {
+        tx.execute(
+            "INSERT INTO owner_events (owner, event, list, todo, notify)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![o.id, kind.as_str(), cell.list, cell.todo, cell.notify],
+        )?;
+    }
+    for (kind, list) in [("repo", &o.repos), ("user", &o.users)] {
+        for (position, item) in list.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO exclusions (owner, kind, position, name, state)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![o.id, kind, position as i64, item.name, item.state.as_str()],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn save_pr(tx: &Transaction<'_>, pr: &PrRec) -> rusqlite::Result<()> {
     tx.execute(
         "INSERT OR REPLACE INTO prs
-         (id, owner, repo, number, url, title, author, base, head, state, is_draft, review,
-          checks, base_status, mergeable, failed_check, changes_requested_by, updated_at,
-          is_private, requested_me, link_review, link_checks, link_base, mine, unreadable,
-          snoozed, added_at, prev_review, prev_checks, prev_base_status, prev_mergeable,
-          requested_team, gone_at, collected, author_avatar_url)
+         (key, account, id, owner, repo, number, url, title, author, author_avatar_url, base,
+          head, state, is_draft, review, checks, base_status, mergeable, failed_check,
+          changes_requested_by, updated_at, is_private, requested_me, requested_team,
+          assignees, link_review, link_checks, link_base, unreadable, snoozed, added_at,
+          prev_review, prev_checks, prev_base_status, prev_mergeable, gone_at, collected)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
                  ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32,
-                 ?33, ?34, ?35)",
+                 ?33, ?34, ?35, ?36, ?37)",
         params![
+            pr.key,
+            pr.account,
             pr.id,
             pr.owner,
             pr.repo,
@@ -530,6 +599,7 @@ fn save_pr(tx: &Transaction<'_>, pr: &PrRec) -> rusqlite::Result<usize> {
             pr.url,
             pr.title,
             pr.author,
+            pr.author_avatar_url,
             pr.base,
             pr.head,
             pr.state.as_str(),
@@ -543,10 +613,11 @@ fn save_pr(tx: &Transaction<'_>, pr: &PrRec) -> rusqlite::Result<usize> {
             pr.updated_at,
             pr.is_private,
             pr.requested_me,
+            pr.requested_team,
+            to_json(&pr.assignees),
             pr.link_review,
             pr.link_checks,
             pr.link_base,
-            pr.mine,
             pr.unreadable,
             pr.snoozed,
             pr.added_at,
@@ -554,23 +625,23 @@ fn save_pr(tx: &Transaction<'_>, pr: &PrRec) -> rusqlite::Result<usize> {
             pr.prev.map(|p| p.checks.as_str()),
             pr.prev.map(|p| p.base_status.as_str()),
             pr.prev.map(|p| p.mergeable),
-            pr.requested_team,
             pr.gone_at,
             pr.collected,
-            pr.author_avatar_url,
         ],
-    )
+    )?;
+    Ok(())
 }
 
-fn save_row(tx: &Transaction<'_>, row: &RowRec) -> rusqlite::Result<usize> {
+fn save_row(tx: &Transaction<'_>, row: &RowRec) -> rusqlite::Result<()> {
     tx.execute(
         "INSERT OR REPLACE INTO pr_rows
-         (id, pr_id, kind, text, counts, actor, url, occurred_at, comment_id, unread,
-          seen_pending, done, pruned, notify, team)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+         (id, account, pr, kind, text, counts, actor, url, occurred_at, comment_id, unread,
+          seen_pending, done, pruned, notify, todo_auto, todo_manual)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
         params![
             row.id,
-            row.pr_id,
+            row.account,
+            row.pr,
             row.kind.as_str(),
             row.text,
             row.counts.as_ref().map(counts_text),
@@ -583,48 +654,35 @@ fn save_row(tx: &Transaction<'_>, row: &RowRec) -> rusqlite::Result<usize> {
             row.done,
             row.pruned,
             row.notify.as_str(),
-            row.team,
+            row.todo_auto,
+            row.todo_manual,
         ],
-    )
+    )?;
+    Ok(())
 }
 
-fn stored<T>(column: usize, text: &str, parse: fn(&str) -> Option<T>) -> rusqlite::Result<T> {
-    parse(text).ok_or_else(|| {
-        rusqlite::Error::FromSqlConversionFailure(
-            column,
-            rusqlite::types::Type::Text,
-            format!("unknown stored value: {text}").into(),
-        )
-    })
+fn meta(conn: &Connection, key: &str) -> anyhow::Result<Option<String>> {
+    Ok(conn
+        .query_row("SELECT value FROM meta WHERE key = ?1", [key], |row| {
+            row.get(0)
+        })
+        .optional()?)
 }
 
 fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
-    let last_release_at: Option<String> = conn
-        .query_row(
-            "SELECT value FROM meta WHERE key = 'last_release_at'",
-            [],
-            |row| row.get(0),
-        )
-        .optional()?;
-    let Some(last_release_at) = last_release_at else {
+    let Some(last_release_at) = meta(conn, "last_release_at")? else {
         return Ok(None);
     };
-    let color_seq: Option<String> = conn
-        .query_row(
-            "SELECT value FROM meta WHERE key = 'color_seq'",
-            [],
-            |row| row.get(0),
-        )
-        .optional()?;
     let mut data = Data {
         last_release_at: last_release_at
             .parse()
             .context("stored last_release_at is not a number")?,
-        color_seq: color_seq
+        seq: meta(conn, "seq")?
             .map(|text| text.parse())
             .transpose()
-            .context("stored color_seq is not a number")?
+            .context("stored seq is not a number")?
             .unwrap_or(0),
+        restore_accounts: meta(conn, "restore_accounts")?.as_deref() == Some("true"),
         ..Data::default()
     };
 
@@ -642,118 +700,193 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
     }
 
     let mut statement = conn.prepare(
-        "SELECT id, removed, enabled, notify, watch_started_at, updated_at, dot, kind, name,
-                fetched_at, color
-         FROM scopes",
+        "SELECT id, login, color, seq, token, updated_at, dot, teams, graphql_limit,
+                rest_limit, stopped_until, fetch
+         FROM accounts",
     )?;
-    let scopes = statement.query_map([], |row| {
-        let kind: Option<String> = row.get(7)?;
-        Ok(ScopeRec {
-            kind: kind
-                .map(|text| stored(7, &text, ScopeKind::parse))
-                .transpose()?,
-            name: row.get(8)?,
-            fetched_at: row.get(9)?,
-            color: stored(10, &row.get::<_, String>(10)?, ScopeColor::parse)?,
+    let accounts = statement.query_map([], |row| {
+        let graphql: Option<String> = row.get(8)?;
+        let rest: Option<String> = row.get(9)?;
+        Ok(AccountRec {
             id: row.get(0)?,
-            removed: row.get(1)?,
-            enabled: row.get(2)?,
-            notify: row.get(3)?,
-            watch_started_at: row.get(4)?,
+            login: row.get(1)?,
+            color: stored(2, &row.get::<_, String>(2)?, AccountColor::parse)?,
+            seq: row.get::<_, i64>(3)? as u64,
+            token: from_json(&row.get::<_, String>(4)?)?,
             updated_at: row.get(5)?,
             dot: row.get(6)?,
+            teams: from_json(&row.get::<_, String>(7)?)?,
+            graphql: graphql.as_deref().map(from_json).transpose()?,
+            rest: rest.as_deref().map(from_json).transpose()?,
+            stopped_until: row.get(10)?,
+            fetch: from_json(&row.get::<_, String>(11)?)?,
         })
     })?;
-    for scope in scopes {
-        let scope = scope?;
-        data.scopes.insert(scope.id.clone(), scope);
+    for account in accounts {
+        let account = account?;
+        data.accounts.insert(account.id.clone(), account);
     }
 
     let mut statement = conn.prepare(
-        "SELECT id, owner, repo, number, url, title, author, base, head, state, is_draft, review,
-                checks, base_status, mergeable, failed_check, changes_requested_by, updated_at,
-                is_private, requested_me, link_review, link_checks, link_base, mine, unreadable,
+        "SELECT id, account, name, kind, github_id, seq, enabled, notify, skip_drafts,
+                watch_started_at, fetched_at
+         FROM owners",
+    )?;
+    let owners = statement.query_map([], |row| {
+        Ok(OwnerRec {
+            id: row.get(0)?,
+            account: row.get(1)?,
+            name: row.get(2)?,
+            kind: stored(3, &row.get::<_, String>(3)?, OwnerKind::parse)?,
+            github_id: row.get(4)?,
+            seq: row.get::<_, i64>(5)? as u64,
+            enabled: row.get(6)?,
+            notify: row.get(7)?,
+            skip_drafts: row.get(8)?,
+            watch_started_at: row.get(9)?,
+            fetched_at: row.get(10)?,
+            events: EventTable::default(),
+            repos: Vec::new(),
+            users: Vec::new(),
+        })
+    })?;
+    for owner in owners {
+        let owner = owner?;
+        data.owners.insert(owner.id.clone(), owner);
+    }
+    let mut statement =
+        conn.prepare("SELECT owner, event, list, todo, notify FROM owner_events")?;
+    let cells = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            stored(1, &row.get::<_, String>(1)?, EventKind::parse)?,
+            Cell {
+                list: row.get(2)?,
+                todo: row.get(3)?,
+                notify: row.get(4)?,
+            },
+        ))
+    })?;
+    for cell in cells {
+        let (owner, kind, cell) = cell?;
+        if let Some(owner) = data.owners.get_mut(&owner) {
+            owner.events.0.insert(kind, cell);
+        }
+    }
+    let mut statement = conn.prepare(
+        "SELECT owner, kind, name, state FROM exclusions ORDER BY owner, kind, position",
+    )?;
+    let items = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            ExclusionRec {
+                name: row.get(2)?,
+                state: stored(3, &row.get::<_, String>(3)?, ExclusionState::parse)?,
+            },
+        ))
+    })?;
+    for item in items {
+        let (owner, kind, item) = item?;
+        if let Some(owner) = data.owners.get_mut(&owner) {
+            match kind.as_str() {
+                "repo" => owner.repos.push(item),
+                "user" => owner.users.push(item),
+                other => anyhow::bail!("unknown stored exclusion kind: {other}"),
+            }
+        }
+    }
+
+    let mut statement = conn.prepare(
+        "SELECT key, account, id, owner, repo, number, url, title, author, author_avatar_url,
+                base, head, state, is_draft, review, checks, base_status, mergeable,
+                failed_check, changes_requested_by, updated_at, is_private, requested_me,
+                requested_team, assignees, link_review, link_checks, link_base, unreadable,
                 snoozed, added_at, prev_review, prev_checks, prev_base_status, prev_mergeable,
-                requested_team, gone_at, collected, author_avatar_url
+                gone_at, collected
          FROM prs",
     )?;
     let prs = statement.query_map([], |row| {
-        let prev_review: Option<String> = row.get(27)?;
-        let prev_checks: Option<String> = row.get(28)?;
-        let prev_base: Option<String> = row.get(29)?;
-        let prev_mergeable: Option<bool> = row.get(30)?;
+        let prev_review: Option<String> = row.get(31)?;
+        let prev_checks: Option<String> = row.get(32)?;
+        let prev_base: Option<String> = row.get(33)?;
+        let prev_mergeable: Option<bool> = row.get(34)?;
         let prev = match (prev_review, prev_checks, prev_base, prev_mergeable) {
             (Some(review), Some(checks), Some(base), Some(mergeable)) => Some(PrevValues {
-                review: stored(27, &review, Review::parse)?,
-                checks: stored(28, &checks, Checks::parse)?,
-                base_status: stored(29, &base, BaseStatus::parse)?,
+                review: stored(31, &review, Review::parse)?,
+                checks: stored(32, &checks, Checks::parse)?,
+                base_status: stored(33, &base, BaseStatus::parse)?,
                 mergeable,
             }),
             _ => None,
         };
         Ok(PrRec {
-            id: row.get(0)?,
-            owner: row.get(1)?,
-            repo: row.get(2)?,
-            number: row.get::<_, i64>(3)? as u64,
-            url: row.get(4)?,
-            title: row.get(5)?,
-            author: row.get(6)?,
-            base: row.get(7)?,
-            head: row.get(8)?,
-            state: stored(9, &row.get::<_, String>(9)?, PrState::parse)?,
-            is_draft: row.get(10)?,
-            review: stored(11, &row.get::<_, String>(11)?, Review::parse)?,
-            checks: stored(12, &row.get::<_, String>(12)?, Checks::parse)?,
-            base_status: stored(13, &row.get::<_, String>(13)?, BaseStatus::parse)?,
-            mergeable: row.get(14)?,
-            failed_check: row.get(15)?,
-            changes_requested_by: row.get(16)?,
-            updated_at: row.get(17)?,
-            is_private: row.get(18)?,
-            requested_me: row.get(19)?,
-            link_review: row.get(20)?,
-            link_checks: row.get(21)?,
-            link_base: row.get(22)?,
-            mine: row.get(23)?,
-            unreadable: row.get(24)?,
-            snoozed: row.get(25)?,
-            added_at: row.get(26)?,
+            key: row.get(0)?,
+            account: row.get(1)?,
+            id: row.get(2)?,
+            owner: row.get(3)?,
+            repo: row.get(4)?,
+            number: row.get::<_, i64>(5)? as u64,
+            url: row.get(6)?,
+            title: row.get(7)?,
+            author: row.get(8)?,
+            author_avatar_url: row.get(9)?,
+            base: row.get(10)?,
+            head: row.get(11)?,
+            state: stored(12, &row.get::<_, String>(12)?, PrState::parse)?,
+            is_draft: row.get(13)?,
+            review: stored(14, &row.get::<_, String>(14)?, Review::parse)?,
+            checks: stored(15, &row.get::<_, String>(15)?, Checks::parse)?,
+            base_status: stored(16, &row.get::<_, String>(16)?, BaseStatus::parse)?,
+            mergeable: row.get(17)?,
+            failed_check: row.get(18)?,
+            changes_requested_by: row.get(19)?,
+            updated_at: row.get(20)?,
+            is_private: row.get(21)?,
+            requested_me: row.get(22)?,
+            requested_team: row.get(23)?,
+            assignees: from_json(&row.get::<_, String>(24)?)?,
+            link_review: row.get(25)?,
+            link_checks: row.get(26)?,
+            link_base: row.get(27)?,
+            unreadable: row.get(28)?,
+            snoozed: row.get(29)?,
+            added_at: row.get(30)?,
             prev,
-            requested_team: row.get(31)?,
-            gone_at: row.get(32)?,
-            collected: row.get(33)?,
-            author_avatar_url: row.get(34)?,
+            gone_at: row.get(35)?,
+            collected: row.get(36)?,
         })
     })?;
     for pr in prs {
         let pr = pr?;
-        data.prs.insert(pr.id.clone(), pr);
+        data.prs.insert(pr.key.clone(), pr);
     }
 
     let mut statement = conn.prepare(
-        "SELECT id, pr_id, kind, text, counts, actor, url, occurred_at, comment_id, unread,
-                seen_pending, done, pruned, notify, team
+        "SELECT id, account, pr, kind, text, counts, actor, url, occurred_at, comment_id, unread,
+                seen_pending, done, pruned, notify, todo_auto, todo_manual
          FROM pr_rows",
     )?;
     let rows = statement.query_map([], |row| {
-        let counts: Option<String> = row.get(4)?;
+        let counts: Option<String> = row.get(5)?;
         Ok(RowRec {
             id: row.get(0)?,
-            pr_id: row.get(1)?,
-            kind: stored(2, &row.get::<_, String>(2)?, RowKind::parse)?,
-            text: row.get(3)?,
-            counts: counts.as_deref().map(parse_counts).transpose()?,
-            actor: row.get(5)?,
-            url: row.get(6)?,
-            occurred_at: row.get(7)?,
-            comment_id: row.get(8)?,
-            unread: row.get(9)?,
-            seen_pending: row.get(10)?,
-            done: row.get(11)?,
-            pruned: row.get(12)?,
-            notify: stored(13, &row.get::<_, String>(13)?, NotifyState::parse)?,
-            team: row.get(14)?,
+            account: row.get(1)?,
+            pr: row.get(2)?,
+            kind: stored(3, &row.get::<_, String>(3)?, RowKind::parse)?,
+            text: row.get(4)?,
+            counts: counts.as_deref().map(from_json).transpose()?,
+            actor: row.get(6)?,
+            url: row.get(7)?,
+            occurred_at: row.get(8)?,
+            comment_id: row.get(9)?,
+            unread: row.get(10)?,
+            seen_pending: row.get(11)?,
+            done: row.get(12)?,
+            pruned: row.get(13)?,
+            notify: stored(14, &row.get::<_, String>(14)?, NotifyState::parse)?,
+            todo_auto: row.get(15)?,
+            todo_manual: row.get(16)?,
         })
     })?;
     for row in rows {
@@ -761,303 +894,19 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
         data.rows.insert(row.id.clone(), row);
     }
 
-    let mut statement = conn.prepare("SELECT comment_id, pr_id, counts FROM reaction_baselines")?;
+    let mut statement = conn.prepare("SELECT key, pr, counts FROM reaction_baselines")?;
     let baselines = statement.query_map([], |row| {
         Ok(Baseline {
-            comment_id: row.get(0)?,
-            pr_id: row.get(1)?,
-            counts: parse_counts(&row.get::<_, String>(2)?)?,
+            key: row.get(0)?,
+            pr: row.get(1)?,
+            counts: from_json(&row.get::<_, String>(2)?)?,
         })
     })?;
     for baseline in baselines {
         let baseline = baseline?;
-        data.baselines.insert(baseline.comment_id.clone(), baseline);
+        data.baselines.insert(baseline.key.clone(), baseline);
     }
-    data.fetch = load_fetch(conn)?;
     Ok(Some(data))
-}
-
-fn json_err(e: serde_json::Error) -> rusqlite::Error {
-    rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
-}
-
-fn test_text(test: &TestRec) -> String {
-    let results: Vec<serde_json::Value> = test
-        .results
-        .iter()
-        .map(|item| {
-            serde_json::json!({
-                "item": item.item,
-                "outcome": item.outcome,
-                "missing": item.missing,
-                "reason": item.reason,
-            })
-        })
-        .collect();
-    serde_json::json!({"at": test.at, "results": results}).to_string()
-}
-
-fn parse_test(text: &str) -> rusqlite::Result<TestRec> {
-    let value: serde_json::Value = serde_json::from_str(text).map_err(json_err)?;
-    let string = |v: &serde_json::Value, key: &str| v[key].as_str().map(str::to_string);
-    let results = value["results"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|item| TestItem {
-            item: string(item, "item").unwrap_or_default(),
-            outcome: string(item, "outcome").unwrap_or_default(),
-            missing: string(item, "missing"),
-            reason: string(item, "reason"),
-        })
-        .collect();
-    Ok(TestRec {
-        at: value["at"].as_i64().unwrap_or(0),
-        results,
-    })
-}
-
-fn save_fetch(tx: &Transaction<'_>, fetch: &FetchData) -> rusqlite::Result<()> {
-    for table in [
-        "tokens",
-        "pr_ids",
-        "own_comments",
-        "threads",
-        "teams",
-        "retries",
-        "fetch_meta",
-    ] {
-        tx.execute(&format!("DELETE FROM {table}"), [])?;
-    }
-    for token in fetch.tokens.values() {
-        tx.execute(
-            "INSERT INTO tokens (target, registered, invalid, owner, expires_at, scopes, sso,
-                                 sso_urls, last_test)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                token.target,
-                token.registered,
-                token.invalid,
-                token.owner,
-                token.expires_at,
-                token
-                    .scopes
-                    .as_ref()
-                    .map(|s| serde_json::json!(s).to_string()),
-                token.sso,
-                serde_json::json!(token.sso_urls).to_string(),
-                token.last_test.as_ref().map(test_text),
-            ],
-        )?;
-    }
-    for (key, id) in &fetch.pr_ids {
-        tx.execute(
-            "INSERT INTO pr_ids (key, pr_id) VALUES (?1, ?2)",
-            params![key, id],
-        )?;
-    }
-    for own in fetch.own.values() {
-        tx.execute(
-            "INSERT INTO own_comments (id, pr_id, url, text, created_at, baseline_done)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                own.id,
-                own.pr_id,
-                own.url,
-                own.text,
-                own.created_at,
-                own.baseline_done
-            ],
-        )?;
-    }
-    for thread in fetch.threads.values() {
-        tx.execute(
-            "INSERT INTO threads (id, pr_id, from_at) VALUES (?1, ?2, ?3)",
-            params![thread.id, thread.pr_id, thread.from_at],
-        )?;
-    }
-    for (scope, teams) in &fetch.teams {
-        for team in teams {
-            tx.execute(
-                "INSERT OR REPLACE INTO teams (scope, database_id, slug) VALUES (?1, ?2, ?3)",
-                params![scope, team.database_id, team.slug],
-            )?;
-        }
-    }
-    for retry in fetch.retries.values() {
-        tx.execute(
-            "INSERT INTO retries (pr_id, since, failures) VALUES (?1, ?2, ?3)",
-            params![retry.pr_id, retry.since, retry.failures],
-        )?;
-    }
-    let usage = &fetch.usage;
-    let meta = [
-        (
-            "notif_last_modified",
-            serde_json::json!(fetch.notif_last_modified),
-        ),
-        ("notif_since", serde_json::json!(fetch.notif_since)),
-        ("poll_interval", serde_json::json!(fetch.poll_interval)),
-        ("costs", serde_json::json!(fetch.costs)),
-        (
-            "usage",
-            serde_json::json!([
-                usage.rest_remaining,
-                usage.rest_limit,
-                usage.graphql_remaining,
-                usage.graphql_limit,
-                usage.cost_per_poll
-            ]),
-        ),
-        ("stopped_until", serde_json::json!(fetch.stopped_until)),
-        ("stop_reason", serde_json::json!(fetch.stop_reason)),
-        ("pending_signals", serde_json::json!(fetch.pending_signals)),
-        (
-            "team_requests_on_at",
-            serde_json::json!(fetch.team_requests_on_at),
-        ),
-        (
-            "notif_checked_at",
-            serde_json::json!(fetch.notif_checked_at),
-        ),
-    ];
-    for (key, value) in meta {
-        tx.execute(
-            "INSERT INTO fetch_meta (key, value) VALUES (?1, ?2)",
-            params![key, value.to_string()],
-        )?;
-    }
-    Ok(())
-}
-
-fn load_fetch(conn: &Connection) -> anyhow::Result<FetchData> {
-    let mut fetch = FetchData::default();
-    let mut statement = conn.prepare(
-        "SELECT target, registered, invalid, owner, expires_at, scopes, sso, sso_urls, last_test
-         FROM tokens",
-    )?;
-    let tokens = statement.query_map([], |row| {
-        let scopes: Option<String> = row.get(5)?;
-        let urls: String = row.get(7)?;
-        let test: Option<String> = row.get(8)?;
-        Ok(TokenRec {
-            target: row.get(0)?,
-            registered: row.get(1)?,
-            invalid: row.get(2)?,
-            owner: row.get(3)?,
-            expires_at: row.get(4)?,
-            scopes: scopes
-                .map(|text| serde_json::from_str(&text).map_err(json_err))
-                .transpose()?,
-            sso: row.get(6)?,
-            sso_urls: serde_json::from_str(&urls).map_err(json_err)?,
-            last_test: test.as_deref().map(parse_test).transpose()?,
-        })
-    })?;
-    for token in tokens {
-        let token = token?;
-        fetch.tokens.insert(token.target.clone(), token);
-    }
-    let mut statement = conn.prepare("SELECT key, pr_id FROM pr_ids")?;
-    let pairs = statement.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    })?;
-    for pair in pairs {
-        let (key, id) = pair?;
-        fetch.pr_ids.insert(key, id);
-    }
-    let mut statement =
-        conn.prepare("SELECT id, pr_id, url, text, created_at, baseline_done FROM own_comments")?;
-    let own = statement.query_map([], |row| {
-        Ok(OwnComment {
-            id: row.get(0)?,
-            pr_id: row.get(1)?,
-            url: row.get(2)?,
-            text: row.get(3)?,
-            created_at: row.get(4)?,
-            baseline_done: row.get(5)?,
-        })
-    })?;
-    for own in own {
-        let own = own?;
-        fetch.own.insert(own.id.clone(), own);
-    }
-    let mut statement = conn.prepare("SELECT id, pr_id, from_at FROM threads")?;
-    let threads = statement.query_map([], |row| {
-        Ok(ThreadRec {
-            id: row.get(0)?,
-            pr_id: row.get(1)?,
-            from_at: row.get(2)?,
-        })
-    })?;
-    for thread in threads {
-        let thread = thread?;
-        fetch.threads.insert(thread.id.clone(), thread);
-    }
-    let mut statement = conn.prepare("SELECT scope, database_id, slug FROM teams")?;
-    let teams = statement.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            TeamRec {
-                database_id: row.get(1)?,
-                slug: row.get(2)?,
-            },
-        ))
-    })?;
-    for team in teams {
-        let (scope, team) = team?;
-        fetch.teams.entry(scope).or_default().push(team);
-    }
-    let mut statement = conn.prepare("SELECT pr_id, since, failures FROM retries")?;
-    let retries = statement.query_map([], |row| {
-        Ok(RetryRec {
-            pr_id: row.get(0)?,
-            since: row.get(1)?,
-            failures: row.get(2)?,
-        })
-    })?;
-    for retry in retries {
-        let retry = retry?;
-        fetch.retries.insert(retry.pr_id.clone(), retry);
-    }
-    let mut statement = conn.prepare("SELECT key, value FROM fetch_meta")?;
-    let pairs = statement.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    })?;
-    for pair in pairs {
-        let (key, text) = pair?;
-        let value: serde_json::Value =
-            serde_json::from_str(&text).context("stored fetch state is not JSON")?;
-        let string = || value.as_str().map(str::to_string);
-        match key.as_str() {
-            "notif_last_modified" => fetch.notif_last_modified = string(),
-            "notif_since" => fetch.notif_since = string(),
-            "poll_interval" => fetch.poll_interval = value.as_i64(),
-            "costs" => {
-                fetch.costs = serde_json::from_value(value).context("stored costs")?;
-            }
-            "usage" => {
-                let at = |i: usize| value.get(i).and_then(serde_json::Value::as_i64);
-                fetch.usage = Usage {
-                    rest_remaining: at(0),
-                    rest_limit: at(1),
-                    graphql_remaining: at(2),
-                    graphql_limit: at(3),
-                    cost_per_poll: at(4),
-                };
-            }
-            "stopped_until" => fetch.stopped_until = value.as_i64(),
-            "stop_reason" => fetch.stop_reason = string(),
-            "pending_signals" => {
-                fetch.pending_signals =
-                    serde_json::from_value(value).context("stored pending signals")?;
-            }
-            "team_requests_on_at" => fetch.team_requests_on_at = value.as_i64().unwrap_or(0),
-            "notif_checked_at" => fetch.notif_checked_at = value.as_i64(),
-            _ => {}
-        }
-    }
-    Ok(fetch)
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 # shiibar-gh
 
-macOS menu bar app that shows the GitHub pull requests you are involved in, what needs your action, and what happened, per scope (owners and Public). Read-only against GitHub.
+macOS menu bar app that shows the GitHub pull requests you are involved in, what needs your action (Todo), and what happened, per account and per owner (organizations, personal accounts and Public). Read-only against GitHub.
 
 ## Source of truth
 
@@ -23,8 +23,9 @@ macOS menu bar app that shows the GitHub pull requests you are involved in, what
 `shiibar-gh` exposes every popover and settings operation (see the CLI part of the implementation section of DESIGN.md). Use it from Bash; `--help` and `--json` are enough. Examples:
 
 ```sh
-shiibar-gh list --needs-action --json
+shiibar-gh list --todo --json
 shiibar-gh done <row>
-shiibar-gh snooze owner/repo#123
+shiibar-gh snooze owner/repo#123 --account <login>
+shiibar-gh owner events <owner> --account <login>
 shiibar-gh config get <key>
 ```

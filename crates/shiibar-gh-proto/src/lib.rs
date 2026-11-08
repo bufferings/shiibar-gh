@@ -1,7 +1,7 @@
 //! Wire format shared by the daemon and its clients: NDJSON over a Unix socket.
 //!
 //! Spec: docs/DESIGN.md, section "Daemon specification / Wire format", and
-//! docs/tasks/M1.md, sections "Injecting events" and "Response fields".
+//! docs/tasks/M4.md, "Wire format and CLI".
 //!
 //! Enums a client receives go through [`Lenient`] so a newer daemon's values do
 //! not break an older client. `Request` and everything inside it stays strict.
@@ -55,6 +55,12 @@ impl<T: Serialize> Lenient<T> {
     }
 }
 
+impl<T: PartialEq> Lenient<T> {
+    pub fn is(&self, value: T) -> bool {
+        matches!(self, Lenient::Known(v) if *v == value)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClientKind {
@@ -97,46 +103,91 @@ pub enum BaseStatus {
     None,
 }
 
-/// The `kind` of an ingested event.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// A kind of the event table of an owner (`owner_events_*`), in table order.
+/// DESIGN.md, "Row kinds and states".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
     ReviewRequested,
+    TeamReviewRequested,
     Mentioned,
+    TeamMentioned,
     Comment,
     Reply,
-    AddedToMergeQueue,
-    RemovedFromMergeQueue,
-    Merged,
-    Closed,
-    BotComment,
+    ReplyMentioned,
+    Reaction,
+    Approved,
+    ChangesRequested,
+    ChecksFailed,
+    Conflicts,
+    Mergeable,
+    MergeQueueAdded,
+    MergeQueueRemoved,
+    MergedClosed,
 }
 
-/// `row.kind`: every [`EventKind`] plus the rows the daemon derives itself.
+impl EventKind {
+    pub const ALL: [EventKind; 16] = [
+        EventKind::ReviewRequested,
+        EventKind::TeamReviewRequested,
+        EventKind::Mentioned,
+        EventKind::TeamMentioned,
+        EventKind::Comment,
+        EventKind::Reply,
+        EventKind::ReplyMentioned,
+        EventKind::Reaction,
+        EventKind::Approved,
+        EventKind::ChangesRequested,
+        EventKind::ChecksFailed,
+        EventKind::Conflicts,
+        EventKind::Mergeable,
+        EventKind::MergeQueueAdded,
+        EventKind::MergeQueueRemoved,
+        EventKind::MergedClosed,
+    ];
+}
+
+/// The `kind` of an event handed to the core by the fetcher or `dev_ingest`.
+/// The rows the core derives itself (state changes, reactions) have no
+/// ingest kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IngestKind {
+    ReviewRequested,
+    TeamReviewRequested,
+    Mentioned,
+    TeamMentioned,
+    Comment,
+    Reply,
+    ReplyMentioned,
+    Approved,
+    MergeQueueAdded,
+    MergeQueueRemoved,
+    Merged,
+    Closed,
+}
+
+/// `row.kind`: the event kinds, with `merged_closed` split in two.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RowKind {
     ReviewRequested,
+    TeamReviewRequested,
     Mentioned,
+    TeamMentioned,
     Comment,
     Reply,
-    AddedToMergeQueue,
-    RemovedFromMergeQueue,
-    Merged,
-    Closed,
-    BotComment,
+    ReplyMentioned,
+    Reaction,
+    Approved,
+    ChangesRequested,
     ChecksFailed,
     Conflicts,
-    ChangesRequested,
     Mergeable,
-    Reaction,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RowClass {
-    NeedsAction,
-    Event,
+    MergeQueueAdded,
+    MergeQueueRemoved,
+    Merged,
+    Closed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -151,58 +202,108 @@ pub enum StateLabel {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ScopeKind {
+pub enum OwnerKind {
     Org,
     User,
     Public,
 }
 
-/// The background color of a scope, one of the six fixed colors of the
-/// Settings window. DESIGN.md, "Overview and scope".
+/// The color of an account. DESIGN.md, "Account colors".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ScopeColor {
-    Gray,
+pub enum AccountColor {
+    None,
+    Red,
+    Orange,
+    Yellow,
     Green,
     Blue,
     Purple,
-    Pink,
-    Beige,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// DESIGN.md, "Showing warnings", in the order of that table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WarningKind {
+    KeychainUnavailable,
+    TokensUnreadable,
     NoToken,
     TokenInvalid,
     TokenExpiring,
     FetchFailed,
-    CostNearCap,
     RateLimited,
+    GraphqlNearLimit,
+    RestNearLimit,
+    ScopeMissing,
     SsoRequired,
-    PermissionMissing,
-    TokenOwnerMismatch,
     EventsFetchFailed,
 }
 
-/// Which token a warning is about.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+/// What the daemon could make of the Keychain item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum TokenRole {
-    Scope,
+pub enum KeychainState {
+    Ok,
+    Unavailable,
+    Unreadable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExclusionKind {
+    Repo,
+    User,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExclusionState {
+    Hidden,
+    ListOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EventColumn {
+    List,
+    Todo,
+    Notify,
+}
+
+/// The segment of the filter row. DESIGN.md, "What the filters mean".
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrFilter {
+    #[default]
+    All,
+    Authored,
+    Assigned,
+    ReviewRequested,
+}
+
+/// Which item of `token_test` a result is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TestItem {
+    Account,
+    Scopes,
     Notifications,
+    TeamMembership,
+    Owner,
 }
 
 /// The outcome of one item of `token_test`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TestOutcome {
-    /// Answered without a permission error, with or without data.
+    /// `✓` (the Account item shows its text without the mark).
     Ok,
-    /// A permission error. `missing` names the permission.
+    /// `✗`.
     Failed,
-    /// Nothing to check against, such as an owner without repositories.
-    Unverifiable,
+    /// `SSO authorization required` with `Authorize…`.
+    SsoRequired,
+    /// Nothing to check against.
+    CantCheck,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -217,6 +318,8 @@ pub enum NotificationType {
 pub enum ErrorCode {
     NotFound,
     Invalid,
+    Unreachable,
+    KeychainUnavailable,
     Internal,
 }
 
@@ -228,35 +331,37 @@ pub struct Links {
     pub base: String,
 }
 
-/// What the fetcher hands to the daemon core, and what `dev_ingest` takes.
-/// The fetcher owns classification: `kind` is final, and this type carries
-/// nothing that would let the core decide participation, bots or authorship
-/// again.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// What the fetcher hands to the daemon core for one account, and what
+/// `dev_ingest` takes. The fetcher owns classification: `kind` is final.
+/// PR, event and comment ids are GitHub node ids; the core joins them with
+/// the account.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Ingest {
-    pub viewer: String,
+    #[serde(default)]
     pub missing_pr_ids: Vec<String>,
+    #[serde(default)]
     pub prs: Vec<IngestPr>,
+    #[serde(default)]
     pub events: Vec<IngestEvent>,
+    #[serde(default)]
     pub reactions: Vec<IngestReaction>,
-    /// Scopes whose search and status fetch finished without errors. Their
-    /// `updated_at` moves on even without PRs or events. The fetcher always
-    /// sends it; without it the M1 rule applies (only scopes with PRs or
-    /// events move on). docs/tasks/M2.md, "Fetcher and core".
+    /// Owners (login or `public`) whose search and status fetch finished
+    /// without errors: the start of their next event window moves on.
+    /// Without it, no owner's window moves on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub succeeded_scopes: Option<Vec<String>>,
+    pub succeeded_owners: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IngestPr {
     pub id: String,
+    /// The repository owner's login. It decides the owner the PR belongs to.
     pub owner: String,
     pub repo: String,
     pub number: u64,
     pub url: String,
     pub title: String,
     pub author: String,
-    /// `author.avatarUrl`; `null` when `author` is `null`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author_avatar_url: Option<String>,
     pub base: String,
@@ -271,12 +376,14 @@ pub struct IngestPr {
     pub changes_requested_by: Option<String>,
     pub updated_at: i64,
     pub is_private: bool,
-    /// A review is requested from the viewer directly.
+    /// A review is requested from the account directly.
     pub requested_me: bool,
-    /// A review is requested from one of the viewer's teams. Include requests
-    /// to my teams is applied by the core.
+    /// A review is requested from one of the account's teams.
     #[serde(default)]
     pub requested_team: bool,
+    /// Logins of the assignees.
+    #[serde(default)]
+    pub assignees: Vec<String>,
     pub links: Links,
 }
 
@@ -284,15 +391,13 @@ pub struct IngestPr {
 pub struct IngestEvent {
     pub id: String,
     pub pr_id: String,
-    pub kind: EventKind,
+    pub kind: IngestKind,
     pub occurred_at: i64,
     pub url: String,
+    /// Who caused the event; the Users of the Exclusions compare with it.
     pub actor: Option<String>,
     pub text: Option<String>,
     pub comment_id: Option<String>,
-    /// A `review_requested` event addressed to one of the viewer's teams.
-    #[serde(default)]
-    pub team: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -302,7 +407,7 @@ pub struct IngestReaction {
     pub url: String,
     pub text: String,
     pub comment_created_at: i64,
-    /// Absolute count per `ReactionContent` value, without the viewer's own.
+    /// Absolute count per `ReactionContent` value, without the account's own.
     pub counts: BTreeMap<String, u32>,
     pub watching: bool,
 }
@@ -313,42 +418,63 @@ pub struct IngestReaction {
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum Request {
     List {
-        #[serde(flatten)]
-        filter: Filter,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        account: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        owner: Option<String>,
+        #[serde(default)]
+        todo: bool,
+        #[serde(default)]
+        filter: PrFilter,
+        #[serde(default)]
+        snoozed: bool,
     },
     Activity {
-        #[serde(flatten)]
-        filter: Filter,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        account: Option<String>,
+        #[serde(default)]
+        owners: Vec<String>,
+        #[serde(default)]
+        todo: bool,
+        #[serde(default)]
+        filter: PrFilter,
     },
     Status {
+        account: String,
         pr: String,
     },
     Seen {
         row_ids: Vec<String>,
     },
     PopoverOpened {
-        scope: String,
+        account: String,
     },
     PopoverClosed {
-        scope: String,
+        account: String,
     },
     Done {
         row: String,
+        on: bool,
     },
-    Undone {
+    Todo {
         row: String,
+        on: bool,
     },
     Snooze {
+        account: String,
         pr: String,
     },
     Unsnooze {
+        account: String,
         pr: String,
     },
     Refresh {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        scope: Option<String>,
+        account: Option<String>,
     },
     Open {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        account: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pr: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -361,51 +487,103 @@ pub enum Request {
         key: String,
         value: serde_json::Value,
     },
-    ScopeList,
-    ScopeAdd {
+    AccountList,
+    /// Never logged: it carries a token.
+    AccountAdd {
+        token: String,
+    },
+    AccountRemove {
+        account: String,
+    },
+    AccountColor {
+        account: String,
+        color: AccountColor,
+    },
+    OwnerLookup {
+        account: String,
         owner: String,
     },
-    ScopeRemove {
+    OwnerAdd {
+        account: String,
         owner: String,
     },
-    ScopeEnable {
-        scope: String,
+    OwnerRemove {
+        account: String,
+        owner: String,
     },
-    ScopeDisable {
-        scope: String,
+    OwnerEnable {
+        account: String,
+        owner: String,
     },
-    ScopeNotify {
-        scope: String,
+    OwnerDisable {
+        account: String,
+        owner: String,
+    },
+    OwnerNotify {
+        account: String,
+        owner: String,
         on: bool,
     },
-    ScopeColor {
-        scope: String,
-        color: ScopeColor,
+    OwnerSkipDrafts {
+        account: String,
+        owner: String,
+        on: bool,
     },
-    /// The type of an owner on GitHub, without registering anything.
-    ScopeLookup {
+    OwnerEventsGet {
+        account: String,
         owner: String,
     },
+    OwnerEventsSet {
+        account: String,
+        owner: String,
+        event: EventKind,
+        column: EventColumn,
+        on: bool,
+    },
+    OwnerEventsCopy {
+        account: String,
+        from_owner: String,
+        to_owner: String,
+    },
+    OwnerExclusionsGet {
+        account: String,
+        owner: String,
+    },
+    OwnerExclusionsSet {
+        account: String,
+        owner: String,
+        kind: ExclusionKind,
+        name: String,
+        state: ExclusionState,
+    },
+    OwnerExclusionsRemove {
+        account: String,
+        owner: String,
+        kind: ExclusionKind,
+        name: String,
+    },
+    /// Never logged: it carries a token.
+    TokenSet {
+        account: String,
+        token: String,
+    },
+    /// Never logged: it may carry a token.
+    TokenTest {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        account: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token: Option<String>,
+    },
+    TokenReset,
     Subscribe {
         client: ClientKind,
     },
     Reset,
     Info,
     Shutdown,
-    /// Never logged: it carries a token.
-    TokenSet {
-        target: String,
-        token: String,
-    },
-    /// Never logged: it may carry a token.
-    TokenTest {
-        target: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        token: Option<String>,
-    },
-    SettingsStatus,
     #[cfg(feature = "dev-ingest")]
     DevIngest {
+        account: String,
         ingest: Ingest,
     },
     #[cfg(feature = "dev-ingest")]
@@ -413,58 +591,55 @@ pub enum Request {
         now: i64,
         tz: String,
     },
+    /// An account without asking GitHub. `token`, when given, is saved to
+    /// the Keychain like `token_set`, without the owner check.
+    #[cfg(feature = "dev-ingest")]
+    DevAccountAdd {
+        id: String,
+        login: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token: Option<String>,
+    },
+    /// An owner without asking GitHub. `kind` `public` adds Public.
+    #[cfg(feature = "dev-ingest")]
+    DevOwnerAdd {
+        account: String,
+        owner: String,
+        kind: OwnerKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        github_id: Option<i64>,
+    },
 }
 
-/// Arguments shared by `list` and `activity`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Filter {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub scope: Option<String>,
-    #[serde(default)]
-    pub needs_action: bool,
-    #[serde(default)]
-    pub mine: bool,
-    #[serde(default)]
-    pub others: bool,
-    #[serde(default)]
-    pub snoozed: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Scope {
-    pub id: String,
-    pub name: String,
-    pub kind: Option<Lenient<ScopeKind>>,
-    pub enabled: bool,
-    pub notify: bool,
-    pub color: Lenient<ScopeColor>,
-    pub badge: u32,
-    pub dot: bool,
-    pub warnings: Vec<Warning>,
-    pub updated_at: Option<i64>,
-}
-
-/// DESIGN.md, "Wire format": an element of a scope's `warnings` and of the
-/// `refresh` response.
+/// DESIGN.md, "Wire format": an element of an account's `warnings` and of
+/// the `refresh` response.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Warning {
     pub kind: Lenient<WarningKind>,
-    /// `null` for a warning about no token, such as a rate limit.
-    pub token: Option<Lenient<TokenRole>>,
+    /// The account id; `null` for the Keychain warnings.
+    pub account: Option<String>,
+    /// The owner id of `sso_required` (when known) and `events_fetch_failed`.
+    pub owner: Option<String>,
     pub message: String,
     pub until: Option<i64>,
+    pub url: Option<String>,
 }
 
 /// One item of a `token_test` result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TestResult {
-    /// The item as the Settings board names it, such as `Checks`.
-    pub item: String,
+    pub item: Lenient<TestItem>,
+    /// The left column: `Account`, `Scopes`, `Notifications`,
+    /// `Team membership`, or the owner's name.
+    pub label: String,
+    /// The owner id of an `owner` item.
+    pub owner: Option<String>,
     pub outcome: Lenient<TestOutcome>,
-    /// The missing permission when `outcome` is `failed`.
-    pub missing: Option<String>,
-    /// Why, in a few words, when the outcome is not `ok`.
-    pub reason: Option<String>,
+    /// The right column without the mark: `OK`, `Missing (read:org)`,
+    /// `Belongs to octocat`, the account login, ...
+    pub text: String,
+    /// The SSO authorization URL of `sso_required`, when GitHub gave one.
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -474,43 +649,67 @@ pub struct LastTest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ApiUsage {
-    pub rest_remaining: Option<i64>,
-    pub rest_limit: Option<i64>,
-    pub graphql_remaining: Option<i64>,
-    pub graphql_limit: Option<i64>,
-    pub cost_per_poll: Option<i64>,
-    pub notifications_poll_interval: Option<i64>,
+pub struct TokenInfo {
+    pub registered: bool,
+    pub expires_at: Option<i64>,
+    pub last_test: Option<LastTest>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TokenStatus {
-    /// `notifications`, `public` or an owner login.
-    pub target: String,
-    pub registered: bool,
-    pub owner: Option<String>,
-    pub expires_at: Option<i64>,
-    /// The scopes of the classic PAT; `null` for a fine-grained PAT.
-    pub scopes: Option<Vec<String>>,
-    pub last_test: Option<LastTest>,
-    pub sso_urls: Vec<String>,
-    /// The warnings about this token itself: `token_invalid`,
-    /// `token_expiring`, `sso_required` and, for a scope's token,
-    /// `token_owner_mismatch`. Empty for a token not registered.
-    #[serde(default)]
-    pub warnings: Vec<Warning>,
+pub struct Limit {
+    pub used: i64,
+    pub limit: i64,
+    pub reset_at: Option<i64>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RateLimit {
+    pub graphql: Option<Limit>,
+    pub rest: Option<Limit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Owner {
+    pub id: String,
+    pub name: String,
+    pub kind: Lenient<OwnerKind>,
+    pub github_id: Option<i64>,
+    pub enabled: bool,
+    pub notify: bool,
+    pub skip_drafts: bool,
+    pub todo_count: u32,
+    pub pr_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Account {
+    pub id: String,
+    pub login: String,
+    pub color: Lenient<AccountColor>,
+    pub token: TokenInfo,
+    pub updated_at: Option<i64>,
+    pub todo_count: u32,
+    /// The blue dot of the menu bar icon.
+    pub unread: bool,
+    pub warnings: Vec<Warning>,
+    pub rate_limit: Option<RateLimit>,
+    pub owners: Vec<Owner>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Card {
+    /// Unique across accounts.
     pub id: String,
     pub pr: String,
-    pub scope: String,
+    pub account: String,
+    pub owner: String,
     pub title: String,
     pub url: String,
     pub author: String,
-    /// `author.avatarUrl`; `null` when the author is unknown.
     pub author_avatar_url: Option<String>,
-    pub mine: bool,
+    pub authored_by_me: bool,
+    pub assigned_to_me: bool,
+    pub review_requested: bool,
     pub state_label: Lenient<StateLabel>,
     pub review: Lenient<Review>,
     pub checks: Lenient<Checks>,
@@ -526,18 +725,22 @@ pub struct Card {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Row {
+    /// Unique across accounts.
     pub id: String,
     pub pr: String,
     pub pr_title: String,
+    pub account: String,
+    pub owner: String,
     pub kind: Lenient<RowKind>,
-    pub class: Lenient<RowClass>,
+    /// A Todo row now: it has the checkbox.
+    pub todo: bool,
+    pub done: bool,
     pub text: Option<String>,
     pub counts: Option<BTreeMap<String, u32>>,
     pub actor: Option<String>,
     pub url: String,
     pub occurred_at: i64,
     pub unread: bool,
-    pub done: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -545,7 +748,8 @@ pub struct Notification {
     pub id: String,
     #[serde(rename = "type")]
     pub kind: Lenient<NotificationType>,
-    pub scope: String,
+    pub account: String,
+    pub owner: String,
     pub rows: Vec<String>,
     pub pr: Option<String>,
     pub url: Option<String>,
@@ -554,22 +758,46 @@ pub struct Notification {
     pub body: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventCell {
+    pub list: bool,
+    pub todo: bool,
+    pub notify: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Exclusion {
+    pub name: String,
+    pub state: Lenient<ExclusionState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Exclusions {
+    pub repos: Vec<Exclusion>,
+    pub users: Vec<Exclusion>,
+}
+
 /// An event on a `subscribe` connection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum SubscribeEvent {
     Snapshot {
-        scopes: Vec<Scope>,
+        accounts: Vec<Account>,
+        keychain: Lenient<KeychainState>,
         db_unreadable: bool,
     },
-    ScopeChanged {
-        scope: Scope,
+    AccountChanged {
+        account: Account,
+    },
+    AccountRemoved {
+        id: String,
+    },
+    KeychainChanged {
+        keychain: Lenient<KeychainState>,
     },
     Notify {
         notification: Notification,
     },
-    /// A setting changed through `config_set`, by any client. `value` is
-    /// what `config_get` now answers.
     ConfigChanged {
         key: String,
         value: serde_json::Value,
@@ -627,18 +855,37 @@ pub struct ConfigResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ScopesResponse {
+pub struct AccountsResponse {
     pub ok: bool,
-    pub scopes: Vec<Scope>,
+    pub accounts: Vec<Account>,
 }
 
-/// `scope_lookup`: the owner's login as GitHub spells it and its type,
-/// `org` or `user`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ScopeLookupResponse {
+pub struct AccountResponse {
+    pub ok: bool,
+    pub account: Account,
+}
+
+/// `owner_lookup`: the owner's login as GitHub spells it, `org` or `user`,
+/// and the numeric id of `GET /users/{owner}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OwnerLookupResponse {
     pub ok: bool,
     pub owner: String,
-    pub kind: Lenient<ScopeKind>,
+    pub kind: Lenient<OwnerKind>,
+    pub id: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventsResponse {
+    pub ok: bool,
+    pub events: BTreeMap<String, EventCell>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExclusionsResponse {
+    pub ok: bool,
+    pub exclusions: Exclusions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -658,17 +905,6 @@ pub struct RefreshResponse {
 pub struct TokenTestResponse {
     pub ok: bool,
     pub results: Vec<TestResult>,
-    /// The login the tested token belongs to, when it could be read.
-    pub owner: Option<String>,
-    /// The owner differs from the owner of the notifications token.
-    pub owner_mismatch: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SettingsStatusResponse {
-    pub ok: bool,
-    pub api_usage: ApiUsage,
-    pub tokens: Vec<TokenStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -712,58 +948,78 @@ mod tests {
         assert!(
             serde_json::from_str::<Request>(r#"{"cmd":"subscribe","client":"other"}"#).is_err()
         );
-        assert!(serde_json::from_str::<EventKind>("\"nope\"").is_err());
+        assert!(serde_json::from_str::<IngestKind>("\"bot_comment\"").is_err());
         assert!(
-            serde_json::from_str::<Request>(r#"{"cmd":"scope_color","scope":"a","color":"red"}"#)
-                .is_err()
+            serde_json::from_str::<Request>(
+                r#"{"cmd":"account_color","account":"a","color":"pink"}"#
+            )
+            .is_err()
         );
+        assert!(serde_json::from_str::<Request>(r#"{"cmd":"list","filter":"mine"}"#).is_err());
     }
 
     #[test]
     fn list_takes_its_filter_at_the_top_level() {
-        let request: Request =
-            serde_json::from_str(r#"{"cmd":"list","scope":"public","needs_action":true}"#).unwrap();
+        let request: Request = serde_json::from_str(
+            r#"{"cmd":"list","account":"me","owner":"public","todo":true,"filter":"review_requested"}"#,
+        )
+        .unwrap();
         assert_eq!(
             request,
             Request::List {
-                filter: Filter {
-                    scope: Some("public".into()),
-                    needs_action: true,
-                    ..Filter::default()
-                }
+                account: Some("me".into()),
+                owner: Some("public".into()),
+                todo: true,
+                filter: PrFilter::ReviewRequested,
+                snoozed: false,
             }
         );
     }
 
     #[test]
-    fn the_sample_ingest_in_the_brief_decodes() {
-        let ingest: Ingest = serde_json::from_str(
-            r#"{"viewer":"me","missing_pr_ids":[],
-            "prs":[{"id":"PR_1","owner":"example-org","repo":"app","number":1,"url":"https://github.example/1","title":"Fix","author":"me","base":"main","head":"fix","state":"open","is_draft":false,"review":"none","checks":"failed","base_status":"up_to_date","mergeable":false,"failed_check":"build","changes_requested_by":null,"updated_at":1800000000,"is_private":false,"requested_me":false,"links":{"review":"https://github.example/1/r","checks":"https://github.example/1/c","base":"https://github.example/1/b"}}],
-            "events":[{"id":"E_1","pr_id":"PR_1","kind":"comment","occurred_at":1800000000,"url":"https://github.example/1#c","actor":"alice","text":"Looks good","comment_id":"C_1"}],
-            "reactions":[{"comment_id":"C_2","pr_id":"PR_1","url":"https://github.example/1#d","text":"Done","comment_created_at":1800000000,"counts":{"THUMBS_UP":2},"watching":true}]}"#,
-        )
-        .unwrap();
-        assert_eq!(ingest.prs[0].checks, Checks::Failed);
-        assert_eq!(ingest.events[0].kind, EventKind::Comment);
-        assert_eq!(ingest.reactions[0].counts["THUMBS_UP"], 2);
-        assert_eq!(ingest.succeeded_scopes, None);
-        assert!(!ingest.prs[0].requested_team);
-        assert!(!ingest.events[0].team);
+    fn the_event_kinds_are_the_wire_values() {
+        let names: Vec<String> = EventKind::ALL
+            .iter()
+            .map(|k| Lenient::Known(*k).as_text())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "review_requested",
+                "team_review_requested",
+                "mentioned",
+                "team_mentioned",
+                "comment",
+                "reply",
+                "reply_mentioned",
+                "reaction",
+                "approved",
+                "changes_requested",
+                "checks_failed",
+                "conflicts",
+                "mergeable",
+                "merge_queue_added",
+                "merge_queue_removed",
+                "merged_closed"
+            ]
+        );
     }
 
     #[test]
     fn a_warning_has_the_shape_of_the_wire_format() {
         let warning = Warning {
             kind: Lenient::Known(WarningKind::RateLimited),
-            token: None,
-            message: "GraphQL cost cap reached".into(),
+            account: Some("2001".into()),
+            owner: None,
+            message: "Polling paused until 14:05 · GitHub's limit reached".into(),
             until: Some(1_800_000_000),
+            url: None,
         };
         assert_eq!(
             serde_json::to_value(&warning).unwrap(),
-            serde_json::json!({"kind":"rate_limited","token":null,
-                "message":"GraphQL cost cap reached","until":1800000000})
+            serde_json::json!({"kind":"rate_limited","account":"2001","owner":null,
+                "message":"Polling paused until 14:05 · GitHub's limit reached",
+                "until":1800000000,"url":null})
         );
     }
 }

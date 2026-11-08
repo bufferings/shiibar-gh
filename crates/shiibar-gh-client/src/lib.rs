@@ -185,7 +185,7 @@ mod tests {
             BufReader::new(stream.try_clone().unwrap())
                 .read_line(&mut request)
                 .unwrap();
-            let line = br#"{"event":"snapshot","scopes":[],"db_unreadable":true}
+            let line = br#"{"event":"snapshot","accounts":[],"keychain":"ok","db_unreadable":true}
 "#;
             let (head, tail) = line.split_at(10);
             stream.write_all(head).unwrap();
@@ -199,7 +199,8 @@ mod tests {
         assert_eq!(
             event,
             Some(SubscribeEvent::Snapshot {
-                scopes: vec![],
+                accounts: vec![],
+                keychain: Lenient::Known(shiibar_gh_proto::KeychainState::Ok),
                 db_unreadable: true
             })
         );

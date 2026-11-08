@@ -4,9 +4,11 @@ macOS menu bar app for the GitHub pull requests you are involved in: what
 needs your action and what happened, per owner and for public repositories.
 It only reads from GitHub. See `docs/DESIGN.md` and `CLAUDE.md`.
 
-**One GitHub account.** Version 0.1 supports a single GitHub account: every
-token you register must belong to the same account. Support for several
-accounts is planned.
+**Several GitHub accounts.** Each account has its own menu bar icon and one
+classic personal access token (scopes `repo`, `notifications`, `read:org`).
+Under an account you add owners (organizations or personal accounts) and,
+if you like, Public. Version 0.2 does not read the saved state or tokens of
+0.1: add your accounts again.
 
 ## Install / Uninstall
 
@@ -20,8 +22,8 @@ brew install --cask bufferings/tap/shiibar-gh
 This installs `Shiibar GH.app` to `/Applications` and links the
 `shiibar-gh` command into Homebrew's `bin`. Open Shiibar GH once (from
 Spotlight or `/Applications`): it asks for the notification permission and
-registers itself to launch at login. Then add your tokens in Settings ›
-Scopes.
+registers itself to launch at login. Then add an account in Settings ›
+Accounts.
 
 To uninstall:
 
@@ -29,8 +31,8 @@ To uninstall:
 brew uninstall --cask shiibar-gh
 ```
 
-The tokens stay in the Keychain (service `shiibar-gh`). Remove each scope
-with `shiibar-gh scope remove <scope>` before uninstalling, or delete them in
+The tokens stay in the Keychain (service `shiibar-gh`, account `accounts`).
+Run `shiibar-gh token reset` before uninstalling, or delete the item in
 Keychain Access. `brew uninstall --zap --cask shiibar-gh` also removes the
 saved state.
 
