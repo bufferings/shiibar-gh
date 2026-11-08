@@ -25,18 +25,18 @@ shiibar-gh は、自分が関わっている GitHub の PR について「自分
 
 ## 画面構成
 
-**メニューバー**。アカウントごとにアイコン 1 つ（幅固定。1 アカウントでも 1 つ）。絵柄は shiibar-gh のもので全アカウント同じで、アカウントの色（「アカウントの色」）で塗る。右上の青い点＝新しい出来事あり、右下の数字＝Todo の PR の数（「Todo の定義」）、三角＝注意（トークンの期限と無効、取得の失敗、上限による取得の停止、Keychain を読めない）。画像は絵柄を中央に配置し、点と数字を角に少しはみ出させる（大きさは実機で決める）。アカウントが 1 つもないときは、shiibar-gh のアイコンを 1 つだけ表示する。押すと「No accounts yet」「Add an account in Settings」と Settings ボタン、⌄ のメニューを表示する。
+**メニューバー**。アカウントごとにアイコン 1 つ（幅固定。1 アカウントでも 1 つ）。絵柄は shiibar-gh のもので全アカウント同じで、アカウントの色（「アカウントの色」）で塗る。右上の青い点＝新しい出来事あり、右下の数字＝Todo の PR の数（「Todo の定義」。100 以上は `99+`）、三角＝注意（トークンの期限と無効、取得の失敗、上限による取得の停止、Keychain を読めない）。画像は絵柄を中央に配置し、点と数字を角に少しはみ出させる（大きさは実機で決める）。アカウントが 1 つもないときは、shiibar-gh のアイコンを 1 つだけ表示する。押すと「No accounts yet」「Add an account in Settings」と Settings ボタン、⌄ のメニューを表示する。
 
 **ポップオーバー**。幅 460px。押したアカウントだけを表示する。上から：
 
-1. 見出し：アカウント名（前にアカウントの色の丸）、Updated … ago、Open in window、Refresh、Settings、⌄ のメニュー（About shiibar-gh、Settings…、Quit shiibar-gh）。警告があるときだけ黄色い帯（「警告の表示」）。ポップオーバーを開いている間と、常時表示ウインドウにフォーカスがある間は ⌘Q でも終了する。終了するとデーモンも止まる。
+1. 見出し：アカウント名（前にアカウントの色の丸）、Updated … ago（まだ取得が終わっていなければ `Not updated yet`）、Open in window、Refresh、Settings、⌄ のメニュー（About shiibar-gh、Settings…、Quit shiibar-gh）。警告があるときだけ黄色い帯（「警告の表示」）。ポップオーバーを開いている間と、常時表示ウインドウにフォーカスがある間は ⌘Q でも終了する。終了するとデーモンも止まる。
 2. タブ：**PRs**（owner ごとのセクションに PR のカード）と **Activity**（全 PR の行を新しい順に 1 本で）。並び替えはない。
 3. 絞り込み 1 行（macOS の標準のコントロール）：押し込み式のボタン **Todo**（オンで Todo の PR だけに絞る）と、セグメント **All｜Authored by me｜Assigned to me｜Review requested**（GitHub の Pull requests ダッシュボードの既定の絞り込みと同じ名前。shiibar-gh の All は GitHub の Involves me に相当する）。件数は表示しない。どちらも全セクションに適用し、アカウントごとに前回の選択を記憶する。オンの色は OS のアクセントカラーで、アプリ側で固定しない。Activity タブでは、この行の代わりに owner ごとの押し込み式のボタンを並べ、オンにした owner の行だけを表示する（複数を同時にオンにできる。すべてオフ＝すべて表示）。
 4. カードの列（PRs）または行の列（Activity）。
 5. API の使用量 1 行（「レート制限」）。
 6. キーのヒント 1 行（「キーボード」）。
 
-**PRs タブのセクション**。owner ごとに 1 つ。見出しは owner 名、Todo の PR の数（赤。0 なら表示しない）、PR の数。押すと折りたたむ（アカウントごとに記憶する）。並びは登録の順で、Public は常に最後。セクションの中はカードを追加が新しい順に並べ、位置は固定で出来事で動かさない。Todo のない PR は「+ 2 more PRs」の 1 行にまとめ、押すと展開する（展開の状態は記憶しない）。Snooze 中の PR は、最後の「Snoozed」セクション（見出しは `Snoozed · 2 PRs · until Mon 09:00`。初期状態は折りたたみ）にまとめ、owner のセクションには表示しない。
+**PRs タブのセクション**。owner ごとに 1 つ。見出しは owner 名、Todo の PR の数（赤。0 なら表示しない）、PR の数。どちらの数も絞り込みに依存せず、Snooze 中と Hidden のリポジトリの PR を除いて数える。押すと折りたたむ（アカウントごとに記憶する）。並びは登録の順で、Public は常に最後。セクションの中はカードを追加が新しい順に並べ、位置は固定で出来事で動かさない。Todo のない PR は「+ 2 more PRs」の 1 行（1 件なら「+ 1 more PR」）にまとめ、押すと展開する（展開の状態は記憶しない）。Snooze 中の PR は、最後の「Snoozed」セクション（見出しは `Snoozed · 2 PRs · until Mon 09:00`。初期状態は折りたたみ）にまとめ、owner のセクションには表示しない。Snoozed の件数は絞り込みに依存しない。Snoozed セクションではカードをまとめず（「+ N more PRs」はない）、すべて表示する。
 
 **通常のアプリへの切り替え**。常時表示のウインドウと設定画面のどちらかが存在する間だけ、アプリは通常のアプリとして動作する。Dock と ⌘Tab にアプリが表示され、画面上端にアプリのメニューを表示する。両方が閉じると常駐の状態に戻り、どちらも表示しない。メニューはアプリのメニューと Edit の 2 つである。アプリのメニューは About shiibar-gh、Settings…（⌘,）、Close Window（⌘W。閉じるウインドウがなければ無効）、Quit shiibar-gh（⌘Q）で構成し、Quit は ⌄ のメニューの Quit と同じくデーモンも止める。Edit は Undo、Redo、Cut、Copy、Paste、Select All である。Dock のアイコンを押すか ⌘Tab で切り替えると、開いているウインドウを前面に表示する。shiibar-cc の DESIGN.md の同じ規則にならう（shiibar-cc は設定画面を対象に含めない）。
 
@@ -68,7 +68,7 @@ Mergeable は mergeStateStatus が CLEAN のときだけで、自前で計算し
 
 **Open in window**。見出しのボタンで、同じ内容を常に手前の小さなウインドウ（NSPanel）にする。アカウントごとに 1 つ、位置と大きさを記憶。
 
-**アカウントの色**。選択肢は None、Red、Orange、Yellow、Green、Blue、Purple（Finder のタグと同じ並び）。塗る先はメニューバーのアイコンと、アカウント名の前の丸（ポップオーバーの見出し、設定画面の一覧）だけである。None はアイコンに色を付けず、ほかのメニューバーのアイコンと同じ色（ライトでは黒、ダークでは白）にし、丸は文字と同じ色にする。値は macOS のシステムカラー（systemRed など）を使用し、ライトとダークで自動的に切り替わるものにする（最終の見え方は所有者が実機で確認する）。初期値は、1 つ目のアカウントが None、2 つ目からは Red → Orange → Yellow → Green → Blue → Purple の順で未使用の色を割り当て、すべて使用済みなら Red から再び巡回する（重複を許す）。削除して再び追加したアカウントは新規として扱う。ポップオーバーの背景は全アカウント同じで、owner と Public に色はない。
+**アカウントの色**。選択肢は None、Red、Orange、Yellow、Green、Blue、Purple（Finder のタグと同じ並び）。塗る先はメニューバーのアイコンと、アカウント名の前の丸（ポップオーバーの見出し、設定画面の一覧）だけである。None はアイコンに色を付けず、ほかのメニューバーのアイコンと同じ色（ライトでは黒、ダークでは白）にし、丸は文字と同じ色にする。値は macOS のシステムカラー（systemRed など）を使用し、ライトとダークで自動的に切り替わるものにする（最終の見え方は所有者が実機で確認する）。初期値は、アカウントが 0 件のときに追加したアカウントが None、2 つ目からは Red → Orange → Yellow → Green → Blue → Purple の順で未使用の色を割り当て、すべて使用済みなら Red から再び巡回する（重複を許す）。削除して再び追加したアカウントは新規として扱う。ポップオーバーの背景は全アカウント同じで、owner と Public に色はない。
 
 ## 行の種類と状態
 
@@ -82,7 +82,7 @@ Mergeable は mergeStateStatus が CLEAN のときだけで、自前で計算し
 | My team mentioned | ✓✓✓ | 自分が属するチームがメンションされた |
 | Comment on my PR | ✓✓✓ | 自分の PR に他の人がコメントした |
 | Reply in a thread I commented in | ✓✓✓ | 自分がコメントしたスレッドに返信があった |
-| Reply in a thread I was mentioned in | ✓✓✓ | 自分がメンションされたスレッドに、そのメンションより後の返信があった |
+| Reply in a thread I was mentioned in | ✓✓✓ | 自分または自分のチームがメンションされたスレッドに、そのメンションより後の返信があった |
 | Reaction to my comment | ✓–✓ | 自分のコメントに Reaction が付いた |
 | Approved | ✓–✓ | 自分の PR が承認された（承認のレビュー 1 件につき 1 行） |
 | Changes requested | ✓–✓ | 自分の PR が Changes requested になった |
@@ -95,9 +95,9 @@ Mergeable は mergeStateStatus が CLEAN のときだけで、自前で計算し
 
 表の見出しは Reviews and mentions（上 4 行）、Comments（次の 4 行）、My pull requests（次の 5 行）、Any pull request（残り）である。
 
-**表の適用**。List は一覧に表示するか、Todo は Todo の行にするか、Notify は macOS の通知をするかを決める。List をオフにすると Todo と Notify もオフになる。Todo と Notify は行を生成する時点の表の値で決め、行に保存する。あとから表を変更しても既存の行は変更しない（既存の行を Todo から除外するには、その行で D または T を押す）。List は表示の絞り込みなので、変更はすぐ反映する。List がオフの間も行は記録し、未読、Todo の数、通知の対象にしない。List をオンに戻すと、オフの間に記録した行を既読、Todo なしの行として表示し、さかのぼって通知しない。例外は Review requested と Review requested to my team の行で、「今もやることか」は今の表に従う（「Review requested の行」）。
+**表の適用**。List は一覧に表示するか、Todo は Todo の行にするか、Notify は macOS の通知をするかを決める。List をオフにすると Todo と Notify もオフになる。List がオフの種類の Todo または Notify をオンにする要求は `invalid` で拒否する。List を再びオンにしても、Todo と Notify はオフのままである。Todo と Notify は行を生成する時点の表の値で決め、行に保存する。あとから表を変更しても既存の行は変更しない（既存の行を Todo から除外するには、その行で D または T を押す）。List は表示の絞り込みなので、変更はすぐ反映する。List がオフの間も行は記録し（未読なし、Todo なし、通知なしで保存する）、未読、Todo の数、通知の対象にしない。List をオンに戻すと、オフの間に記録した行を既読、Todo なしの行として表示し、さかのぼって通知しない。例外は Review requested と Review requested to my team の行で、「今もやることか」は今の表に従う（「Review requested の行」）。
 
-**Todo の行**。Todo の行は先頭に四角のチェックボックスとオレンジの背景を持ち、Done まで残る。チェックボックスで Done（緑の塗り、行全体が薄くなる）、もう一度押すと Not done。表で Todo にならない行も、T で手で Todo に追加できる（「キーボード」）。手で追加した Todo は、表で Todo になった行と同じ扱いである。Todo でない行は種類のアイコンを持ち、既読になると薄く表示する。
+**Todo の行**。Todo の行は先頭に四角のチェックボックスとオレンジの背景を持ち、Done まで残る。チェックボックスで Done（緑の塗り、行全体が薄くなる）、もう一度押すと Not done。未完了の Todo の行は、既読になっても薄くしない。表で Todo にならない行も、T で手で Todo に追加できる（「キーボード」）。手で追加した Todo は、表で Todo になった行と同じ扱いである。Todo でない行は種類のアイコンを持ち、既読になると薄く表示する。
 
 **Comment と Reply の対象**。Comment on my PR の行は、自分の PR に他の人が投稿した会話のコメント、レビューの本文、インラインコメントから、1 コメントにつき 1 行を生成する。Approve のレビューの本文も含める。本文付きで変更を求めるレビューは、Changes requested の行と Comment の行の両方を残す。本文付きの承認も同じく、Approved の行と Comment の行の両方を残す。他の人の PR の会話のコメントは行にしない。Reply の 2 種類の行は、自分がコメントしたスレッドへの返信と、スレッドで自分がメンションされたあとの返信から生成し、どの PR でも対象にする。ここでのスレッドは、コードの行に付くレビューのスレッドを指す。Comment と Reply の両方に該当するコメント（自分の PR の、自分がコメントしたスレッドへの返信）は、Reply の行だけを生成する。Mentioned と Reply の両方に該当するコメントは、Mentioned の行だけを生成する。Bot の投稿を特別扱いしない。Bot は利用者と同じく、投稿の内容で行の種類を決める。Bot を一覧や通知から除くには、owner の Exclusions の Users に加える（「Exclusions」）。
 
@@ -112,7 +112,7 @@ Mergeable は mergeStateStatus が CLEAN のときだけで、自前で計算し
 
 状況アイコンは「今の状態」、行は「起きたことの記録」。Checks が落ちて直ればアイコンは Passed に戻り、Checks failed の行は残る。再び落ちれば新しい行を生成する。
 
-**Review requested の行**。今もやることかは、その PR の Review requested（または Review requested to my team）の行のうち最新の行であり、PR が開いていて、今も自分または自分のチームにレビューが依頼されているかで判断する。チーム宛ての依頼は、その owner の Review requested to my team の Todo がオンのときだけ数える（List は行を記録するか、Todo はやることにするかを決める列なので、検索の切り替えは List、やることの判定は Todo に従う）。Done の値は変更しない。条件から外れた行は Todo の数に数えず、オレンジとチェックボックスを表示せず、既読の行と同じ薄い表示にして整理の対象にする。未読の行は青い点を残し、通常の規則で既読にする。PR が再び開かれると、整理済みの行も含めてやることに戻す。再び依頼された場合は新しい行を生成する。
+**Review requested の行**。今もやることかは、その PR の Review requested（または Review requested to my team）の行のうち最新の行であり、PR が開いていて、今も自分または自分のチームにレビューが依頼されているかで判断する。チーム宛ての依頼は、その owner の Review requested to my team の Todo がオンのときだけ数える（List は行を記録するか、Todo はやることにするかを決める列なので、検索の切り替えは List、やることの判定は Todo に従う）。Done の値は変更しない。条件から外れた行は Todo の数に数えず、オレンジとチェックボックスを表示せず、既読の行と同じ薄い表示にして整理の対象にする（アプリは、Review requested と Review requested to my team の行のうち Todo でない行をすべて薄く表示する。T で Todo から除いた行も同じ表示になる）。未読の行は青い点を残し、通常の規則で既読にする。PR が再び開かれると、整理済みの行も含めてやることに戻す。再び依頼された場合は新しい行を生成する。
 
 **チーム宛ての依頼とメンション**。チームの所属はアカウントのトークンで取得する（「API の使い分け」）。Review requested to my team の List がオフの owner では、チーム宛ての依頼を行にせず（記録はする）、その owner の検索に `user-review-requested:@me` を使用する。ほかの検索で見つかった PR のチーム宛ての依頼は、記録だけにする。
 
@@ -130,18 +130,18 @@ Mergeable は mergeStateStatus が CLEAN のときだけで、自前で計算し
 
 owner ごとに、Repositories と Users の 2 つの一覧を持つ。1 行＝名前と、Hidden｜List only のどちらかの状態である。
 
-- **Hidden**：一覧に表示しない。リポジトリなら、そのリポジトリの PR のカードと行を表示せず、未読、Todo の数、通知の対象にしない。利用者なら、その利用者が起こした出来事（コメント、レビュー、Reaction、レビューの依頼、メンション、マージキューの操作、マージとクローズ）の行を表示せず、同じく対象にしない。どちらも内部には記録し、状態を List only にするか一覧から削除すると、記録した行を既読、Todo なしの行として表示する。
+- **Hidden**：一覧に表示しない。リポジトリなら、そのリポジトリの PR のカードと行を表示せず、未読、Todo の数、通知の対象にしない。利用者なら、その利用者が起こした出来事（コメント、レビュー、レビューの依頼、メンション、マージキューの操作、マージとクローズ）の行を表示せず、同じく対象にしない。どちらも内部には記録し、状態を List only にするか一覧から削除すると、Hidden の間に記録した行を既読、Todo なしの行として表示する。Hidden にする前からあった行は元の状態で表示する。一覧から削除したときは、Review requested の行は「Review requested の行」の規則に従い、今も依頼が続いていれば Todo になる（List only の間は Todo にしない）。
 - **List only**：一覧には表示するが、表の値に関係なく Todo にも通知にもしない（手で T を押せば Todo に追加できる）。
 - 追加した直後は List only。「通知だけ除く」「Todo だけ除く」はリポジトリ／利用者の単位では持たない。
-- 状態変化の行（Checks failed など）は利用者の Exclusions の対象にしない。Approved の行は承認した人が対象である。
-- 名前は GitHub に問い合わせずに保存し、大文字と小文字を区別せずに比較する。リポジトリは `owner/repo` の形で指定する。Bot は利用者として扱い、Users に加える。
+- 状態変化の行（Checks failed など）と Reaction の行（件数だけを検知し、誰が付けたかを取得しない）は利用者の Exclusions の対象にしない。Approved の行は承認した人が対象である。
+- 名前は GitHub に問い合わせずに保存し、大文字と小文字を区別せずに比較する。リポジトリは `owner/repo` の形で指定する。Bot は利用者として扱い、Users に加える。Bot のログイン名は GraphQL の `Bot.login` の表記（`renovate`。`[bot]` の接尾辞なし）で比較する（公開スキーマと実データで確認、2026-11-09）。
 
 ## Snooze
 
 Snooze は PR 単位。「この PR は翌朝まで確認しない」をアプリに伝える唯一の入力で、Done（列から除く）とも放置（今やることとして数え続ける）とも違う。目的はメニューバーの数字が「今やることがある」を意味し続けること。
 
 - カードの 3 行目右端の時計、または見出しを選んで S を押すと Snooze。毎朝、戻り時刻（設定、既定 09:00）にすべての Snooze を解除する。
-- Snooze 中は owner のセクションからも Activity からも消え、Todo の数に数えず、通知も鳴らさない。Snoozed セクションにまとめて表示し、見出しに `until Mon 09:00` を表示する。セクションの中でも行の T と D は使用できる。
+- Snooze 中は owner のセクションからも Activity からも消え、Todo の数に数えず、通知も鳴らさない。Snoozed セクションにまとめて表示し、見出しに `until Mon 09:00` を表示する（絞り込みで Snoozed のカードが 0 件でも、Snooze 中の PR があれば `until` を表示する）。Snoozed セクションのカードは通常のカードと同じ見た目で、3 行目の右端の時計が Unsnooze の操作になる。カードに `Snoozed until` の文や Unsnooze のボタンは配置しない。セクションの中でも行の T と D は使用できる。
 - 戻るのは戻り時刻と Unsnooze の 2 つだけ。Snooze 中に新しい Todo が来ても戻さない（その間に来たものも「確認しない」の対象。戻ったカードに青い点とオレンジが付いているので失うものはなく、遅れるだけ）。「来たら知りたい」なら Snooze しない。
 - 解除された PR は元の位置に戻る。
 - Snooze 中に通知対象の出来事があった PR を、解除時に owner ごとに 1 件の通知にまとめる。押すとポップオーバーを開く。通知対象の出来事がなければ通知しない。手動の Unsnooze（CLI を含む）では通知せず、まとめ通知の対象の記録を消去する。Snooze より前に起きて渡せなかった通知の記録も同じく消去する。
@@ -165,7 +165,7 @@ Snooze は PR 単位。「この PR は翌朝まで確認しない」をアプ�
 通知するのは、owner の出来事の表で Notify がオンの種類の行である（既定は「行の種類と状態」の表のとおり。Added to merge queue と Merged / Closed の Notify の既定値はオフ）。Reaction は、1 回の取得で検知した同じコメントの分を 1 件にまとめる。通知の要否は行の生成時に表の値で決める（「表の適用」）。owner の `Notify for <owner>` がオフならその owner のすべての行を通知しない。`Skip draft pull requests` がオンの owner では、Draft の PR の出来事を行にはするが通知しない。Exclusions の Hidden と List only の対象は通知しない。
 
 - オン・オフは owner 単位（`Notify for <owner>`）。種類ごとのオン・オフは表の Notify の列である。
-- 個別の通知の文面は、タイトルが「アカウント名 · 行の種類」（`bufferings-work · Mentioned`）、サブタイトルが `owner/repo #番号` と PR のタイトル、本文が行の本文である。Reaction の本文は種類ごとの件数とコメント（`👍3 🎉1 “...”`）とする。
+- 個別の通知の文面は、タイトルが「アカウント名 · 行の種類」（`bufferings-work · Mentioned`。種類は表の名前で、Merged / Closed の行は `Merged` と `Closed` に区別する）、サブタイトルが `owner/repo #番号` と PR のタイトル、本文が行の本文である。Reaction の本文は種類ごとの件数とコメント（`👍3 🎉1 “...”`）とする。
 - 通知は owner ごとにまとめる。1 回の配信で、owner の個別の通知になるはずのものが 2 件以上なら 1 件のまとめ通知にし、1 件なら個別の通知にする。同じコメントの Reaction をまとめた通知は 1 件と数える。通常の取得、アプリの停止のあと、再接続のすべてに適用し、owner をまたいでまとめない。Snooze の解除は、件数に関係なく `Back from Snooze` の 1 件とする。
 - まとめ通知の文面は、Snooze の解除以外がタイトル `bufferings-work · 5 new events` とサブタイトル `example-org · in 3 PRs`、Snooze の解除がタイトル `bufferings-work · Back from Snooze` とサブタイトル `example-org · 3 PRs had new events` である。N は行の数で、件数が 1 のときは `1 new event`、`in 1 PR`、`1 PR had new events` と単数形にする。
 - アプリは、デーモンから受け取った通知を保持せずにすぐ表示し、macOS の既定の通知音を鳴らす。まとめ通知を押すとそのアカウントのポップオーバーを開く。
@@ -183,6 +183,7 @@ Snooze は PR 単位。「この PR は翌朝まで確認しない」をアプ�
 | カードの見出し | `↑↓ Move  ⏎ Open  S Snooze`（Snoozed セクションでは `S Unsnooze`） |
 | Todo でない行 | `↑↓ Move  ⏎ Open  T Add to Todo` |
 | Todo の行（未完了） | `↑↓ Move  ⏎ Open  D Done  T Remove from Todo` |
+| 何も選択していない | `↑↓ Move` |
 | Done の行 | `↑↓ Move  ⏎ Open  D Not done` |
 | セクションの見出し | `↑↓ Move  ⏎ Collapse`（折りたたみ中は `⏎ Expand`） |
 | `+ N more PRs` | `↑↓ Move  ⏎ Expand` |
@@ -201,6 +202,8 @@ Snooze は PR 単位。「この PR は翌朝まで確認しない」をアプ�
 | Accounts | アカウントと owner の一覧と、選んだものの設定（「設定画面 › Accounts」） | — |
 | Watching | Days to keep watching after close | 3 |
 | Watching | Days without updates before a PR is dropped | 14 |
+
+General と Watching の各行の 1 行の説明は次のとおりである。Launch at login は "Runs in the menu bar after you log in to your Mac"（登録に失敗したときは "Allow shiibar-gh in System Settings › General › Login Items"）、Appearance は "System follows the appearance setting of your Mac"、PR status interval と Reactions interval は "Shorter means you notice sooner, but uses more API quota"、Return time は "All snoozed PRs come back every day at this time"、Days to keep watching after close は "Reactions are watched this long after a card leaves the list"、Days without updates before a PR is dropped は "Other people's open PRs leave the list after this many quiet days"。数値の欄に整数以外を入力したときは "Enter a whole number" を表示する。
 
 値の範囲：PR status interval と Reactions interval は 1 分以上、Days to keep watching after close は 0 以上、Days without updates before a PR is dropped は 1 以上、Return time は `HH:MM`。
 
@@ -222,18 +225,18 @@ owner を選んだとき：Owner／Notifications／Exclusions の 3 つのタブ
 | --- | --- | --- |
 | Owner | Owner | `Enabled`（スイッチ。説明 "Off hides this owner's section and stops fetching."） |
 | Owner | Remove | `Remove this owner`（説明 "Deletes this owner from shiibar-gh: its PRs, Done marks, snoozes and settings. Nothing changes on GitHub."。`Remove…`） |
-| Notifications | Notifications | `Notify for example-org`（スイッチ。"Off keeps the table below but sends no notifications for this owner."）、`Skip draft pull requests`（スイッチ。"Events on draft PRs stay in the list but never notify."） |
+| Notifications | Notifications | `Notify for example-org`（スイッチ。"Off keeps the table below but sends no notifications for this owner."）、`Skip draft pull requests`（スイッチ。"Events on draft PRs stay in the list but never notify."）。既定値はどちらもオン |
 | Notifications | Events | 出来事の表（List／Todo／Notify のチェックボックス）と、最後の行 `Copy table from another owner`（説明 "Replaces the table above with that owner's."）`Copy…` |
 | Exclusions | Repositories | 説明 "Hidden: not in the list. List only: in the list, but no Todo and no notifications."、枠付きの一覧（名前と Hidden｜List only のセグメント）、下に ＋ − |
 | Exclusions | Users | 説明 "Same for a user. Bots are users too."、同じ形の一覧 |
 
 Copy… のシート（題は `Copy table to example-org`）は、`Copy from` のポップアップで相手の owner を選ぶと、その owner の表を読み取り専用で表示し、Copy ボタンでその場で反映する。写すのは表だけで、スイッチと Exclusions は写さない。差分は表示しない。
 
-**owner**。PR のリポジトリの owner がそのアカウントに登録済みなら、PR はその owner に属する。未登録の owner の公開リポジトリの PR は、そのアカウントの Public に属する。owner の表示名は owner のログイン名で、種類（Organization／Personal account）は追加時の問い合わせで決まる。owner を disabled にすると、セクションを表示せず、取得も通知もしない。Public がないときは、未登録の owner の PR を表示せず、取得もしない。owner とアカウントの削除は、その PR、行、Done、Snooze、設定をすべて削除する（再び追加しても戻らない）。アカウントの削除はトークンも Keychain から削除する。owner の追加と削除は Keychain に触れない。
+**owner**。PR のリポジトリの owner がそのアカウントに登録済みなら、PR はその owner に属する。未登録の owner の公開リポジトリの PR は、そのアカウントの Public に属する。owner の表示名は owner のログイン名で、種類（Organization／Personal account）は追加時の問い合わせで決まる。owner を disabled にすると、セクションを表示せず、取得も通知もしない。Public がないときは、未登録の owner の PR を表示せず、取得もしない。owner とアカウントの削除は、その PR、行、Done、Snooze、設定をすべて削除する（再び追加しても戻らない）。アカウントの削除はトークンも Keychain から削除する。owner の追加と削除は Keychain の項目を変更しない。
 
-**Add owner… のシート**。owner のログイン名の欄と `Add`、`Add Public instead`（押すとその場で Public を追加して閉じる）。Add で `owner lookup`（アカウントのトークンで `GET /users/{owner}` を引く）を実行し、見つかれば種類と数値の `id` を保存して閉じる。見つからなければ `Owner not found`、GitHub に接続できなければ `Couldn't reach GitHub` を欄の下に表示して閉じない。トークンの画面は続かない。
+**Add owner… のシート**。owner のログイン名の欄と `Add`、`Add Public instead`（押すとその場で Public を追加して閉じる。Public がすでにあれば押せない）。Add で `owner lookup`（アカウントのトークンで `GET /users/{owner}` を引く）を実行し、見つかれば種類と数値の `id` を保存して閉じる。見つからなければ `Owner not found`、GitHub に接続できなければ `Couldn't reach GitHub` を欄の下に表示して閉じない。トークンの画面は続かない。
 
-**Add account… と Edit… のシート**。同じ作りで、題は `Add account` と `Token for bufferings-work`。1. Create a token on GitHub（`Create token…` のボタンと、SSO の注記 "If an organization enforces SAML SSO, authorize the token for it after creating it (Configure SSO on the token page)."）。2. Paste the token and test it（貼り付ける欄と `Test`。欄の表示は常に点で、Edit… では保存済みを示す固定 12 個の • を表示する。アプリはトークン本体も文字数も知らない）。`Test` は保存せずに検証し、結果を一覧に表示する（「トークンの登録とテスト」）。OK でない項目があるときだけ、Save の行の左に `You can save now and test again later.` を表示する。Save は持ち主を確かめてから保存して閉じる（「トークン」）。Account の項目が ✗ のときは Save できない。Edit… では貼り替えたときだけ Save できる。途中でやめた場合、アカウントは作成しない。Save のあと、デーモンは保存したトークンで `token test` と同じ検証を行って `last_test` を更新し、その間は Token の行に `Checking…` を表示する。問題があれば状態の列に理由を表示する（「トークンの状態」）。
+**Add account… と Edit… のシート**。同じ作りで、題は `Add account` と `Token for bufferings-work`。1. Create a token on GitHub（`Create token…` のボタンと、SSO の注記 "If an organization enforces SAML SSO, authorize the token for it after creating it (Configure SSO on the token page)."）。2. Paste the token and test it（貼り付ける欄と `Test`。欄の表示は常に点で、Edit… では保存済みを示す固定 12 個の • を表示する。アプリはトークン本体も文字数も知らない）。`Test` は保存せずに検証し、結果を一覧に表示する（「トークンの登録とテスト」）。OK でない項目があるときだけ、Save の行の左に `You can save now and test again later.` を表示する。Save は持ち主を確かめてから保存して閉じる（「トークン」）。Account の項目が ✗ のときは Save できない。Edit… では貼り替えたときだけ Save できる。途中でやめた場合、アカウントは作成しない。Save のあと、デーモンは保存したトークンで `token test` と同じ検証を行って `last_test` を更新し、その間は Token の行に `Checking…` を表示する（進行中を示す項目はワイヤに持たず、アプリは Save の応答から `last_test` が更新された `account_changed` までを進行中として扱い、300 秒を過ぎても更新がなければ進行中の表示をやめる）。問題があれば状態の列に理由を表示する（「トークンの状態」）。
 
 **設定画面の規則**
 
@@ -241,10 +244,10 @@ Copy… のシート（題は `Copy table to example-org`）は、`Copy from` �
 2. コントロールは 5 種類：スイッチ、セグメント（2〜3 択で 1 行に収まるとき）、ポップアップ（4 択以上、または選択肢が長いとき）、ボタン（押すものはすべてボタン。シート、ダイアログ、別のウインドウ、別のアプリが続くときは末尾に …）、状態の文字（問題と進行中だけ。正常なときは表示しない）。青い文字のリンクは使用しない。チェックボックスは表の中だけ。Test の結果はシートの中に表示する。
 3. 行を押して先へ進むものは右端に ›。
 4. 名前を打ち込むだけの一覧（Exclusions の Repositories、Users）は枠付きの一覧に ＋ −。自分の画面を持つもの（アカウント、owner）は一覧の末尾に `Add account…`／`Add owner…`。チップは使用しない。
-5. Remove は末尾の独立した見出し。赤くしない。押すと確認を表示し、説明に「何が消えて、何が残り、GitHub 側は変更されない」を記述する。
+5. Remove は末尾の独立した見出し。赤くしない。押すと確認を表示し、説明に「何が消えて、何が残り、GitHub 側は変更されない」を記述する。確認の題は `Remove <名前>?`、ボタンは `Remove` と `Cancel` である。
 6. すべての枠に見出しを付ける。タブは場所、見出しは枠の内容。
 7. owner の設定は 3 タブ、アカウントの設定はタブにしない。トークンの行は 1 行で、右のボタンは Edit… の 1 つ。
-8. 押した直後に進行中の表示（状態の列に `Checking…`、ボタンは押せない）にし、結果が出たら置き換える。アプリは CLI を起動せず、デーモンに直接要求を送る。
+8. 押した直後に進行中の表示（状態の列に `Checking…`、ボタンは押せない）にし、結果が出たら置き換える。シートのボタンは押している間、`Test` は `Checking…`、`Save` は `Saving…`、`Add` は `Adding…` の表示になり、押せない。アプリは CLI を起動せず、デーモンに直接要求を送る。
 
 ## 実装方針
 
@@ -262,22 +265,22 @@ Copy… のシート（題は `Copy table to example-org`）は、`Copy from` �
 
 **トークン**。アカウントごとに classic PAT 1 つ。スコープは `repo`、`notifications`、`read:org`。通知、PR の検索と詳細、チェック、チームの所属、Public の取得をすべてこのトークンで行う。owner と Public はトークンを持たない。アプリは GitHub に書き込まないので、`repo` が書き込みを許すことは受け入れる。classic にそろえる理由は、通知 API が classic PAT でしか使用できないためである（fine-grained PAT の権限の一覧に通知のエンドポイントがない。docs.github.com の「Permissions required for fine-grained personal access tokens」で確認、2026-11-08）。
 
-- アカウントの識別子は GitHub のユーザー id（GraphQL の `viewer { id login }`）で、表示名は login である。GitHub 側で login を変更すると、次の取得で表示、Keychain の項目の login、CLI の `<account>` も新しい login に追従する。
-- 保存の手順。`token set`（トークンは標準入力）は、保存の前に `viewer { id }` で持ち主を確かめる。アカウントと同じ id なら保存する。違えば `Belongs to octocat`（octocat はそのトークンの login）を返して保存しない。GitHub に接続できなければ `Couldn't reach GitHub` を返して保存しない。`account add`（トークンは標準入力）は、`viewer` で id と login を取得してアカウントを作成し、保存する。接続できなければ何もしない。同じ id のアカウントがあれば `bufferings-work is already added` を返す。
+- アカウントの識別子は GitHub のユーザーの数値の id（GraphQL の `viewer { databaseId login }`。REST の `GET /user` の `id` と同じ値）で、表示名は login である。node id は形式の移行中で同じ人の id が変更されうるため（docs.github.com「Migrating GraphQL global node IDs」、2026-11-09 に確認）、識別子には使用しない。`databaseId` は公開スキーマで `Int`、非推奨の印なし（2026-11-09 に確認）。GitHub 側で login を変更すると、次の取得で表示、Keychain の項目の login、CLI の `<account>` も新しい login に追従する。
+- 保存の手順。`token set`（トークンは標準入力）は、保存の前に `viewer { databaseId }` で持ち主を確かめる。アカウントと同じ id なら保存する。違えば `Belongs to octocat`（octocat はそのトークンの login）を返して保存しない。GitHub に接続できなければ `Couldn't reach GitHub` を返して保存しない。`account add`（トークンは標準入力）は、`viewer` で id と login を取得してアカウントを作成し、保存する。接続できなければ何もしない。同じ id のアカウントがあれば `bufferings-work is already added` を返す。
 - 取得は保存済みのトークンをそのまま使用し、デーモンが持ち主を再確認することはない（classic PAT の持ち主は変更されない）。アカウントの付け替えはなく、Remove してから Add account… する。
 - トークンの期限の 7 日前からそのアカウントに警告を付ける。期限のないトークンは警告しない。期限を過ぎたトークンは、無効なトークン（401）として扱う。
 - トークンが 401 を返すか期限を過ぎると、そのアカウントのすべての取得を止めて警告する。トークンを差し替えると、次の定期取得で自動で再開する。
-- トークンのないアカウント（`token reset` のあと）は取得せず、`no_token` の警告を付ける。トークンを登録すると、次の定期取得で再開する。
+- トークンのないアカウント（`token reset` のあと）は取得せず、`no_token` の警告を付ける。トークンを登録すると、次の定期取得で再開する。このアカウントでの `public` 以外の `owner_add` と `owner_lookup` は `invalid`（`Account has no token`）で拒否する。認証なしで GitHub に問い合わせることはない。
 - 応答に `X-GitHub-SSO` が付いたら、SSO の承認が必要という警告を付ける。ヘッダーは organization の数値の id を返す（`X-GitHub-SSO: partial-results; organizations=21955855,20582480`。docs.github.com/en/rest/authentication/authenticating-to-the-rest-api で確認、2026-11-05）ので、そのアカウントの登録済み owner の数値の id（`owner lookup` で保存した値）と比較し、一致すれば `SSO authorization required for example-org` と名指しし、一致しなければ `SSO authorization required` とする。帯の `Authorize…` はヘッダーの URL（なければ GitHub のトークンの設定ページ）を開く。ほかの owner の取得は続くので三角は付けない。承認後は次の取得でヘッダーが消え、警告も消える。
 - Create token… は `https://github.com/settings/tokens/new?scopes=repo,notifications,read:org&description=shiibar-gh` をブラウザで開く。期限は指定せず、GitHub の既定に従う。
 
 **トークンの状態**。設定画面の Token の行の右には、次のうち最も上のものを 1 つ表示する：`Checking…`（進行中）、`Keychain unavailable`（「Keychain を読めないとき」。Edit… を表示しない）、`No token`（灰、`no_token`。Edit… は空の欄で開く）、`Invalid`（赤、`token_invalid`）、`Expires in N days`（黄、`token_expiring`。1 日未満は切り上げて `Expires in 1 day`）、`Missing scope`（黄、`scope_missing`）、`SSO authorization required`（黄、`sso_required`）。正常なときは何も表示しない。
 
-**Keychain を読めないとき**。デーモンは起動直後の最初の取得で Keychain を読み込み、成功したトークンを保持する。読み込めなければ、前回の内容を表示したまますべてのアカウントの取得を止め、自動では再読み込みしない。2 種類に区別する。OS のエラー（許可の拒否など）は `keychain_unavailable`、項目はあるが内容を読み取れないときは `tokens_unreadable` である。
+**Keychain を読めないとき**。デーモンは起動直後の最初の取得で Keychain を読み込み、成功したトークンを保持する。読み込むのは DB にアカウントが 1 件以上あるとき、または `reset` の直後だけで、アカウントのない DB で起動したときは Keychain に触れない。項目がなく DB にアカウントがあるときは、すべてのアカウントを `no_token` にし、`keychain` は `ok` とする。読み込めなければ、前回の内容を表示したまますべてのアカウントの取得を止め、自動では再読み込みしない。2 種類に区別する。OS のエラー（許可の拒否など）は `keychain_unavailable`、項目はあるが内容を読み取れないときは `tokens_unreadable` である。
 
-- アプリは起動直後にダイアログで知らせる。`keychain_unavailable` は題 `Couldn't read tokens from Keychain`、説明 "If macOS asked whether shiibar-gh may use the Keychain, allow it, then retry."、ボタン `Retry`（既定）と `Not now`。`tokens_unreadable` は題 `Saved tokens are unreadable`、説明 "Reset deletes the Keychain item. You enter every token again. PRs, Done marks, snoozes and settings stay."、ボタン `Reset tokens`（既定）と `Not now`。
+- アプリは起動直後にダイアログで知らせる。`keychain_unavailable` は題 `Couldn't read tokens from Keychain`、説明 "If macOS asked whether shiibar-gh may use the Keychain, allow it, then retry."、ボタン `Retry`（既定）と `Not now`。Retry と Reset が失敗したときは同じダイアログをもう一度表示する。`tokens_unreadable` は題 `Saved tokens are unreadable`、説明 "Reset deletes the Keychain item. You enter every token again. PRs, Done marks, snoozes and settings stay."、ボタン `Reset tokens`（既定）と `Not now`。
 - Not now で閉じると、すべてのアカウントのアイコンに三角、ポップオーバーと設定画面の Accounts の上端に帯（文面と `Retry…`／`Reset tokens…`）が残る。帯のボタンは同じダイアログを表示する。Retry して失敗したら同じダイアログをもう一度表示する。
-- 読めない間はトークンに触れる操作を止める。Token の行は Edit… を表示せず状態 `Keychain unavailable` だけ、`Add account…` とアカウントの `Remove…` は押せない。owner の追加、削除、Enabled は使用できる。
+- 読めない間はトークンに触れる操作を止める。Token の行は Edit… を表示せず状態 `Keychain unavailable` だけ、`Add account…`、アカウントの `Remove…`、Add owner… のシートの `Add`（GitHub への問い合わせにトークンが必要になる）は押せない。`Add Public instead`、owner の削除、Enabled は使用できる。
 - CLI では Retry は `refresh`、Reset は `token reset` である。`token reset` は Keychain の項目を削除し、すべてのアカウントをトークンなし（`no_token`）にする。アカウント、owner、PR、行、設定は残る。
 - DB を読めないときは従来どおり帯だけで、ダイアログは表示しない。
 
@@ -291,10 +294,10 @@ Copy… のシート（題は `Copy table to example-org`）は、`Copy from` �
 | 状況アイコン、状態ラベル、assignees | GraphQL：reviewDecision、statusCheckRollup、mergeable、mergeStateStatus、isDraft、compare.behindBy、assignees。nodes(ids:) でまとめて（100 件まで） |
 | 失敗したチェックの名前 | REST の GitHub Actions（head_sha で絞った workflow run と、その job）の job 名、次に Commit status の名前。statusCheckRollup に含まれない run（Copilot のレビューなど、event が dynamic の run）は除く |
 | 自分のコメントへの Reaction | 監視中の PR ごとに、自分のコメント、レビュー、レビューコメント、PR の本文の id を集め、GraphQL の nodes(ids:) で reactionGroups を定期取得し、件数の増加を検知する |
-| 対象 PR の発見 | アカウントのトークンで、owner ごとに GraphQL search を 4 つ：`is:pr is:open involves:@me updated:>=D`、`is:pr is:open reviewed-by:@me updated:>=D`、`is:pr is:open author:@me`、`is:pr is:open review-requested:@me`（Review requested to my team の List がオフなら `is:pr is:open user-review-requested:@me`）（D は Days without updates before a PR is dropped の日数前の日付）。owner は種類に合わせて `org:` または `user:` を加え、Public は `is:public` を加えてそのアカウントの登録済みの owner の PR を除く |
+| 対象 PR の発見 | アカウントのトークンで、owner ごとに GraphQL search を 4 つ：`is:pr is:open involves:@me updated:>=D`、`is:pr is:open reviewed-by:@me updated:>=D`、`is:pr is:open author:@me`、`is:pr is:open review-requested:@me`（Review requested to my team の List がオフなら `is:pr is:open user-review-requested:@me`）（D は Days without updates before a PR is dropped の日数前の日付）。owner は種類に合わせて `org:` または `user:` を加え、Public は `is:public` を加え、結果からそのアカウントの登録済みの owner の PR を除く（検索の文字列には除外を加えない。0.1 と同じ） |
 | チームの所属 | アカウントごとに REST `GET /user/teams`（`read:org`。0.1 が Public のチームの所属に使用していた API）で、所属するすべてのチームの `id` と `slug` を取得する。owner ごとの問い合わせはしない |
 | owner の種類と id | `GET /users/{owner}` の `type`（`Organization` または `User`）と `id` |
-| トークンの持ち主と期限 | GraphQL の `viewer { id login }` と、応答ヘッダー `github-authentication-token-expiration` |
+| トークンの持ち主と期限 | GraphQL の `viewer { databaseId login }` と、応答ヘッダー `github-authentication-token-expiration` |
 
 **レート制限**。上限は GitHub のもの（アカウントごと。REST API は 1 時間に 5,000 リクエスト、GraphQL API は 1 時間にポイントで数える別の上限。docs.github.com の「Rate limits for the REST API」で確認、2026-11-09）をそのまま使用し、アプリ側の上限は設けない。GraphQL の応答の `rateLimit`（`limit`、`remaining`、`resetAt`）と REST の応答ヘッダー（`x-ratelimit-limit`、`x-ratelimit-remaining`、`x-ratelimit-reset`）を毎回記録する。残りがどちらかの API で 20% を下回ると警告する（`graphql_near_limit`、`rest_near_limit`）。取得の間隔は設定の値のまま変更しない。残量が尽きたときは、そのアカウントの通知を含むすべての取得を止め、再開の時刻を付けたエラーを表示する。再開後は通知 API の since で停止中の通知を取得するので、失うのは停止中に起きて元に戻った状態の変化と、出来事の検知時刻だけである。停止中は `refresh` も取得しない。二次レート制限も同じ扱いで、指定の時間（retry-after、x-ratelimit-reset、指定がなければ 1 分）だけそのアカウントのすべての取得を止め、再開の時刻を表示し、自動で再開する。
 
@@ -343,26 +346,28 @@ Copy… のシート（題は `Copy table to example-org`）は、`Copy from` �
 | Comment on my PR | 自分の PR の ISSUE_COMMENT、レビューの本文、インラインコメントで、author が自分でない |
 | Approved | 自分の PR の PULL_REQUEST_REVIEW で、state が APPROVED、author が自分でない |
 | Reply in a thread I commented in | 自分がコメントしたスレッドの、自分以外のコメント |
-| Reply in a thread I was mentioned in | 自分がメンションされたスレッドの、メンションより後の自分以外のコメント |
+| Reply in a thread I was mentioned in | 自分または自分のチームがメンションされたスレッドの、メンションより後の自分以外のコメント |
 | Merged／Closed | MERGED_EVENT／CLOSED_EVENT（自分の操作かは問わない） |
 | Added to／Removed from merge queue | ADDED_TO_MERGE_QUEUE_EVENT／REMOVED_FROM_MERGE_QUEUE_EVENT |
 
 同じ出来事が Mentioned と Comment の両方に該当するときは Mentioned の行だけを生成する。Mentioned の行の投稿者、本文、飛び先は、リンクを含むコメント、レビュー、または PR の本文から求める。MENTIONED_EVENT は使用しない。GitHub はレビューコメントでのメンションに MENTIONED_EVENT を生成せず、会話のコメントでもコメントより数秒遅れて生成するためである（所有者の確認、2026-11-05）。引用の返信の中のメンションは user-mention のリンクにならないので、Mentioned にしない。本文の文字列から `@login` や `@org/team` を検索する方法は使用しない。メンションの検知は、取得の契機に関係なく、取得したすべてのタイムラインで行う。
 
-**行の本文と飛び先**。Review requested の本文は `for you`、Review requested to my team の本文は `for <チームの slug> team` である。Merged と Closed の行は出来事を起こした人を表示し、本文を持たない。Removed from merge queue の行は、取り除いた人（チェックの失敗では github-merge-queue、手動では操作した人）を表示し、本文は理由と PR をキューに追加した人である（`Checks failed · added by alice`）。理由は `failed_checks` を `Checks failed`、`manual` を `Removed manually` と表示し、それ以外の値はそのまま表示する。キューに追加した人は、同じ PR の Added to merge queue の出来事のうち、まだ対応させていない最も古いものの actor とする。理由が `merged` の取り除きは、Merged の行で足りるので行にしない。GitHub が出来事の URL を返さない Review requested とマージキューの行は、PR のページを開く。
+**行のラベル**。行の種類のラベルは表の名前である。ただし長い名前は短くする：Comment on my PR は `Comment`、Reply in a thread I commented in と Reply in a thread I was mentioned in は `Reply`、Review requested to my team は `Review requested`（本文の `for <チームの slug> team` で区別する）、Reaction to my comment は `Reaction`。Merged / Closed は `Merged` と `Closed` に区別する。
+
+**行の本文と飛び先**。Review requested の本文は `for you`、Review requested to my team の本文は `for <チームの slug> team` である。Merged と Closed の行と Approved の行は、出来事を起こした人を `by <ログイン名>` の形で本文に表示する。Added to merge queue の行も同じである。Removed from merge queue の行は、取り除いた人（チェックの失敗では github-merge-queue、手動では操作した人）を表示し、本文は理由と PR をキューに追加した人である（`Checks failed · added by alice`）。理由は `failed_checks` を `Checks failed`、`manual` を `Removed manually` と表示し、それ以外の値はそのまま表示する。キューに追加した人は、同じ PR の Added to merge queue の出来事のうち、まだ対応させていない最も古いものの actor とする。理由が `merged` の取り除きは、Merged の行で足りるので行にしない。GitHub が出来事の URL を返さない Review requested とマージキューの行は、PR のページを開く。
 
 **選択とキー**。選択は PRs タブでは「セクションの見出し」「カードの見出し」「行」「+ N more PRs」を上から順に、Activity では行だけを移る。セクションの見出しで ⏎ は折りたたみの切り替え。カードの見出しで ⏎ は PR を開く、S はその PR を Snooze（Snoozed セクションでは Unsnooze）、D と T は何もしない。行で ⏎ はその場所を開く、T は Todo の切り替え（Done の行では何もしない）、D は Done の切り替え（Todo の行のみ）、S は何もしない。「+ N more PRs」で ⏎ は展開。
 
-**Activity に表示する行**。PRs タブに今出ているカードの行だけ。Todo の絞り込みとセグメントは両タブに同じように適用し、Activity ではさらに owner のボタンで絞る。Snooze 中の PR の行は Activity に表示しない。
+**Activity に表示する行**。PRs タブに今出ているカードの行だけで、行の見た目（チェックボックス、種類のアイコン、薄い表示）は PRs タブと同じである。Todo の絞り込みとセグメントは両タブに同じように適用し、Activity ではさらに owner のボタンで絞る。Snooze 中の PR の行は Activity に表示しない。
 
-**絞り込みの意味**。Authored by me は author が自分の PR、Assigned to me は assignees に自分を含む PR、Review requested は今も自分または自分のチームにレビューが依頼されている PR（チームは、その owner の Review requested to my team の List がオンのときだけ）である。Todo は Todo の PR だけに絞る。
+**絞り込みの意味**。Authored by me は author が自分の PR、Assigned to me は assignees に自分を含む PR、Review requested は今も自分または自分のチームにレビューが依頼されている PR（チームは、その owner の Review requested to my team の List がオンのときだけ）である。Todo は Todo の PR だけに絞る。Snoozed セクションでは、未完了の Todo の行を含む PR に絞る（Snooze 中の PR は Todo の PR に数えないため）。
 
 **初回、失敗、空**
 
 | 状態 | 見せ方 |
 | --- | --- |
 | アカウントがない | メニューバーに shiibar-gh のアイコン 1 つ。押すと「No accounts yet」「Add an account in Settings」と Settings ボタン |
-| アカウントに owner がない | ポップオーバーに「No owners yet」「Add an owner in Settings」と Settings ボタンだけ。設定はそのアカウントを選んだ状態で開く |
+| アカウントに owner がない | ポップオーバーに「No owners yet」「Add an owner in Settings」と Settings ボタンだけ（警告があれば見出しの下の帯は表示する）。設定はそのアカウントを選んだ状態で開く |
 | 取得の失敗 | アイコンに三角。ポップオーバーに黄色い帯「Couldn't reach GitHub · retrying in N min」。N は次の再試行の時刻（`fetch_failed` の警告の時刻）から求める。前回の内容は残す |
 | トークンが無効（401） | アイコンに三角。帯に警告。トークンを差し替えるまでそのアカウントの取得を止める。前回の内容は残す |
 | トークンがない（`token reset` のあと） | アイコンに三角。帯に `No token`。登録するまでそのアカウントの取得を止める。前回の内容は残す |
@@ -370,7 +375,7 @@ Copy… のシート（題は `Copy table to example-org`）は、`Copy from` �
 | Keychain を読めない | すべてのアイコンに三角。ダイアログと帯（「Keychain を読めないとき」） |
 | API の残りが 20% を下回った | 帯に警告。バーをオレンジにする。間隔は変更しない |
 | GitHub の残量が尽きた | アイコンに三角。帯に再開の時刻を付けたエラー。再開まで取得しない |
-| カードが 0 件 | 「Nothing needs you」。絞り込みで 0 件なら「Nothing matches」 |
+| カードが 0 件 | 「Nothing needs you」。絞り込みで 0 件なら「Nothing matches」。owner のセクションの代わりに表示し、Snoozed セクションは残す |
 | Activity が 0 件 | 「No activity」 |
 
 **警告の表示**。アカウントの `warnings` の種類ごとに、メニューバーの三角と、ポップオーバーの黄色い帯の文面と右のボタンを次のとおりにする。三角は、取得が止まっている、または止まりそうな種類だけに付ける。警告が複数あるときは、表の上の行から順に、すべてを 1 行ずつ帯に並べる。`Settings…` は設定画面をそのアカウントを選んだ状態で開く。
@@ -422,19 +427,19 @@ owner や PR を指す命令は `--account <account>` を必須にする。省�
 
 | 項目 | 確かめ方 | 結果 |
 | --- | --- | --- |
-| Account | `viewer { login id }` | 持ち主の login（`bufferings-work`）。Edit… で id がアカウントと異なれば `✗ Belongs to octocat`。Add account で同じ id のアカウントがすでにあれば `✗ bufferings-work is already added`。接続できなければ `✗ Couldn't reach GitHub` |
+| Account | `viewer { login databaseId }` | 持ち主の login（`bufferings-work`）。Edit… で id がアカウントと異なれば `✗ Belongs to octocat`。Add account で同じ id のアカウントがすでにあれば `✗ bufferings-work is already added`。接続できなければ `✗ Couldn't reach GitHub`。401 なら `✗ Token is invalid`（ほかの項目は `Can't check`） |
 | Scopes | 応答ヘッダー `x-oauth-scopes`（0.1 で使用済み）に `repo`、`notifications`、`read:org` があるか | `✓ OK` または `✗ Missing (read:org)`（足りないものを列挙する） |
 | Notifications | `GET /notifications` | `✓ OK` または `✗ Failed (notifications)` |
 | Team membership | `GET /user/teams` | `✓ OK`（チームが 0 でも OK）または `✗ Failed (read:org)` |
 | 登録済みの owner ごと | その owner の検索 1 つ | `✓ OK`、SSO の承認が必要なら `SSO authorization required` と `Authorize…`、ほかの失敗は `✗ Failed` |
 
-`account add` のシートでは、まだ owner がないので owner の行はない。結果の理由は括弧に記述する。`Can't check` は確かめる対象がないときである。`token test` を `--account` なしで実行すると（標準入力のトークンが必須）、Add account のシートの Test と同じく、アカウントを作成せずに検証する。
+`account add` のシートでは、まだ owner がないので owner の行はない。結果の理由は括弧に記述する。`Can't check` は確かめる対象がないとき、または問い合わせができなかったとき（`Can't check (Couldn't reach GitHub)`、`Can't check (rate limited)`）である。接続はできたが GitHub がエラーを返した項目は `✗ Failed (HTTP 404)` のように状態コードを示す。Account の項目でレート制限に達したときは `✗ Rate limited` にし、残りの項目は `Can't check` にする。GitHub が `databaseId` を返さなかったときは Account を `✗ Failed (no numeric id)` にし、残りは `Can't check` にする（`account add` は `internal`）。標準入力のトークンの検証では、そのトークンの使用量と上限をアカウントに記録しない。`token test` を `--account` なしで実行すると（標準入力のトークンが必須）、Add account のシートの Test と同じく、アカウントを作成せずに検証する。
 
 ## デーモンの仕様
 
 ### ワイヤ形式
 
-Unix ソケットの NDJSON。1 接続 1 要求 1 応答。`subscribe` だけは接続を維持する。応答は `{"ok":true,...}` または `{"ok":false,"code":"...","error":"..."}`。`code` は `not_found`、`invalid`、`unreachable`（GitHub に接続できない）、`keychain_unavailable`（Keychain を読めない間の `account_add`、`account_remove`、`token_set`、`token_test`、`token_reset` 以外のトークンの操作）、`internal` のいずれかである。クライアントは未知の `event` とフィールドを無視する。時刻は epoch 秒。
+Unix ソケットの NDJSON。1 接続 1 要求 1 応答。`subscribe` だけは接続を維持する。応答は `{"ok":true,...}` または `{"ok":false,"code":"...","error":"..."}`。`code` は `not_found`、`invalid`、`unreachable`（GitHub に接続できない）、`keychain_unavailable`（Keychain を読み込めない間の `account_add`、`account_remove`、`token_set`、保存済みのトークンの `token_test`、`public` 以外の `owner_add` と `owner_lookup`。標準入力のトークンの `token_test` と `token_reset` は受け付ける）、`internal` のいずれかである。クライアントは未知の `event` とフィールドを無視する。時刻は epoch 秒。
 
 | cmd | 引数 | 応答 |
 | --- | --- | --- |
@@ -474,13 +479,13 @@ Unix ソケットの NDJSON。1 接続 1 要求 1 応答。`subscribe` だけは
 
 `account` の引数はアカウントの login、`owner` の引数は owner のログイン名または `public` で、応答の中の参照は id で行う。
 
-アカウントの値は `{"id","login","color","token":{"registered","expires_at","last_test"},"updated_at","todo_count","unread","warnings":[...],"rate_limit":{"graphql":{"used","limit","reset_at"},"rest":{...}},"owners":[...]}` である。`id` は GitHub のユーザーの node id、`color` は `none`、`red`、`orange`、`yellow`、`green`、`blue`、`purple` のいずれかで、`account_color` の不正な値は `invalid` になる。`last_test` は保存済みのトークンの最後のテストの `{"at","results"}`（なければ `null`）。`rate_limit` の値がまだなければ `null`。owner の値は `{"id","name","kind","github_id","enabled","notify","skip_drafts","todo_count","pr_count"}` で、`kind` は `org`、`user`、`public` のいずれかである。`id` はデーモンが割り当てる識別子で、ログイン名として解釈しない。`github_id` は `GET /users/{owner}` の数値の `id`（Public は `null`）である。カードの値は `author_avatar_url`（GraphQL の `author.avatarUrl(size: 32)`。`author` が `null` なら `null`）、`owner`（owner の id）、`assigned_to_me`、`authored_by_me`、`review_requested` を持つ。行の値は `todo`（今 Todo か）、`done`、`kind` を持つ。
+アカウントの値は `{"id","login","color","token":{"registered","expires_at","last_test"},"updated_at","todo_count","unread","warnings":[...],"rate_limit":{"graphql":{"used","limit","reset_at"},"rest":{...}},"owners":[...]}` である。`owners` は登録の順で、Public は常に最後である（アプリは並べ替えない）。`id` は GitHub のユーザーの数値の id を 10 進の文字列にしたもの（`"3407303"`）、`color` は `none`、`red`、`orange`、`yellow`、`green`、`blue`、`purple` のいずれかで、`account_color` の不正な値は `invalid` になる。`last_test` は保存済みのトークンの最後のテストの `{"at","results"}`（なければ `null`）。`rate_limit` の値がまだなければ `null`。owner の値は `{"id","name","kind","github_id","enabled","notify","skip_drafts","todo_count","pr_count"}` で、`kind` は `org`、`user`、`public` のいずれかである。`id` はデーモンが割り当てる識別子で、ログイン名として解釈しない。`github_id` は `GET /users/{owner}` の数値の `id`（Public は `null`）である。カードと行の値は 0.1（docs/tasks/M1.md の「応答の項目」）の項目を保ち、`scope` を `owner`（owner の id）に、カードの `mine` を `authored_by_me` に、行の `class` を `todo`（今 Todo か）と `done` に置き換える。カードはさらに `author_avatar_url`（GraphQL の `author.avatarUrl(size: 32)`。`author` が `null` なら `null`）、`assigned_to_me`、`review_requested` を持ち、行は `owner` と `kind` を持つ（Activity の行の owner の表示に使用する）。`notify` の `notification` も 0.1 の形を保ち、`scope` を `account`（アカウントの id）と `owner`（owner の id）に置き換える。まとめ通知は `title` と `subtitle` を持ち、`body` は `null` である。カードと行も `account` を持つ。
 
 出来事の種類の値（`event`、行の `kind`）は `review_requested`、`team_review_requested`、`mentioned`、`team_mentioned`、`comment`、`reply`、`reply_mentioned`、`reaction`、`approved`、`changes_requested`、`checks_failed`、`conflicts`、`mergeable`、`merge_queue_added`、`merge_queue_removed`、`merged_closed` である。行の `kind` では `merged_closed` の代わりに `merged` と `closed` を使用する。`events` は種類ごとの `{"list","todo","notify"}`、`exclusions` は `{"repos":[{"name","state"}],"users":[...]}` である。
 
 `owner_lookup` は `GET /users/{owner}` で owner の種類と id を求め、owner を登録しない。GitHub のログイン名として不正な owner（英数字とハイフン以外を含む、ハイフンで始まるか終わる、40 文字以上）は問い合わせずに `invalid`、見つからなければ `not_found`、接続できなければ `unreachable`、ほかの失敗は理由を付けた `internal` にする。`owner_add` は同じ問い合わせを行い、成功したときだけ登録する。`account_add` と `token_set` の持ち主の確認が失敗したときの `code` は、持ち主が異なれば `invalid`（`error` は `Belongs to octocat`）、接続できなければ `unreachable` である。
 
-`subscribe` は最初に `{"event":"snapshot","accounts":[...],"keychain":"ok"|"unavailable"|"unreadable","db_unreadable":false}` を送る。DB を読めない間も `subscribe` と `info` は使用でき、`db_unreadable` が真になる。以降は `{"event":"account_changed","account":{...}}`、`{"event":"account_removed","id":"..."}`、`{"event":"keychain_changed","keychain":"..."}`、`{"event":"notify","notification":{...}}`、`{"event":"config_changed","key":"...","value":...}` を送る。`config_changed` は、`config_set` で設定の値が変化したときに、保存してからすべての購読者に送る。`value` は `config_get` が返す値である。同じ値の `config_set` と、拒否した値では送らない。アプリはこれで `launch_at_login` の変更を知り、ログイン項目を登録または解除する（「Launch at login の同期」）。また `appearance`（`system`、`light`、`dark`）の変更を、ポップオーバー、常時表示ウインドウ、設定画面、メニューバーのアイコンにすぐ反映する。
+`subscribe` は最初に `{"event":"snapshot","accounts":[...],"keychain":"ok"|"unavailable"|"unreadable","db_unreadable":false}` を送る。DB を読めない間も `subscribe` と `info` は使用でき、`db_unreadable` が真になる。以降は `{"event":"account_changed","account":{...}}`、`{"event":"account_removed","id":"..."}`、`{"event":"keychain_changed","keychain":"..."}`、`{"event":"notify","notification":{...}}`、`{"event":"config_changed","key":"...","value":...}` を送る。`account_changed` は、アカウントの値が変化したとき、またはそのアカウントのカードか行が変化したときに送り、クライアントは `list` と `activity` で一覧を取り直す。`keychain` は最初の読み込みまでは `ok` である。`config_changed` は、`config_set` で設定の値が変化したときに、保存してからすべての購読者に送る。`value` は `config_get` が返す値である。同じ値の `config_set` と、拒否した値では送らない。アプリはこれで `launch_at_login` の変更を知り、ログイン項目を登録または解除する（「Launch at login の同期」）。また `appearance`（`system`、`light`、`dark`）の変更を、ポップオーバー、常時表示ウインドウ、設定画面、メニューバーのアイコンにすぐ反映する。
 
 設定のキーは `launch_at_login`、`appearance`、`status_interval_minutes`、`reactions_interval_minutes`、`snooze_return_time`、`keep_watching_days`、`drop_after_days` である（範囲は「設定項目」）。0.1 の `graphql_cost_cap`、`notify_*`、`bot_comments`、`include_team_requests` はない。
 
@@ -496,7 +501,7 @@ DB を読めない状態に移行したとき、およびその状態から `res
 
 ### CLI の終了コード
 
-0 成功、1 接続エラー、内部エラー、不正な値、使用法の誤り（デーモン不在を含む）、GitHub に接続できない、2 該当なし（`not_found`）。不正な設定値は保存しない。
+0 成功、1 接続エラー、内部エラー、不正な値、使用法の誤り（デーモン不在を含む）、GitHub に接続できない、Keychain を読めない、2 該当なし（`not_found`）。不正な設定値は保存しない。
 
 ### 行の状態遷移
 
@@ -508,7 +513,7 @@ DB を読めない状態に移行したとき、およびその状態から `res
 | `seen`（行が画面に表示された） | — | 立てる | — | — |
 | `popover_closed` | seen_pending の行で下ろす | 下ろす | — | — |
 | `todo`（on） | — | — | 真（手の値として保存） | — |
-| `todo`（off） | — | — | 偽（手の値として保存） | 未完了に戻す |
+| `todo`（off） | — | — | 偽（手の値として保存） | — |
 | `done`（on） | — | — | — | 完了 |
 | `done`（off） | — | — | — | 未完了 |
 
@@ -542,6 +547,5 @@ DB を読めない状態に移行したとき、およびその状態から `res
 - [ ] 1 つの PR が同時にマージキューに 2 回追加されることがあるか、取り除きが追加の順と異なる順に起きることがあるか（Removed from merge queue の行の、キューに追加した人の対応に影響する。ドキュメントに記載がなく、確認していない）
 - [ ] `GET /notifications` の応答に、SSO を承認していない organization の分が含まれず `X-GitHub-SSO` が付くか（ドキュメントは REST の応答一般について記載している。所有者は SSO の organization に属していないので確認できない）
 - [ ] SSO の承認が必要という警告の動作全体（SSO を有効にした organization で確認できていない）
-- [ ] GitHub のユーザーの node id が、login の変更やアカウントの操作で変更されないこと（ドキュメントで確認していない）
-- [ ] Bot のログイン名の表記（GraphQL の `Bot.login` と REST の `login` で `[bot]` の有無が異なるか）。Exclusions の Users の比較に影響する
+- [ ] `x-oauth-scopes` の `write:org` と `admin:org` が `read:org` を含むとみなしてよいか（docs.github.com の「Scopes for OAuth apps」は `user` の入れ子だけを明記している。2026-11-09 に確認。実装はこの 2 つを `read:org` とみなす）
 - [ ] 通知の書き込みと配信の記録の間にデーモンが強制終了すると、次の再接続のまとめ通知で 1 件多く数える場合がある（M1 から引き継いだ既知の動作で、変更しない）
