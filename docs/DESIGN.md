@@ -2,7 +2,7 @@
 
 shiibar-gh は、自分が関わっている GitHub の PR について「自分のレビューを待っている PR」と「起きたこと」を macOS のメニューバーで知らせる個人用アプリ。画面デザインは docs/design のモックを正とする。
 
-この版（0.3、M5）は複数の GitHub アカウントに対応する。0.2 のデータは引き継ぎ、0.1 のデータ（DB と Keychain の項目）は引き継がない（「状態の保存」）。
+この版（0.3、M5）は 0.2 の Todo と Done を廃止し、自分のレビューを待っている PR を PR の状態としてカードとメニューバーの数字に表示する。行は操作で既読にし、ポップオーバーには検索、Group by、並びを加える。0.2 のデータは引き継ぎ、0.1 のデータ（DB と Keychain の項目）は引き継がない（「状態の保存」）。
 
 ## 概要とスコープ
 
@@ -25,18 +25,18 @@ shiibar-gh は、自分が関わっている GitHub の PR について「自分
 
 ## 画面構成
 
-**メニューバー**。アカウントごとにアイコン 1 つ（幅固定。1 アカウントでも 1 つ）。絵柄は shiibar-gh のもので全アカウント同じで、アカウントの色（「アカウントの色」）で塗る。右上の青い点＝新しい出来事あり、右下の数字＝レビュー待ちの PR の数（「レビュー待ちの定義」。100 以上は `99+`）、三角＝注意（トークンの期限と無効、取得の失敗、上限による取得の停止、Keychain を読めない）。画像は絵柄を中央に配置し、点と数字を角に少しはみ出させる（大きさは実機で決める）。アカウントが 1 つもないときは、shiibar-gh のアイコンを 1 つだけ表示する。押すと「No accounts yet」「Add an account in Settings」と Settings ボタン、⌄ のメニューを表示する。
+**メニューバー**。アカウントごとにアイコン 1 つ（幅固定。1 アカウントでも 1 つ）。絵柄は shiibar-gh のもので全アカウント同じで、アカウントの色（「アカウントの色」）で塗る。右上の青い点＝新しい出来事あり、右下の数字＝レビュー待ちの PR の数（「レビュー待ちの定義」。100 以上は `99+`。アクセシビリティの文言は `N review requests`（1 なら `1 review request`）、0 なら `No review requests`）、三角＝注意（トークンの期限と無効、取得の失敗、上限による取得の停止、Keychain を読めない）。画像は絵柄を中央に配置し、点と数字を角に少しはみ出させる（大きさは実機で決める）。アカウントが 1 つもないときは、shiibar-gh のアイコンを 1 つだけ表示する。押すと「No accounts yet」「Add an account in Settings」と Settings ボタン、⌄ のメニューを表示する。
 
 **ポップオーバー**。幅 460px（文字の大きさが 12 のとき。「文字の大きさ」）。押したアカウントだけを表示する。上から：
 
 1. 見出し：アカウント名（前にアカウントの色の丸）、その下の行に `Updated 1 min ago · API 25%`、Open in window、Refresh、Settings、⌄ のメニュー（About shiibar-gh、Settings…、Quit shiibar-gh）。Updated は、そのアカウントの取得が最後に成功して終わった時刻である（「取得の成功と失敗」。成功したことがなければ `Not updated yet`）。API は GraphQL と REST の使用率の高い方を整数の百分率で表示する（「レート制限」）。警告があるときだけ黄色い帯（「警告の表示」）。ポップオーバーを開いている間と、常時表示ウインドウにフォーカスがある間は ⌘Q でも終了する。終了するとデーモンも止まる。
 2. タブ：**PRs**（セクションに PR のカード）と **Activity**（全 PR の行を新しい順に 1 本で）。
-3. 絞り込みの 1 行目：チップ **All｜Authored by me｜Assigned to me｜Review requested**（GitHub の Pull requests ダッシュボードの既定の絞り込みと同じ名前。shiibar-gh の All は GitHub の Involves me に相当する）。左寄せで、幅は文字の分だけとし、ポップオーバーやウインドウの幅が広がっても伸びない。常に 1 つがオンである。件数は表示しない。全セクションに適用する。Activity タブでは、この行の代わりに owner のボタンの行（先頭が `All owners`、続いて owner 名）を表示し、オンにした owner の行だけを表示する（複数を同時にオンにできる。owner をすべてオフにした状態が `All owners` で、すべて表示する。`All owners` を押すと owner のボタンをすべてオフにする）。
+3. 絞り込みの 1 行目：チップ **All｜Authored by me｜Assigned to me｜Review requested**（GitHub の Pull requests ダッシュボードの既定の絞り込みと同じ名前。shiibar-gh の All は GitHub の Involves me に相当する）。左寄せで、幅は文字の分だけとし、ポップオーバーやウインドウの幅が広がっても伸びない。常に 1 つがオンである。件数は表示しない。全セクションに適用する。Activity タブでは、この行の代わりに owner のボタンの行（先頭が `All owners`、続いて owner 名）を表示し、オンにした owner の行だけを表示する（複数を同時にオンにできる。owner をすべてオフにした状態が `All owners` で、すべて表示する。`All owners` を押すと owner のボタンをすべてオフにする。記憶した選択が空のときは `All owners` をオンに表示し、owner を 1 つでもオンにすると `All owners` はオフになる。すべての owner を個別にオンにしても `All owners` はオフのままである。記憶した選択の中の削除済みと disabled の owner は無視する）。
 4. 絞り込みの 2 行目：検索欄（プレースホルダー `Search`。⌘F で移動する）、Group by のポップアップボタン、並びのポップアップボタン（どちらも今の値を表示する）。幅に合わせて伸びるのは検索欄だけである。Activity タブでは検索欄だけを表示する（Group by と並びは PRs タブだけ）。
 5. カードの列（PRs）または行の列（Activity）。
 6. キーのヒント 1 行（「キーボード」）。
 
-コントロールは macOS の標準のものを使用し、オンの色は OS のアクセントカラーで、アプリ側で固定しない。絞り込みの選択、Group by、並び、折りたたみ、Activity の owner の選択は、アカウントごとに記憶する。検索の文字は記憶しない。絞り込みと検索の意味は「絞り込みの意味」に記述する。
+コントロールは macOS の標準のものを使用し、オンの色は OS のアクセントカラーで、アプリ側で固定しない。絞り込みの選択、Group by、並び、折りたたみ、Activity の owner の選択は、アカウントごとに記憶する。検索の文字は記憶しない（「キーボード」）。絞り込みと検索の意味は「絞り込みの意味」に記述する。
 
 **PRs タブのセクション**。Group by の値でセクションを区別する。
 
@@ -48,13 +48,17 @@ shiibar-gh は、自分が関わっている GitHub の PR について「自分
 | `Involvement` | `Review requested`、`Authored by me`、`Assigned to me`、`Others` の順。複数に該当する PR は、この順で先に該当した 1 つに属する。`Others` はどれにも該当しない PR |
 | `None` | セクションを区別しない（Snoozed を除いて見出しを表示しない） |
 
-`Owner` 以外では、カードのないセクションは表示しない。どの Group by でも、Snooze 中の PR は最後の「Snoozed」セクション（見出しは `Snoozed · 2 PRs · until Mon 09:00`。初期状態は折りたたみ）にまとめ、ほかのセクションには表示しない。
+どの Group by でも（`Owner` を含む）、カードのないセクションは表示しない。カードの有無は、絞り込みと検索を適用したあとのカードで判定する。どの Group by でも、Snooze 中の PR は最後の「Snoozed」セクション（見出しは `Snoozed · 2 PRs · until Mon 09:00`。初期状態は折りたたみ）にまとめ、ほかのセクションには表示しない。
 
-セクションの見出しは、名前、レビュー待ちの PR の数（赤。0 なら表示しない）、PR の数、折りたたみの山形である。どちらの数も絞り込みと検索に依存せず、Snooze 中と Hidden のリポジトリの PR を除いて数える。Snoozed の件数も絞り込みと検索に依存しない。見出しを押すと折りたたむ（アカウントごとに記憶する）。
+`None` では、Snoozed セクションの前のカードを見出しのない 1 本の一覧にする。並びはセクションの中と同じで、開いている PR を先に、Merged と Closed を後ろに並べ、その次に `+ N more PRs`、最後に Snoozed セクションを配置する。選択は、カードの見出し、行、`+ N more PRs`、Snoozed セクションの見出しの順に移る。見出しのない 1 本の一覧には折りたたみがない。
+
+セクションの見出しは、名前、レビュー待ちの PR の数（赤。0 なら表示しない）、PR の数、折りたたみの山形である。どちらの数も絞り込みと検索に依存せず、Snooze 中と Hidden のリポジトリの PR を除いて数える。Snoozed の件数も絞り込みと検索に依存しない。見出しを押すと折りたたむ。折りたたみは、アカウントごとに、Group by の値とセクションの鍵の組ごとに記憶する。
 
 並び（アカウントごとに記憶する）は `Recently updated`（既定。PR の `updatedAt` が新しい順）と `Recently added`（カードの追加が新しい順）の 2 つである。どの Group by でも、セクションの中では開いている PR（Draft を含む）を先に、Merged と Closed を後ろに並べ、それぞれの中で選択した並びに従う。`Recently updated` では、出来事で `updatedAt` が進んだカードが上に移動する。選択中のカードは、移動しても選択を保つ。
 
-セクションの中で、未読の行がなくレビュー待ちでもない PR は「+ 2 more PRs」の 1 行（1 件なら「+ 1 more PR」）にまとめ、押すと展開する（展開の状態は記憶しない）。Snoozed セクションではカードをまとめず（「+ N more PRs」はない）、すべて表示する。
+セクションの中で、未読の行がなくレビュー待ちでもない PR は「+ 2 more PRs」の 1 行（1 件なら「+ 1 more PR」）にまとめ、押すと展開する（展開の状態は記憶しない）。Snoozed セクションではカードをまとめず（「+ N more PRs」はない）、すべて表示する。検索の文字があるときはまとめない。チップだけで絞っているときはまとめる。
+
+まとめるかどうかは、アプリがポップオーバーを開いた時点と新しい PR が現れた時点で決める。開いている間は、まとめずに表示した PR をまとめない（最後の未読の行を選んでも、そのカードは「+ N more PRs」に移らない）。ポップオーバーを閉じたときに判定をやり直す。常時表示ウインドウは、フォーカスが外れたときに判定をやり直す。
 
 **通常のアプリへの切り替え**。常時表示のウインドウと設定画面のどちらかが存在する間だけ、アプリは通常のアプリとして動作する。Dock と ⌘Tab にアプリが表示され、画面上端にアプリのメニューを表示する。両方が閉じると常駐の状態に戻り、どちらも表示しない。メニューはアプリのメニューと Edit の 2 つである。アプリのメニューは About shiibar-gh、Settings…（⌘,）、Close Window（⌘W。閉じるウインドウがなければ無効）、Quit shiibar-gh（⌘Q）で構成し、Quit は ⌄ のメニューの Quit と同じくデーモンも止める。Edit は Undo、Redo、Cut、Copy、Paste、Select All である。Dock のアイコンを押すか ⌘Tab で切り替えると、開いているウインドウを前面に表示する。shiibar-cc の DESIGN.md の同じ規則にならう（shiibar-cc は設定画面を対象に含めない）。
 
@@ -68,7 +72,7 @@ shiibar-gh は、自分が関わっている GitHub の PR について「自分
 
 `Review requested` のマークは、薄いオレンジの地に濃いオレンジの文字の小さなラベルで、PR がレビュー待ち（「レビュー待ちの定義」）の間だけ表示する。行の既読とは独立で、行を既読にしても残る。
 
-3 行目の右の部分は、PR の作成時刻（GraphQL の `createdAt`）、作者、更新時刻（`updatedAt`）である。相対時刻の書式は行の meta と同じで、マウスを乗せると正確な日時を表示する。作者を特定できない PR は `by …` を省く。幅が足りなければ、右の部分を省略せずに 4 行目に折り返す。Snooze の時計は、この部分の右に付く。
+3 行目の右の部分は、PR の作成時刻（GraphQL の `createdAt`）、作者、更新時刻（`updatedAt`）である。作成時刻がまだないとき（0.2 から移行した直後で、次の取得の前）は `opened …` を省き、`by alice · updated 2h ago` とする。相対時刻の書式は行の meta と同じで、マウスを乗せると正確な日時を表示する。作者を特定できない PR は `by …` を省く。幅が足りなければ、右の部分を省略せずに 4 行目に折り返す。Snooze の時計は、この部分の右に付く。
 
 状態ラベルと同じ色の縦線をカードの左端にも引く（色だけにしない）。「自分の PR」のタグはなく、アバターで分かる。アバターは作者の GitHub のアイコンの画像（GraphQL の `author.avatarUrl`）である。
 
@@ -84,13 +88,21 @@ Base は、behindBy を取得できなければ Conflicts または空とする�
 
 Mergeable は mergeStateStatus が CLEAN のときだけで、自前で計算しない。詳細（誰が、どのチェックが、何コミット）は載せず、押すと各軸の場所へ飛ぶ。飛び先は、Review と Base が PR のページ、Checks が PR の Checks のページ（`/checks`）である。この行から「誰の番か」は判断しない。自分のレビューを待っているかは `Review requested` のマークで示す。
 
-**レビュー待ちの定義**。レビュー待ちは PR の状態であり、行の性質ではない。レビュー待ちの PR とは、開いている PR のうち、Snooze しておらず、GitHub の今のレビュー依頼（reviewRequests）に自分または自分のチームが含まれるものを指す。チーム宛ての依頼は、その owner の Review requested to my team の List がオンのときだけ数える。読めなくなった PR と Hidden のリポジトリの PR は数えない。依頼した利用者が Exclusions の Hidden または List only の間は、その依頼を数えない（0.2 で Todo にならなかった動作を保つ）。メニューバーの数字とセクションの赤い数字はこの PR の数である。依頼が取り消されるか、レビューの投稿によって GitHub が依頼を取り消すと、レビュー待ちではなくなる（再び依頼されると戻る）。状況アイコンの赤はレビュー待ちに関係しない。
+**レビュー待ちの定義**。レビュー待ちは PR の状態であり、行の性質ではない。レビュー待ちの PR とは、開いている PR のうち、Snooze しておらず、GitHub の今のレビュー依頼（reviewRequests）に自分または自分のチームが含まれ、最新の依頼のあとに自分のレビューがないものを指す。
 
-**押したときの動作**。カード内に開閉はない。カードの見出しと行は、クリックで選び（行は既読になる。「未読の消え方」）、ダブルクリックで開き（カードの見出しは PR のページ、行はその出来事の場所。⏎ と同じ）、右クリックでメニューを表示する（「キーボード」）。状況アイコンは押すと Web のその場所へ、時計は押すと Snooze を切り替える。セクションの見出しはクリックで折りたたみ、`+ N more PRs` はクリックで展開する。ホバーでしか表示されない操作は設けない。
+- 自分宛ての依頼は、reviewRequests に自分がいれば数える。Review requested の行の有無と、Review requested の List のオンとオフは条件にしない。
+- チーム宛ての依頼は、その owner の Review requested to my team の List がオンのときだけ数える。自分宛てと同じく、最新の依頼のあとに自分がレビューしていれば数えない。
+- 自分のレビューは、取得している PR のレビュー（author が自分のもの）から判定する。レビューの投稿によって GitHub が依頼を取り消すかは確認していないので、この条件で補う。最新の依頼の時刻は Review requested の行（自分宛てまたはチーム宛て）の時刻で判定し、行がなく時刻が分からないときは、自分のレビューが 1 つでもあれば数えない。
+- 依頼した利用者が Exclusions の Hidden または List only の間は、その依頼を数えない（0.2 で Todo にならなかった動作を保つ）。依頼した利用者は、その PR の最新の Review requested の行（自分宛ての依頼では自分宛ての行、チーム宛ての依頼ではチーム宛ての行。記録だけの行を含む）の actor で判定する。行がなく依頼した利用者が分からなければ数える。
+- 読めなくなった PR と Hidden のリポジトリの PR は数えない。
+
+メニューバーの数字とセクションの赤い数字はこの PR の数である。依頼が取り消されるか、最新の依頼のあとに自分がレビューすると、レビュー待ちではなくなる（再び依頼されると戻る）。状況アイコンの赤はレビュー待ちに関係しない。
+
+**押したときの動作**。カード内に開閉はない。カードの見出しと行は、クリックで選び（行は既読になる。「未読の消え方」）、ダブルクリックで開き（カードの見出しは PR のページ、行はその出来事の場所。⏎ と同じ）、右クリックでその項目を選んでから（行なら既読にしてから）メニューを表示する（「キーボード」）。状況アイコンは押すと Web のその場所へ、時計は押すと Snooze を切り替える。セクションの見出しはクリックで折りたたみ、`+ N more PRs` はクリックで展開する。ホバーでしか表示されない操作は設けない。
 
 **Open in window**。見出しのボタンで、同じ内容を小さなウインドウ（NSPanel）に表示する。アカウントごとに 1 つ、位置と大きさを記憶する。ウインドウの見出しの右側（Refresh、Settings、⌄ の並びの先頭）にピンのボタン（ツールチップ `Keep on top`）を表示する。オンは塗りつぶし（青）、オフは線だけで、オンの間ウインドウを常に手前に表示する。押すとそのウインドウがすぐ切り替わる。値はウインドウの位置と一緒にアカウントごとに記憶し、既定はオンである。ピンのボタンはポップオーバーには表示しない。
 
-**文字の大きさ**。設定の Text size（`text_size`）は本文の文字の大きさ（pt）で、全アカウントのポップオーバーと常時表示ウインドウに共通に適用する。ほかの文字、行の高さ、アバター、ポップオーバーとウインドウの幅は、12 に対する比率で連動する。ポップオーバーとウインドウでは、⌘= で 1 pt 大きく（⌘+ も同じ）、⌘− で 1 pt 小さく、⌘0 で 12 に戻す。キーで変更した値も設定の値として保存する（範囲は「設定項目」）。
+**文字の大きさ**。設定の Text size（`text_size`）は本文の文字の大きさ（pt）で、全アカウントのポップオーバーと常時表示ウインドウに共通に適用する。メニューバーのアイコンと設定画面には適用しない。ほかの文字、行の高さ、アバターは、12 に対する比率で連動する。ポップオーバーは幅も比率で連動する。常時表示ウインドウは記憶した大きさを優先し、内容だけを比率で連動させる。ポップオーバーとウインドウでは、⌘= で 1 pt 大きく（⌘+ も同じ）、⌘− で 1 pt 小さく、⌘0 で 12 に戻す。18 での ⌘= と 9 での ⌘− は何もしない（アプリは要求を送らない）。キーで変更した値も設定の値として保存する（範囲と範囲外の入力の文言は「設定項目」）。
 
 **アカウントの色**。選択肢は None、Red、Orange、Yellow、Green、Blue、Purple（Finder のタグと同じ並び）。塗る先はメニューバーのアイコンと、アカウント名の前の丸（ポップオーバーの見出し、設定画面の一覧）だけである。None はアイコンに色を付けず、ほかのメニューバーのアイコンと同じ色（ライトでは黒、ダークでは白）にし、丸は文字と同じ色にする。値は macOS のシステムカラー（systemRed など）を使用し、ライトとダークで自動的に切り替わるものにする（最終の見え方は所有者が実機で確認する）。初期値は、アカウントが 0 件のときに追加したアカウントが None、2 つ目からは Red → Orange → Yellow → Green → Blue → Purple の順で未使用の色を割り当て、すべて使用済みなら Red から再び巡回する（重複を許す）。削除して再び追加したアカウントは新規として扱う。ポップオーバーの背景は全アカウント同じで、owner と Public に色はない。
 
@@ -129,8 +141,8 @@ Mergeable は mergeStateStatus が CLEAN のときだけで、自前で計算し
 
 **未読の消え方**。役目は「気づいていない出来事がある」を示すことだけ。行は操作で既読にする。
 
-- 行を選んだ時点（↑↓ またはクリック）で、その行を既読にする。⏎、ダブルクリック、右クリックのメニューの `Open on GitHub` で行を開いたときも既読にする。
-- ⇧R（右クリックのメニューの `Mark all as read`）は、表示中のアカウントのすべての行を既読にする。
+- 行を選んだ時点（↑↓、クリック、右クリック）で、その行を既読にする。⏎、ダブルクリック、右クリックのメニューの `Open on GitHub` で行を開いたときも既読にする。このとき、アプリは URL を開くとともに `read` を送る。
+- ⇧R（右クリックのメニューの `Mark all as read`）は、表示中のタブに今表示している行を既読にする。チップ、検索、owner のボタンを適用したあとの行で、折りたたんだセクションの行は含め、Snoozed セクションの行は含めない。アプリは `read` に行の id を列挙して送る。ワイヤの `read_all` と CLI の `read --all` の範囲はこれと異なる（「ワイヤ形式」）。
 - ポップオーバーを閉じただけ、または常時表示ウインドウを閉じたかフォーカスが外れただけでは既読にしない。macOS の通知を押したかは関係しない。未読に戻す操作はない。
 - メニューバーの青い点はポップオーバーを開いた時点（常時表示ウインドウにフォーカスが移った時点を含む）で消える。常時表示ウインドウは、フォーカスがある間を開いている、フォーカスがない間を閉じているとして扱う。Snooze 中の行と、List がオフの行、Exclusions で Hidden の行では付けず、Snooze の解除時（手動の Unsnooze を含む）に未読の行があれば付ける。ポップオーバーを開いている間と、常時表示ウインドウにフォーカスがある間は、新着でも解除でも付けず、閉じたときに未読の行が残っていても付けない。
 - レビュー待ちは行の既読と独立なので、Review requested の行を既読にしても `Review requested` のマークとメニューバーの数字は残る。Checks／Conflicts／Mergeable は状況アイコンとラベルに残る。
@@ -166,7 +178,7 @@ owner ごとに、Repositories と Users の 2 つの一覧を持つ。1 行＝�
 Snooze は PR 単位。「この PR は翌朝まで確認しない」をアプリに伝える唯一の入力で、放置（レビュー待ちとして数え続ける）とは違う。目的はメニューバーの数字が「今レビューを待っている PR がある」を意味し続けること。
 
 - カードの 3 行目の時計を押すか、見出しを選んで S を押すか、右クリックのメニューの `Snooze until <時刻>` を選ぶと Snooze。毎朝、戻り時刻（設定、既定 09:00）にすべての Snooze を解除する。
-- Snooze 中は Snoozed 以外のセクションからも Activity からも消え、レビュー待ちの数に数えず、通知も鳴らさない。Snoozed セクションにまとめて表示し、見出しに `until Mon 09:00` を表示する（絞り込みや検索で Snoozed のカードが 0 件でも、Snooze 中の PR があれば `until` を表示する）。Snoozed セクションのカードは通常のカードと同じ見た目で、3 行目の時計と右クリックのメニューの `Unsnooze` が Unsnooze の操作になる。カードに `Snoozed until` の文や Unsnooze のボタンは配置しない。セクションの中でも行を選んで既読にできる。
+- Snooze 中は Snoozed 以外のセクションからも Activity からも消え、レビュー待ちの数に数えず、通知も鳴らさない。Snoozed セクションにまとめて表示し、見出しに `until Mon 09:00` を表示する。チップと検索は Snoozed セクションのカードにも適用する。絞り込みや検索で Snoozed のカードが 0 件でも、Snooze 中の PR があれば見出しの `until` を表示する。Snoozed セクションのカードは通常のカードと同じ見た目で、3 行目の時計と右クリックのメニューの `Unsnooze` が Unsnooze の操作になる。カードに `Snoozed until` の文や Unsnooze のボタンは配置しない。セクションの中でも行を選んで既読にできる。
 - 戻るのは戻り時刻と Unsnooze の 2 つだけ。Snooze 中に新しい出来事やレビューの依頼が来ても戻さない（その間に来たものも「確認しない」の対象。戻ったカードに青い点と `Review requested` のマークが付いているので失うものはなく、遅れるだけ）。「来たら知りたい」なら Snooze しない。
 - 解除された PR は、並び（「PRs タブのセクション」）に従う位置に戻る。
 - Snooze 中に通知対象の出来事があった PR を、解除時に owner ごとに 1 件の通知にまとめる。押すとポップオーバーを開く。通知対象の出来事がなければ通知しない。手動の Unsnooze（CLI を含む）では通知せず、まとめ通知の対象の記録を消去する。Snooze より前に起きて渡せなかった通知の記録も同じく消去する。
@@ -182,6 +194,8 @@ Snooze は PR 単位。「この PR は翌朝まで確認しない」をアプ�
 - 読めなくなった PR（id で取得して見つからないと返された PR）は、未読の行があってもカードを表示せず、レビュー待ちの数に数えず、青い点を付けず、通知もしない。状態は保存し、再び読めるようになると元に戻る。戻ったときに未読の行があれば、Snooze の解除と同じ規則で青い点を付ける。検索結果に出なくなっただけではカードを変更しない。
 
 カードが消える条件を満たしても、ポップオーバーを開いている間（常時表示ウインドウにフォーカスがある間を含む）は消さず、閉じたとき（行の整理と同じ時点）に消す。最後の未読の行を選んだ瞬間にカードが消えないためである。
+
+この判定はデーモンが行う。デーモンは、アカウントごとに「開いている間に表示したカードの PR の集合」を持つ。`popover_opened` のあと、`list` の応答に含めた PR をこの集合に加え、集合にある PR は消える条件を満たしても `list` に含め続ける。`popover_closed`、`client` が `app` の接続の切断、デーモンの起動で集合を空にする。この集合は保存しない。owner の `pr_count` は `list` に含めるカードの数で、同じ集合を使用する。レビュー待ちは PR の状態なので、この集合で保持しない（`review_count` は今の状態から求める）。
 
 カードの追加時刻（`Recently added` の並びの基準）は、Snooze の解除や再表示でも変更しない。
 
@@ -201,19 +215,21 @@ Snooze は PR 単位。「この PR は翌朝まで確認しない」をアプ�
 
 ## キーボード
 
-↑↓ Move、⏎ Open、S Snooze／Unsnooze、⇧R Mark all read、⌘F Search。行のキーは両タブで同じで、S はカードの見出しだけで使用できる（Activity には見出しがないので S はない）。⇧R は表示中のアカウントのすべての行を既読にする（「未読の消え方」）。⌘F は検索欄に移動する。⌘=、⌘−、⌘0 は文字の大きさを変更する（「文字の大きさ」）。
+↑↓ Move、⏎ Open、S Snooze／Unsnooze、⇧R Mark all read、⌘F Search。行のキーは両タブで同じで、S はカードの見出しだけで使用できる（Activity には見出しがないので S はない）。⇧R は表示中のタブに今表示している行を既読にする（「未読の消え方」）。⌘F は検索欄に移動する。⌘=、⌘−、⌘0 は文字の大きさを変更する（「文字の大きさ」）。
 
-ポップオーバー下部のヒント 1 行は、選んでいるものに合わせて使用できるキーだけを、押した結果の表現で表示する。
+**検索欄**。ポップオーバーを開いたときに検索欄にフォーカスは移らない。⌘F で検索欄に移る。検索欄で Esc を押すと、文字があれば文字を消して一覧に戻り、空なら一覧に戻るだけである（ポップオーバーは閉じない）。検索欄で ↓ を押しても一覧に戻る。検索欄にいる間、⇧R と S は文字として入力する。検索の文字は PRs と Activity で別に持ち、ポップオーバーを閉じたとき（常時表示ウインドウは閉じたとき）に消す。
+
+ポップオーバー下部のヒント 1 行は、選んでいるものに合わせて使用できるキーだけを、押した結果の表現で表示する。⇧R と ⌘F は、どの状態でも表示する。
 
 | 選択 | ヒント |
 | --- | --- |
 | カードの見出し | `↑↓ Move  ⏎ Open  S Snooze  ⇧R Mark all read  ⌘F Search`（Snoozed セクションでは `S Unsnooze`） |
 | 行 | `↑↓ Move  ⏎ Open  ⇧R Mark all read  ⌘F Search` |
-| 何も選択していない | `↑↓ Move` |
-| セクションの見出し | `↑↓ Move  ⏎ Collapse`（折りたたみ中は `⏎ Expand`） |
-| `+ N more PRs` | `↑↓ Move  ⏎ Expand` |
+| 何も選択していない | `↑↓ Move  ⇧R Mark all read  ⌘F Search` |
+| セクションの見出し | `↑↓ Move  ⏎ Collapse  ⇧R Mark all read  ⌘F Search`（折りたたみ中は `⏎ Expand`） |
+| `+ N more PRs` | `↑↓ Move  ⏎ Expand  ⇧R Mark all read  ⌘F Search` |
 
-**マウス**。クリックで選び、ダブルクリックで開き、右クリックでメニューを表示する（「押したときの動作」）。カードの見出しと行の右クリックのメニューは次の項目である。
+**マウス**。クリックで選び、ダブルクリックで開き、右クリックでその項目を選んでから（行なら既読にしてから）メニューを表示する（「押したときの動作」）。カードの見出しと行の右クリックのメニューは次の項目である。
 
 | 項目 | 動作 |
 | --- | --- |
@@ -238,7 +254,7 @@ Snooze は PR 単位。「この PR は翌朝まで確認しない」をアプ�
 | Watching | Days to keep watching after close | 3 |
 | Watching | Days without updates before a PR is dropped | 14 |
 
-General と Watching の各行の 1 行の説明は次のとおりである。Launch at login は "Runs in the menu bar after you log in to your Mac"（登録に失敗したときは "Allow shiibar-gh in System Settings › General › Login Items"）、Appearance は "System follows the appearance setting of your Mac"、PR status interval と Reactions interval は "Shorter means you notice sooner, but uses more API quota"、Return time は "All snoozed PRs come back every day at this time"、Days to keep watching after close は "Reactions are watched this long after a card leaves the list"、Days without updates before a PR is dropped は "Other people's open PRs leave the list after this many quiet days"。数値の欄に整数以外を入力したときは "Enter a whole number" を表示する。
+General と Watching の各行の 1 行の説明は次のとおりである。Launch at login は "Runs in the menu bar after you log in to your Mac"（登録に失敗したときは "Allow shiibar-gh in System Settings › General › Login Items"）、Appearance は "System follows the appearance setting of your Mac"、PR status interval と Reactions interval は "Shorter means you notice sooner, but uses more API quota"、Return time は "All snoozed PRs come back every day at this time"、Days to keep watching after close は "Reactions are watched this long after a card leaves the list"、Days without updates before a PR is dropped は "Other people's open PRs leave the list after this many quiet days"。数値の欄に整数以外を入力したときは "Enter a whole number" を表示する。Text size の欄は 9〜18 の外の値を受け付けず、範囲外の値を入力したときは "Enter a number from 9 to 18" を表示する。
 
 Text size の 1 行の説明は "Text in the popover and its window" である。
 
@@ -308,7 +324,7 @@ Copy… のシート（題は `Copy table to example-org`）は、`Copy from` �
 - トークンの期限の 7 日前からそのアカウントに警告を付ける。期限のないトークンは警告しない。期限を過ぎたトークンは、無効なトークン（401）として扱う。
 - トークンが 401 を返すか期限を過ぎると、そのアカウントのすべての取得を止めて警告する。トークンを差し替えると、次の定期取得で自動で再開する。
 - トークンのないアカウント（`token reset` のあと）は取得せず、`no_token` の警告を付ける。トークンを登録すると、次の定期取得で再開する。このアカウントでの `public` 以外の `owner_add` と `owner_lookup` は `invalid`（`Account has no token`）で拒否する。認証なしで GitHub に問い合わせることはない。
-- 応答に `X-GitHub-SSO` が付いたら、SSO の承認が必要という警告を付けるかを判定する。ヘッダーは organization の数値の id を返す（`X-GitHub-SSO: partial-results; organizations=21955855,20582480`。docs.github.com/en/rest/authentication/authenticating-to-the-rest-api で確認、2026-11-05）ので、そのアカウントの登録済み owner の数値の id（`owner lookup` で保存した `github_id`）と比較し、一致した owner ごとに `SSO authorization required for example-org` の警告を付ける。一致しない organization は無視し、警告を付けない。帯の `Authorize…` はヘッダーの URL（なければ GitHub のトークンの設定ページ）を開く。ほかの owner の取得は続くので三角は付けない。承認後は次の取得でヘッダーが消え、警告も消える。
+- 応答に `X-GitHub-SSO` が付いたら、SSO の承認が必要という警告を付けるかを判定する。ヘッダーは organization の数値の id を返す（`X-GitHub-SSO: partial-results; organizations=21955855,20582480`。docs.github.com/en/rest/authentication/authenticating-to-the-rest-api で確認、2026-11-05）ので、そのアカウントの登録済み owner の数値の id（`owner lookup` で保存した `github_id`）と比較し、一致した owner ごとに `SSO authorization required for example-org` の警告を付ける。一致しない organization は無視し、警告を付けない。1 つの organization への 403 では、ヘッダーは承認の URL だけを返し、organization の id を返さない（同じページで確認、2026-11-10）。この形は、owner ごとの要求（検索）で受けたときはその owner の `sso_required` とし、複数の owner にまたがる要求（状況の取得、通知）で受けたときはその取得の失敗として扱う（警告は付けず、再試行と 5 分の帯の対象にする）。owner を示さない `sso_required` の警告は付けない。帯の `Authorize…` はヘッダーの URL（なければ GitHub のトークンの設定ページ）を開く。ほかの owner の取得は続くので三角は付けない。承認後は次の取得でヘッダーが消え、警告も消える。
 - Create token… は `https://github.com/settings/tokens/new?scopes=repo,notifications,read:org&description=shiibar-gh` をブラウザで開く。期限は指定せず、GitHub の既定に従う。
 
 **トークンの状態**。設定画面の Token の行の右には、次のうち最も上のものを 1 つ表示する：`Checking…`（進行中）、`Keychain unavailable`（「Keychain を読めないとき」。Edit… を表示しない）、`No token`（灰、`no_token`。Edit… は空の欄で開く）、`Invalid`（赤、`token_invalid`）、`Expires in N days`（黄、`token_expiring`。1 日未満は切り上げて `Expires in 1 day`）、`Missing scope`（黄、`scope_missing`）、`SSO authorization required`（黄、`sso_required`）。正常なときは何も表示しない。
@@ -342,14 +358,16 @@ Copy… のシート（題は `Copy table to example-org`）は、`Copy from` �
 
 **取得の成功と失敗**。owner の取得の成功は、その owner の検索と状況の取得がすべてエラーなく終わったことを指す。成功した時刻は出来事を取得する範囲（「監視開始より前の出来事」）の始まりに使用する。アカウントの取得の成功は、そのアカウントのすべての owner の取得と通知の確認がエラーなく終わったことを指し、1 つでも失敗すればそのアカウントの取得は失敗である。Updated … ago は、そのアカウントの定期取得または `refresh` が最後に成功して終わった時刻である（成功したことがなければ `Not updated yet`）。失敗が続く間は時刻が進まないので、帯が出る前でも古いデータだと分かる。PR も出来事もなかった場合も、成功なら更新する。上限、401、トークンなし、Keychain を読めない状態で取得を止めている間は進まない。
 
-取得が終わるたびに、そのアカウントの次の取得までの待ち時間を決める。成功なら設定の間隔とする。失敗なら 5、10、20、40 秒と延ばし、設定の間隔を超えたら設定の間隔とする。タイマーは 1 本で、次の取得は前回の取得の終わりから数える。`refresh` はいつでもすぐに取得する。
+アカウントの定期取得（全 owner の検索と状況の取得、および通知の確認）は 1 回の取得として扱い、その終了時刻から次の取得の時刻を 1 つ決める。成功なら設定の間隔のあととする。失敗なら 5、10、20、40 秒と延ばし、40 秒のあとは 40 秒を繰り返す。どの待ち時間も設定の間隔を超えない。失敗のあとの再試行は、失敗した owner だけでなく、アカウントの取得全体をやり直す。通知の確認は、前回の確認から X-Poll-Interval の秒数がたっていなければその回は省き、省いた回も成功として扱う（「通知 API の取り方」）。Reaction の取得は 0.2 のまま別の時刻（Reactions interval）で行い、アカウントの取得の成功と失敗の判定にも Updated にも関係しない。
+
+`refresh` はいつでもすぐに取得し、通常の 1 回の取得として扱う。成功すれば失敗の回数を 0 に戻し、Updated を進め、次の定期取得をその終了時刻から設定の間隔のあとにする。失敗すれば失敗の回数を 1 つ進め、最初の失敗なら 5 分の起点になる。
 
 - 出来事の取得に失敗した PR は、失敗した時点の取得の範囲の始まりを、その PR の取り直しの時刻として記録する。次の取得ではその時刻から取り直し、成功すれば記録を消す。そのため、owner の成功の時刻が進んでも出来事を失わない。
 - 通知 API の since と Last-Modified は常に進める。通知を合図にした取得に失敗した PR も、同じく取り直しの対象にする。知らない PR（repo#number → id の対応がない PR）の通知と、取得できる owner に属さない PR（disabled の owner、どの owner にも属さない PR）の通知は無視し、ほかの取得を妨げない。
 - 出来事の取得に続けて失敗する PR には、その PR を示す警告を付け、取得のたびに取り直す。
 - スコープ不足で取得できなかった部分は失敗に数えず、取得できる部分の取得を続けて警告する（`scope_missing`）。SSO の未承認も警告にする。
 - ネットワークの失敗、5xx、タイムアウト、本文が空の 200 の応答（GraphQL の応答を解釈できないもの）は失敗で、上の待ち時間で再試行する。
-- 取得の失敗の帯と三角（`fetch_failed`）は、最初の失敗から 5 分たっても成功していないときに表示し、成功で消す。それまでの失敗は、`Updated … ago` の時刻が進まないことだけで示す。
+- 取得の失敗の帯と三角（`fetch_failed`）は、最初の失敗から 5 分たっても成功していないときに表示し、成功で消す。それまでの失敗は、`Updated … ago` の時刻が進まないことだけで示す。最初の失敗の時刻は保存せず、デーモンの再起動で消える。上限による停止、401、トークンなし、Keychain を読めない状態の間は取得していないので、`fetch_failed` を付けない（それぞれの警告を表示する）。これらの停止を始めた時点で失敗の回数と最初の失敗の時刻は消え、再開後の最初の失敗から再び数える。
 - 401 は失敗で、トークンを差し替えるまでそのアカウントの取得を止める。
 - 上限による停止は失敗である。停止中は上の待ち時間ではなく、再開の時刻まで取得しない（「レート制限」）。
 - 失敗はアカウントごとに扱い、ほかのアカウントの取得を止めない。1 つの owner の失敗は、同じアカウントのほかの owner の取得を止めない。
@@ -357,7 +375,9 @@ Copy… のシート（題は `Copy table to example-org`）は、`Copy from` �
 
 **状態の保存**。行の未読、Snooze、カードの追加時刻、監視開始時刻、owner ごとの最後に取得に成功した時刻、アカウントごとの最後に取得に成功して終わった時刻、PR の前回の値、Reaction の基準値、設定（`text_size` を含む）、アカウント、owner、出来事の表、Exclusions はデーモンが SQLite に保存する（SQLite はデーモンに組み込み、macOS の libsqlite3 は利用しない）。絞り込みの選択、Group by、並び、折りたたみ、Activity の owner の選択、ウインドウの位置と大きさ、`Keep on top` は画面の状態なので、アプリがアカウントごとに UserDefaults に保存する。検索の文字は保存しない。GitHub 側には何も書き込まない。トークンは DB に保存せず Keychain に保存する。すべてのアカウントのトークンは Keychain の 1 つの項目にまとめて保存し、項目にはアカウントの id と login も記録する。開発版は再インストールのたびに Keychain の許可のダイアログを表示するので（ローカルの署名の ID には Team ID がなく、項目の許可がビルドごとの cdhash に結び付くため）、項目を 1 つにしてダイアログを 1 回に抑える。トークンの追加、置き換え、削除は、この項目を読み、変更して保存する。
 
-0.2 の DB（スキーマの版 4）は、起動時に版 5 に移行する。アカウント、owner、出来事の表（Todo の列は捨てる）、Exclusions、PR、行、未読、Snooze、監視開始時刻は引き継ぎ、Todo と Done の値は捨てる。Keychain の項目は版 2 のまま変更しない。
+0.2 の DB（スキーマの版 4）は、起動時に版 5 に移行する。Todo と Done の列（`owner_events.todo`、`pr_rows.seen_pending`、`done`、`todo_auto`、`todo_manual`）を削除するほかは、すべての表とデータをそのまま引き継ぐ。PR の前回の値、Reaction の基準値、通知の配信の記録、整理済みの印、通知 API の since も引き継ぐ。通知だけから取り込んだ 0.2 の PR と行も消さない。移行は 1 つのトランザクションで行い、列を削除し、`prs.created_at`（null 可）を追加し、`user_version` を 5 にする。失敗したらロールバックし、版 4 のまま「DB を読めないとき」の状態にする。Keychain の項目は版 2 のまま変更しない。
+
+開いている間に表示したカードの PR の集合（「カードが出る・消える条件と監視期間」）と、取得の最初の失敗の時刻（「取得の成功と失敗」）は保存しない。
 
 0.1 のデータは引き継がない。0.1 のスキーマの DB は「DB を読めないとき」と同じ扱いにし、Reset で退避する。0.1 の Keychain の項目は読み込まず、0.2 以降は別の名前の項目を使用する。トークンは利用者が再登録する。
 
@@ -375,7 +395,7 @@ Copy… のシート（題は `Copy table to example-org`）は、`Copy from` �
 
 **reason を判定に使用しない理由**。reason は「なぜ自分に通知されるか」を表すスレッド単位の値で、起きた出来事を表さない。一度 mention になったスレッドは、その後メンションされなくても mention のままになる。
 
-**PR の識別**。鍵は GraphQL の node id と、それを取得したアカウントの組である。同じ PR を 2 つのアカウントで取得した場合は別の PR として扱い、Snooze と未読を共有しない。PR は検索で見つけたときに取り込み、repo#number → id の対応を記憶する。通知 API は repo と number しか持たないので、通知の PR はこの対応で id に変換し、すでに知っている PR の再取得の合図にする。対応のない PR（知らない PR）は通知からは取り込まない。
+**PR の識別**。鍵は GraphQL の node id と、それを取得したアカウントの組である。同じ PR を 2 つのアカウントで取得した場合は別の PR として扱い、Snooze と未読を共有しない。PR は検索で見つけたときに取り込む。repo#number → id の対応は、保存した PR（prs 表の owner、repo、number）から求める。通知 API は repo と number しか持たないので、通知の PR はこの対応で id に変換し、すでに知っている PR の再取得の合図にする。対応のない PR（知らない PR）は通知からは取り込まない。0.2 で通知だけから取り込んだ PR も保存した PR なので、対応に含む。
 
 **行の種類の判定**
 
@@ -398,13 +418,24 @@ Copy… のシート（題は `Copy table to example-org`）は、`Copy from` �
 
 **行の本文と飛び先**。Review requested の本文は `for you`、Review requested to my team の本文は `for <チームの slug> team` である。Merged と Closed の行と Approved の行は、出来事を起こした人を `by <ログイン名>` の形で本文に表示する。Added to merge queue の行も同じである。Removed from merge queue の行は、取り除いた人（チェックの失敗では github-merge-queue、手動では操作した人）を表示し、本文は理由と PR をキューに追加した人である（`Checks failed · added by alice`）。理由は `failed_checks` を `Checks failed`、`manual` を `Removed manually` と表示し、それ以外の値はそのまま表示する。キューに追加した人は、同じ PR の Added to merge queue の出来事のうち、まだ対応させていない最も古いものの actor とする。理由が `merged` の取り除きは、Merged の行で足りるので行にしない。GitHub が出来事の URL を返さない Review requested とマージキューの行は、PR のページを開く。
 
-**選択とキー**。選択は PRs タブでは「セクションの見出し」「カードの見出し」「行」「+ N more PRs」を上から順に、Activity では行だけを移る。クリックでも選ぶ。行を選ぶと、その行を既読にする。セクションの見出しで ⏎ は折りたたみの切り替え。カードの見出しで ⏎ は PR を開く、S はその PR を Snooze（Snoozed セクションでは Unsnooze）。行で ⏎ はその場所を開く、S は何もしない。「+ N more PRs」で ⏎ は展開。⇧R は選択に関係なく、表示中のアカウントのすべての行を既読にする。⌘F は検索欄に移動する。
+**選択とキー**。選択は PRs タブでは「セクションの見出し」「カードの見出し」「行」「+ N more PRs」を上から順に、Activity では行だけを移る。クリックでも選ぶ。行を選ぶと、その行を既読にする。セクションの見出しで ⏎ は折りたたみの切り替え。カードの見出しで ⏎ は PR を開く、S はその PR を Snooze（Snoozed セクションでは Unsnooze）。行で ⏎ はその場所を開く、S は何もしない。「+ N more PRs」で ⏎ は展開。⇧R は選択に関係なく、表示中のタブに今表示している行を既読にする（「未読の消え方」）。⌘F は検索欄に移動する。
 
 **Activity に表示する行**。PRs タブに今出ているカードの行だけである。行は、青い点、種類のアイコン、ラベル、meta（actor と時刻）、本文（未読のメンションは 3 行）、`owner/repo #番号 · タイトル` で構成し、見た目（青い点、種類のアイコン、既読の薄い表示）は PRs タブと同じである。owner 名の列は持たない（リポジトリ名に owner が含まれる）。チップと検索は両タブに同じように適用し、Activity ではさらに owner のボタン（`All owners` と owner 名）で絞る。Snooze 中の PR の行は Activity に表示しない。
 
-**絞り込みの意味**。Authored by me は author が自分の PR、Assigned to me は assignees に自分を含む PR、Review requested は今も自分または自分のチームにレビューが依頼されている PR（チームは、その owner の Review requested to my team の List がオンのときだけ）である。Group by の `Involvement` のセクションも同じ意味で分類する。
+**絞り込みの意味**。Authored by me は author が自分の PR、Assigned to me は assignees に自分を含む PR、Review requested は今も自分または自分のチームにレビューが依頼されている PR（チームは、その owner の Review requested to my team の List がオンのときだけ）である。Group by の `Involvement` のセクションも同じ意味で分類する。チップと Involvement の Review requested は GitHub の事実（`review_requested`）で、Exclusions を参照しない。カードの `Review requested` のマークと赤い数は、このアプリのレビュー待ち（「レビュー待ちの定義」。Exclusions とチームの List を反映する）である。
 
-検索は、タイトル、owner/repo と番号、作者のログイン名、base と head のブランチ名、行の本文を対象に、大文字と小文字を区別しない部分一致で行う。PRs タブでは一致しない PR（PR の項目にもその行の本文にも一致しない PR）を、Activity では一致しない行（その PR の項目にも行の本文にも一致しない行）を隠す。セクションの数は変更しない。チップ、owner のボタン、検索で 0 件になったときは `Nothing matches` を表示する。Group by と並びは表示の順と区切りだけを決め、カードを隠さない。
+チップ、owner のボタン、検索、Group by、並び、`+ N more PRs` の計算はすべてアプリが行う。アプリは `list` と `activity` を絞り込み（`filter`、`owner`、`owners`）も `search` も付けずに取得する。セクションの数は絞り込みに依存しないので、アプリは絞り込み前のカードを持つ必要があるためである。取得は 1 回ごとに 1 往復で完了し、文字を打つたびにデーモンへ問い合わせない。ワイヤの `filter` と `search` は CLI のためだけに残す。
+
+検索は、検索の文字を空白で単語に分割し、すべての単語が一致した項目だけを表示する。各単語は、次のいずれかに大文字と小文字を区別しない部分一致で一致すればよい：タイトル、`owner/repo#number`（`example-org/api#407` の形）、作者のログイン名、base と head のブランチ名、行の本文、行の actor のログイン名。PRs タブでは一致しない PR（PR の項目にもその行の本文と actor にも一致しない PR）を、Activity では一致しない行（その PR の項目にもその行の本文と actor にも一致しない行）を隠す。セクションの数は変更しない。アプリ（Swift）と CLI の判定（Rust）は同じ規則で、テストは次の例を共有する。
+
+| 検索の文字 | `example-org/api#407` に一致するか | 理由 |
+| --- | --- | --- |
+| `api 407` | 一致する | `api` と `407` がそれぞれ `example-org/api#407` に含まれる |
+| `#407` | 一致する | `example-org/api#407` に含まれる |
+| `api #407` | 一致する | 2 つの単語がそれぞれ一致する |
+| `API` | 一致する | 大文字と小文字を区別しない |
+
+チップ、owner のボタン、検索で 0 件になったときは `Nothing matches` を表示する。Group by と並びは表示の順と区切りだけを決め、カードを隠さない。
 
 **初回、失敗、空**
 
@@ -412,7 +443,7 @@ Copy… のシート（題は `Copy table to example-org`）は、`Copy from` �
 | --- | --- |
 | アカウントがない | メニューバーに shiibar-gh のアイコン 1 つ。押すと「No accounts yet」「Add an account in Settings」と Settings ボタン |
 | アカウントに owner がない | ポップオーバーに「No owners yet」「Add an owner in Settings」と Settings ボタンだけ（警告があれば見出しの下の帯は表示する）。設定はそのアカウントを選んだ状態で開く |
-| 取得の失敗 | 最初の失敗から 5 分たっても成功していないとき、アイコンに三角。ポップオーバーに黄色い帯「Couldn't reach GitHub · retrying in N min」。N は次の再試行の時刻（`fetch_failed` の警告の時刻）から求める。前回の内容は残す。5 分までは `Updated … ago` の時刻が進まないことだけで示す |
+| 取得の失敗 | 最初の失敗から 5 分たっても成功していないとき、アイコンに三角。ポップオーバーに黄色い帯「Couldn't reach GitHub · retrying in N min」。N は次の再試行の時刻（`fetch_failed` の警告の時刻）から 0.2 と同じ形式で求める。前回の内容は残す。5 分までは `Updated … ago` の時刻が進まないことだけで示す |
 | トークンが無効（401） | アイコンに三角。帯に警告。トークンを差し替えるまでそのアカウントの取得を止める。前回の内容は残す |
 | トークンがない（`token reset` のあと） | アイコンに三角。帯に `No token`。登録するまでそのアカウントの取得を止める。前回の内容は残す |
 | トークンの期限まで 7 日以内 | アイコンに三角。帯に期限 |
@@ -447,20 +478,20 @@ owner や PR を指す命令は `--account <account>` を必須にする。省�
 
 | コマンド | 動作 |
 | --- | --- |
-| list [--account \<a\>] [--owner \<o\>] [--authored｜--assigned｜--review-requested] [--search \<text\>] [--snoozed] [--json] | PRs タブと同じ列を出力する。`--search` はポップオーバーの検索と同じ一致で絞る。`--snoozed` は Snoozed セクションの PR だけ。Group by と並びは表示の状態なので持たない |
+| list [--account \<a\>] [--owner \<o\>] [--authored｜--assigned｜--review-requested] [--search \<text\>] [--snoozed] [--json] | PRs タブと同じ列を出力する。絞り込みと `--search` の判定はデーモンが行い、ポップオーバーと同じ規則（「絞り込みの意味」）で絞る。`--snoozed` は Snoozed セクションの PR だけ。Group by と並びは表示の状態なので持たない。出力の順は Owner の順で、各 owner の中は開いている PR を先にした `Recently updated` の順である。テキスト出力では、レビュー待ちの PR に `[review requested]` を付ける |
 | status \<pr\> --account \<a\> | 状態ラベルと Review／Checks／Base |
-| activity [--account \<a\>] [--owner \<o\>]… [--authored｜--assigned｜--review-requested] [--json] | Activity タブと同じ流れ。`--owner` は複数指定できる |
-| read \<row\>… / read --all --account \<a\> | 行を既読にする（行を選ぶか開いたときと同じ）／アカウントのすべての行を既読にする（⇧R と同じ） |
+| activity [--account \<a\>] [--owner \<o\>]… [--authored｜--assigned｜--review-requested] [--search \<text\>] [--json] | Activity タブと同じ流れ。`--owner` は複数指定できる。`--search` は `list` と同じ規則で絞る |
+| read \<row\>… / read --all --account \<a\> | 行を既読にする（行を選ぶか開いたときと同じ）／Snooze 中の PR の行を除くアカウントのすべての行を既読にする（ワイヤの `read_all`。⇧R より範囲が広い） |
 | snooze \<pr\> --account \<a\> / unsnooze \<pr\> --account \<a\> | PR 単位の Snooze |
 | refresh [--account \<a\>] | 今すぐ取得する。定期取得と同じ内容（検索、状況、出来事、通知、Reaction）を取得し、反映が終わってから戻る。Keychain を読めない状態では再読み込みから始める |
-| open \<pr｜row\> [--account \<a\>] | その場所の URL を出力する（開くのは呼び元。`<row>` では `--account` を省略できる） |
+| open \<pr｜row\> [--account \<a\>] | その場所の URL を出力する（開くのは呼び元。`<row>` では `--account` を省略できる）。行を既読にしない |
 | config get \<key\> / config set \<key\> \<value\> | 設定項目の読み書き（General と Watching の項目。`text_size` を含む） |
 | version [--json] | CLI 自身の版と、デーモンの `info` の版を 2 行で出力する（`cli: 0.3.0` と `daemon: 0.3.0`。`--json` は `{"cli":"0.3.0","daemon":"0.3.0"}`）。デーモンに接続できないときは CLI の版を出力し、デーモンの行は `daemon: not running`（`--json` では `"daemon":null`）とする |
 | reset | DB を読めないときの初期化 |
-| account list [--json] / account add / account remove \<account\> / account color \<account\> \<color\> | アカウントの一覧、追加（トークンは標準入力）、削除、色（`none`、`red`、`orange`、`yellow`、`green`、`blue`、`purple`） |
+| account list [--json] / account add / account remove \<account\> / account color \<account\> \<color\> | アカウントの一覧（テキスト出力のレビュー待ちの PR の数は `review=`）、追加（トークンは標準入力）、削除、色（`none`、`red`、`orange`、`yellow`、`green`、`blue`、`purple`） |
 | token set --account \<a\> / token test --account \<a\> / token reset | トークンの差し替え（標準入力）、テスト（標準入力にトークンがあればそれを、なければ保存済みを検証）、Keychain の項目の削除（「Keychain を読めないとき」） |
 | owner lookup \<owner\> --account \<a\> | owner の種類と id を `GET /users/{owner}` で求める。見つからなければ `not_found`。owner を登録しない |
-| owner list [--account \<a\>] / owner add \<owner｜public\> --account \<a\> / owner remove \<owner\> --account \<a\> / owner enable｜disable \<owner\> --account \<a\> | owner の一覧、追加（`public` は Public）、削除、enabled と disabled の切り替え。`owner add` は `owner lookup` を実行して種類と id を保存する |
+| owner list [--account \<a\>] / owner add \<owner｜public\> --account \<a\> / owner remove \<owner\> --account \<a\> / owner enable｜disable \<owner\> --account \<a\> | owner の一覧（テキスト出力のレビュー待ちの PR の数は `review=`）、追加（`public` は Public）、削除、enabled と disabled の切り替え。`owner add` は `owner lookup` を実行して種類と id を保存する |
 | owner notify \<owner\> on｜off --account \<a\> / owner skip-drafts \<owner\> on｜off --account \<a\> | Notifications タブの 2 つのスイッチ |
 | owner events \<owner\> --account \<a\> / owner events set \<owner\> \<event\> list｜notify on｜off --account \<a\> / owner events copy \<from-owner\> \<to-owner\> --account \<a\> | 出来事の表の表示、変更、コピー。`<event>` は「ワイヤ形式」の種類の値 |
 | owner exclusions \<owner\> --account \<a\> / owner exclusions set \<owner\> repo｜user \<name\> hidden｜list-only --account \<a\> / owner exclusions remove \<owner\> repo｜user \<name\> --account \<a\> | Exclusions の表示、追加または状態の変更（なければ作成する）、削除 |
@@ -520,9 +551,9 @@ Unix ソケットの NDJSON。1 接続 1 要求 1 応答。`subscribe` だけは
 | `info` | — | `version`、`started_at` |
 | `shutdown` | — | 応答後に終了 |
 
-`account` の引数はアカウントの login、`owner` の引数は owner のログイン名または `public` で、応答の中の参照は id で行う。
+`account` の引数はアカウントの login、`owner` の引数は owner のログイン名または `public` で、応答の中の参照は id で行う。`list` と `activity` の `filter`、`owner`、`owners`、`search` は CLI のための引数で、アプリは付けずに取得する（「絞り込みの意味」）。
 
-アカウントの値は `{"id","login","color","token":{"registered","expires_at","last_test"},"updated_at","review_count","unread","warnings":[...],"rate_limit":{"graphql":{"used","limit","reset_at"},"rest":{...}},"owners":[...]}` である。`owners` は登録の順で、Public は常に最後である（アプリは並べ替えない）。`id` は GitHub のユーザーの数値の id を 10 進の文字列にしたもの（`"3407303"`）、`color` は `none`、`red`、`orange`、`yellow`、`green`、`blue`、`purple` のいずれかで、`account_color` の不正な値は `invalid` になる。`last_test` は保存済みのトークンの最後のテストの `{"at","results"}`（なければ `null`）。`rate_limit` の値がまだなければ `null`。`updated_at` はそのアカウントの取得が最後に成功して終わった時刻（なければ `null`）、`review_count` はそのアカウントのレビュー待ちの PR の数（「レビュー待ちの定義」）である。owner の値は `{"id","name","kind","github_id","enabled","notify","skip_drafts","review_count","pr_count"}` で、`review_count` はその owner のレビュー待ちの PR の数である。`kind` は `org`、`user`、`public` のいずれかである。`id` はデーモンが割り当てる識別子で、ログイン名として解釈しない。`github_id` は `GET /users/{owner}` の数値の `id`（Public は `null`）である。カードと行の値は 0.1（docs/tasks/M1.md の「応答の項目」）の項目を保ち、`scope` を `owner`（owner の id）に、カードの `mine` を `authored_by_me` に置き換え、行の `class` と `done` を削除する。カードはさらに `author_avatar_url`（GraphQL の `author.avatarUrl(size: 32)`。`author` が `null` なら `null`）、`assigned_to_me`、`review_requested`（「絞り込みの意味」の Review requested）、`awaiting_review`（レビュー待ちか。「レビュー待ちの定義」）、`created_at`（GraphQL の `createdAt`）、`updated_at`（GraphQL の `updatedAt`）を持ち、行は `owner` と `kind` を持つ。`notify` の `notification` も 0.1 の形を保ち、`scope` を `account`（アカウントの id）と `owner`（owner の id）に置き換える。まとめ通知は `title` と `subtitle` を持ち、`body` は `null` である。カードと行も `account` を持つ。
+アカウントの値は `{"id","login","color","token":{"registered","expires_at","last_test"},"updated_at","review_count","unread","warnings":[...],"rate_limit":{"graphql":{"used","limit","reset_at"},"rest":{...}},"owners":[...]}` である。`owners` は登録の順で、Public は常に最後である（アプリは並べ替えない）。`id` は GitHub のユーザーの数値の id を 10 進の文字列にしたもの（`"3407303"`）、`color` は `none`、`red`、`orange`、`yellow`、`green`、`blue`、`purple` のいずれかで、`account_color` の不正な値は `invalid` になる。`last_test` は保存済みのトークンの最後のテストの `{"at","results"}`（なければ `null`）。`rate_limit` の値がまだなければ `null`。`updated_at` はそのアカウントの取得が最後に成功して終わった時刻（なければ `null`）、`review_count` はそのアカウントのレビュー待ちの PR の数（「レビュー待ちの定義」）である。owner の値は `{"id","name","kind","github_id","enabled","notify","skip_drafts","review_count","pr_count"}` で、`review_count` はその owner のレビュー待ちの PR の数である。`kind` は `org`、`user`、`public` のいずれかである。`id` はデーモンが割り当てる識別子で、ログイン名として解釈しない。`github_id` は `GET /users/{owner}` の数値の `id`（Public は `null`）である。カードと行の値は 0.1（docs/tasks/M1.md の「応答の項目」）の項目を保ち、`scope` を `owner`（owner の id）に、カードの `mine` を `authored_by_me` に置き換え、行の `class` と `done` を削除する。カードはさらに `author_avatar_url`（GraphQL の `author.avatarUrl(size: 32)`。`author` が `null` なら `null`）、`assigned_to_me`、`review_requested`（「絞り込みの意味」の Review requested）、`awaiting_review`（レビュー待ちか。「レビュー待ちの定義」）、`created_at`（GraphQL の `createdAt`。0.2 から移行した直後で、まだ取得していなければ `null`）、`updated_at`（GraphQL の `updatedAt`）を持ち、行は `owner` と `kind` を持つ。`notify` の `notification` も 0.1 の形を保ち、`scope` を `account`（アカウントの id）と `owner`（owner の id）に置き換える。まとめ通知は `title` と `subtitle` を持ち、`body` は `null` である。カードと行も `account` を持つ。
 
 出来事の種類の値（`event`、行の `kind`）は `review_requested`、`team_review_requested`、`mentioned`、`team_mentioned`、`comment`、`reply`、`reply_mentioned`、`reaction`、`approved`、`changes_requested`、`checks_failed`、`conflicts`、`mergeable`、`merge_queue_added`、`merge_queue_removed`、`merged_closed` である。行の `kind` では `merged_closed` の代わりに `merged` と `closed` を使用する。`events` は種類ごとの `{"list","notify"}`、`exclusions` は `{"repos":[{"name","state"}],"users":[...]}` である。
 
@@ -534,9 +565,9 @@ Unix ソケットの NDJSON。1 接続 1 要求 1 応答。`subscribe` だけは
 
 DB を読めない状態に移行したとき、およびその状態から `reset` で戻ったとき、デーモンは `subscribe` の接続をすべて切断する。クライアントは再接続し、`snapshot` で新しい状態を受け取る。DB を読めない間の `accounts` は空の配列とする。`reset` のあとの最初の取得で Keychain を読み込み、アカウントを復元する。
 
-`popover_opened` と `popover_closed` は、メニューバーの青い点（「未読の消え方」）と行の整理（「残す行の数」）のために開いている状態を伝える。行の既読は変更しない。`popover_opened` で記録した開いている状態は、`client` が `app` の接続が切れたときとデーモンの起動時に解除する。アプリの異常終了で `popover_closed` を受信できなくても、メニューバーの青い点を付けられるようにするためである。アプリは再接続時に、開いているアカウントの `popover_opened` を再送する。
+`popover_opened` と `popover_closed` は、メニューバーの青い点（「未読の消え方」）、行の整理（「残す行の数」）、カードの消滅の反映（「カードが出る・消える条件と監視期間」）のために開いている状態を伝える。行の既読は変更しない。デーモンは `popover_opened` のあと、`list` の応答に含めた PR を開いている間に表示したカードの集合に加え、`popover_closed` で集合を空にする。`popover_opened` で記録した開いている状態とこの集合は、`client` が `app` の接続が切れたときとデーモンの起動時に解除する。アプリの異常終了で `popover_closed` を受信できなくても、メニューバーの青い点を付けられるようにするためである。アプリは再接続時に、開いているアカウントの `popover_opened` を再送する。
 
-`read` は指定した行の未読を下ろす。存在しない行 id があれば `not_found` を返し、何も変更しない。`read_all` は、そのアカウントのすべての行の未読を下ろす。
+`read` は指定した行の未読を下ろす。存在しない行 id があれば `not_found` を返し、何も変更しない。`read_all` は、Snooze 中の PR の行を除く、そのアカウントのすべての行の未読を下ろす。Hidden や List オフで表示しない行も含む。ポップオーバーの ⇧R は `read_all` を使用せず、表示している行の id を `read` に列挙して送る（「未読の消え方」）。`open` は URL を返すだけで、行を既読にしない。行を開いたときの既読は、アプリが `read` を送って付ける。
 
 アカウントの `warnings` と `refresh` の応答の `warnings` の要素は `{"kind":"...","account":<アカウントの id または null>,"owner":<owner の id または null>,"message":"...","until":<epoch 秒または null>,"url":<文字列または null>}` である。`kind` は「警告の表示」の表の値のいずれかで、`owner` は `sso_required`（常に owner を示す）と `events_fetch_failed` で owner を示し、`until` は `fetch_failed` では次の再試行の時刻、`rate_limited` では再開の時刻、`token_expiring` ではトークンの期限、`url` は `sso_required` の承認の URL である。`keychain_unavailable` と `tokens_unreadable` はすべてのアカウントに付く。
 
@@ -556,7 +587,7 @@ DB を読めない状態に移行したとき、およびその状態から `res
 | --- | --- |
 | 行の生成 | 立てる（List がオフの種類、Hidden の対象なら立てない） |
 | `read`（行を選んだ、または開いた） | 下ろす |
-| `read_all`（⇧R） | そのアカウントのすべての行で下ろす |
+| `read_all`（CLI の `read --all`） | Snooze 中の PR の行を除く、そのアカウントのすべての行で下ろす |
 
 行の状態は未読だけである。`popover_opened` と `popover_closed` は行の状態を変更しない。
 
@@ -564,7 +595,8 @@ DB を読めない状態に移行したとき、およびその状態から `res
 
 - 表示の判定は次の順で行う。読めなくなった PR と、Exclusions で Hidden のリポジトリの PR は表示しない。Snooze 中は Snoozed セクションに表示する。それ以外は、未読の行があるかレビュー待ちなら表示する。残りは「カードが出る・消える条件と監視期間」に従う（消える条件はポップオーバーを閉じたときに反映する）。
 - 並びは、開いている PR（Draft を含む）を先に、Merged と Closed を後ろにし、それぞれの中で `Recently updated` なら PR の `updatedAt` の降順、`Recently added` ならカードの追加時刻の降順とする。追加時刻はカードが初めて表示の条件を満たした時刻で、更新しない。セクションへの区別と並べ替えはアプリが行う（「PRs タブのセクション」）。
-- レビュー待ち（`awaiting_review`）は、取得のたびに PR の今の状態から求める。
+- レビュー待ち（`awaiting_review`）と `review_count` は、表示のたびに（`list` の応答と `account_changed` を生成するたびに）PR の今の状態、Snooze、Exclusions、チームの List から求める。disabled の owner の `review_count` は 0 で、アカウントの `review_count` は owner の値の和である。
+- 消える条件を満たしても、ポップオーバーを開いている間に表示したカードは `list` に含め続ける（「カードが出る・消える条件と監視期間」）。
 - Snooze は PR ごとの有無だけを保存し、戻る時刻を PR ごとに保存しない。解除は Mac の現在のタイムゾーンの Return time に行う。「Snoozed until」の表示は次の Return time から求める。Return time を変更すると、Snooze 中のすべての PR に反映する。
 
 ### 通知の判定
@@ -580,7 +612,7 @@ DB を読めない状態に移行したとき、およびその状態から `res
 | 状態ディレクトリ | `~/.local/state/shiibar-gh/`（`SHIIBAR_GH_STATE_DIR` で変更） |
 | ログレベル | info（`SHIIBAR_GH_LOG` で変更） |
 | アプリの再接続 | 1 秒から倍々、上限 30 秒 |
-| 取得の失敗の再試行 | 5、10、20、40 秒と延ばし、設定の間隔を超えたら設定の間隔 |
+| 取得の失敗の再試行 | 5、10、20、40 秒と延ばし、以降は 40 秒を繰り返す。どの待ち時間も設定の間隔を超えない |
 | 取得の失敗の帯と三角を表示するまで | 最初の失敗から 5 分 |
 | 文字の大きさ（`text_size`） | 既定 12 pt、範囲 9〜18 pt の整数 |
 | 状態ディレクトリの権限 | ディレクトリ 0700、DB 0600 |
@@ -592,5 +624,6 @@ DB を読めない状態に移行したとき、およびその状態から `res
 - [ ] 1 つの PR が同時にマージキューに 2 回追加されることがあるか、取り除きが追加の順と異なる順に起きることがあるか（Removed from merge queue の行の、キューに追加した人の対応に影響する。ドキュメントに記載がなく、確認していない）
 - [ ] `GET /notifications` の応答に、SSO を承認していない organization の分が含まれず `X-GitHub-SSO` が付くか（ドキュメントは REST の応答一般について記載している。所有者は SSO の organization に属していないので確認できない）
 - [ ] SSO の承認が必要という警告の動作全体（SSO を有効にした organization で確認できていない）
+- [ ] 複数の owner にまたがる要求（状況の取得、通知）で、1 つの organization への 403（`X-GitHub-SSO` が承認の URL だけの形）を受けたとき、その 403 を owner に結び付けられない。今はその取得の失敗として扱い、`sso_required` の警告は付けない（「トークン」）
 - [ ] `x-oauth-scopes` の `write:org` と `admin:org` が `read:org` を含むとみなしてよいか（docs.github.com の「Scopes for OAuth apps」は `user` の入れ子だけを明記している。2026-11-09 に確認。実装はこの 2 つを `read:org` とみなす）
 - [ ] 通知の書き込みと配信の記録の間にデーモンが強制終了すると、次の再接続のまとめ通知で 1 件多く数える場合がある（M1 から引き継いだ既知の動作で、変更しない）
