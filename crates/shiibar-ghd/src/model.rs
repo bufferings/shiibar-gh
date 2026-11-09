@@ -11,6 +11,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const PUBLIC: &str = "public";
 
+/// DESIGN.md, "Constants": `text_size` is a whole number of points.
+pub const TEXT_SIZE_DEFAULT: i64 = 12;
+pub const TEXT_SIZE_MIN: i64 = 9;
+pub const TEXT_SIZE_MAX: i64 = 18;
+
 /// `<account id>:<node id>`, the key of a PR, row, baseline or comment.
 pub fn join_key(account: &str, node: &str) -> String {
     format!("{account}:{node}")
@@ -156,17 +161,11 @@ impl EventKind {
         EventKind::MergedClosed,
     ];
 
-    /// The defaults of DESIGN.md, "Row kinds and states": List, Todo, Notify.
+    /// The defaults of DESIGN.md, "Row kinds and states": List and Notify.
     pub fn default_cell(self) -> Cell {
         use EventKind::*;
-        let (list, todo, notify) = match self {
-            ReviewRequested | TeamReviewRequested | Mentioned | TeamMentioned | Comment | Reply
-            | ReplyMentioned => (true, true, true),
-            Reaction | Approved | ChangesRequested | ChecksFailed | Conflicts | Mergeable
-            | MergeQueueRemoved => (true, false, true),
-            MergeQueueAdded | MergedClosed => (true, false, false),
-        };
-        Cell { list, todo, notify }
+        let notify = !matches!(self, MergeQueueAdded | MergedClosed);
+        Cell { list: true, notify }
     }
 }
 
@@ -363,7 +362,6 @@ stored_enum!(Appearance {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cell {
     pub list: bool,
-    pub todo: bool,
     pub notify: bool,
 }
 
@@ -460,6 +458,9 @@ pub struct TokenRec {
     pub sso: bool,
     pub sso_orgs: Vec<i64>,
     pub sso_urls: Vec<String>,
+    /// Owner ids whose search the last run was refused with the
+    /// single-organization form of `X-GitHub-SSO`, with its URL.
+    pub sso_owners: BTreeMap<String, Option<String>>,
     pub last_test: Option<TestRec>,
 }
 
@@ -505,8 +506,6 @@ pub struct RetryRec {
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct FetchRec {
-    /// Lowercase `owner/repo#number` to PR node id.
-    pub pr_ids: BTreeMap<String, String>,
     pub own: BTreeMap<String, OwnComment>,
     pub threads: BTreeMap<String, ThreadRec>,
     pub retries: BTreeMap<String, RetryRec>,
@@ -573,6 +572,12 @@ pub struct PrRec {
     pub failed_check: Option<String>,
     pub changes_requested_by: Option<String>,
     pub updated_at: i64,
+    /// GraphQL `createdAt`; `None` until the first fetch after the move from
+    /// 0.2.
+    pub created_at: Option<i64>,
+    /// The newest review the account submitted on the PR, from the last
+    /// status fetch. DESIGN.md, "Awaiting review".
+    pub my_review_at: Option<i64>,
     pub is_private: bool,
     pub requested_me: bool,
     pub requested_team: bool,
@@ -617,14 +622,8 @@ pub struct RowRec {
     pub occurred_at: i64,
     pub comment_id: Option<String>,
     pub unread: bool,
-    pub seen_pending: bool,
-    pub done: bool,
     pub pruned: bool,
     pub notify: NotifyState,
-    /// The table's Todo when the row was made (and no List only).
-    pub todo_auto: bool,
-    /// The value `todo` set by hand, which wins over `todo_auto`.
-    pub todo_manual: Option<bool>,
 }
 
 /// The last counted reactions of one of the account's comments.
@@ -645,6 +644,8 @@ pub struct Config {
     pub keep_watching_days: i64,
     pub drop_after_days: i64,
     pub appearance: Appearance,
+    /// The body text size of the popover and its window, in points.
+    pub text_size: i64,
 }
 
 impl Default for Config {
@@ -657,6 +658,7 @@ impl Default for Config {
             keep_watching_days: 3,
             drop_after_days: 14,
             appearance: Appearance::System,
+            text_size: TEXT_SIZE_DEFAULT,
         }
     }
 }

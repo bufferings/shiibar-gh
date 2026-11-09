@@ -226,8 +226,8 @@ impl Daemon {
             Request::List {
                 account,
                 owner,
-                todo,
                 filter,
+                search,
                 snoozed,
             } => line(&proto::ListResponse {
                 ok: true,
@@ -235,8 +235,8 @@ impl Daemon {
                     &ListArgs {
                         account,
                         owner,
-                        todo,
                         filter,
+                        search,
                         snoozed,
                     },
                     now,
@@ -245,16 +245,16 @@ impl Daemon {
             Request::Activity {
                 account,
                 owners,
-                todo,
                 filter,
+                search,
             } => line(&proto::ActivityResponse {
                 ok: true,
                 rows: self.engine.activity(
                     &ActivityArgs {
                         account,
                         owners,
-                        todo,
                         filter,
+                        search,
                     },
                     now,
                 )?,
@@ -263,8 +263,12 @@ impl Daemon {
                 ok: true,
                 card: self.engine.status(&account, &pr, now)?,
             }),
-            Request::Seen { row_ids } => {
-                self.engine.seen(&row_ids);
+            Request::Read { row_ids } => {
+                self.engine.read(&row_ids)?;
+                ack()
+            }
+            Request::ReadAll { account } => {
+                self.engine.read_all(&account)?;
                 ack()
             }
             Request::PopoverOpened { account } => {
@@ -273,14 +277,6 @@ impl Daemon {
             }
             Request::PopoverClosed { account } => {
                 self.engine.popover_closed(&account)?;
-                ack()
-            }
-            Request::Done { row, on } => {
-                self.engine.done(&row, on)?;
-                ack()
-            }
-            Request::Todo { row, on } => {
-                self.engine.todo(&row, on, now)?;
                 ack()
             }
             Request::Snooze { account, pr } => {
@@ -1068,7 +1064,7 @@ impl Daemon {
             let Some(token) = self.tokens.get(&id).cloned() else {
                 continue;
             };
-            plans.extend(self.engine.fetch_plan(&id, &now, due, forced, token));
+            plans.extend(self.engine.fetch_plan(&id, &now, due, token));
         }
         plans
     }

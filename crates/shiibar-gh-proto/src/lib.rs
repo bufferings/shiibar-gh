@@ -1,7 +1,7 @@
 //! Wire format shared by the daemon and its clients: NDJSON over a Unix socket.
 //!
 //! Spec: docs/DESIGN.md, section "Daemon specification / Wire format", and
-//! docs/tasks/M4.md, "Wire format and CLI".
+//! docs/tasks/M5.md, "Wire format and CLI".
 //!
 //! Enums a client receives go through [`Lenient`] so a newer daemon's values do
 //! not break an older client. `Request` and everything inside it stays strict.
@@ -266,7 +266,6 @@ pub enum ExclusionState {
 #[serde(rename_all = "snake_case")]
 pub enum EventColumn {
     List,
-    Todo,
     Notify,
 }
 
@@ -375,6 +374,12 @@ pub struct IngestPr {
     pub failed_check: Option<String>,
     pub changes_requested_by: Option<String>,
     pub updated_at: i64,
+    /// GraphQL `createdAt`.
+    pub created_at: i64,
+    /// The newest review the account submitted, if any (`reviews` of the
+    /// PR, author the account). DESIGN.md, "Awaiting review".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub my_review_at: Option<i64>,
     pub is_private: bool,
     /// A review is requested from the account directly.
     pub requested_me: bool,
@@ -423,9 +428,10 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         owner: Option<String>,
         #[serde(default)]
-        todo: bool,
-        #[serde(default)]
         filter: PrFilter,
+        /// DESIGN.md, "What the filters mean": every word must match.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        search: Option<String>,
         #[serde(default)]
         snoozed: bool,
     },
@@ -435,30 +441,25 @@ pub enum Request {
         #[serde(default)]
         owners: Vec<String>,
         #[serde(default)]
-        todo: bool,
-        #[serde(default)]
         filter: PrFilter,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        search: Option<String>,
     },
     Status {
         account: String,
         pr: String,
     },
-    Seen {
+    Read {
         row_ids: Vec<String>,
+    },
+    ReadAll {
+        account: String,
     },
     PopoverOpened {
         account: String,
     },
     PopoverClosed {
         account: String,
-    },
-    Done {
-        row: String,
-        on: bool,
-    },
-    Todo {
-        row: String,
-        on: bool,
     },
     Snooze {
         account: String,
@@ -618,7 +619,7 @@ pub struct Warning {
     pub kind: Lenient<WarningKind>,
     /// The account id; `null` for the Keychain warnings.
     pub account: Option<String>,
-    /// The owner id of `sso_required` (when known) and `events_fetch_failed`.
+    /// The owner id of `sso_required` and `events_fetch_failed`.
     pub owner: Option<String>,
     pub message: String,
     pub until: Option<i64>,
@@ -677,7 +678,8 @@ pub struct Owner {
     pub enabled: bool,
     pub notify: bool,
     pub skip_drafts: bool,
-    pub todo_count: u32,
+    /// PRs awaiting the account's review. DESIGN.md, "Awaiting review".
+    pub review_count: u32,
     pub pr_count: u32,
 }
 
@@ -688,7 +690,7 @@ pub struct Account {
     pub color: Lenient<AccountColor>,
     pub token: TokenInfo,
     pub updated_at: Option<i64>,
-    pub todo_count: u32,
+    pub review_count: u32,
     /// The blue dot of the menu bar icon.
     pub unread: bool,
     pub warnings: Vec<Warning>,
@@ -709,7 +711,11 @@ pub struct Card {
     pub author_avatar_url: Option<String>,
     pub authored_by_me: bool,
     pub assigned_to_me: bool,
+    /// GitHub asks the account or one of its teams for a review now
+    /// (the `Review requested` filter).
     pub review_requested: bool,
+    /// The PR awaits the account's review. DESIGN.md, "Awaiting review".
+    pub awaiting_review: bool,
     pub state_label: Lenient<StateLabel>,
     pub review: Lenient<Review>,
     pub checks: Lenient<Checks>,
@@ -719,6 +725,11 @@ pub struct Card {
     pub snoozed: bool,
     pub snoozed_until: Option<i64>,
     pub added_at: Option<i64>,
+    /// GraphQL `createdAt`; `null` until the first fetch after the move
+    /// from 0.2.
+    pub created_at: Option<i64>,
+    /// GraphQL `updatedAt`.
+    pub updated_at: i64,
     pub links: Links,
     pub rows: Vec<Row>,
 }
@@ -732,9 +743,6 @@ pub struct Row {
     pub account: String,
     pub owner: String,
     pub kind: Lenient<RowKind>,
-    /// A Todo row now: it has the checkbox.
-    pub todo: bool,
-    pub done: bool,
     pub text: Option<String>,
     pub counts: Option<BTreeMap<String, u32>>,
     pub actor: Option<String>,
@@ -761,7 +769,6 @@ pub struct Notification {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EventCell {
     pub list: bool,
-    pub todo: bool,
     pub notify: bool,
 }
 
@@ -956,12 +963,23 @@ mod tests {
             .is_err()
         );
         assert!(serde_json::from_str::<Request>(r#"{"cmd":"list","filter":"mine"}"#).is_err());
+        for removed in [
+            r#"{"cmd":"seen","row_ids":[]}"#,
+            r#"{"cmd":"done","row":"r","on":true}"#,
+            r#"{"cmd":"todo","row":"r","on":true}"#,
+            r#"{"cmd":"owner_events_set","account":"a","owner":"o","event":"mentioned","column":"todo","on":true}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<Request>(removed).is_err(),
+                "{removed}"
+            );
+        }
     }
 
     #[test]
     fn list_takes_its_filter_at_the_top_level() {
         let request: Request = serde_json::from_str(
-            r#"{"cmd":"list","account":"me","owner":"public","todo":true,"filter":"review_requested"}"#,
+            r#"{"cmd":"list","account":"me","owner":"public","filter":"review_requested","search":"api #407"}"#,
         )
         .unwrap();
         assert_eq!(
@@ -969,8 +987,8 @@ mod tests {
             Request::List {
                 account: Some("me".into()),
                 owner: Some("public".into()),
-                todo: true,
                 filter: PrFilter::ReviewRequested,
+                search: Some("api #407".into()),
                 snoozed: false,
             }
         );

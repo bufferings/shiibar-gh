@@ -327,13 +327,10 @@ fn owner_settings_send_account_changed() {
         "event":"merged_closed","column":"notify","on":true}),
     )["events"]
         .clone();
-    assert_eq!(
-        events["merged_closed"],
-        json!({"list":true,"todo":false,"notify":true})
-    );
+    assert_eq!(events["merged_closed"], json!({"list":true,"notify":true}));
     assert_eq!(
         events["review_requested"],
-        json!({"list":true,"todo":true,"notify":true})
+        json!({"list":true,"notify":true})
     );
     assert_eq!(events.as_object().unwrap().len(), 16);
     let copied = daemon.ok(json!({"cmd":"owner_events_copy","account":"me",

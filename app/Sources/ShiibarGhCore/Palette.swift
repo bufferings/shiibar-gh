@@ -1,7 +1,7 @@
 // Colors of the boards, as sRGB hex values, each with a dark variant: the
 // app follows the macOS light and dark appearance, and the boards are light
 // only (DESIGN.md, "UI"). The dark values keep the boards' roles (text,
-// secondary text, orange to-do rows, status colors) on dark surfaces and are
+// secondary text, status colors) on dark surfaces and are
 // checked by the owner on the device.
 //
 // Account colors are macOS system colors (Colors.swift), not listed here.
@@ -45,11 +45,12 @@ public enum Palette {
     /// The board's `.tg.on` and `.seg`: the on state of a toggle button
     /// follows the macOS accent color in the app (DESIGN.md, "Screens").
     public static let segmentTrack = Shade(0xE4E4E8, 0x3A3A3F)
-    public static let usageTrack = Shade(0xE0E0E4, 0x3A3A3F)
-    public static let usageFill = Shade(0x8A8A90, 0x8A8A90)
-    public static let usageWarn = Shade(0xC98A00, 0xE6B04D)
-    public static let ownerTag = Shade(0xECECEF, 0x34353A)
-    public static let ownerTagText = Shade(0x4A4A50, 0xC4C4CA)
+    /// A selected header, row or "+ N more PRs" (Main.html `.sel`).
+    public static let selection = Shade(0xDCE7F7, 0x1F3A5C)
+    /// The `Review requested` mark (Main.html `.rq`), with `orangeText`.
+    public static let reviewMark = Shade(0xFBE3D6, 0x4A2E20)
+    /// A read row's kind icon (Main.html `.ev.rd .ki`).
+    public static let readIcon = Shade(0x9A9AA0, 0x6A6A70)
     public static let sidebar = Shade(0xF0F0F2, 0x252528)
 
     // Fixed colors of the boards, light first.
@@ -60,7 +61,6 @@ public enum Palette {
     public static let blueDot = Shade(0x0A66D6, 0x3D8BFF)
     public static let badge = Shade(0xC7420D, 0xE0582A)
     public static let orangeText = Shade(0xA0390A, 0xF08A5D)
-    public static let orangeRow = Shade(0xFFF8F3, 0x3A2A22)
     public static let orangeIcon = Shade(0xA8410B, 0xF39A6B)
     public static let orangeIconBackground = Shade(0xFCE9DC, 0x4A2E20)
     public static let green = Shade(0x1F8A3E, 0x2FA352)

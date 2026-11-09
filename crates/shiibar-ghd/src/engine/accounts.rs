@@ -89,8 +89,8 @@ impl Engine {
         Ok(())
     }
 
-    /// Everything of the account goes: owners, PRs, rows, Done, Snooze and
-    /// its fetch records. DESIGN.md, "Owners".
+    /// Everything of the account goes: owners, PRs, rows, Snooze and its
+    /// fetch records. DESIGN.md, "Owners".
     pub fn account_remove(&mut self, id: &str) {
         let owners: Vec<String> = self
             .data
@@ -113,6 +113,7 @@ impl Engine {
         self.data.accounts.remove(id);
         self.dirty.accounts.insert(id.to_string());
         self.open.remove(id);
+        self.held.remove(id);
         self.timers.remove(id);
         self.failures.remove(id);
     }
@@ -143,7 +144,7 @@ impl Engine {
             .map(|o| self.wire_owner(o))
             .collect();
         // A disabled owner counts nothing (`wire_owner`).
-        let todo_count = owners.iter().map(|o| o.todo_count).sum();
+        let review_count = owners.iter().map(|o| o.review_count).sum();
         let limit = |l: &Option<LimitRec>| {
             l.map(|l| proto::Limit {
                 used: (l.limit - l.remaining).max(0),
@@ -169,7 +170,7 @@ impl Engine {
                 }),
             },
             updated_at: account.updated_at,
-            todo_count,
+            review_count,
             unread: account.dot,
             warnings: self.warnings(account),
             rate_limit,
@@ -177,22 +178,26 @@ impl Engine {
         }
     }
 
+    /// `pr_count` is the cards `list` has for the owner outside Snoozed,
+    /// the held ones included; `review_count` the PRs awaiting review
+    /// (DESIGN.md, "Card states"). A disabled owner counts nothing.
     fn wire_owner(&self, owner: &OwnerRec) -> proto::Owner {
         let now = self.clock.at;
-        let mut todo_count = 0;
+        let mut review_count = 0;
         let mut pr_count = 0;
         if owner.enabled {
             for pr in self.data.prs.values() {
                 if pr.account != owner.account
                     || pr.snoozed
                     || self.owner_of(pr).is_none_or(|o| o.id != owner.id)
-                    || !self.would_show(pr, owner, now)
                 {
                     continue;
                 }
-                pr_count += 1;
-                if self.pr_todo(pr, owner) {
-                    todo_count += 1;
+                if self.awaiting_review(pr, owner) {
+                    review_count += 1;
+                }
+                if self.shows_unsnoozed(pr, owner, now) {
+                    pr_count += 1;
                 }
             }
         }
@@ -204,7 +209,7 @@ impl Engine {
             enabled: owner.enabled,
             notify: owner.notify,
             skip_drafts: owner.skip_drafts,
-            todo_count,
+            review_count,
             pr_count,
         }
     }
@@ -277,7 +282,9 @@ impl Engine {
                     fetch.own.retain(|_, c| c.pr_id != pr.id);
                     fetch.threads.retain(|_, t| t.pr_id != pr.id);
                     fetch.retries.remove(&pr.id);
-                    fetch.pr_ids.retain(|_, id| *id != pr.id);
+                    fetch
+                        .pending_signals
+                        .remove(&crate::plan::pr_key(&pr.owner, &pr.repo, pr.number));
                     self.dirty.accounts.insert(pr.account.clone());
                 }
             }
@@ -297,7 +304,7 @@ impl Engine {
         self.released.retain(|id| self.data.rows.contains_key(id));
     }
 
-    /// Remove an owner and its PRs, rows, Done marks, snoozes and settings.
+    /// Remove an owner and its PRs, rows, snoozes and settings.
     pub fn owner_remove(&mut self, id: &str) {
         let prs: Vec<String> = self
             .data
@@ -307,11 +314,7 @@ impl Engine {
             .map(|pr| pr.key.clone())
             .collect();
         self.delete_prs(&prs);
-        if let Some(owner) = self.data.owners.remove(id)
-            && let Some(timers) = self.timers.get_mut(&owner.account)
-        {
-            timers.status.remove(id);
-        }
+        self.data.owners.remove(id);
         self.dirty.owners.insert(id.to_string());
     }
 
@@ -394,7 +397,6 @@ impl Engine {
                             k.as_str().to_string(),
                             proto::EventCell {
                                 list: c.list,
-                                todo: c.todo,
                                 notify: c.notify,
                             },
                         )
@@ -404,8 +406,8 @@ impl Engine {
             .unwrap_or_default()
     }
 
-    /// DESIGN.md, "Applying the table": List off turns Todo and Notify off;
-    /// Todo or Notify cannot be on while List is off.
+    /// DESIGN.md, "Applying the table": List off turns Notify off; Notify
+    /// cannot be on while List is off.
     pub fn owner_events_set(
         &mut self,
         id: &str,
@@ -423,17 +425,15 @@ impl Engine {
             proto::EventColumn::List => {
                 cell.list = on;
                 if !on {
-                    cell.todo = false;
                     cell.notify = false;
                 }
             }
-            proto::EventColumn::Todo | proto::EventColumn::Notify if on && !cell.list => {
+            proto::EventColumn::Notify if on && !cell.list => {
                 return Err(CmdError::Invalid(format!(
                     "List is off for {}: turn it on first",
                     kind.as_str()
                 )));
             }
-            proto::EventColumn::Todo => cell.todo = on,
             proto::EventColumn::Notify => cell.notify = on,
         }
         if let Some(owner) = self.owner_mut(id) {

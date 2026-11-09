@@ -363,7 +363,7 @@ pub fn pr(id: &str, author: &str) -> Value {
         "title": format!("Title {id}"), "author": author, "base": "main", "head": "topic",
         "state": "open", "is_draft": false, "review": "none", "checks": "none",
         "base_status": "none", "mergeable": false, "failed_check": null,
-        "changes_requested_by": null, "updated_at": T0, "is_private": false,
+        "changes_requested_by": null, "updated_at": T0, "created_at": T0 - 86_400, "is_private": false,
         "requested_me": false,
         "links": {
             "review": format!("https://github.example/{id}/r"),

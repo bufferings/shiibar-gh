@@ -148,8 +148,8 @@ fn every_command_has_help_with_exit_0_and_needs_no_daemon() {
         &["list", "--help"],
         &["status", "--help"],
         &["activity", "--help"],
-        &["done", "--help"],
-        &["todo", "--help"],
+        &["read", "--help"],
+        &["version", "--help"],
         &["snooze", "--help"],
         &["unsnooze", "--help"],
         &["refresh", "--help"],
@@ -174,6 +174,20 @@ fn every_command_has_help_with_exit_0_and_needs_no_daemon() {
         let result = run(dir.path(), args);
         assert_eq!(result.code, 0, "{args:?}");
         assert!(result.stdout.contains("usage"), "{args:?}");
+        for gone in ["--todo", "Todo", "Done", "list|todo|notify"] {
+            assert!(!result.stdout.contains(gone), "{args:?}: {gone}");
+        }
+    }
+    let help = run(dir.path(), &["--help"]).stdout;
+    for wanted in [
+        "--search <text>",
+        "read <row>... [--account <a>] | --all --account <a>",
+        "version [--json]",
+        "text_size",
+        "list|notify on|off",
+        "[review requested]",
+    ] {
+        assert!(help.contains(wanted), "{wanted}: {help}");
     }
     // Stage 4, S4-2-5: the one `--json` that is not the daemon's line.
     let owner_list = run(dir.path(), &["owner", "list", "--help"]);
@@ -188,7 +202,7 @@ fn every_command_has_help_with_exit_0_and_needs_no_daemon() {
 #[test]
 fn usage_errors_exit_1() {
     let dir = tempfile::tempdir().unwrap();
-    let cases: [&[&str]; 32] = [
+    let cases: [&[&str]; 40] = [
         &[],
         &["nope"],
         // 0.1 commands are gone.
@@ -196,6 +210,28 @@ fn usage_errors_exit_1() {
         &["scope", "list"],
         &["settings", "status"],
         &["list", "--needs-action"],
+        // 0.2 commands are gone.
+        &["done", "x"],
+        &["todo", "x"],
+        &["list", "--todo"],
+        &["activity", "--todo"],
+        &[
+            "owner",
+            "events",
+            "set",
+            "org",
+            "mentioned",
+            "todo",
+            "on",
+            "--account",
+            "me",
+        ],
+        // `read` takes rows, or `--all` with `--account`.
+        &["read"],
+        &["read", "--all"],
+        &["read", "--all", "x", "--account", "me"],
+        &["list", "--search"],
+        &["version", "extra"],
         // No token on standard input.
         &["token", "set", "--account", "me"],
         &["account", "add"],
@@ -220,8 +256,6 @@ fn usage_errors_exit_1() {
         &["list", "--bogus"],
         &["list", "extra"],
         &["list", "--account"],
-        &["done"],
-        &["done", "a", "b"],
         &["owner", "notify", "org", "maybe", "--account", "me"],
         &["account", "color", "me", "pink"],
         &[
@@ -253,21 +287,46 @@ fn no_daemon_exits_1() {
     );
 }
 
+/// DESIGN.md, "CLI": `version` exits 0 without a daemon too.
+#[test]
+fn version_prints_both_versions_or_not_running() {
+    let cli = env!("CARGO_PKG_VERSION");
+    let dir = tempfile::tempdir().unwrap();
+    let alone = run(dir.path(), &["version"]);
+    assert_eq!(alone.code, 0);
+    assert_eq!(alone.stdout, format!("cli: {cli}\ndaemon: not running\n"));
+    let alone = run(dir.path(), &["version", "--json"]);
+    assert_eq!(alone.code, 0);
+    let json: Value = serde_json::from_str(&alone.stdout).unwrap();
+    assert_eq!(json, serde_json::json!({"cli": cli, "daemon": null}));
+
+    let daemon = Daemon::start();
+    let both = daemon.cli(&["version"]);
+    assert_eq!(both.code, 0);
+    assert_eq!(both.stdout, format!("cli: {cli}\ndaemon: {cli}\n"));
+    let json: Value = serde_json::from_str(&daemon.cli(&["version", "--json"]).stdout).unwrap();
+    assert_eq!(json, serde_json::json!({"cli": cli, "daemon": cli}));
+}
+
 /// Nothing here reads the Keychain or reaches GitHub: no account exists.
 #[test]
 fn exit_codes_without_an_account() {
     let daemon = Daemon::start();
-    let cases: [(&[&str], i32); 17] = [
+    let cases: [(&[&str], i32); 21] = [
         (&["list"], 0),
-        (&["list", "--snoozed", "--todo"], 0),
-        (&["activity"], 0),
+        (&["list", "--snoozed", "--search", "x"], 0),
+        (&["activity", "--search", "x y"], 0),
         (&["refresh"], 0),
         (&["account", "list"], 0),
         (&["owner", "list"], 0),
         (&["config", "get", "drop_after_days"], 0),
         (&["config", "set", "drop_after_days", "5"], 0),
-        (&["done", "nope"], 2),
-        (&["todo", "--off", "nope"], 2),
+        (&["config", "set", "text_size", "18"], 0),
+        (&["config", "set", "text_size", "19"], 1),
+        (&["config", "set", "text_size", "8"], 1),
+        (&["config", "set", "text_size", "12.5"], 1),
+        (&["read", "nope"], 2),
+        (&["read", "--all", "--account", "nobody"], 2),
         (&["status", "a/b#1", "--account", "me"], 2),
         (&["open", "nope"], 2),
         (&["list", "--account", "nobody"], 2),
@@ -280,6 +339,7 @@ fn exit_codes_without_an_account() {
         let result = daemon.cli(args);
         assert_eq!(result.code, code, "{args:?}: {}", result.stderr);
     }
+    assert_eq!(daemon.cli(&["config", "get", "text_size"]).stdout, "18\n");
     let cases: [(&[&str], i32); 5] = [
         (&["account", "remove", "nobody"], 2),
         (&["account", "color", "nobody", "red"], 2),
@@ -402,7 +462,7 @@ fn account_and_owner_commands_work_from_the_command_line() {
     assert!(
         accounts
             .stdout
-            .starts_with("me id=1001 color=none token=no"),
+            .starts_with("me id=1001 color=none token=no review=0 unread=false"),
         "{}",
         accounts.stdout
     );
@@ -422,7 +482,7 @@ fn account_and_owner_commands_work_from_the_command_line() {
     let owners = daemon.cli(&["owner", "list", "--account", "me"]).stdout;
     assert!(
         owners.contains("me org ")
-            && owners.contains("enabled=false notify=false skip_drafts=false"),
+            && owners.contains("enabled=false notify=false skip_drafts=false review=0 prs=0"),
         "{owners}"
     );
     let json: Value = serde_json::from_str(
@@ -443,11 +503,11 @@ fn account_and_owner_commands_work_from_the_command_line() {
         .cli(&["owner", "events", "org", "--account", "me"])
         .stdout;
     assert!(
-        events.starts_with("review_requested list=on todo=on notify=on\n"),
+        events.starts_with("review_requested list=on notify=on\n"),
         "{events}"
     );
     assert!(
-        events.contains("merged_closed list=on todo=off notify=off"),
+        events.contains("merged_closed list=on notify=off"),
         "{events}"
     );
     let set = daemon.cli(&[
@@ -462,11 +522,8 @@ fn account_and_owner_commands_work_from_the_command_line() {
         "me",
     ]);
     assert_eq!(set.code, 0, "{}", set.stderr);
-    assert!(
-        set.stdout
-            .contains("merged_closed list=on todo=off notify=on")
-    );
-    // Todo while List is off is refused.
+    assert!(set.stdout.contains("merged_closed list=on notify=on"));
+    // Notify while List is off is refused.
     daemon.cli(&[
         "owner",
         "events",
@@ -486,7 +543,7 @@ fn account_and_owner_commands_work_from_the_command_line() {
                 "set",
                 "public",
                 "reaction",
-                "todo",
+                "notify",
                 "on",
                 "--account",
                 "me"
@@ -504,11 +561,7 @@ fn account_and_owner_commands_work_from_the_command_line() {
         "me",
     ]);
     assert_eq!(copied.code, 0, "{}", copied.stderr);
-    assert!(
-        copied
-            .stdout
-            .contains("merged_closed list=on todo=off notify=on")
-    );
+    assert!(copied.stdout.contains("merged_closed list=on notify=on"));
 
     let set = daemon.cli(&[
         "owner",
@@ -687,7 +740,8 @@ mod with_events {
             "title": format!("Title {id}"), "author": author, "base": "main", "head": "topic",
             "state": "open", "is_draft": false, "review": "none", "checks": "none",
             "base_status": "none", "mergeable": false, "failed_check": null,
-            "changes_requested_by": null, "updated_at": 1_800_000_000, "is_private": false,
+            "changes_requested_by": null, "updated_at": 1_800_000_000,
+            "created_at": 1_799_000_000, "is_private": false,
             "requested_me": false,
             "links": {"review":"https://r.example","checks":"https://c.example","base":"https://b.example"}
         });
@@ -737,7 +791,7 @@ mod with_events {
         assert!(text.contains("account=me"), "{text}");
         assert!(
             text.contains("1001:E_1"),
-            "a row id to pass to done: {text}"
+            "a row id to pass to read: {text}"
         );
 
         let rows = json_of(daemon.cli(&["activity", "--json"]));
@@ -748,8 +802,23 @@ mod with_events {
             .map(|r| r["id"].as_str().unwrap())
             .collect();
         assert_eq!(ids, ["1001:E_2", "1001:E_1"]);
-        let todo = json_of(daemon.cli(&["list", "--todo", "--account", "me", "--json"]));
-        assert_eq!(todo["cards"][0]["id"], "1001:PR_2");
+        let found =
+            json_of(daemon.cli(&["list", "--search", "APP #2", "--account", "me", "--json"]));
+        let found: Vec<&str> = found["cards"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(found, ["1001:PR_2"]);
+        let rows = json_of(daemon.cli(&["activity", "--search", "merged", "--json"]));
+        assert!(
+            rows["rows"].as_array().unwrap().is_empty(),
+            "the row kind is no field"
+        );
+        let rows = json_of(daemon.cli(&["activity", "--search", "text e_2", "--json"]));
+        assert_eq!(rows["rows"][0]["id"], "1001:E_2");
+        assert_eq!(rows["rows"].as_array().unwrap().len(), 1);
         let assigned = json_of(daemon.cli(&["list", "--assigned", "--owner", "org", "--json"]));
         assert_eq!(assigned["cards"].as_array().unwrap().len(), 1);
         let authored = json_of(daemon.cli(&["activity", "--authored", "--json"]));
@@ -760,21 +829,38 @@ mod with_events {
     }
 
     #[test]
-    fn done_todo_snooze_and_open_flow() {
+    fn read_snooze_and_open_flow() {
         let daemon = seeded();
-        assert_eq!(daemon.cli(&["done", "1001:E_1"]).code, 0);
-        let rows = json_of(daemon.cli(&["activity", "--json"]));
-        assert_eq!(rows["rows"][1]["done"], true);
-        assert_eq!(daemon.cli(&["done", "--off", "1001:E_1"]).code, 0);
+        let unread = |daemon: &Daemon| -> Vec<bool> {
+            json_of(daemon.cli(&["activity", "--json"]))["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r["unread"].as_bool().unwrap())
+                .collect()
+        };
+        assert_eq!(unread(&daemon), [true, true]);
+        // DESIGN.md, "CLI": `open` prints the URL and reads nothing.
         assert_eq!(
-            daemon.cli(&["done", "1001:E_2"]).code,
-            0,
-            "a row that is not Todo is ok with no change"
+            daemon.cli(&["open", "1001:E_1"]).stdout,
+            "https://github.example/E_1\n"
         );
-        assert_eq!(daemon.cli(&["todo", "1001:E_2"]).code, 0);
-        let rows = json_of(daemon.cli(&["activity", "--json"]));
-        assert_eq!(rows["rows"][0]["todo"], true, "added to Todo by hand");
-        assert_eq!(daemon.cli(&["todo", "--off", "1001:E_2"]).code, 0);
+        assert_eq!(unread(&daemon), [true, true]);
+        // `--account` may come with rows; it has to name their account.
+        assert_eq!(
+            daemon
+                .cli(&["read", "1001:E_1", "--account", "nobody"])
+                .code,
+            2
+        );
+        assert_eq!(daemon.cli(&["read", "1002:E_1", "--account", "me"]).code, 2);
+        assert_eq!(unread(&daemon), [true, true], "nothing read yet");
+        assert_eq!(daemon.cli(&["read", "1001:E_1", "--account", "ME"]).code, 0);
+        assert_eq!(unread(&daemon), [true, false]);
+        assert_eq!(daemon.cli(&["read", "1001:E_2", "nope"]).code, 2);
+        assert_eq!(unread(&daemon), [true, false], "nothing changes");
+        assert_eq!(daemon.cli(&["read", "--all", "--account", "ME"]).code, 0);
+        assert_eq!(unread(&daemon), [false, false]);
 
         assert_eq!(
             daemon.cli(&["snooze", "org/app#2", "--account", "me"]).code,
@@ -838,6 +924,46 @@ mod with_events {
     }
 
     #[test]
+    fn list_prints_open_prs_first_then_recently_updated_and_marks_review_requests() {
+        let daemon = Daemon::start_with_keychain("keychain.json", |_| {});
+        daemon.setup();
+        daemon.ok(json!({"cmd":"dev_ingest","account":"me","ingest":{
+            "prs":[
+                pr("PR_1", 1, "me", json!({"updated_at": 1_800_000_500})),
+                pr("PR_2", 2, "alice", json!({"updated_at": 1_800_000_900, "state": "merged"})),
+                pr("PR_3", 3, "alice", json!({"updated_at": 1_800_000_700, "requested_me": true})),
+                pr("PR_4", 4, "alice", json!({"owner": "elsewhere", "requested_me": true})),
+            ],
+            "events":[event("E_1", "PR_2", "merged", 1_800_000_002)]
+        }}));
+        let text = daemon.cli(&["list"]).stdout;
+        let order: Vec<&str> = text
+            .lines()
+            .filter(|l| !l.starts_with(' '))
+            .map(|l| l.split(' ').next().unwrap())
+            .collect();
+        assert_eq!(
+            order,
+            ["org/app#3", "org/app#1", "org/app#2", "elsewhere/app#4"]
+        );
+        assert!(
+            text.contains("org/app#3 [open] [review requested] review="),
+            "{text}"
+        );
+        assert!(
+            !text.contains("org/app#1 [open] [review requested]"),
+            "{text}"
+        );
+        let accounts = daemon.cli(&["account", "list"]).stdout;
+        assert!(accounts.contains(" review=2 "), "{accounts}");
+        let owners = daemon.cli(&["owner", "list"]).stdout;
+        assert!(
+            owners.contains("me org ") && owners.contains("review=1 prs=3"),
+            "{owners}"
+        );
+    }
+
+    #[test]
     fn exit_codes_with_prs() {
         let daemon = seeded();
         let cases: [(&[&str], i32); 5] = [
@@ -857,7 +983,7 @@ mod with_events {
             0
         );
         let cases: [(&[&str], i32); 5] = [
-            (&["done", "1001:E_1"], 2),
+            (&["read", "1001:nope"], 2),
             (&["snooze", "org/app#1", "--account", "me"], 2),
             (&["unsnooze", "org/app#1", "--account", "me"], 2),
             (&["status", "org/app#1", "--account", "me"], 2),

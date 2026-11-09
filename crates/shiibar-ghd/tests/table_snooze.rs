@@ -135,7 +135,7 @@ fn a_released_pr_returns_to_its_position() {
 }
 
 #[test]
-fn a_new_todo_row_does_not_bring_a_snoozed_pr_back() {
+fn a_new_row_does_not_bring_a_snoozed_pr_back() {
     let mut h = H::new();
     h.prs(vec![pr("PR_1")]);
     h.snooze(&key("PR_1"));
@@ -162,7 +162,6 @@ struct SummaryCase {
     name: &'static str,
     /// Rows made while snoozed.
     rows: &'static [IngestKind],
-    done: &'static [usize],
     want_rows: usize,
 }
 
@@ -172,37 +171,21 @@ fn summary_table() {
         SummaryCase {
             name: "one comment",
             rows: &[IngestKind::Comment],
-            done: &[],
             want_rows: 1,
         },
         SummaryCase {
             name: "two rows",
             rows: &[IngestKind::Comment, IngestKind::Mentioned],
-            done: &[],
             want_rows: 2,
         },
         SummaryCase {
             name: "nothing notifiable",
             rows: &[IngestKind::MergeQueueAdded, IngestKind::Merged],
-            done: &[],
-            want_rows: 0,
-        },
-        SummaryCase {
-            name: "a row done before the release goes",
-            rows: &[IngestKind::Comment, IngestKind::Reply],
-            done: &[0],
-            want_rows: 1,
-        },
-        SummaryCase {
-            name: "all done",
-            rows: &[IngestKind::Comment],
-            done: &[0],
             want_rows: 0,
         },
         SummaryCase {
             name: "nothing happened",
             rows: &[],
-            done: &[],
             want_rows: 0,
         },
     ];
@@ -219,9 +202,6 @@ fn summary_table() {
             "{}: no notification while snoozed",
             c.name
         );
-        for i in c.done {
-            h.done(&format!("E_{i}"));
-        }
         h.set_time(NEXT_0900);
         h.tick();
         let out = h.delivered();
@@ -246,17 +226,49 @@ fn summary_table() {
 }
 
 #[test]
-fn undone_before_the_release_puts_a_row_back() {
+fn a_row_read_while_snoozed_leaves_the_release_summary() {
+    // Like a Done row of 0.2: a read row is not counted at the release.
+    let mut h = H::new();
+    h.prs(vec![other("PR_1")]);
+    h.snooze(&key("PR_1"));
+    let a = h.ev("E_1", "PR_1", IngestKind::Comment);
+    let b = h.ev("E_2", "PR_1", IngestKind::Reply);
+    h.events(vec![a, b]);
+    h.read(&["E_1"]);
+    assert_eq!(h.row("E_1").notify, NotifyState::None);
+    h.set_time(NEXT_0900);
+    h.tick();
+    let out = h.delivered();
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].rows, [full("E_2")], "only the unread row");
+}
+
+#[test]
+fn only_read_rows_while_snoozed_mean_no_release_summary() {
     let mut h = H::new();
     h.prs(vec![other("PR_1")]);
     h.snooze(&key("PR_1"));
     let e = h.ev("E_1", "PR_1", IngestKind::Comment);
     h.events(vec![e]);
-    h.done("E_1");
-    h.undone("E_1");
+    h.read(&["E_1"]);
     h.set_time(NEXT_0900);
     h.tick();
-    assert_eq!(h.delivered().len(), 1);
+    assert!(h.delivered().is_empty());
+}
+
+#[test]
+fn a_row_from_before_the_snooze_read_leaves_the_return_time_summary() {
+    let mut h = H::new();
+    h.prs(vec![other("PR_1")]);
+    let before = h.ev("BEFORE", "PR_1", IngestKind::Comment);
+    h.events(vec![before]);
+    h.offline();
+    h.snooze(&key("PR_1"));
+    h.read(&["BEFORE"]);
+    h.set_time(NEXT_0900);
+    h.tick();
+    assert!(h.delivered().is_empty());
+    assert_eq!(h.row("BEFORE").notify, NotifyState::None);
 }
 
 #[test]
@@ -409,21 +421,6 @@ fn undelivered_rows_from_before_the_snooze_join_the_return_time_summary() {
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].title, "me · Back from Snooze");
     assert_eq!(out[0].rows.len(), 2);
-}
-
-#[test]
-fn a_row_from_before_the_snooze_marked_done_leaves_the_return_time_summary() {
-    let mut h = H::new();
-    h.prs(vec![other("PR_1")]);
-    let before = h.ev("BEFORE", "PR_1", IngestKind::Comment);
-    h.events(vec![before]);
-    h.offline();
-    h.snooze(&key("PR_1"));
-    h.done("BEFORE");
-    h.set_time(NEXT_0900);
-    h.tick();
-    assert!(h.delivered().is_empty());
-    assert_eq!(h.row("BEFORE").notify, NotifyState::None);
 }
 
 #[test]

@@ -1,5 +1,7 @@
 //! One fetch run of one account: its login and teams, notifications, then
-//! each owner's search, status and events, then reactions. Calls run one
+//! each owner's search, status and events (the account run, DESIGN.md "Fetch
+//! success and failure"), then reactions, which keep their own time and never
+//! make the run fail. Calls run one
 //! after another, never in parallel. The run works on a copy of the core
 //! state ([`Plan`]) and hands everything back as an [`Outcome`]; it never
 //! changes rows, cards or unread state itself. Every call uses the
@@ -52,12 +54,13 @@ fn timeline_nodes() -> String {
 /// `assignees` is a `UserConnection` of `PullRequest` (public schema).
 fn pr_status_fields() -> String {
     format!(
-        "id number url title state isDraft updatedAt isCrossRepository \
+        "id number url title state isDraft createdAt updatedAt isCrossRepository \
          author {AUTHOR} repository {{ name isPrivate owner {{ login }} }} \
          baseRefName headRefName headRefOid reviewDecision \
          latestOpinionatedReviews(first: 100) {{ nodes {{ state author {{ login }} }} }} \
          statusCheckRollup {{ state }} mergeable mergeStateStatus \
          reviewRequests(first: 100) {{ nodes {{ {REVIEWER} }} }} \
+         reviews(last: 100) {{ nodes {{ state submittedAt createdAt author {{ login }} }} }} \
          assignees(first: 100) {{ nodes {{ login }} }}"
     )
 }
@@ -104,6 +107,10 @@ fn stops_the_run(error: &CallError) -> bool {
     )
 }
 
+fn stops_the_run_result<T>(answer: &Result<T, CallError>) -> bool {
+    answer.as_ref().err().is_some_and(stops_the_run)
+}
+
 pub struct Run<'a> {
     api: &'a Api,
     plan: &'a Plan,
@@ -129,12 +136,6 @@ pub async fn run(api: &Api, plan: &Plan) -> Outcome {
         rec: Recorder::new(plan.now),
         out: Outcome {
             due: plan.due,
-            status_ran: plan
-                .owners
-                .iter()
-                .filter(|o| o.status_due)
-                .map(|o| o.id.clone())
-                .collect(),
             ..Outcome::default()
         },
         teams: plan.teams.clone(),
@@ -173,9 +174,25 @@ impl Run<'_> {
         self.out.failed = Some(UNREACHABLE.into());
     }
 
+    /// The last call was a 403 with the single-organization form of
+    /// `X-GitHub-SSO`. A call that spans owners (status, notifications,
+    /// teams) cannot name an owner with it, so it fails the run (DESIGN.md,
+    /// "Tokens").
+    fn last_call_single_org_sso(&self) -> bool {
+        self.rec.refused_for_sso()
+    }
+
     async fn execute(&mut self) {
         let plan = self.plan;
-        if plan.due.status {
+        if !plan.due.status {
+            // A reaction-only run: no owner, no notifications.
+            if plan.due.reactions {
+                self.reactions().await;
+            }
+            self.out.pending_signals = Some(plan.pending_signals.clone());
+            return;
+        }
+        {
             // DESIGN.md, "Tokens": the login follows GitHub's.
             match self
                 .gql("query Viewer { viewer { databaseId login } }", json!({}))
@@ -209,12 +226,16 @@ impl Run<'_> {
                     self.out.pending_signals = Some(signals);
                     return;
                 }
+                // DESIGN.md, "Fetch success and failure": only a check GitHub
+                // answered starts the X-Poll-Interval wait; after a failure
+                // the retry checks again.
+                Err(e @ CallError::Forbidden { .. }) if self.last_call_single_org_sso() => {
+                    self.fail(&e);
+                }
                 Err(CallError::Forbidden { .. }) => {
-                    self.out.notifications_checked = true;
                     self.out.refused.insert("notifications".into());
                 }
                 Err(e) => {
-                    self.out.notifications_checked = true;
                     self.fail(&e);
                 }
             }
@@ -278,6 +299,9 @@ impl Run<'_> {
                         None => break,
                     }
                 }
+                Err(e @ CallError::Forbidden { .. }) if self.last_call_single_org_sso() => {
+                    return Err(e);
+                }
                 Err(CallError::Forbidden { .. }) => {
                     self.out.refused.insert("read:org".into());
                     return Ok(());
@@ -322,8 +346,13 @@ impl Run<'_> {
                 break;
             }
             let (prs, newest) = convert::notified_prs(&answer.body);
+            // DESIGN.md, "Identifying PRs": a notification only signals a PR
+            // already saved; an unknown one is ignored, never looked up.
             for (owner, repo, number) in prs {
-                found.insert(pr_key(&owner, &repo, number));
+                let key = pr_key(&owner, &repo, number);
+                if plan.pr_ids.contains_key(&key) {
+                    found.insert(key);
+                }
             }
             if let Some(newest) = newest
                 && self.out.notif_since.as_deref().is_none_or(|old| {
@@ -389,7 +418,10 @@ impl Run<'_> {
             return true;
         }
         match self.owner_inner(op, &mine, &retries).await {
-            Ok(()) => self.consumed.extend(mine),
+            Ok(true) => self.consumed.extend(mine),
+            // DESIGN.md, "Tokens": the owner's search needs SSO; a warning,
+            // not a failure, and nothing of the owner is fetched.
+            Ok(false) => return true,
             Err(e) if stops_the_run(&e) => return false,
             // Notified PRs of a failed owner wait for the next run.
             Err(e) => {
@@ -407,12 +439,14 @@ impl Run<'_> {
         true
     }
 
+    /// Search, status and events of one owner. `Ok(false)` when the search
+    /// needs SSO authorization for the owner.
     async fn owner_inner(
         &mut self,
         op: &OwnerPlan,
         signals: &[String],
         retries: &[String],
-    ) -> Result<(), CallError> {
+    ) -> Result<bool, CallError> {
         let plan = self.plan;
         let mut targets: BTreeSet<String> = BTreeSet::new();
         if op.status_due {
@@ -434,7 +468,11 @@ impl Run<'_> {
             text.push('}');
             let vars =
                 json!({"q0": queries[0], "q1": queries[1], "q2": queries[2], "q3": queries[3]});
-            let answer = self.gql(&text, vars).await?;
+            let answer = self.gql(&text, vars).await;
+            if self.search_needs_sso(op, &answer) {
+                return Ok(false);
+            }
+            let answer = answer?;
             if let Some(e) = answer.errors.iter().find(|e| !e.is_permission()) {
                 return Err(CallError::Other(format!("search failed: {}", e.message)));
             }
@@ -462,7 +500,11 @@ impl Run<'_> {
                             &format!("query SearchPage($q: String!, $after: String!) {{ s: search(type: ISSUE, query: $q, first: 100, after: $after) {{ {SEARCH_NODES} }} }}"),
                             json!({"q": query, "after": after}),
                         )
-                        .await?;
+                        .await;
+                    if self.search_needs_sso(op, &page) {
+                        return Ok(false);
+                    }
+                    let page = page?;
                     found.extend(convert::search_ids(&page.data["s"], &exclude));
                     cursor = has_next(&page.data["s"]);
                     pages += 1;
@@ -476,51 +518,11 @@ impl Run<'_> {
             }
         }
 
-        // Notified PRs: their ids, resolved once and remembered.
-        let mut signaled: BTreeSet<String> = BTreeSet::new();
-        let mut unresolved: Vec<String> = Vec::new();
-        for key_text in signals {
-            match plan.pr_ids.get(key_text) {
-                Some(id) => {
-                    signaled.insert(id.clone());
-                }
-                None => unresolved.push(key_text.clone()),
-            }
-        }
-        for chunk in unresolved.chunks(NODES_PER_QUERY) {
-            let mut text = String::from("query Resolve(");
-            let mut body = String::new();
-            let mut vars = json!({});
-            for (i, key_text) in chunk.iter().enumerate() {
-                let Some((owner, rest)) = key_text.split_once('/') else {
-                    continue;
-                };
-                let Some((repo, number)) = rest.split_once('#') else {
-                    continue;
-                };
-                let Ok(number) = number.parse::<i64>() else {
-                    continue;
-                };
-                text.push_str(&format!("$o{i}: String!, $r{i}: String!, $n{i}: Int!, "));
-                body.push_str(&format!(
-                    "p{i}: repository(owner: $o{i}, name: $r{i}) {{ pullRequest(number: $n{i}) {{ id }} }} "
-                ));
-                vars[format!("o{i}")] = json!(owner);
-                vars[format!("r{i}")] = json!(repo);
-                vars[format!("n{i}")] = json!(number);
-            }
-            if body.is_empty() {
-                continue;
-            }
-            let text = format!("{}) {{ {body} }}", text.trim_end_matches(", "));
-            let answer = self.gql(&text, vars).await?;
-            for (i, key_text) in chunk.iter().enumerate() {
-                if let Some(id) = answer.data[format!("p{i}")]["pullRequest"]["id"].as_str() {
-                    self.out.pr_ids.push((key_text.clone(), id.to_string()));
-                    signaled.insert(id.to_string());
-                }
-            }
-        }
+        // Notified PRs: only saved ones reach here (`poll_notifications`).
+        let signaled: BTreeSet<String> = signals
+            .iter()
+            .filter_map(|key| plan.pr_ids.get(key).cloned())
+            .collect();
         targets.extend(signaled.iter().cloned());
         targets.extend(retries.iter().cloned());
 
@@ -650,7 +652,36 @@ impl Run<'_> {
         wanted.retain(|id| nodes.contains_key(id));
         // A PR whose events failed is fetched again; the owner still
         // succeeded (DESIGN.md, "Fetch success and failure").
-        self.events_of(op, &wanted, ctx).await
+        self.events_of(op, &wanted, ctx).await?;
+        Ok(true)
+    }
+
+    /// DESIGN.md, "Tokens": a search of the owner answered with the
+    /// single-organization form of `X-GitHub-SSO` (a refusal or not) is that
+    /// owner's `sso_required`.
+    fn search_needs_sso<T>(&mut self, op: &OwnerPlan, answer: &Result<T, CallError>) -> bool {
+        if stops_the_run_result(answer) || !self.last_call_single_org_sso() {
+            return false;
+        }
+        if op.public() {
+            // Public's search spans organizations: the form names none of
+            // them, so the run fails like any request across owners.
+            self.fail(&CallError::Other(
+                "the search of Public needs SSO authorization for an organization".into(),
+            ));
+            return true;
+        }
+        let url = self
+            .rec
+            .last_sso
+            .as_deref()
+            .and_then(crate::github::sso_url);
+        self.rec.token.sso_owners.insert(op.id.clone(), url);
+        logging::info(format_args!(
+            "the search of {} needs SSO authorization",
+            op.id
+        ));
+        true
     }
 
     /// `StatusContext` entries of the rollups.
@@ -1024,11 +1055,10 @@ impl Run<'_> {
             let text = "query Reactions($ids: [ID!]!) { nodes(ids: $ids) { __typename ... on Reactable { id reactionGroups { content viewerHasReacted reactors(first: 1) { totalCount } } } } }";
             let answer = match self.gql(text, json!({"ids": ids})).await {
                 Ok(answer) => answer,
+                // DESIGN.md, "Fetch success and failure": the reaction fetch
+                // is not part of the account run's success or failure.
                 Err(e) => {
                     logging::info(format_args!("reactions not fetched: {e}"));
-                    if !stops_the_run(&e) {
-                        self.out.failed = Some(UNREACHABLE.into());
-                    }
                     break;
                 }
             };

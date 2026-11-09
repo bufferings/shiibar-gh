@@ -1,17 +1,13 @@
-//! Rule tables for M4: accounts and owners, the event table, Exclusions,
-//! Todo by hand and by the table, and notification titles. DESIGN.md,
-//! "Row kinds and states", "Applying the table", "Exclusions", "Review
-//! requested rows" and "macOS notifications".
+//! Rule tables: accounts and owners, the event table, Exclusions and
+//! notification titles. DESIGN.md, "Row kinds and states", "Applying the
+//! table", "Exclusions", "Review requested rows" and "macOS notifications".
 
 mod support;
 
 use shiibar_gh_proto::*;
 use shiibar_ghd::engine::{ActivityArgs, ListArgs};
+use shiibar_ghd::model::NotifyState;
 use support::*;
-
-fn row_todo(h: &H, id: &str) -> bool {
-    h.wire_row(id).map(|r| r.todo).unwrap_or(false)
-}
 
 #[test]
 fn the_same_owner_under_two_accounts_keeps_rows_and_notifications_apart() {
@@ -46,72 +42,54 @@ fn the_same_owner_under_two_accounts_keeps_rows_and_notifications_apart() {
     let sent = h.delivered();
     let titles: Vec<&str> = sent.iter().map(|n| n.title.as_str()).collect();
     assert_eq!(titles, ["me · Comment on my PR", "you · Comment on my PR"]);
-    // Done on one account leaves the other.
-    h.done("E_1");
-    assert!(h.wire_row("E_1").unwrap().done);
+    // Reading on one account leaves the other.
+    h.read(&["E_1"]);
+    assert!(!h.wire_row("E_1").unwrap().unread);
     let other = h
         .list(ListArgs {
             account: Some(YOU.into()),
             ..ListArgs::default()
         })
         .remove(0);
-    assert!(!other.rows[0].done);
-    assert_eq!(h.account_of(OTHER).todo_count, 1);
+    assert!(other.rows[0].unread);
 }
 
 #[test]
-fn the_table_decides_todo_and_notify_when_the_row_is_made() {
-    let cases: &[(&str, EventKind, EventColumn, bool, IngestKind, bool, bool)] = &[
-        // name, cell, column, value, kind, todo, notified
+fn the_table_decides_notify_when_the_row_is_made() {
+    let cases: &[(&str, EventKind, bool, IngestKind, bool)] = &[
+        // name, cell, Notify, kind, notified
         (
             "comment default",
             EventKind::Comment,
-            EventColumn::Todo,
             true,
             IngestKind::Comment,
-            true,
-            true,
-        ),
-        (
-            "comment todo off",
-            EventKind::Comment,
-            EventColumn::Todo,
-            false,
-            IngestKind::Comment,
-            false,
             true,
         ),
         (
             "comment notify off",
             EventKind::Comment,
-            EventColumn::Notify,
             false,
             IngestKind::Comment,
-            true,
             false,
         ),
         (
-            "approved todo on",
+            "approved default",
             EventKind::Approved,
-            EventColumn::Todo,
             true,
             IngestKind::Approved,
-            true,
             true,
         ),
         (
             "merged notify on",
             EventKind::MergedClosed,
-            EventColumn::Notify,
             true,
             IngestKind::Merged,
-            false,
             true,
         ),
     ];
-    for (name, event, column, on, kind, todo, notified) in cases {
+    for (name, event, on, kind, notified) in cases {
         let mut h = H::new();
-        h.table(*event, *column, *on);
+        h.table(*event, EventColumn::Notify, *on);
         let ev = h.ev("E_1", "PR_1", *kind);
         h.push(vec![pr("PR_1")], vec![ev], vec![]);
         let id = if *kind == IngestKind::Approved {
@@ -119,7 +97,7 @@ fn the_table_decides_todo_and_notify_when_the_row_is_made() {
         } else {
             "E_1"
         };
-        assert_eq!(row_todo(&h, id), *todo, "{name}: todo");
+        assert!(h.wire_row(id).unwrap().unread, "{name}: unread");
         assert_eq!(!h.delivered().is_empty(), *notified, "{name}: notified");
     }
 }
@@ -129,11 +107,15 @@ fn changing_the_table_leaves_existing_rows() {
     let mut h = H::new();
     let ev = h.ev("E_1", "PR_1", IngestKind::Comment);
     h.push(vec![pr("PR_1")], vec![ev], vec![]);
-    h.table(EventKind::Comment, EventColumn::Todo, false);
-    assert!(row_todo(&h, "E_1"), "made as Todo, stays Todo");
+    h.table(EventKind::Comment, EventColumn::Notify, false);
+    assert_eq!(h.row("E_1").notify, NotifyState::Pending, "made to notify");
     let ev = h.ev("E_2", "PR_1", IngestKind::Comment);
     h.events(vec![ev]);
-    assert!(!row_todo(&h, "E_2"), "made after the change");
+    assert_eq!(
+        h.row("E_2").notify,
+        NotifyState::None,
+        "made after the change"
+    );
 }
 
 #[test]
@@ -145,41 +127,59 @@ fn list_is_a_filter_that_applies_at_once() {
     assert!(h.wire_row("E_2").is_some());
     h.table(EventKind::Comment, EventColumn::List, false);
     assert!(h.wire_row("E_2").is_none(), "hidden at once");
-    assert_eq!(h.badge(), 0, "a hidden row is not Todo");
-    // Recorded while off: read, no Todo, no notification.
+    // Recorded while off: read, no notification.
     let ev = h.ev("E_3", "PR_2", IngestKind::Comment);
     h.events(vec![ev]);
     assert!(h.has_row("E_3"));
     assert!(h.delivered().is_empty());
     h.table(EventKind::Comment, EventColumn::List, true);
     let back = h.wire_row("E_3").unwrap();
-    assert!(!back.unread && !back.todo);
+    assert!(!back.unread);
     assert!(
-        h.wire_row("E_2").unwrap().todo,
+        h.wire_row("E_2").unwrap().unread,
         "rows from before come back as they were"
     );
 }
 
 #[test]
-fn list_off_turns_todo_and_notify_off_and_they_need_list() {
+fn list_off_turns_notify_off_and_notify_needs_list() {
     let mut h = H::new();
     let owner = h.owner_id(ORG);
     h.table(EventKind::Mentioned, EventColumn::List, false);
     let cell = h.engine.owner_events(&owner)["mentioned"];
-    assert!(!cell.list && !cell.todo && !cell.notify);
+    assert!(!cell.list && !cell.notify);
     let refused = h.engine.owner_events_set(
         &owner,
         EventKind::Mentioned,
-        EventColumn::Todo,
+        EventColumn::Notify,
         true,
         &h.now,
     );
     assert!(invalid(refused));
+    h.table(EventKind::Mentioned, EventColumn::List, true);
+    let cell = h.engine.owner_events(&owner)["mentioned"];
+    assert!(cell.list && !cell.notify, "Notify stays off");
+}
+
+#[test]
+fn the_table_has_two_columns_with_the_design_defaults() {
+    // DESIGN.md, "Row kinds and states": every kind List on; Notify off for
+    // Added to merge queue and Merged / Closed only.
+    let h = H::new();
+    let events = h.engine.owner_events(&h.owner_id(ORG));
+    assert_eq!(events.len(), 16);
+    for (name, cell) in &events {
+        let quiet = name == "merge_queue_added" || name == "merged_closed";
+        assert!(cell.list, "{name}");
+        assert_eq!(cell.notify, !quiet, "{name}");
+    }
+    let wire = serde_json::to_value(events["comment"]).unwrap();
+    assert_eq!(wire, serde_json::json!({"list": true, "notify": true}));
 }
 
 #[test]
 fn exclusions_hidden_and_list_only() {
-    // name, kind, name, state, shown, todo, notified
+    // name, kind, name, state, shown, unread, notified
     let cases: &[(&str, ExclusionKind, &str, ExclusionState, bool, bool, bool)] = &[
         (
             "user list only",
@@ -187,7 +187,7 @@ fn exclusions_hidden_and_list_only() {
             "alice",
             ExclusionState::ListOnly,
             true,
-            false,
+            true,
             false,
         ),
         (
@@ -214,7 +214,7 @@ fn exclusions_hidden_and_list_only() {
             "org/app",
             ExclusionState::ListOnly,
             true,
-            false,
+            true,
             false,
         ),
         (
@@ -236,14 +236,14 @@ fn exclusions_hidden_and_list_only() {
             true,
         ),
     ];
-    for (name, kind, who, state, shown, todo, notified) in cases {
+    for (name, kind, who, state, shown, unread, notified) in cases {
         let mut h = H::new();
         h.exclude(*kind, who, *state);
         let ev = h.ev("E_1", "PR_1", IngestKind::Comment);
         h.push(vec![pr("PR_1")], vec![ev], vec![]);
         let row = h.wire_row("E_1");
         assert_eq!(row.is_some(), *shown, "{name}: shown");
-        assert_eq!(row.is_some_and(|r| r.todo), *todo, "{name}: todo");
+        assert_eq!(row.is_some_and(|r| r.unread), *unread, "{name}: unread");
         assert_eq!(!h.delivered().is_empty(), *notified, "{name}: notified");
     }
 }
@@ -259,46 +259,12 @@ fn a_hidden_repository_has_no_card_and_comes_back_read() {
     assert!(!h.dot());
     h.include(ExclusionKind::Repo, "org/app");
     let row = h.wire_row("E_1").unwrap();
-    assert!(
-        !row.unread && !row.todo,
-        "recorded while hidden: read, no Todo"
-    );
+    assert!(!row.unread, "recorded while hidden: read");
     assert_eq!(h.owner(ORG).pr_count, 1);
 }
 
 #[test]
-fn todo_by_hand_wins_over_the_table() {
-    let mut h = H::new();
-    let ev = h.ev("E_1", "PR_1", IngestKind::Merged);
-    h.push(vec![pr("PR_1")], vec![ev], vec![]);
-    assert!(!row_todo(&h, "E_1"));
-    h.todo("E_1", true);
-    assert!(row_todo(&h, "E_1"));
-    assert_eq!(h.badge(), 1);
-    h.done("E_1");
-    assert!(h.wire_row("E_1").unwrap().done);
-    // `todo` leaves a Done row as it is.
-    h.todo("E_1", false);
-    assert!(row_todo(&h, "E_1"));
-    h.undone("E_1");
-    h.todo("E_1", false);
-    assert!(!row_todo(&h, "E_1"));
-    assert_eq!(h.badge(), 0);
-}
-
-#[test]
-fn list_only_by_hand_can_still_be_todo() {
-    let mut h = H::new();
-    h.exclude(ExclusionKind::User, "alice", ExclusionState::ListOnly);
-    let ev = h.ev("E_1", "PR_1", IngestKind::Comment);
-    h.push(vec![pr("PR_1")], vec![ev], vec![]);
-    assert!(!row_todo(&h, "E_1"));
-    h.todo("E_1", true);
-    assert!(row_todo(&h, "E_1"));
-}
-
-#[test]
-fn a_team_review_request_counts_only_while_its_todo_is_on() {
+fn a_team_review_request_counts_only_while_its_list_is_on() {
     let mut h = H::new();
     let ev = h.ev("E_1", "PR_1", IngestKind::TeamReviewRequested);
     let p = IngestPr {
@@ -306,26 +272,23 @@ fn a_team_review_request_counts_only_while_its_todo_is_on() {
         ..other("PR_1")
     };
     h.push(vec![p], vec![ev], vec![]);
-    assert!(row_todo(&h, "E_1"));
     assert_eq!(h.badge(), 1);
-    // The review requested exception: the table as it is now.
-    h.table(EventKind::TeamReviewRequested, EventColumn::Todo, false);
-    assert!(!row_todo(&h, "E_1"));
-    assert_eq!(h.badge(), 0);
-    h.table(EventKind::TeamReviewRequested, EventColumn::Todo, true);
-    assert!(row_todo(&h, "E_1"));
-    // List off: no row shown, and the Review requested filter leaves it.
+    // List off: no row shown, no count, and the Review requested filter
+    // leaves it.
     h.table(EventKind::TeamReviewRequested, EventColumn::List, false);
     assert!(h.wire_row("E_1").is_none());
+    assert_eq!(h.badge(), 0);
     let filtered = h.card_ids(ListArgs {
         filter: PrFilter::ReviewRequested,
         ..ListArgs::default()
     });
     assert!(filtered.is_empty(), "{filtered:?}");
+    h.table(EventKind::TeamReviewRequested, EventColumn::List, true);
+    assert_eq!(h.badge(), 1);
 }
 
 #[test]
-fn a_direct_review_request_follows_the_current_table() {
+fn a_direct_review_request_counts_whatever_its_list() {
     let mut h = H::new();
     let ev = h.ev("E_1", "PR_1", IngestKind::ReviewRequested);
     h.push(
@@ -336,9 +299,10 @@ fn a_direct_review_request_follows_the_current_table() {
         vec![ev],
         vec![],
     );
-    assert!(row_todo(&h, "E_1"));
-    h.table(EventKind::ReviewRequested, EventColumn::Todo, false);
-    assert!(!row_todo(&h, "E_1"));
+    assert_eq!(h.badge(), 1);
+    h.table(EventKind::ReviewRequested, EventColumn::List, false);
+    assert_eq!(h.badge(), 1, "DESIGN.md, Awaiting review");
+    assert!(h.wire_row("E_1").is_none());
 }
 
 #[test]
@@ -454,7 +418,7 @@ fn removing_an_owner_removes_its_prs_and_adding_it_again_starts_empty() {
     let mut h = H::new();
     let ev = h.ev("E_1", "PR_1", IngestKind::Comment);
     h.push(vec![pr("PR_1")], vec![ev], vec![]);
-    h.done("E_1");
+    h.read(&["E_1"]);
     let owner = h.owner_id(ORG);
     h.engine.owner_remove(&owner);
     assert!(!h.has_row("E_1"));
@@ -529,8 +493,7 @@ fn user_exclusions_cover_approved_rows_but_not_state_changes_or_reactions() {
 }
 
 #[test]
-fn rows_from_before_hidden_keep_their_state_and_a_request_recorded_while_hidden_comes_back_as_todo()
-{
+fn rows_from_before_hidden_keep_their_state_and_a_request_recorded_while_hidden_comes_back_read() {
     // DESIGN.md, "Exclusions" (3-2 (a) and (b)).
     let mut h = H::new();
     let before = h.ev("E_1", "PR_1", IngestKind::Comment);
@@ -548,12 +511,12 @@ fn rows_from_before_hidden_keep_their_state_and_a_request_recorded_while_hidden_
     assert!(h.wire_row("E_1").is_none() && h.wire_row("E_2").is_none());
     h.include(ExclusionKind::User, "alice");
     let old = h.wire_row("E_1").unwrap();
-    assert!(old.unread && old.todo, "(a) as it was before Hidden");
+    assert!(old.unread, "(a) as it was before Hidden");
     let back = h.wire_row("E_2").unwrap();
     assert!(!back.unread, "(b) recorded while hidden: read");
     assert!(
-        back.todo,
-        "(b) the request goes on: Todo by the current table"
+        h.card(&key("PR_2")).unwrap().awaiting_review,
+        "(b) the request goes on: it awaits review"
     );
 }
 

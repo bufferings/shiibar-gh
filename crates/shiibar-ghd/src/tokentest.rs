@@ -311,9 +311,11 @@ async fn test_owner(api: &Api, rec: &mut Recorder, token: &str, owner: &OwnerPro
             json!({"q": format!("is:pr involves:@me {qualifier}")}),
         )
         .await;
-    let sso = rec.token.sso
-        && (rec.token.sso_orgs.is_empty()
-            || owner
+    // DESIGN.md, "Tokens": the owner's organization id, or the URL form
+    // of a 403 to this owner's search.
+    let sso = rec.refused_for_sso()
+        || (rec.token.sso
+            && owner
                 .github_id
                 .is_some_and(|id| rec.token.sso_orgs.contains(&id)));
     if sso {

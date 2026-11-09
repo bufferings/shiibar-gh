@@ -51,7 +51,7 @@ final class PresentationTests: XCTestCase {
         let lines = Warnings.banner([
             Warning(kind: .eventsFetchFailed, owner: "o2", message: "Couldn't fetch events for example-org/api #407 · retrying"),
             Warning(kind: .ssoRequired, owner: "o2", message: "SSO authorization required for example-org", url: "https://github.com/orgs/x/sso"),
-            Warning(kind: .ssoRequired, message: "SSO authorization required"),
+            Warning(kind: .ssoRequired, owner: "o3", message: "SSO authorization required for acme-corp", url: nil),
             Warning(kind: .scopeMissing, message: "Token is missing read:org"),
             Warning(kind: .restNearLimit, message: "REST API usage is over 80% of GitHub's limit"),
             Warning(kind: .graphqlNearLimit, message: "GraphQL API usage is over 80% of GitHub's limit"),
@@ -75,7 +75,7 @@ final class PresentationTests: XCTestCase {
             "REST API usage is over 80% of GitHub's limit",
             "Token is missing read:org",
             "SSO authorization required for example-org",
-            "SSO authorization required",
+            "SSO authorization required for acme-corp",
             "Couldn't fetch events for example-org/api #407 · retrying",
         ])
         XCTAssertEqual(lines.map { $0.button?.title ?? "-" }, [
@@ -83,7 +83,7 @@ final class PresentationTests: XCTestCase {
             "Authorize…", "Authorize…", "-",
         ])
         XCTAssertEqual(lines[10].button, .authorize("https://github.com/orgs/x/sso"))
-        XCTAssertEqual(lines[11].button, .authorize("https://github.com/settings/tokens"), "no URL: the token settings page")
+        XCTAssertEqual(lines[11].button, .authorize("https://github.com/settings/tokens"), "url null (the organizations= form): the token settings page")
     }
 
     func testRetryingMinutesRoundUpToAtLeastOne() {
@@ -112,12 +112,21 @@ final class PresentationTests: XCTestCase {
     }
 
     func testMenuBarMarks() {
-        let marks = MenuBarMarks(Account(id: "a", todoCount: 3, unread: true, warnings: [Warning(kind: .tokenExpiring)]))
+        let marks = MenuBarMarks(Account(id: "a", reviewCount: 3, unread: true, warnings: [Warning(kind: .tokenExpiring)]))
         XCTAssertEqual(marks, MenuBarMarks(count: 3, dot: true, triangle: true))
         XCTAssertEqual(marks.number, "3")
         XCTAssertNil(MenuBarMarks(count: 0, dot: false, triangle: false).number)
         XCTAssertEqual(MenuBarMarks(count: 120, dot: false, triangle: false).number, "99+")
         XCTAssertEqual(BoardIcons.account, BoardIcons.app, "one placeholder glyph for every account")
+    }
+
+    /// DESIGN.md, "Screens": "N review requests", "1 review request", "No
+    /// review requests" in place of 0.2's "N Todo".
+    func testTheMenuBarIconSaysHowManyReviewsWait() {
+        XCTAssertEqual(MenuBarMarks.accessibilityLabel(Account(id: "a", login: "me", reviewCount: 2, unread: true, warnings: [Warning(kind: .fetchFailed)])),
+                       "me, unread, 2 review requests, warning")
+        XCTAssertEqual(MenuBarMarks.accessibilityLabel(Account(id: "a", login: "me", reviewCount: 1)), "me, 1 review request")
+        XCTAssertEqual(MenuBarMarks.accessibilityLabel(Account(id: "a", login: "me", reviewCount: 0)), "me, No review requests")
     }
 
     func testRelativeTimes() {
@@ -154,62 +163,54 @@ final class PresentationTests: XCTestCase {
             var label: String
             var meta: String
             var body: String?
-            var style: RowStyle
             var dimmed: Bool
             var lines: Int
         }
+        // Every row is a record: the blue dot while unread, faded once read
+        // (DESIGN.md, "Row kinds and states"). No checkbox, no orange row.
         let cases = [
-            Case(row: Row(id: "1", kind: .mentioned, todo: true, text: "hi\nthere", actor: "alice", occurredAt: at),
-                 label: "Mentioned", meta: "alice · 9 min ago", body: "hi there", style: .toDo, dimmed: false, lines: 3),
-            // An open Todo row stays bright once read.
-            Case(row: Row(id: "2", kind: .mentioned, todo: true, text: "x", actor: "alice", occurredAt: at, unread: false),
-                 label: "Mentioned", meta: "alice · 9 min ago", body: "x", style: .toDo, dimmed: false, lines: 1),
-            Case(row: Row(id: "3", kind: .comment, todo: true, done: true, text: "x", actor: "bob", occurredAt: at, unread: false),
-                 label: "Comment", meta: "bob · 9 min ago", body: "x", style: .done, dimmed: true, lines: 1),
+            Case(row: Row(id: "1", kind: .mentioned, text: "hi\nthere", actor: "alice", occurredAt: at),
+                 label: "Mentioned", meta: "alice · 9 min ago", body: "hi there", dimmed: false, lines: 3),
+            Case(row: Row(id: "2", kind: .mentioned, text: "x", actor: "alice", occurredAt: at, unread: false),
+                 label: "Mentioned", meta: "alice · 9 min ago", body: "x", dimmed: true, lines: 1),
             Case(row: Row(id: "4", kind: .comment, text: "Coverage", actor: "codecov", occurredAt: at),
-                 label: "Comment", meta: "codecov · 9 min ago", body: "Coverage", style: .event, dimmed: false, lines: 1),
+                 label: "Comment", meta: "codecov · 9 min ago", body: "Coverage", dimmed: false, lines: 1),
             Case(row: Row(id: "5", kind: .merged, actor: "carol", occurredAt: at),
-                 label: "Merged", meta: "9 min ago", body: "by carol", style: .event, dimmed: false, lines: 1),
-            Case(row: Row(id: "6", kind: .teamReviewRequested, todo: true, text: "for frontend team", actor: "dave", occurredAt: at),
-                 label: "Review requested", meta: "9 min ago", body: "for frontend team", style: .toDo, dimmed: false, lines: 1),
-            // A Review requested row that is not Todo is faded even unread.
-            Case(row: Row(id: "7", kind: .reviewRequested, text: "for you", actor: "dave", occurredAt: at),
-                 label: "Review requested", meta: "9 min ago", body: "for you", style: .event, dimmed: true, lines: 1),
-            Case(row: Row(id: "7b", kind: .teamReviewRequested, text: "for web team", occurredAt: at),
-                 label: "Review requested", meta: "9 min ago", body: "for web team", style: .event, dimmed: true, lines: 1),
-            Case(row: Row(id: "7c", kind: .comment, text: "read", actor: "bob", occurredAt: at, unread: false),
-                 label: "Comment", meta: "bob · 9 min ago", body: "read", style: .event, dimmed: true, lines: 1),
+                 label: "Merged", meta: "9 min ago", body: "by carol", dimmed: false, lines: 1),
+            Case(row: Row(id: "6", kind: .teamReviewRequested, text: "for frontend team", actor: "dave", occurredAt: at),
+                 label: "Review requested", meta: "9 min ago", body: "for frontend team", dimmed: false, lines: 1),
+            Case(row: Row(id: "7", kind: .reviewRequested, text: "for you", actor: "dave", occurredAt: at, unread: false),
+                 label: "Review requested", meta: "9 min ago", body: "for you", dimmed: true, lines: 1),
             Case(row: Row(id: "8", kind: .reaction, text: "Merged", counts: ["HOORAY": 2], occurredAt: at, unread: false),
-                 label: "Reaction", meta: "9 min ago", body: "\u{201C}Merged\u{201D}", style: .event, dimmed: true, lines: 1),
+                 label: "Reaction", meta: "9 min ago", body: "\u{201C}Merged\u{201D}", dimmed: true, lines: 1),
             Case(row: Row(id: "9", kind: .conflicts, occurredAt: at),
-                 label: "Conflicts", meta: "9 min ago", body: nil, style: .event, dimmed: false, lines: 1),
+                 label: "Conflicts", meta: "9 min ago", body: nil, dimmed: false, lines: 1),
             Case(row: Row(id: "10", kind: .mergeQueueRemoved, text: "Checks failed · added by alice", actor: "github-merge-queue", occurredAt: at),
-                 label: "Removed from merge queue", meta: "github-merge-queue · 9 min ago", body: "Checks failed · added by alice", style: .event, dimmed: false, lines: 1),
+                 label: "Removed from merge queue", meta: "github-merge-queue · 9 min ago", body: "Checks failed · added by alice", dimmed: false, lines: 1),
             Case(row: Row(id: "10b", kind: .mergeQueueAdded, actor: "mk", occurredAt: at),
-                 label: "Added to merge queue", meta: "9 min ago", body: "by mk", style: .event, dimmed: false, lines: 1),
+                 label: "Added to merge queue", meta: "9 min ago", body: "by mk", dimmed: false, lines: 1),
             Case(row: Row(id: "11", kind: .approved, actor: "erin", occurredAt: at),
-                 label: "Approved", meta: "9 min ago", body: "by erin", style: .event, dimmed: false, lines: 1),
+                 label: "Approved", meta: "9 min ago", body: "by erin", dimmed: false, lines: 1),
             Case(row: Row(id: "12", kind: .replyMentioned, text: "ok", actor: "frank", occurredAt: at),
-                 label: "Reply", meta: "frank · 9 min ago", body: "ok", style: .event, dimmed: false, lines: 1),
-            Case(row: Row(id: "13", kind: .teamMentioned, todo: true, text: "@org/team look", actor: "gus", occurredAt: at),
-                 label: "My team mentioned", meta: "gus · 9 min ago", body: "@org/team look", style: .toDo, dimmed: false, lines: 3),
-            // A Done row whose review request is over: no checkbox.
-            Case(row: Row(id: "14", kind: .reviewRequested, todo: false, done: true, text: "for you", occurredAt: at, unread: false),
-                 label: "Review requested", meta: "9 min ago", body: "for you", style: .event, dimmed: true, lines: 1),
+                 label: "Reply", meta: "frank · 9 min ago", body: "ok", dimmed: false, lines: 1),
+            Case(row: Row(id: "13", kind: .teamMentioned, text: "@org/team look", actor: "gus", occurredAt: at),
+                 label: "My team mentioned", meta: "gus · 9 min ago", body: "@org/team look", dimmed: false, lines: 3),
         ]
         for c in cases {
             let p = RowPresentation(c.row, now: T0)
             XCTAssertEqual(p.label, c.label, c.row.id)
             XCTAssertEqual(p.meta, c.meta, c.row.id)
             XCTAssertEqual(p.body, c.body, c.row.id)
-            XCTAssertEqual(p.style, c.style, c.row.id)
             XCTAssertEqual(p.dimmed, c.dimmed, c.row.id)
+            XCTAssertEqual(p.unreadDot, c.row.unread, c.row.id)
             XCTAssertEqual(p.bodyLines, c.lines, c.row.id)
-            XCTAssertEqual(p.hasCheckbox, c.row.todo, c.row.id)
         }
         XCTAssertEqual(RowPresentation(cases.first { $0.row.id == "8" }!.row, now: T0).counts, "🎉2")
-        XCTAssertEqual(BoardIcons.row(.known(.approved)).tone, .ok)
-        XCTAssertEqual(BoardIcons.row(.unknown("later")).tone, .info)
+        XCTAssertEqual(BoardIcons.row(.known(.reviewRequested)), BoardIcons.kindReviewRequest)
+        XCTAssertEqual(BoardIcons.row(.known(.teamMentioned)), BoardIcons.kindMention)
+        XCTAssertEqual(BoardIcons.row(.known(.changesRequested)), BoardIcons.kindChangesRequested)
+        XCTAssertEqual(BoardIcons.row(.known(.merged)), BoardIcons.kindMerged)
+        XCTAssertEqual(BoardIcons.row(.unknown("later")), BoardIcons.kindComment)
     }
 
     func testTheTokenStateIsTheFirstThatApplies() {
@@ -264,19 +265,132 @@ final class PresentationTests: XCTestCase {
         XCTAssertNil(url.queryItems?.first { $0.name == "expires_in" }, "GitHub's default expiry")
     }
 
-    func testUsageBars() {
-        let bars = UsageBar.bars(RateLimit(graphql: Limit(used: 4_200, limit: 5_000), rest: Limit(used: 100, limit: 5_000)))
-        XCTAssertEqual(bars.map(\.label), ["GraphQL API", "REST API"])
-        XCTAssertEqual(bars.map(\.text), ["4,200 / 5,000", "100 / 5,000"])
-        XCTAssertEqual(bars[0].fraction, 0.84, accuracy: 0.0001)
-        XCTAssertEqual(bars.map(\.warn), [true, false])
-        XCTAssertFalse(UsageBar(label: "x", limit: Limit(used: 4_000, limit: 5_000)).warn, "exactly 20% left is not under it")
-        XCTAssertTrue(UsageBar(label: "x", limit: Limit(used: 4_001, limit: 5_000)).warn)
-        for bar in UsageBar.bars(nil) + UsageBar.bars(RateLimit(graphql: Limit(used: 1, limit: 2))).suffix(1) {
-            XCTAssertEqual(bar.text, "– / –")
-            XCTAssertEqual(bar.fraction, 0)
-            XCTAssertFalse(bar.warn)
+    /// DESIGN.md, "Rate limits": the higher of the two as a whole
+    /// percentage, the warning color from 80%, both counts on hover.
+    func testApiUsageInTheHeader() {
+        let board = ApiUsage(RateLimit(graphql: Limit(used: 1_240, limit: 5_000), rest: Limit(used: 100, limit: 5_000)))
+        XCTAssertEqual(board.text, "API 25%", "24.8% shows as on Main.html")
+        XCTAssertFalse(board.warn)
+        XCTAssertEqual(board.tooltip, "GraphQL API 1,240 / 5,000 · REST API 100 / 5,000")
+        let high = ApiUsage(RateLimit(graphql: Limit(used: 4_200, limit: 5_000), rest: Limit(used: 100, limit: 5_000)))
+        XCTAssertEqual(high.text, "API 84%")
+        XCTAssertTrue(high.warn)
+        let rest = ApiUsage(RateLimit(graphql: Limit(used: 10, limit: 5_000), rest: Limit(used: 4_000, limit: 5_000)))
+        XCTAssertEqual(rest.text, "API 80%", "REST is the higher one")
+        XCTAssertTrue(rest.warn, "80% is in the warning color")
+        XCTAssertFalse(ApiUsage(RateLimit(rest: Limit(used: 3_950, limit: 5_000))).warn, "79%")
+        let almost = ApiUsage(RateLimit(rest: Limit(used: 3_975, limit: 5_000)))
+        XCTAssertEqual(almost.text, "API 80%", "79.5% rounds to 80%")
+        XCTAssertFalse(almost.warn, "the color follows the unrounded 79.5%")
+        XCTAssertTrue(ApiUsage(RateLimit(graphql: Limit(used: 4_000, limit: 5_000))).warn, "80.0%")
+        let one = ApiUsage(RateLimit(graphql: Limit(used: 50, limit: 5_000)))
+        XCTAssertEqual(one.text, "API 1%")
+        XCTAssertEqual(one.tooltip, "GraphQL API 50 / 5,000 · REST API \u{2013} / \u{2013}")
+        for none in [ApiUsage(nil), ApiUsage(RateLimit()), ApiUsage(RateLimit(graphql: Limit(used: 0, limit: 0)))] {
+            XCTAssertEqual(none.text, "API \u{2013}")
+            XCTAssertNil(none.percent)
+            XCTAssertFalse(none.warn)
+            XCTAssertNil(none.tooltip)
         }
+        XCTAssertEqual(ApiUsage.headerLine(updated: "Updated 1 min ago", usage: board), "Updated 1 min ago · API 25%")
+    }
+
+    /// DESIGN.md, "Text size": proportion to 12, 9 to 18, ⌘= at 18 and ⌘−
+    /// at 9 send nothing.
+    func testTextSizeRatiosAndEdges() {
+        XCTAssertEqual(TextSize.ratio(12), 1)
+        XCTAssertEqual(TextSize.ratio(9), 0.75)
+        XCTAssertEqual(TextSize.ratio(18), 1.5)
+        XCTAssertEqual(TextSize.width(12), 460)
+        XCTAssertEqual(TextSize.width(9), 345)
+        XCTAssertEqual(TextSize.width(18), 690)
+        XCTAssertEqual(TextSize.next(12, .larger), 13)
+        XCTAssertEqual(TextSize.next(17, .larger), 18)
+        XCTAssertNil(TextSize.next(18, .larger), "⌘= at 18 does nothing")
+        XCTAssertEqual(TextSize.next(10, .smaller), 9)
+        XCTAssertNil(TextSize.next(9, .smaller), "⌘− at 9 does nothing")
+        XCTAssertEqual(TextSize.next(18, .reset), 12)
+        XCTAssertEqual(TextSize.next(9, .reset), 12)
+        XCTAssertNil(TextSize.next(12, .reset), "already 12")
+        XCTAssertEqual(TextSize.clamp(nil), 12)
+        XCTAssertEqual(TextSize.clamp(30), 18)
+        XCTAssertEqual(TextSize.clamp(1), 9)
+        XCTAssertEqual(try TextSize.parse(" 9 ").get(), 9)
+        XCTAssertEqual(try TextSize.parse("18").get(), 18)
+        for text in ["8", "19", "0", "-1"] {
+            XCTAssertEqual(TextSize.parse(text), .failure(TextSizeError(message: "Enter a number from 9 to 18")), text)
+        }
+        for text in ["", "12.5", "abc"] {
+            XCTAssertEqual(TextSize.parse(text), .failure(TextSizeError(message: "Enter a whole number")), text)
+        }
+        XCTAssertEqual(SettingsText.textSizeDetail, "Text in the popover and its window")
+    }
+
+    /// DESIGN.md, "Keyboard" and "Search field", as a table.
+    func testKeyRules() {
+        func press(_ code: UInt16 = 0, _ chars: String = "", _ mods: Set<KeyModifier> = []) -> KeyPress {
+            KeyPress(keyCode: code, characters: chars, modifiers: mods)
+        }
+        let esc = press(KeyPress.escape, "\u{1B}")
+        let down = press(KeyPress.downArrow)
+        let shiftR = press(15, "R", [.shift])
+        let s = press(1, "s")
+        let cases: [(KeyPress, Bool, Bool, KeyInput, String)] = [
+            // In the list.
+            (press(KeyPress.upArrow), false, false, .key(.up), "↑"),
+            (down, false, false, .key(.down), "↓"),
+            (press(KeyPress.returnKey, "\r"), false, false, .key(.open), "⏎"),
+            (press(KeyPress.enter), false, false, .key(.open), "keypad Enter"),
+            (s, false, false, .key(.snooze), "S"),
+            (shiftR, false, false, .key(.markAllRead), "⇧R"),
+            (press(15, "r"), false, false, .pass, "r alone does nothing"),
+            (esc, false, false, .pass, "Esc in the list: the popover closes as usual"),
+            (press(3, "f", [.command]), false, false, .key(.find), "⌘F"),
+            (press(24, "=", [.command]), false, false, .textSize(.larger), "⌘="),
+            (press(24, "+", [.command, .shift]), false, false, .textSize(.larger), "⌘+"),
+            (press(27, "-", [.command]), false, false, .textSize(.smaller), "⌘−"),
+            (press(29, "0", [.command]), false, false, .textSize(.reset), "⌘0"),
+            (press(12, "q", [.command]), false, false, .quit, "⌘Q"),
+            (press(1, "s", [.option]), false, false, .pass, "⌥S"),
+            // In the search field.
+            (esc, true, true, .leaveSearch(clearing: true), "Esc with text clears it and goes back"),
+            (esc, true, false, .leaveSearch(clearing: false), "Esc without text only goes back"),
+            (down, true, true, .leaveSearch(clearing: false), "↓ goes back, text kept"),
+            (shiftR, true, false, .pass, "⇧R is typed"),
+            (s, true, true, .pass, "S is typed"),
+            (press(KeyPress.returnKey, "\r"), true, true, .pass, "⏎ stays in the field"),
+            (press(KeyPress.upArrow), true, true, .pass, "↑ stays in the field"),
+            (press(3, "f", [.command]), true, true, .key(.find), "⌘F"),
+            (press(24, "=", [.command]), true, true, .textSize(.larger), "⌘= in the field"),
+            (press(12, "q", [.command]), true, true, .quit, "⌘Q in the field"),
+        ]
+        for (key, inSearch, hasText, want, name) in cases {
+            XCTAssertEqual(KeyRules.decide(key, inSearch: inSearch, hasSearchText: hasText), want, name)
+        }
+    }
+
+    func testTheNextReturnTime() {
+        // T0 is 2027-01-15 08:00 UTC, a Friday.
+        XCTAssertEqual(RelativeTime.weekdayClock(SnoozeTime.next("09:00", now: T0, timeZone: utc), timeZone: utc), "Fri 09:00")
+        XCTAssertEqual(SnoozeTime.next("09:00", now: T0, timeZone: utc), T0 + 3_600)
+        XCTAssertEqual(SnoozeTime.next("08:00", now: T0, timeZone: utc), T0 + 86_400, "now is not after now")
+        XCTAssertEqual(SnoozeTime.next("07:30", now: T0, timeZone: utc), T0 + 86_400 - 1_800)
+        XCTAssertEqual(SnoozeTime.next(nil, now: T0, timeZone: utc), T0 + 3_600, "09:00 by default")
+    }
+
+    func testCardTimes() {
+        let card = Card(id: "c", author: "alice", createdAt: T0 - 3 * 86_400, updatedAt: T0 - 2 * 3_600)
+        XCTAssertEqual(CardText.times(card, now: T0), "opened 3 days ago by alice · updated 2 hr ago")
+        var moved = card
+        moved.createdAt = nil
+        XCTAssertEqual(CardText.times(moved, now: T0), "by alice · updated 2 hr ago", "right after the move from 0.2")
+        moved.author = ""
+        XCTAssertEqual(CardText.times(moved, now: T0), "updated 2 hr ago")
+        var noAuthor = card
+        noAuthor.author = ""
+        XCTAssertEqual(CardText.times(noAuthor, now: T0), "opened 3 days ago · updated 2 hr ago")
+        XCTAssertEqual(CardText.exactTimes(card, timeZone: utc), "Opened 2027-01-12 08:00 · Updated 2027-01-15 06:00")
+        XCTAssertEqual(CardText.exactTimes(moved, timeZone: utc), "Updated 2027-01-15 06:00")
     }
 
     func testEmptyStatesAndSettingsTexts() {

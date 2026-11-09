@@ -50,6 +50,11 @@ public enum RelativeTime {
         format(at, "HH:mm", timeZone)
     }
 
+    /// "2026-11-10 14:05", for hover texts.
+    public static func dateTime(_ at: Int64, timeZone: TimeZone = .current) -> String {
+        format(at, "yyyy-MM-dd HH:mm", timeZone)
+    }
+
     /// "Mon 09:00", for "until Mon 09:00".
     public static func weekdayClock(_ at: Int64, timeZone: TimeZone = .current) -> String {
         format(at, "EEE HH:mm", timeZone)
@@ -180,7 +185,7 @@ public struct KeychainDialog: Equatable {
     )
     public static let unreadable = KeychainDialog(
         state: .unreadable, title: "Saved tokens are unreadable",
-        message: "Reset deletes the Keychain item. You enter every token again. PRs, Done marks, snoozes and settings stay.",
+        message: "Reset deletes the Keychain item. You enter every token again. PRs, snoozes and settings stay.",
         action: "Reset tokens"
     )
 
@@ -297,16 +302,6 @@ extension String {
     }
 }
 
-/// How a row looks: the board's `.ev` classes.
-public enum RowStyle: Equatable {
-    /// A Todo row not done yet: orange, with an empty checkbox.
-    case toDo
-    /// A Todo row made Done: faded, with a green checkbox.
-    case done
-    /// Any other row: its kind's icon.
-    case event
-}
-
 public struct RowPresentation: Equatable {
     public var label: String
     /// Reaction counts next to the label, such as "👍3".
@@ -316,12 +311,9 @@ public struct RowPresentation: Equatable {
     /// The body under the label line, already normalized.
     public var body: String?
     public var bodyLines: Int
-    public var style: RowStyle
-    /// Read rows and Done rows show faded.
+    /// Read rows show faded (DESIGN.md, "Row kinds and states").
     public var dimmed: Bool
     public var unreadDot: Bool
-    /// The checkbox shows for Todo rows only.
-    public var hasCheckbox: Bool
 
     public init(_ row: Row, now: Int64) {
         let kind = row.kind.value
@@ -344,51 +336,70 @@ public struct RowPresentation: Equatable {
             body = text
         }
         counts = kind == .reaction ? row.counts.map(RowText.counts).flatMap { $0.isEmpty ? nil : $0 } : nil
-        if row.todo {
-            style = row.done ? .done : .toDo
-            hasCheckbox = true
-        } else {
-            style = .event
-            hasCheckbox = false
-        }
         unreadDot = row.unread
-        // DESIGN.md, "Todo rows" and "Review requested rows": a Done row, a
-        // read row that is not Todo, and a Review requested row that is not
-        // Todo (any longer) show faded; an open Todo row never does, read or
-        // not. The blue dot stays on an unread one.
-        let request = kind == .reviewRequested || kind == .teamReviewRequested
-        dimmed = row.done || (!row.todo && (!row.unread || request))
+        dimmed = !row.unread
         bodyLines = ((kind == .mentioned || kind == .teamMentioned) && row.unread) ? 3 : 1
     }
 }
 
-// MARK: - API usage
+// MARK: - Cards
 
-/// One bar of the usage line (DESIGN.md, "Rate limits").
-public struct UsageBar: Equatable {
-    public var label: String
-    /// "1,240 / 5,000", or "– / –" before any value.
-    public var text: String
-    /// Used over limit, 0...1.
-    public var fraction: Double
-    /// Less than 20% left: the orange bar.
-    public var warn: Bool
-
-    public init(label: String, limit: Limit?) {
-        self.label = label
-        guard let limit, limit.limit > 0 else {
-            text = "\u{2013} / \u{2013}"
-            fraction = 0
-            warn = false
-            return
-        }
-        text = Self.number(limit.used) + " / " + Self.number(limit.limit)
-        fraction = min(1, max(0, Double(limit.used) / Double(limit.limit)))
-        warn = (limit.limit - limit.used) * 100 < limit.limit * 20
+public enum CardText {
+    /// Line 3 on the right: "opened 3 days ago by alice · updated 2 hr ago"
+    /// (DESIGN.md, "Card header"). Without `created_at` (right after the
+    /// move from 0.2) "opened …" is left out, without an author "by …".
+    public static func times(_ card: Card, now: Int64) -> String {
+        var first: [String] = []
+        if let created = card.createdAt { first.append("opened " + RelativeTime.ago(now - created)) }
+        if !card.author.isEmpty { first.append("by " + card.author) }
+        let updated = "updated " + RelativeTime.ago(now - card.updatedAt)
+        return first.isEmpty ? updated : first.joined(separator: " ") + " · " + updated
     }
 
-    public static func bars(_ rateLimit: RateLimit?) -> [UsageBar] {
-        [UsageBar(label: "GraphQL API", limit: rateLimit?.graphql), UsageBar(label: "REST API", limit: rateLimit?.rest)]
+    /// The exact times on hover.
+    public static func exactTimes(_ card: Card, timeZone: TimeZone = .current) -> String {
+        var parts: [String] = []
+        if let created = card.createdAt { parts.append("Opened " + RelativeTime.dateTime(created, timeZone: timeZone)) }
+        parts.append("Updated " + RelativeTime.dateTime(card.updatedAt, timeZone: timeZone))
+        return parts.joined(separator: " · ")
+    }
+
+    public static let reviewRequestedMark = "Review requested"
+}
+
+// MARK: - API usage
+
+/// `API 25%` in the header (DESIGN.md, "Rate limits"): the higher of the
+/// GraphQL and REST usage as a whole percentage (rounded, as Main.html shows
+/// 1,240 / 5,000 as 25%), the warning color from 80.0% of the unrounded
+/// usage, both counts on hover, `API –` before any value.
+public struct ApiUsage: Equatable {
+    public var text: String
+    public var percent: Int?
+    public var warn: Bool
+    public var tooltip: String?
+
+    public init(_ rateLimit: RateLimit?) {
+        let limits = [rateLimit?.graphql, rateLimit?.rest].compactMap { $0 }.filter { $0.limit > 0 }
+        guard !limits.isEmpty else {
+            text = "API \u{2013}"
+            percent = nil
+            warn = false
+            tooltip = nil
+            return
+        }
+        let exact = limits.map { Double($0.used) / Double($0.limit) * 100 }.max() ?? 0
+        let whole = Int(min(max(exact.rounded(), 0), 999))
+        percent = whole
+        text = "API \(whole)%"
+        // The color follows the usage itself, as the daemon's 80% warnings
+        // do: 79.5% shows as 80% without it.
+        warn = exact >= 80
+        func pair(_ limit: Limit?) -> String {
+            guard let limit, limit.limit > 0 else { return "\u{2013} / \u{2013}" }
+            return Self.number(limit.used) + " / " + Self.number(limit.limit)
+        }
+        tooltip = "GraphQL API " + pair(rateLimit?.graphql) + " · REST API " + pair(rateLimit?.rest)
     }
 
     static func number(_ value: Int64) -> String {
@@ -396,6 +407,89 @@ public struct UsageBar: Equatable {
         formatter.numberStyle = .decimal
         formatter.locale = Locale(identifier: "en_US")
         return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
+    }
+
+    /// "Updated 1 min ago · API 25%".
+    public static func headerLine(updated: String, usage: ApiUsage) -> String {
+        updated + " · " + usage.text
+    }
+}
+
+// MARK: - Text size
+
+/// `text_size` (DESIGN.md, "Text size"): the body text in points; other
+/// text, row heights, avatars and the popover's width follow it in
+/// proportion to 12.
+public enum TextSize {
+    public static let configKey = "text_size"
+    public static let base = 12
+    public static let range = 9...18
+    public static let popoverWidth: Double = 460
+    public static let outOfRange = "Enter a number from 9 to 18"
+    public static let notWhole = "Enter a whole number"
+
+    public enum Change: Equatable { case larger, smaller, reset }
+
+    /// A value from the daemon, kept inside the range.
+    public static func clamp(_ value: Int64?) -> Int {
+        guard let value else { return base }
+        return Int(min(max(value, Int64(range.lowerBound)), Int64(range.upperBound)))
+    }
+
+    public static func ratio(_ size: Int) -> Double {
+        Double(size) / Double(base)
+    }
+
+    public static func width(_ size: Int) -> Double {
+        popoverWidth * ratio(size)
+    }
+
+    /// The value ⌘=, ⌘− or ⌘0 asks for, or nil when nothing should go out:
+    /// ⌘= at 18, ⌘− at 9 and ⌘0 at 12.
+    public static func next(_ current: Int, _ change: Change) -> Int? {
+        let wanted: Int
+        switch change {
+        case .larger: wanted = current + 1
+        case .smaller: wanted = current - 1
+        case .reset: wanted = base
+        }
+        return range.contains(wanted) && wanted != current ? wanted : nil
+    }
+
+    /// The Settings field: a whole number from 9 to 18, else the message.
+    public static func parse(_ text: String) -> Result<Int, TextSizeError> {
+        guard let number = Int(text.trimmingCharacters(in: .whitespaces)) else { return .failure(TextSizeError(message: notWhole)) }
+        guard range.contains(number) else { return .failure(TextSizeError(message: outOfRange)) }
+        return .success(number)
+    }
+}
+
+public struct TextSizeError: Error, Equatable {
+    public var message: String
+}
+
+// MARK: - Snooze
+
+public enum SnoozeTime {
+    public static let configKey = "snooze_return_time"
+
+    /// The next Return time after `now` in the time zone of the Mac: today's
+    /// if it is still ahead, else tomorrow's (the daemon's
+    /// `next_return_at`). A time skipped by a daylight saving change comes
+    /// after the gap.
+    public static func next(_ returnTime: String?, now: Int64, timeZone: TimeZone = .current) -> Int64 {
+        let (hour, minute) = ReturnTime.parse(returnTime) ?? (9, 0)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let date = Date(timeIntervalSince1970: TimeInterval(now))
+        for offset in 0...2 {
+            guard let day = calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: date)),
+                  let at = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day, matchingPolicy: .nextTime, repeatedTimePolicy: .first, direction: .forward)
+            else { continue }
+            let seconds = Int64(at.timeIntervalSince1970)
+            if seconds > now { return seconds }
+        }
+        return now + 86_400
     }
 }
 
@@ -503,17 +597,18 @@ public enum CreateTokenURL {
 public enum SettingsText {
     public static let colorDetail = "Tints this account's icon and the dot next to its name."
     public static let removeAccountDetail =
-        "Deletes this account and its owners from shiibar-gh: token, PRs, Done marks, snoozes and settings. Nothing changes on GitHub."
+        "Deletes this account and its owners from shiibar-gh: token, PRs, snoozes and settings. Nothing changes on GitHub."
     public static let removeOwnerDetail =
-        "Deletes this owner from shiibar-gh: its PRs, Done marks, snoozes and settings. Nothing changes on GitHub."
+        "Deletes this owner from shiibar-gh: its PRs, snoozes and settings. Nothing changes on GitHub."
     public static let enabledDetail = "Off hides this owner's section and stops fetching."
     public static let notifyDetail = "Off keeps the table below but sends no notifications for this owner."
     public static let skipDraftsDetail = "Events on draft PRs stay in the list but never notify."
     public static let copyDetail = "Replaces the table above with that owner's."
-    public static let reposDetail = "Hidden: not in the list. List only: in the list, but no Todo and no notifications."
+    public static let reposDetail = "Hidden: not in the list. List only: in the list, but no notifications."
     public static let usersDetail = "Same for a user. Bots are users too."
     public static let ssoNote =
         "If an organization enforces SAML SSO, authorize the token for it after creating it (Configure SSO on the token page)."
+    public static let textSizeDetail = "Text in the popover and its window"
     public static let saveLater = "You can save now and test again later."
     public static let ownerNotFound = "Owner not found"
     public static let unreachable = "Couldn't reach GitHub"

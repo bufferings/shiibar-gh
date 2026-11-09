@@ -7,7 +7,7 @@ mod support;
 
 use serde_json::json;
 use shiibar_gh_proto::*;
-use shiibar_ghd::engine::{Engine, missing_scopes};
+use shiibar_ghd::engine::{Engine, missing_scopes, retry_wait};
 use shiibar_ghd::github::{CallError, Recorder};
 use shiibar_ghd::model::{LimitRec, OwnComment, OwnerKind as Kind, TeamRec};
 use shiibar_ghd::plan::*;
@@ -30,7 +30,7 @@ fn warning(h: &H, kind: WarningKind) -> Option<Warning> {
 fn plan_of(h: &H, account: &str, forced: bool) -> Plan {
     let due = h.engine.due(account, h.at(), forced);
     h.engine
-        .fetch_plan(account, &h.now, due, forced, "t".into())
+        .fetch_plan(account, &h.now, due, "t".into())
         .unwrap()
 }
 
@@ -47,11 +47,24 @@ fn apply_to(h: &mut H, account: &str, outcome: Outcome) {
     h.engine.apply_fetch(account, outcome, &now);
 }
 
+/// An account run (DESIGN.md, "Fetch success and failure") that answered.
 fn ran(outcome: Outcome) -> Outcome {
     Outcome {
         ran: true,
+        due: Due {
+            status: true,
+            ..outcome.due
+        },
         ..outcome
     }
+}
+
+/// An account run that failed.
+fn failed_run() -> Outcome {
+    ran(Outcome {
+        failed: Some("Couldn't reach GitHub".into()),
+        ..Outcome::default()
+    })
 }
 
 // ---------------------------------------------------------------- watching
@@ -197,20 +210,42 @@ fn a_succeeded_owner_sets_its_fetch_time_and_the_account_moves_on() {
 }
 
 #[test]
-fn updated_ago_moves_with_every_run_failed_or_not_but_not_without_one() {
+fn updated_ago_moves_only_with_a_successful_run() {
+    // DESIGN.md, "Fetch success and failure": the end of the last account
+    // run that succeeded.
     let mut h = H::new();
+    apply(&mut h, failed_run());
+    assert_eq!(
+        h.account().updated_at,
+        None,
+        "a failed run does not move it"
+    );
+    apply(&mut h, ran(Outcome::default()));
+    let first = h.account().updated_at;
+    assert_eq!(first, Some(h.at()));
+    h.advance(10);
+    apply(&mut h, failed_run());
+    assert_eq!(h.account().updated_at, first, "failures keep it");
+    h.advance(10);
     apply(
         &mut h,
-        ran(Outcome {
-            failed: Some("Couldn't reach GitHub".into()),
+        Outcome {
+            ran: true,
+            due: Due {
+                reactions: true,
+                ..Due::default()
+            },
             ..Outcome::default()
-        }),
+        },
     );
-    let first = h.account().updated_at;
-    assert_eq!(first, Some(h.at()), "a failed run counts");
-    h.advance(60);
+    assert_eq!(
+        h.account().updated_at,
+        first,
+        "a reaction fetch is not an account run"
+    );
+    h.advance(10);
     apply(&mut h, Outcome::default());
-    assert_eq!(h.account().updated_at, first, "no call, no move");
+    assert_eq!(h.account().updated_at, first, "no run, no move");
 }
 
 #[test]
@@ -234,9 +269,7 @@ fn the_same_event_from_overlapping_windows_is_one_row() {
     let mut h = H::new();
     let e = h.ev("E_1", "PR_1", IngestKind::Comment);
     h.push(vec![pr("PR_1")], vec![e.clone()], vec![]);
-    h.open();
-    h.seen(&["E_1"]);
-    h.close();
+    h.read(&["E_1"]);
     h.push(vec![pr("PR_1")], vec![e], vec![]);
     assert!(!h.wire_row("E_1").unwrap().unread, "not made again");
     assert_eq!(h.card(&key("PR_1")).unwrap().rows.len(), 1);
@@ -472,26 +505,172 @@ fn a_401_stops_only_that_account_until_a_token_is_saved() {
 }
 
 #[test]
-fn fetch_failed_holds_until_the_next_run_and_counts_down_the_retry() {
+fn a_failed_run_is_retried_after_5_10_20_then_every_40_seconds() {
+    // DESIGN.md, "Fetch success and failure" and "Constants".
     let mut h = H::new();
-    apply(
-        &mut h,
-        ran(Outcome {
-            failed: Some("Couldn't reach GitHub".into()),
-            ..Outcome::default()
-        }),
+    let mut waits = Vec::new();
+    for _ in 0..6 {
+        apply(&mut h, failed_run());
+        let next = h.engine.timers(ACCOUNT).run;
+        waits.push(next - h.at());
+        assert!(!h.engine.due(ACCOUNT, next - 1, false).status);
+        assert!(h.engine.due(ACCOUNT, next, false).status);
+        h.set_time(next);
+    }
+    assert_eq!(waits, [5, 10, 20, 40, 40, 40]);
+    assert_eq!(h.engine.failures(ACCOUNT).unwrap().count, 6);
+    apply(&mut h, ran(Outcome::default()));
+    assert_eq!(h.engine.timers(ACCOUNT).run - h.at(), 60, "the interval");
+    assert_eq!(h.engine.failures(ACCOUNT), None, "a success forgets them");
+    apply(&mut h, failed_run());
+    assert_eq!(
+        h.engine.timers(ACCOUNT).run - h.at(),
+        5,
+        "the count starts again"
     );
+}
+
+#[test]
+fn no_wait_is_longer_than_the_interval() {
+    assert_eq!(retry_wait(1, 3), 3);
+    assert_eq!(retry_wait(4, 30), 30);
+    assert_eq!(retry_wait(9, 60), 40);
+    assert_eq!(retry_wait(2, 60), 10);
+}
+
+#[test]
+fn fetch_failed_shows_five_minutes_after_the_first_failure() {
+    let mut h = H::new();
+    let first = h.at();
+    apply(&mut h, failed_run());
+    assert!(warning(&h, WarningKind::FetchFailed).is_none(), "not yet");
+    // Failures go on every 40 seconds once the waits have grown.
+    while h.at() < first + 299 {
+        h.set_time(h.engine.timers(ACCOUNT).run.min(first + 299));
+        apply(&mut h, failed_run());
+        assert!(
+            warning(&h, WarningKind::FetchFailed).is_none(),
+            "+{}",
+            h.at() - first
+        );
+    }
+    h.set_time(first + 300);
+    apply(&mut h, failed_run());
     let w = warning(&h, WarningKind::FetchFailed).unwrap();
-    assert_eq!(w.until, Some(h.at() + 60));
+    assert_eq!(w.until, Some(h.at() + 40), "the next retry");
     assert_eq!(w.message, "Couldn't reach GitHub · retrying in 1 min");
     assert_eq!(w.account.as_deref(), Some(ACCOUNT));
+    assert!(h.engine.due(ACCOUNT, h.at() + 40, false).status);
     apply(&mut h, Outcome::default());
     assert!(
         warning(&h, WarningKind::FetchFailed).is_some(),
         "no run, no change"
     );
     apply(&mut h, ran(Outcome::default()));
-    assert!(kinds(&h).is_empty(), "a run without failures clears it");
+    assert!(kinds(&h).is_empty(), "a successful run clears it");
+}
+
+#[test]
+fn the_five_minutes_are_judged_when_the_warnings_are() {
+    let mut h = H::new();
+    let first = h.at();
+    apply(&mut h, failed_run());
+    h.set_time(first + 300);
+    h.tick();
+    assert!(
+        warning(&h, WarningKind::FetchFailed).is_some(),
+        "the account value at that time has it"
+    );
+}
+
+#[test]
+fn a_restart_forgets_the_first_failure() {
+    let mut h = H::new();
+    let first = h.at();
+    apply(&mut h, failed_run());
+    let mut restored = Engine::restore(h.engine.data().clone());
+    let now = shiibar_ghd::clock::Now::fixed(first + 400, "Asia/Tokyo").unwrap();
+    restored.set_clock(&now);
+    restored.apply_fetch(ACCOUNT, failed_run(), &now);
+    let warned = restored
+        .account_value(ACCOUNT)
+        .unwrap()
+        .warnings
+        .iter()
+        .any(|w| w.kind.is(WarningKind::FetchFailed));
+    assert!(!warned, "the first failure is now");
+    assert_eq!(restored.failures(ACCOUNT).unwrap().count, 1);
+}
+
+#[test]
+fn a_stop_forgets_the_failures_and_shows_no_fetch_failed() {
+    // DESIGN.md, "Fetch success and failure": while fetching is stopped
+    // nothing is fetched, so `fetch_failed` is not shown; counting starts
+    // again after the stop.
+    type Stop = fn(&mut H);
+    let stops: Vec<(&str, Stop)> = vec![
+        ("rate limit", |h| {
+            let until = h.at() + 600;
+            apply(
+                h,
+                ran(Outcome {
+                    stop: Some(until),
+                    failed: Some("x".into()),
+                    ..Outcome::default()
+                }),
+            )
+        }),
+        ("401", |h| {
+            apply(
+                h,
+                ran(Outcome {
+                    token: TokenObs {
+                        invalid: Some(true),
+                        ..TokenObs::default()
+                    },
+                    ..Outcome::default()
+                }),
+            )
+        }),
+        ("no token", |h| h.engine.token_cleared(ACCOUNT)),
+        ("keychain", |h| {
+            h.engine.set_keychain_state(KeychainState::Unavailable)
+        }),
+    ];
+    for (name, stop) in stops {
+        let mut h = H::new();
+        let first = h.at();
+        apply(&mut h, failed_run());
+        h.set_time(first + 200);
+        stop(&mut h);
+        assert_eq!(h.engine.failures(ACCOUNT), None, "{name}");
+        h.set_time(first + 400);
+        assert!(
+            warning(&h, WarningKind::FetchFailed).is_none(),
+            "{name}: {:?}",
+            kinds(&h)
+        );
+    }
+}
+
+#[test]
+fn refresh_is_one_ordinary_run() {
+    // DESIGN.md, "Fetch success and failure": a successful `refresh` resets
+    // the count, moves Updated and times the next run from its end; a failed
+    // one counts, and the first failure starts the five minutes.
+    let mut h = H::new();
+    let first = h.at();
+    apply(&mut h, failed_run());
+    assert!(h.engine.due(ACCOUNT, h.at() + 1, true).status, "now");
+    h.advance(1);
+    apply(&mut h, failed_run());
+    assert_eq!(h.engine.failures(ACCOUNT).unwrap().count, 2);
+    assert_eq!(h.engine.failures(ACCOUNT).unwrap().first_at, first);
+    h.advance(1);
+    apply(&mut h, ran(Outcome::default()));
+    assert_eq!(h.engine.failures(ACCOUNT), None);
+    assert_eq!(h.account().updated_at, Some(h.at()));
+    assert_eq!(h.engine.timers(ACCOUNT).run, h.at() + 60);
 }
 
 #[test]
@@ -593,15 +772,17 @@ fn a_missing_scope_warns_and_a_later_answer_clears_it() {
 
 #[test]
 fn sso_names_the_owner_whose_id_github_gives() {
-    let sso = |orgs: Vec<i64>, urls: Vec<String>| Outcome {
-        token: TokenObs {
-            invalid: Some(false),
-            sso: true,
-            sso_orgs: orgs,
-            sso_urls: urls,
-            ..TokenObs::default()
-        },
-        ..Outcome::default()
+    let sso = |orgs: Vec<i64>, urls: Vec<String>| {
+        ran(Outcome {
+            token: TokenObs {
+                invalid: Some(false),
+                sso: true,
+                sso_orgs: orgs,
+                sso_urls: urls,
+                ..TokenObs::default()
+            },
+            ..Outcome::default()
+        })
     };
     // `org` has github_id 100 in the support module.
     let mut h = H::new();
@@ -616,27 +797,65 @@ fn sso_names_the_owner_whose_id_github_gives() {
         "the others go on"
     );
 
+    // DESIGN.md, "Tokens": an organization no owner has is ignored, and
+    // no warning goes without an owner.
     let mut h = H::new();
     apply(
         &mut h,
         sso(vec![999], vec!["https://github.com/orgs/x/sso".into()]),
     );
-    let w = h.account().warnings;
-    assert_eq!(w.len(), 1);
-    assert_eq!(w[0].message, "SSO authorization required");
-    assert_eq!(w[0].owner, None);
-    assert_eq!(w[0].url.as_deref(), Some("https://github.com/orgs/x/sso"));
-
-    // The next answer without the header clears it.
+    assert!(kinds(&h).is_empty(), "{:?}", h.account().warnings);
     apply(
         &mut h,
-        Outcome {
+        sso(vec![], vec!["https://github.com/orgs/x/sso".into()]),
+    );
+    assert!(kinds(&h).is_empty(), "a URL alone names no owner");
+
+    // The single-organization form on an owner's search names that owner.
+    let org = h.owner_id(ORG);
+    apply(
+        &mut h,
+        ran(Outcome {
             token: TokenObs {
                 invalid: Some(false),
+                sso: true,
+                sso_urls: vec!["https://github.com/orgs/org/sso".into()],
+                sso_owners: [(org.clone(), Some("https://github.com/orgs/org/sso".into()))].into(),
                 ..TokenObs::default()
             },
             ..Outcome::default()
+        }),
+    );
+    let w = h.account().warnings;
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert_eq!(w[0].message, "SSO authorization required for org");
+    assert_eq!(w[0].owner, Some(org));
+    assert_eq!(w[0].url.as_deref(), Some("https://github.com/orgs/org/sso"));
+
+    // A reaction fetch searches no owner: the warning stays.
+    let answered = |due: Due| Outcome {
+        due,
+        token: TokenObs {
+            invalid: Some(false),
+            ..TokenObs::default()
         },
+        ..Outcome::default()
+    };
+    apply(
+        &mut h,
+        answered(Due {
+            reactions: true,
+            ..Due::default()
+        }),
+    );
+    assert_eq!(kinds(&h), ["sso_required"]);
+    // The next account run without the header clears it.
+    apply(
+        &mut h,
+        answered(Due {
+            status: true,
+            ..Due::default()
+        }),
     );
     assert!(kinds(&h).is_empty());
 }
@@ -759,21 +978,21 @@ fn due_times_follow_the_intervals() {
         due.status && due.reactions && due.notifications,
         "a start fetches"
     );
-    let owners = vec![h.owner_id(ORG), h.owner_id("public")];
     apply(
         &mut h,
         Outcome {
             due,
             poll_interval: Some(90),
-            status_ran: owners,
+            notifications_checked: true,
             ..Outcome::default()
         },
     );
     let start = h.at();
+    // The notifications are checked within an account run only.
     for (offset, status, reactions, notifications) in [
         (0, false, false, false),
         (89, false, false, false),
-        (90, false, false, true),
+        (90, false, false, false),
         (120, true, false, true),
         (300, true, true, true),
     ] {
@@ -803,24 +1022,19 @@ fn secondary_limits_wait_for_retry_after_or_a_minute() {
 }
 
 #[test]
-fn status_timers_are_per_owner() {
+fn an_account_run_covers_every_enabled_owner() {
+    // DESIGN.md, "Fetch success and failure": one run per account, and a
+    // retry runs the whole account again.
     let mut h = H::new();
     let start = h.at();
-    let org = h.owner_id(ORG);
-    apply(
-        &mut h,
-        Outcome {
-            status_ran: vec![org.clone()],
-            ..Outcome::default()
-        },
-    );
+    apply(&mut h, failed_run());
     let p = plan(&h, false);
-    let due = |id: &str| p.owners.iter().find(|o| o.id == id).unwrap().status_due;
-    assert!(!due(&org), "fetched just now");
-    assert!(due(&h.owner_id("public")), "untouched");
-    h.set_time(start + 60);
+    assert!(!p.due.status, "waiting for the retry");
+    assert!(p.owners.iter().all(|o| !o.status_due));
+    h.set_time(start + 5);
     let p = plan(&h, false);
-    assert!(p.owners.iter().all(|o| o.status_due));
+    assert!(p.due.status);
+    assert!(p.owners.iter().all(|o| o.status_due), "every owner again");
 }
 
 // ---------------------------------------------------- reaction baselines
@@ -912,11 +1126,11 @@ fn a_pr_leaving_the_watch_sets_its_reaction_baseline_again() {
 fn fetch_records_are_kept_per_account() {
     let mut h = H::new();
     h.add_other();
+    h.prs(vec![pr("PR_1")]);
     apply(
         &mut h,
         Outcome {
             own: vec![own_comment()],
-            pr_ids: vec![("org/app#1".into(), "PR_1".into())],
             ..Outcome::default()
         },
     );
@@ -925,13 +1139,34 @@ fn fetch_records_are_kept_per_account() {
     assert!(plan_of(&h, OTHER, true).pr_ids.is_empty());
 }
 
+#[test]
+fn the_notified_pr_map_comes_from_the_saved_prs() {
+    // DESIGN.md, "Identifying PRs": repo#number to id from the prs table,
+    // the owner and the repository lowercased.
+    let mut h = H::new();
+    h.prs(vec![
+        pr("PR_1"),
+        IngestPr {
+            owner: "Someone".into(),
+            repo: "Lib".into(),
+            ..pr("PR_7")
+        },
+    ]);
+    let p = plan(&h, false);
+    assert_eq!(p.pr_ids.get("org/app#1").map(String::as_str), Some("PR_1"));
+    assert_eq!(
+        p.pr_ids.get("someone/lib#7").map(String::as_str),
+        Some("PR_7")
+    );
+    assert_eq!(p.pr_ids.len(), 2);
+}
+
 // ------------------------------------------------- notifications check
 
 #[test]
 fn refresh_skips_only_the_notifications_check_within_the_poll_interval() {
     let mut h = H::new();
     let start = h.at();
-    let owners = vec![h.owner_id(ORG), h.owner_id("public")];
     apply(
         &mut h,
         Outcome {
@@ -942,7 +1177,6 @@ fn refresh_skips_only_the_notifications_check_within_the_poll_interval() {
             },
             poll_interval: Some(60),
             notifications_checked: true,
-            status_ran: owners,
             ..Outcome::default()
         },
     );
@@ -989,4 +1223,252 @@ fn the_last_notifications_check_survives_a_restart() {
         restored.due(ACCOUNT, start, false).status,
         "the PR fetches are due at once"
     );
+}
+
+// ------------------------------------------------------ stage 3 fixes
+
+#[test]
+fn an_owner_named_by_its_organization_id_gets_no_other_url() {
+    // DESIGN.md, "Tokens": the app opens the token settings without a URL;
+    // a URL of the same run may be another organization's.
+    let mut h = H::new();
+    apply(
+        &mut h,
+        ran(Outcome {
+            token: TokenObs {
+                invalid: Some(false),
+                sso: true,
+                sso_orgs: vec![100],
+                sso_urls: vec!["https://github.com/orgs/other/sso".into()],
+                ..TokenObs::default()
+            },
+            ..Outcome::default()
+        }),
+    );
+    let w = warning(&h, WarningKind::SsoRequired).unwrap();
+    assert_eq!(w.owner, Some(h.owner_id(ORG)));
+    assert_eq!(w.url, None);
+}
+
+#[test]
+fn a_stop_outside_an_account_run_forgets_the_failures_too() {
+    // DESIGN.md, "Fetch success and failure": any stop that begins.
+    type Stop = fn(&mut H);
+    let stops: Vec<(&str, Stop)> = vec![
+        ("rate limit in a reaction-only run", |h| {
+            let until = h.at() + 600;
+            apply(
+                h,
+                Outcome {
+                    ran: true,
+                    due: Due {
+                        reactions: true,
+                        ..Due::default()
+                    },
+                    stop: Some(until),
+                    ..Outcome::default()
+                },
+            )
+        }),
+        ("401 in a reaction-only run", |h| {
+            apply(
+                h,
+                Outcome {
+                    ran: true,
+                    due: Due {
+                        reactions: true,
+                        ..Due::default()
+                    },
+                    token: TokenObs {
+                        invalid: Some(true),
+                        ..TokenObs::default()
+                    },
+                    ..Outcome::default()
+                },
+            )
+        }),
+        ("rate limit of a token test or lookup", |h| {
+            let until = h.at() + 600;
+            h.engine.usage_seen(ACCOUNT, None, None, Some(until));
+        }),
+    ];
+    for (name, stop) in stops {
+        let mut h = H::new();
+        let first = h.at();
+        apply(&mut h, failed_run());
+        assert!(h.engine.failures(ACCOUNT).is_some(), "{name}");
+        h.set_time(first + 100);
+        stop(&mut h);
+        assert_eq!(h.engine.failures(ACCOUNT), None, "{name}");
+        // After the stop, counting starts again.
+        h.set_time(first + 1000);
+        h.engine.token_saved(ACCOUNT);
+        apply(&mut h, failed_run());
+        let failures = h.engine.failures(ACCOUNT).unwrap();
+        assert_eq!(
+            (failures.count, failures.first_at),
+            (1, first + 1000),
+            "{name}"
+        );
+        assert!(warning(&h, WarningKind::FetchFailed).is_none(), "{name}");
+    }
+}
+
+#[test]
+fn a_failed_notifications_check_starts_no_poll_interval_wait() {
+    let mut h = H::new();
+    let start = h.at();
+    apply(
+        &mut h,
+        ran(Outcome {
+            due: Due {
+                status: true,
+                notifications: true,
+                ..Due::default()
+            },
+            failed: Some("Couldn't reach GitHub".into()),
+            poll_interval: Some(60),
+            notifications_checked: false,
+            ..Outcome::default()
+        }),
+    );
+    let next = h.engine.timers(ACCOUNT).run;
+    assert_eq!(next, start + 5);
+    assert!(
+        h.engine.due(ACCOUNT, next, false).notifications,
+        "the retry checks again"
+    );
+    assert_eq!(
+        h.engine.data().accounts[ACCOUNT].fetch.notif_checked_at,
+        None
+    );
+}
+
+/// DESIGN.md, "Watching": a card on screen is watched. A card the open
+/// popover holds is on screen, so its comments and baselines stay.
+#[test]
+fn a_held_card_stays_watched() {
+    let mut h = H::new();
+    h.set("keep_watching_days", json!(0));
+    let e = h.ev("E_1", "PR_1", IngestKind::Merged);
+    h.push(
+        vec![IngestPr {
+            state: PrState::Merged,
+            ..other("PR_1")
+        }],
+        vec![e],
+        vec![],
+    );
+    apply(
+        &mut h,
+        Outcome {
+            collected: vec!["PR_1".into()],
+            own: vec![own_comment()],
+            ..Outcome::default()
+        },
+    );
+    h.open();
+    assert_eq!(h.app_list(), ["PR_1"]);
+    h.read(&["E_1"]);
+    h.advance(DAY);
+    h.tick();
+    let p = plan(&h, false);
+    assert!(p.prs["PR_1"].watched, "held, on screen");
+    assert!(p.prs["PR_1"].collected);
+    assert!(p.own["C_1"].baseline_done, "the baseline stays");
+    // A reaction in that window becomes a row.
+    let r = h.reaction("C_1", "PR_1", &[("THUMBS_UP", 1)]);
+    h.push(vec![], vec![], vec![r]);
+    let rows = h.card(&key("PR_1")).unwrap().rows;
+    assert!(
+        rows.iter().any(|r| r.kind.is(RowKind::Reaction)),
+        "{rows:?}"
+    );
+    h.read_all();
+    h.close();
+    h.tick();
+    h.advance(1);
+    h.tick();
+    assert!(!plan(&h, false).prs["PR_1"].watched, "gone once closed");
+}
+
+/// A snoozed PR that would await review shows in the Snoozed section: it
+/// stays watched while snoozed.
+#[test]
+fn a_snoozed_pr_that_would_await_review_stays_watched() {
+    let mut h = H::new();
+    h.set("keep_watching_days", json!(0));
+    let asked = IngestPr {
+        requested_me: true,
+        is_draft: true,
+        ..other("PR_1")
+    };
+    h.prs(vec![asked]);
+    apply(
+        &mut h,
+        Outcome {
+            collected: vec!["PR_1".into()],
+            own: vec![own_comment()],
+            ..Outcome::default()
+        },
+    );
+    h.snooze(&key("PR_1"));
+    h.advance(DAY / 2);
+    h.tick();
+    h.advance(1);
+    h.tick();
+    let p = plan(&h, false);
+    assert!(p.prs["PR_1"].watched, "in the Snoozed section");
+    assert!(p.prs["PR_1"].collected);
+    assert!(p.own["C_1"].baseline_done);
+    let r = h.reaction("C_1", "PR_1", &[("THUMBS_UP", 2)]);
+    h.push(vec![], vec![], vec![r]);
+    let row = h
+        .engine
+        .data()
+        .rows
+        .values()
+        .find(|r| r.kind == shiibar_ghd::model::RowKind::Reaction);
+    assert!(row.is_some(), "a reaction while snoozed becomes a row");
+}
+
+/// Every snoozed PR shows in the Snoozed section, so it stays watched,
+/// even a merged one with nothing unread and no days to keep watching.
+#[test]
+fn every_snoozed_pr_stays_watched() {
+    let mut h = H::new();
+    h.set("keep_watching_days", json!(0));
+    let e = h.ev("E_1", "PR_1", IngestKind::Merged);
+    h.push(
+        vec![IngestPr {
+            state: PrState::Merged,
+            ..other("PR_1")
+        }],
+        vec![e],
+        vec![],
+    );
+    apply(
+        &mut h,
+        Outcome {
+            collected: vec!["PR_1".into()],
+            own: vec![own_comment()],
+            ..Outcome::default()
+        },
+    );
+    h.snooze(&key("PR_1"));
+    h.read(&["E_1"]);
+    // Two hours: before the next Return time releases it.
+    h.advance(2 * HOUR);
+    h.tick();
+    h.advance(1);
+    h.tick();
+    let p = plan(&h, false);
+    assert!(p.prs["PR_1"].watched, "in the Snoozed section");
+    assert!(p.prs["PR_1"].collected);
+    assert!(p.own["C_1"].baseline_done);
+    h.unsnooze(&key("PR_1"));
+    h.tick();
+    h.advance(1);
+    h.tick();
+    assert!(!plan(&h, false).prs["PR_1"].watched, "gone once unsnoozed");
 }

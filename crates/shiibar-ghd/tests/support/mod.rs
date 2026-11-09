@@ -67,6 +67,8 @@ pub fn pr(id: &str) -> IngestPr {
         failed_check: None,
         changes_requested_by: None,
         updated_at: T0,
+        created_at: T0 - DAY,
+        my_review_at: None,
         is_private: false,
         requested_me: false,
         requested_team: false,
@@ -262,8 +264,20 @@ impl H {
         self.all_cards().into_iter().find(|c| c.pr == pr_key)
     }
 
+    /// What `list` answers, without holding the cards of an open popover.
     pub fn list(&self, args: ListArgs) -> Vec<Card> {
-        self.engine.list(&args, &self.now).unwrap()
+        self.engine.list_view(&args, &self.now).unwrap()
+    }
+
+    /// `list` as the app sends it: while the popover is open, the cards of
+    /// the answer stay until it closes.
+    pub fn app_list(&mut self) -> Vec<String> {
+        self.engine
+            .list(&ListArgs::default(), &self.now)
+            .unwrap()
+            .into_iter()
+            .map(|c| short(&c.id))
+            .collect()
     }
 
     /// The PRs tab: the owner sections.
@@ -295,11 +309,13 @@ impl H {
         self.card_ids(ListArgs::default()).iter().any(|c| c == id)
     }
 
-    pub fn todo_ids(&self) -> Vec<String> {
-        self.card_ids(ListArgs {
-            todo: true,
-            ..ListArgs::default()
-        })
+    /// Short ids of the cards awaiting review, in the owner sections.
+    pub fn awaiting_ids(&self) -> Vec<String> {
+        self.cards()
+            .into_iter()
+            .filter(|c| c.awaiting_review)
+            .map(|c| short(&c.id))
+            .collect()
     }
 
     pub fn activity(&self, args: ActivityArgs) -> Vec<Row> {
@@ -328,9 +344,9 @@ impl H {
         self.engine.owner_id(ACCOUNT, name).unwrap()
     }
 
-    /// The Todo PR count of the account: the menu bar number.
+    /// The PRs awaiting review of the account: the menu bar number.
     pub fn badge(&self) -> u32 {
-        self.account().todo_count
+        self.account().review_count
     }
 
     /// The blue dot of the account.
@@ -373,21 +389,14 @@ impl H {
         self.engine.unsnooze(ME, key, &self.now).unwrap();
     }
 
-    pub fn done(&mut self, id: &str) {
-        self.engine.done(&full(id), true).unwrap();
-    }
-
-    pub fn undone(&mut self, id: &str) {
-        self.engine.done(&full(id), false).unwrap();
-    }
-
-    pub fn todo(&mut self, id: &str, on: bool) {
-        self.engine.todo(&full(id), on, &self.now).unwrap();
-    }
-
-    pub fn seen(&mut self, rows: &[&str]) {
+    /// `read`: the rows were selected or opened.
+    pub fn read(&mut self, rows: &[&str]) {
         let rows: Vec<String> = rows.iter().map(|r| full(r)).collect();
-        self.engine.seen(&rows);
+        self.engine.read(&rows).unwrap();
+    }
+
+    pub fn read_all(&mut self) {
+        self.engine.read_all(ME).unwrap();
     }
 
     pub fn close(&mut self) {

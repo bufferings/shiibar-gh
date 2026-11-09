@@ -14,16 +14,21 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// M4 (0.2). Versions 1 to 3 are the 0.1 schema, which is not migrated: such
-/// a database is treated like an unreadable one (DESIGN.md, "Saved state").
-pub const SCHEMA_VERSION: i64 = 4;
+/// M5 (0.3). Version 4 is the 0.2 schema, moved to 5 at startup. Versions 1
+/// to 3 are the 0.1 schema, which is not migrated: such a database is treated
+/// like an unreadable one (DESIGN.md, "Saved state").
+pub const SCHEMA_VERSION: i64 = 5;
+/// The 0.2 schema.
+const V02_VERSION: i64 = 4;
 /// The newest version of the 0.1 schema.
 const LAST_V01_VERSION: i64 = 3;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 const FILE_MODE: u32 = 0o600;
 const SIDE_FILES: [&str; 2] = ["-wal", "-shm"];
 
-const SCHEMA_V4: &str = "
+/// The 0.2 schema with the 0.3 changes already made: the columns
+/// [`MIGRATE_V4_TO_V5`] drops are absent and the ones it adds come last.
+const SCHEMA_V5: &str = "
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE accounts (
@@ -57,7 +62,6 @@ CREATE TABLE owner_events (
     owner TEXT NOT NULL,
     event TEXT NOT NULL,
     list INTEGER NOT NULL,
-    todo INTEGER NOT NULL,
     notify INTEGER NOT NULL,
     PRIMARY KEY (owner, event)
 );
@@ -106,7 +110,9 @@ CREATE TABLE prs (
     prev_base_status TEXT,
     prev_mergeable INTEGER,
     gone_at INTEGER,
-    collected INTEGER NOT NULL
+    collected INTEGER NOT NULL,
+    created_at INTEGER,
+    my_review_at INTEGER
 );
 CREATE TABLE pr_rows (
     id TEXT PRIMARY KEY,
@@ -120,12 +126,8 @@ CREATE TABLE pr_rows (
     occurred_at INTEGER NOT NULL,
     comment_id TEXT,
     unread INTEGER NOT NULL,
-    seen_pending INTEGER NOT NULL,
-    done INTEGER NOT NULL,
     pruned INTEGER NOT NULL,
-    notify TEXT NOT NULL,
-    todo_auto INTEGER NOT NULL,
-    todo_manual INTEGER
+    notify TEXT NOT NULL
 );
 CREATE TABLE reaction_baselines (
     key TEXT PRIMARY KEY,
@@ -133,6 +135,33 @@ CREATE TABLE reaction_baselines (
     counts TEXT NOT NULL
 );
 ";
+
+/// docs/tasks/M5.md, "Database and migration": the Todo and Done columns
+/// go, `prs.created_at` comes (null until the next fetch), and so does
+/// `prs.my_review_at` (null until the next fetch; the brief leaves to the
+/// implementer whether the review state has a column). Every other table and
+/// value stays. `ALTER TABLE DROP COLUMN` exists since SQLite 3.35.0 and
+/// refuses a column an index, a key or a constraint refers to; none of these
+/// does (sqlite.org/lang_altertable.html).
+const MIGRATE_V4_TO_V5: [&str; 7] = [
+    "ALTER TABLE owner_events DROP COLUMN todo",
+    "ALTER TABLE pr_rows DROP COLUMN seen_pending",
+    "ALTER TABLE pr_rows DROP COLUMN done",
+    "ALTER TABLE pr_rows DROP COLUMN todo_auto",
+    "ALTER TABLE pr_rows DROP COLUMN todo_manual",
+    "ALTER TABLE prs ADD COLUMN created_at INTEGER",
+    "ALTER TABLE prs ADD COLUMN my_review_at INTEGER",
+];
+
+/// Run the migration inside the caller's transaction, ending with the new
+/// `user_version`. Any error leaves the transaction for the caller to roll
+/// back.
+fn migrate_v4(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    for statement in MIGRATE_V4_TO_V5 {
+        tx.execute_batch(statement)?;
+    }
+    tx.pragma_update(None, "user_version", SCHEMA_VERSION)
+}
 
 #[derive(Debug)]
 pub enum OpenOutcome {
@@ -325,13 +354,62 @@ impl Store {
             return Ok(OpenOutcome::Unreadable);
         }
         if version == 0 {
-            tx.execute_batch(SCHEMA_V4)?;
+            tx.execute_batch(SCHEMA_V5)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
-        tx.commit()?;
+        let migrating = version == V02_VERSION;
+        if migrating {
+            // DESIGN.md, "Saved state": a failed move rolls back and leaves
+            // the 0.2 database as it was, in the unreadable state.
+            if let Err(e) = migrate_v4(&tx) {
+                drop(tx);
+                crate::logging::error(format_args!(
+                    "cannot move the 0.2 database to schema version {SCHEMA_VERSION}: {e}"
+                ));
+                return Ok(OpenOutcome::Unreadable);
+            }
+        }
+        // The moved state is read back inside the move's transaction: a
+        // failure rolls everything back, so the database stays at version 4
+        // and every start shows the unreadable state, never an exit.
+        let moved = if migrating {
+            match load(&tx) {
+                Ok(data) => Some(data),
+                Err(e) => {
+                    drop(tx);
+                    crate::logging::error(format_args!(
+                        "cannot read the 0.2 database moved to schema version {SCHEMA_VERSION}: {e:#}"
+                    ));
+                    return Ok(OpenOutcome::Unreadable);
+                }
+            }
+        } else {
+            None
+        };
+        // DESIGN.md, "When the database cannot be read": a move that cannot
+        // be committed (SQLite rolls it back) leaves the unreadable state,
+        // not an exit.
+        if let Err(e) = tx.commit() {
+            if !migrating {
+                return Err(e.into());
+            }
+            crate::logging::error(format_args!(
+                "cannot commit the move to schema version {SCHEMA_VERSION}: {e}"
+            ));
+            return Ok(OpenOutcome::Unreadable);
+        }
+        if migrating {
+            crate::logging::info(format_args!(
+                "moved the 0.2 database to schema version {SCHEMA_VERSION}"
+            ));
+        }
 
         restrict_side_files(path).context("cannot set the database side file mode")?;
-        let data = load(&conn)?.map(Box::new);
+        let data = match moved {
+            Some(data) => data,
+            None => load(&conn)?,
+        }
+        .map(Box::new);
         let store = Self {
             conn,
             path: path.to_path_buf(),
@@ -561,9 +639,9 @@ fn save_owner(tx: &Transaction<'_>, o: &OwnerRec) -> rusqlite::Result<()> {
     )?;
     for (kind, cell) in &o.events.0 {
         tx.execute(
-            "INSERT INTO owner_events (owner, event, list, todo, notify)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![o.id, kind.as_str(), cell.list, cell.todo, cell.notify],
+            "INSERT INTO owner_events (owner, event, list, notify)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![o.id, kind.as_str(), cell.list, cell.notify],
         )?;
     }
     for (kind, list) in [("repo", &o.repos), ("user", &o.users)] {
@@ -585,10 +663,11 @@ fn save_pr(tx: &Transaction<'_>, pr: &PrRec) -> rusqlite::Result<()> {
           head, state, is_draft, review, checks, base_status, mergeable, failed_check,
           changes_requested_by, updated_at, is_private, requested_me, requested_team,
           assignees, link_review, link_checks, link_base, unreadable, snoozed, added_at,
-          prev_review, prev_checks, prev_base_status, prev_mergeable, gone_at, collected)
+          prev_review, prev_checks, prev_base_status, prev_mergeable, gone_at, collected,
+          created_at, my_review_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
                  ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32,
-                 ?33, ?34, ?35, ?36, ?37)",
+                 ?33, ?34, ?35, ?36, ?37, ?38, ?39)",
         params![
             pr.key,
             pr.account,
@@ -627,6 +706,8 @@ fn save_pr(tx: &Transaction<'_>, pr: &PrRec) -> rusqlite::Result<()> {
             pr.prev.map(|p| p.mergeable),
             pr.gone_at,
             pr.collected,
+            pr.created_at,
+            pr.my_review_at,
         ],
     )?;
     Ok(())
@@ -636,8 +717,8 @@ fn save_row(tx: &Transaction<'_>, row: &RowRec) -> rusqlite::Result<()> {
     tx.execute(
         "INSERT OR REPLACE INTO pr_rows
          (id, account, pr, kind, text, counts, actor, url, occurred_at, comment_id, unread,
-          seen_pending, done, pruned, notify, todo_auto, todo_manual)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+          pruned, notify)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             row.id,
             row.account,
@@ -650,12 +731,8 @@ fn save_row(tx: &Transaction<'_>, row: &RowRec) -> rusqlite::Result<()> {
             row.occurred_at,
             row.comment_id,
             row.unread,
-            row.seen_pending,
-            row.done,
             row.pruned,
             row.notify.as_str(),
-            row.todo_auto,
-            row.todo_manual,
         ],
     )?;
     Ok(())
@@ -754,16 +831,14 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
         let owner = owner?;
         data.owners.insert(owner.id.clone(), owner);
     }
-    let mut statement =
-        conn.prepare("SELECT owner, event, list, todo, notify FROM owner_events")?;
+    let mut statement = conn.prepare("SELECT owner, event, list, notify FROM owner_events")?;
     let cells = statement.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,
             stored(1, &row.get::<_, String>(1)?, EventKind::parse)?,
             Cell {
                 list: row.get(2)?,
-                todo: row.get(3)?,
-                notify: row.get(4)?,
+                notify: row.get(3)?,
             },
         ))
     })?;
@@ -803,7 +878,7 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
                 failed_check, changes_requested_by, updated_at, is_private, requested_me,
                 requested_team, assignees, link_review, link_checks, link_base, unreadable,
                 snoozed, added_at, prev_review, prev_checks, prev_base_status, prev_mergeable,
-                gone_at, collected
+                gone_at, collected, created_at, my_review_at
          FROM prs",
     )?;
     let prs = statement.query_map([], |row| {
@@ -855,6 +930,8 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
             prev,
             gone_at: row.get(35)?,
             collected: row.get(36)?,
+            created_at: row.get(37)?,
+            my_review_at: row.get(38)?,
         })
     })?;
     for pr in prs {
@@ -864,7 +941,7 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
 
     let mut statement = conn.prepare(
         "SELECT id, account, pr, kind, text, counts, actor, url, occurred_at, comment_id, unread,
-                seen_pending, done, pruned, notify, todo_auto, todo_manual
+                pruned, notify
          FROM pr_rows",
     )?;
     let rows = statement.query_map([], |row| {
@@ -881,12 +958,8 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
             occurred_at: row.get(8)?,
             comment_id: row.get(9)?,
             unread: row.get(10)?,
-            seen_pending: row.get(11)?,
-            done: row.get(12)?,
-            pruned: row.get(13)?,
-            notify: stored(14, &row.get::<_, String>(14)?, NotifyState::parse)?,
-            todo_auto: row.get(15)?,
-            todo_manual: row.get(16)?,
+            pruned: row.get(11)?,
+            notify: stored(12, &row.get::<_, String>(12)?, NotifyState::parse)?,
         })
     })?;
     for row in rows {

@@ -24,13 +24,17 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
     private var panels: [String: NSPanel] = [:]
     private var keyMonitor: Any?
     private var cancellables: Set<AnyCancellable> = []
+    /// Keep on top of each window follows its account's value.
+    private var pinWatch: [String: AnyCancellable] = [:]
     private var surfaceAppearance = NSAppearance(named: .aqua)
     var onWindowOpened: ((String) -> Void)?
     var onWindowClosed: ((String) -> Void)?
     /// Called on ⌘Q while a surface has the focus.
     var onQuit: (() -> Void)?
 
-    static let popoverWidth: CGFloat = 460
+    /// 460 points at text size 12, in proportion to the text size.
+    var popoverWidth: CGFloat { CGFloat(TextSize.width(app.textSize)) }
+    static let popoverHeight: CGFloat = 620
 
     init(app: AppModel, avatars: AvatarStore, actions: @escaping (String?) -> SurfaceActions) {
         self.app = app
@@ -43,6 +47,16 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         app.objectWillChange
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in DispatchQueue.main.async { self?.update() } }
+            .store(in: &cancellables)
+        // The popover's width follows the text size at once; a window keeps
+        // the size it has (DESIGN.md, "Text size").
+        app.$textSize
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] size in
+                guard let self, self.popover.isShown, self.popoverAccount != nil else { return }
+                self.popover.contentSize = NSSize(width: CGFloat(TextSize.width(size)), height: Self.popoverHeight)
+            }
             .store(in: &cancellables)
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
@@ -83,7 +97,7 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         for account in accounts.reversed() {
             let item = items[account.id] ?? makeItem(account.id)
             draw(item, color: account.accountColor, marks: MenuBarMarks(account))
-            item.button?.setAccessibilityLabel(accessibility(account))
+            item.button?.setAccessibilityLabel(MenuBarMarks.accessibilityLabel(account))
             item.button?.toolTip = account.login
         }
         if SurfaceRules.showsAppIcon(accounts) {
@@ -133,14 +147,6 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         return item
     }
 
-    private func accessibility(_ account: Account) -> String {
-        var parts = [account.login]
-        if account.unread { parts.append("unread") }
-        if account.todoCount > 0 { parts.append("\(account.todoCount) Todo") }
-        if Warnings.hasTriangle(account) { parts.append("warning") }
-        return parts.joined(separator: ", ")
-    }
-
     @objc private func clicked(_ sender: NSStatusBarButton) {
         guard let id = sender.identifier?.rawValue else { return }
         toggle(account: id, from: sender)
@@ -167,8 +173,9 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         popoverAccount = account
         let content: AnyView
         if let account {
-            content = AnyView(PopoverView(app: app, model: app.viewModel(account), avatars: avatars, actions: actions(account), surface: .popover))
-            popover.contentSize = NSSize(width: Self.popoverWidth, height: 620)
+            let model = app.viewModel(account)
+            content = AnyView(PopoverView(app: app, model: model, list: model.list(.popover), avatars: avatars, actions: actions(account), surface: .popover))
+            popover.contentSize = NSSize(width: popoverWidth, height: Self.popoverHeight)
         } else {
             var none = actions(nil)
             none.openWindow = nil
@@ -180,8 +187,12 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
+        // The search field does not take the keyboard when the popover
+        // opens (DESIGN.md, "Search field"); ⌘F moves there.
+        let window = popover.contentViewController?.view.window
+        DispatchQueue.main.async { window?.makeFirstResponder(nil) }
         if let account {
-            app.surfaceDisplayed(.popover, account: account, true)
+            app.surfaceDisplayed(.popover, account: account, true, opening: true)
             app.surfaceOpened(.popover, account: account)
         }
     }
@@ -212,23 +223,22 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         }
         var surface = actions(account)
         surface.openWindow = nil
-        let view = PopoverView(app: app, model: app.viewModel(account), avatars: avatars, actions: surface, surface: .window)
+        let model = app.viewModel(account)
+        let view = PopoverView(app: app, model: model, list: model.list(.window), avatars: avatars, actions: surface, surface: .window)
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: Self.popoverWidth, height: 620),
+            contentRect: NSRect(x: 0, y: 0, width: popoverWidth, height: Self.popoverHeight),
             styleMask: [.titled, .closable, .resizable, .utilityWindow, .fullSizeContentView],
             backing: .buffered, defer: false
         )
         panel.title = app.account(account)?.login ?? ""
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
-        panel.level = .floating
         panel.hidesOnDeactivate = false
-        panel.isFloatingPanel = true
         panel.becomesKeyOnlyIfNeeded = false
         panel.isReleasedWhenClosed = false
         panel.appearance = surfaceAppearance
         panel.contentViewController = NSHostingController(rootView: view)
-        panel.setContentSize(NSSize(width: Self.popoverWidth, height: 620))
+        panel.setContentSize(NSSize(width: popoverWidth, height: Self.popoverHeight))
         panel.identifier = NSUserInterfaceItemIdentifier(account)
         panel.delegate = self
         if let saved = app.store.windowFrame(account: account) {
@@ -237,10 +247,20 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             panel.center()
         }
         panels[account] = panel
+        // Keep on top: the panel floats above normal windows while on
+        // (NSWindow.level; .floating is in front of every normal-level
+        // window). Applied now and whenever the pin is pressed.
+        pinWatch[account] = app.viewModel(account).$keepOnTop.sink { [weak panel] on in
+            panel?.isFloatingPanel = on
+            panel?.level = on ? .floating : .normal
+        }
         onWindowOpened?(account)
-        app.surfaceDisplayed(.window, account: account, true)
+        // The window becomes key at once below, and `surfaceOpened` reads
+        // the lists after `popover_opened`.
+        app.surfaceDisplayed(.window, account: account, true, opening: true)
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
+        DispatchQueue.main.async { [weak panel] in panel?.makeFirstResponder(nil) }
     }
 
     private func account(of notification: Notification) -> String? {
@@ -282,43 +302,53 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             app.surfaceClosed(.window, account: account)
             app.surfaceDisplayed(.window, account: account, false)
             panels[account] = nil
+            pinWatch[account] = nil
             onWindowClosed?(account)
         }
     }
 
     // MARK: - Keys
 
-    /// ↑↓, ⏎, T, D and S while the popover or a window has the focus, and ⌘Q.
-    /// Keys typed into a text field are left alone.
+    /// The keys while the popover or a window has the focus: what each does
+    /// is `KeyRules.decide` (ShiibarGhCore); this reads the NSEvent and
+    /// carries the answer out.
     private func handleKey(_ event: NSEvent) -> Bool {
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let key = NSApp.keyWindow
         let account: String?
+        let surface: Surface
         if popover.isShown, key === popover.contentViewController?.view.window {
             account = popoverAccount
+            surface = .popover
         } else if let window = key, let id = window.identifier?.rawValue, panels[id] === window {
             account = id
+            surface = .window
         } else {
             return false
         }
-        if flags == .command, event.charactersIgnoringModifiers == "q" {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        var modifiers: Set<KeyModifier> = []
+        if flags.contains(.command) { modifiers.insert(.command) }
+        if flags.contains(.shift) { modifiers.insert(.shift) }
+        if flags.contains(.option) { modifiers.insert(.option) }
+        if flags.contains(.control) { modifiers.insert(.control) }
+        let press = KeyPress(keyCode: event.keyCode, characters: event.charactersIgnoringModifiers ?? "", modifiers: modifiers)
+        let model = account.map { app.viewModel($0).list(surface) }
+        let inSearch = (model?.searchFocused ?? false) || key?.firstResponder is NSText
+        switch KeyRules.decide(press, inSearch: inSearch, hasSearchText: !(model?.search.isEmpty ?? true)) {
+        case .quit:
             onQuit?()
-            return true
-        }
-        if key?.firstResponder is NSText { return false }
-        guard let account, flags.subtracting([.numericPad, .function]).isEmpty else { return false }
-        let model = app.viewModel(account)
-        switch event.keyCode {
-        case 126: model.press(.up)
-        case 125: model.press(.down)
-        case 36, 76: model.press(.open)
-        default:
-            switch event.charactersIgnoringModifiers?.lowercased() {
-            case "d": model.press(.done)
-            case "t": model.press(.todo)
-            case "s": model.press(.snooze)
-            default: return false
-            }
+        case .pass:
+            return false
+        case .textSize(let change):
+            guard model != nil else { return false }
+            app.changeTextSize(change)
+        case .key(let key):
+            guard let model else { return false }
+            model.press(key)
+        case .leaveSearch(let clearing):
+            guard let model else { return false }
+            model.leaveSearch(clearing: clearing)
+            key?.makeFirstResponder(nil)
         }
         return true
     }

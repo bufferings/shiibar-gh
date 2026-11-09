@@ -8,7 +8,9 @@ use crate::model::{
 use shiibar_gh_proto::Ingest;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Which kinds of fetch this run does.
+/// Which kinds of fetch this run does. `status` is the account run: every
+/// enabled owner's search and status, and the notifications check when
+/// `notifications` is set too.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Due {
     pub status: bool,
@@ -36,6 +38,8 @@ pub struct Plan {
     /// Lowercase logins of every registered owner of the account.
     pub registered_owners: BTreeSet<String>,
     pub prs: BTreeMap<String, PrInfo>,
+    /// Lowercase `owner/repo#number` of every saved PR of the account, to
+    /// its node id.
     pub pr_ids: BTreeMap<String, String>,
     pub threads: BTreeMap<String, ThreadRec>,
     pub own: BTreeMap<String, OwnComment>,
@@ -117,6 +121,9 @@ pub struct TokenObs {
     pub sso: bool,
     pub sso_orgs: Vec<i64>,
     pub sso_urls: Vec<String>,
+    /// Owner ids whose search had the single-organization form, with its
+    /// URL.
+    pub sso_owners: BTreeMap<String, Option<String>>,
     /// `Some(true)` after a 401, `Some(false)` after any other answer.
     pub invalid: Option<bool>,
 }
@@ -125,8 +132,6 @@ pub struct TokenObs {
 pub struct Outcome {
     pub ingest: Option<Ingest>,
     pub due: Due,
-    /// Owners whose status fetch was due in this run; their timers restart.
-    pub status_ran: Vec<String>,
     /// The run made at least one call.
     pub ran: bool,
     /// The login `viewer` answered.
@@ -137,9 +142,9 @@ pub struct Outcome {
     /// show them answered (to clear an earlier refusal).
     pub refused: BTreeSet<String>,
     pub checked: BTreeSet<String>,
-    /// The `fetch_failed` of this run, when anything failed.
+    /// Why the account run failed (DESIGN.md, "Fetch success and failure"),
+    /// when it did. The reaction fetch never sets it.
     pub failed: Option<String>,
-    pub pr_ids: Vec<(String, String)>,
     pub threads: Vec<ThreadRec>,
     pub own: Vec<OwnComment>,
     pub own_gone: Vec<String>,

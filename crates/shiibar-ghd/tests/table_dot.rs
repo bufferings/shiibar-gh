@@ -141,23 +141,21 @@ fn dot_table() {
 }
 
 #[test]
-fn an_app_disconnect_releases_the_open_state_but_keeps_seen_pending() {
+fn an_app_disconnect_releases_the_open_state() {
     let mut h = H::new();
     h.prs(vec![pr("PR_1")]);
     h.open();
     comment(&mut h);
-    h.seen(&["E_1"]);
     h.engine.app_disconnected();
     assert!(
-        h.row("E_1").seen_pending,
-        "kept until the next popover_closed"
+        h.row("E_1").unread,
+        "the end of the open state reads nothing"
     );
-    assert!(h.row("E_1").unread);
     let e = h.ev("E_2", "PR_1", IngestKind::Comment);
     h.events(vec![e]);
     assert!(h.dot(), "the dot works again after a crash of the app");
     h.close();
-    assert!(!h.row("E_1").unread);
+    assert!(h.row("E_1").unread, "closing reads nothing either");
 }
 
 #[test]
