@@ -32,7 +32,7 @@ a{color:#0A5FC2;text-decoration:none}a:hover{color:#084A97}
 
 /* popover */
 .pop{width:400px;background:#F3F4F8;border-radius:10px;border:1px solid #D6D6DA;display:flex;flex-direction:column;overflow:hidden;box-sizing:border-box}
-.phead{display:flex;align-items:center;gap:6px;padding:12px 10px 0 16px}
+.phead{display:flex;align-items:center;gap:4px;padding:12px 10px 0 16px}
 .m{font-size:11px;color:#5E5E64;white-space:nowrap}
 .iconbtn{width:24px;height:24px;border:none;background:transparent;border-radius:6px;color:#55555B;display:flex;align-items:center;justify-content:center;padding:0;flex:0 0 24px}
 .banner{margin:8px 12px 0;padding:7px 10px;border-radius:8px;background:#FFF4D6;color:#6B4E00;font-size:12px;display:flex;gap:8px;align-items:center}
@@ -40,15 +40,8 @@ a{color:#0A5FC2;text-decoration:none}a:hover{color:#084A97}
 .ptab{border:none;background:transparent;font:inherit;font-size:12px;color:#5E5E64;padding:4px 10px 6px;border-bottom:2px solid transparent;margin-bottom:-1px}
 .ptab.on{color:#1D1D1F;font-weight:600;border-bottom-color:#1D1D1F}
 .chips{display:flex;gap:8px;padding:8px 12px;align-items:center;flex-wrap:wrap}
-.chip{font:inherit;font-size:11px;padding:3px 9px;border-radius:12px;border:1px solid #C9C9CE;background:#FFFFFF;color:#3A3A3F;white-space:nowrap;display:flex;align-items:center;gap:5px}
+.chip{font:inherit;font-size:11px;padding:3px 9px;border-radius:12px;border:1px solid #C9C9CE;background:#FFFFFF;color:#3A3A3F;white-space:nowrap;line-height:14px}
 .chip.on{background:#1D1D1F;color:#FFFFFF;border-color:#1D1D1F}
-.chip.on::before{content:"✓"}
-.chip-act.on{background:#C7420D;border-color:#C7420D}
-.chip .cnt{font-size:10px;font-weight:700;background:rgba(0,0,0,.08);border-radius:7px;padding:0 5px;line-height:14px}
-.chip.on .cnt{background:rgba(255,255,255,.25)}
-.pair{display:flex}
-.pair .chip:first-child{border-radius:12px 0 0 12px}
-.pair .chip:last-child{border-radius:0 12px 12px 0;border-left:none}
 .card{margin:0 12px 8px;background:#FFFFFF;border-radius:10px;border:1px solid #E3E3E6;overflow:hidden;position:relative}
 .sbar{position:absolute;left:0;top:0;bottom:0;width:4px;background:#1F8A3E}
 .prhead{display:flex;flex-direction:column;padding:6px 10px 5px 12px;gap:3px}
@@ -56,11 +49,10 @@ a{color:#0A5FC2;text-decoration:none}a:hover{color:#084A97}
 .avc{width:16px;height:16px;border-radius:8px;flex:0 0 16px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;color:#FFFFFF}
 .ttl{font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .sls{display:flex;gap:2px}
-.sl{width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:5px}
-.ev{display:flex;gap:8px;align-items:flex-start;padding:5px 10px 6px 14px;border-top:1px solid #F0F0F2;background:#FFF8F3}
+.sl{width:20px;height:20px;display:flex;align-items:center;justify-content:center}
+.ev{display:flex;gap:8px;align-items:flex-start;padding:5px 10px 6px 14px;border-top:1px solid #F0F0F2}
 .dot{width:7px;height:7px;border-radius:4px;background:#0A66D6;flex:0 0 7px;margin-top:6px}
-.cb{width:18px;height:18px;border:1.5px solid #C9C9CE;background:#FFFFFF;border-radius:5px;flex:0 0 18px;margin-top:1px;padding:0}
-.k{font-size:11px;font-weight:600;white-space:nowrap;color:#A0390A;margin-top:2px}
+.k{font-size:11px;font-weight:600;white-space:nowrap;margin-top:2px;color:#3A3A3F}
 .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;margin-top:1px}
 .keys{display:flex;gap:10px;padding:6px 16px 8px;border-top:1px solid #E3E3E6;font-size:11px;color:#5E5E64}
 .kb{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#ECECEF;border-radius:3px;padding:0 4px;color:#3A3A3F}
@@ -115,11 +107,9 @@ a{color:#0A5FC2}a:hover{color:#084A97}
 .empty{margin:0 12px 8px;padding:8px 12px;font-size:12px;color:#8A8A90}
 .act{display:flex;gap:8px;align-items:flex-start;padding:7px 12px 7px 16px;border-top:1px solid #E3E3E6;font-size:12px}
 .act:first-child{border-top:none}
-.act .own{font-size:10px;font-weight:600;color:#4A4A50;background:#ECECEF;border-radius:4px;padding:0 5px;line-height:15px;white-space:nowrap;margin-top:1px}
 .act .body2{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
 .act .body2 .m{overflow:hidden;text-overflow:ellipsis}
 .list{background:#FFFFFF;margin:0 12px 8px;border-radius:10px;border:1px solid #E3E3E6;overflow:hidden}
-.act .own{flex:0 0 80px;width:80px;box-sizing:border-box;overflow:hidden;text-overflow:ellipsis;text-align:center}
 .num{position:absolute;right:-5px;bottom:-4px;font-size:9px;font-weight:700;line-height:10px;color:#1D1D1F;background:#E9E9EC;padding:0 1px;border-radius:2px}
 .item > .ok,.item > .warn,.item > .bad{flex:0 0 110px;width:110px}
 .item > label.ck{margin-left:0}
@@ -129,13 +119,6 @@ a{color:#0A5FC2}a:hover{color:#084A97}
 .item > .phc{flex:0 0 208px;width:208px}
 .item.tail{justify-content:flex-end}
 .item.tail > .btn{width:auto;flex:0 0 auto;padding:4px 10px}
-.tg{font:inherit;font-size:11px;padding:3px 9px;border-radius:6px;border:1px solid #C9C9CE;background:linear-gradient(#FFFFFF,#F6F6F7);color:#1D1D1F;line-height:15px;white-space:nowrap;box-shadow:0 .5px 1px rgba(0,0,0,.08)}
-.tg.on{background:#DCE7F7;border-color:#9DB9E4;color:#0A4FA6;box-shadow:inset 0 1px 2px rgba(0,0,0,.08)}
-.seg{display:flex;background:#E4E4E8;border-radius:7px;padding:2px}
-.seg span{font-size:11px;padding:2px 9px;border-radius:5px;color:#3A3A3F;line-height:15px;white-space:nowrap}
-.seg span.on{background:#FFFFFF;color:#1D1D1F;box-shadow:0 1px 2px rgba(0,0,0,.12)}
-.bar3{display:flex;gap:8px;padding:8px 12px 4px;align-items:center}
-.bar3.second{padding:0 12px 8px}
 .adot{width:10px;height:10px;border-radius:5px;background:#C7420D;flex:0 0 10px}
 .pop{width:460px}
 .side{width:170px;flex:0 0 170px;border-right:1px solid #E3E3E6;background:#F0F0F2;padding:10px 8px;display:flex;flex-direction:column;gap:2px;box-sizing:border-box}
@@ -191,13 +174,19 @@ a{color:#0A5FC2}a:hover{color:#084A97}
 .atext{font-size:11px;color:#3A3A3F;line-height:15px}
 .abtn{width:100%;font:inherit;font-size:12px;padding:5px 0;border-radius:6px;border:1px solid #C9C9CE;background:#FFFFFF;color:#1D1D1F;margin-top:2px}
 .abtn.pri{background:#0A66D6;border-color:#0A66D6;color:#FFFFFF;margin-top:8px}
-.usage{display:flex;align-items:center;gap:6px;padding:6px 16px;border-top:1px solid #E3E3E6;font-size:10px;color:#6E6E76;white-space:nowrap}
-.usage .ul{color:#3A3A3F;font-weight:600}
-.usage .ubar{flex:0 0 64px;height:5px;border-radius:3px;background:#E0E0E4;overflow:hidden}
-.usage .ubar span{display:block;height:100%;border-radius:3px;background:#8A8A90}
-.usage .ubar span.w{background:#C98A00}
-.usage .gap{flex:0 0 10px}
 .nf{display:inline-block;width:56px;box-sizing:border-box;border:1px solid #C9C9CE;border-radius:6px;background:#FFFFFF;padding:3px 6px;font-size:12px;color:#1D1D1F;text-align:right;line-height:16px}
+.pop{position:relative}
+.bar{display:flex;gap:8px;padding:8px 12px 0;align-items:center}
+.bar.last{padding-bottom:8px}
+.search{flex:1;display:flex;align-items:center;gap:6px;height:24px;border:1px solid #C9C9CE;border-radius:6px;background:#FFFFFF;padding:0 8px;font-size:12px;color:#6E6E76;min-width:0;box-sizing:border-box}
+.search input{border:none;outline:none;background:transparent;font:inherit;color:#1D1D1F;flex:1;min-width:0;padding:0}
+.apiw{color:#8A5A00;font-weight:600}
+.dot.off{background:transparent}
+.ki{width:14px;height:14px;flex:0 0 14px;margin-top:2px;color:#55555B}
+.t.wrap{white-space:normal;line-height:16px}
+.act.rd{color:#6E6E76}
+.act.rd .k{color:#6E6E76}
+.act.rd .ki{color:#9A9AA0}
 body{margin:0;padding:24px;background:#e9e9ee}
 .ab{width:max-content;height:auto;overflow:visible;border-radius:8px}
 </style>
@@ -205,29 +194,10 @@ body{margin:0;padding:24px;background:#e9e9ee}
 <body>
 <div class="ab">
 <section class="scene">
-      <div class="cap">Popover › Activity (same account, owner buttons on top, GraphQL API over 80%)</div>
-      <div class="pop">
-        <div class="phead">
-          <div style="display: flex; flex-direction: column; flex: 1; min-width: 0">
-            <div style="display: flex; align-items: center; gap: 8px"><span class="adot"></span><span style="font-weight: 600; font-size: 14px">bufferings-work</span></div>
-            <div class="m">Updated 1 min ago</div>
-          </div>
-          <button class="iconbtn" aria-label="Open in window"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5"></rect><path d="M2 6h12"></path></svg></button>
-          <button class="iconbtn" aria-label="Refresh"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"></path><path d="M13.5 2.5v3h-3"></path></svg></button>
-          <button class="iconbtn" aria-label="Settings"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.4l1.29.13.59 1.94.84.46 1.95-.6.82 1 -.96 1.79.28.92 1.79.96-.13 1.29-1.94.59-.46.84.6 1.95-1 .82-1.79-.96-.92.28-.96 1.79-1.29-.13-.59-1.94-.84-.46-1.95.6-.82-1 .96-1.79-.28-.92L1.4 8l.13-1.29 1.94-.59.46-.84-.6-1.95 1-.82 1.79.96.92-.28z"></path><circle cx="8" cy="8" r="2.2"></circle></svg></button>
-        </div>
-        <div class="ptabs"><button class="ptab">PRs</button><button class="ptab on">Activity</button></div>
-        <div class="bar3" style="padding-bottom: 8px"><button class="tg on">example-org</button><button class="tg on">acme-corp</button><button class="tg on">Public</button></div>
-        <div class="list">
-          <div class="act"><span class="dot"></span><span class="own">example-org</span><div class="body2"><div style="display: flex; gap: 6px; align-items: center"><span class="k">Mentioned</span><span class="m">2 min ago</span></div><div class="t" style="white-space: normal">@bufferings-work could you check the retry path?</div><div class="m">example-org/api #407 · Limit comment fetching to involved PRs</div></div></div>
-          <div class="act"><span class="dot"></span><span class="own">Public</span><div class="body2"><div style="display: flex; gap: 6px; align-items: center"><span class="k">Changes requested</span><span class="m">14 min ago</span></div><div class="t" style="white-space: normal">epage: please add a test for the nested case</div><div class="m">rust-lang/cargo #14880 · Clarify the error for a missing workspace member</div></div></div>
-          <div class="act"><span class="dot" style="background: transparent"></span><span class="own">acme-corp</span><div class="body2"><div style="display: flex; gap: 6px; align-items: center"><span class="k" style="color: #3A3A3F">Mergeable</span><span class="m">1 h ago</span></div><div class="m">acme-corp/billing #88 · Retry failed webhook deliveries</div></div></div>
-          <div class="act"><span class="dot" style="background: transparent"></span><span class="own">example-org</span><div class="body2"><div style="display: flex; gap: 6px; align-items: center"><span class="k" style="color: #3A3A3F">Merged</span><span class="m">3 h ago</span></div><div class="t" style="white-space: normal">by mk</div><div class="m">example-org/web #209 · Fix flaky snapshot test</div></div></div>
-        </div>
-        <div class="usage"><span class="ul">GraphQL API</span><span class="ubar"><span class="w" style="width: 84%"></span></span><span>4,200 / 5,000</span><span class="gap"></span><span class="ul">REST API</span><span class="ubar"><span style="width: 2%"></span></span><span>100 / 5,000</span></div>
-        <div class="keys"><span><span class="kb">↑↓</span> Move</span><span><span class="kb">⏎</span> Open</span><span><span class="kb">D</span> Done</span><span><span class="kb">T</span> Remove from Todo</span></div>
-      </div>
-    </section>
+<div class="cap">Popover › Activity (same account, all owners, GraphQL API over 80%)</div>
+<div class="desc" style="width: 460px">Header: <b>API 84%</b> in the warning color because the higher of GraphQL and REST is 80% or more; hover shows <b>GraphQL API 4,200 / 5,000 · REST API 100 / 5,000</b>. Below the tabs: the owner buttons, starting with <b>All owners</b>, then the search field alone (Group by and Sort are on the PRs tab only). The search hides rows that do not match. Rows have no owner column; owner/repo carries the owner. Blue dot when unread, kind icon, label, actor and time, the text (an unread mention shows up to 3 lines), then <b>owner/repo #number · title</b>. Read rows are dimmed. No checkboxes. Activity has no Snooze.</div>
+<div class="pop"><div class="phead"><div style="display: flex; flex-direction: column; flex: 1; min-width: 0"><div style="display: flex; align-items: center; gap: 8px"><span class="adot"></span><span style="font-weight: 600; font-size: 14px">bufferings-work</span></div><div class="m">Updated 1 min ago · <span class="apiw" title="GraphQL API 4,200 / 5,000 · REST API 100 / 5,000">API 84%</span></div></div><button class="iconbtn" aria-label="Open in window"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5"></rect><path d="M2 6h12"></path></svg></button><button class="iconbtn" aria-label="Refresh"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"></path><path d="M13.5 2.5v3h-3"></path></svg></button><button class="iconbtn" aria-label="Settings"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.4l1.29.13.59 1.94.84.46 1.95-.6.82 1 -.96 1.79.28.92 1.79.96-.13 1.29-1.94.59-.46.84.6 1.95-1 .82-1.79-.96-.92.28-.96 1.79-1.29-.13-.59-1.94-.84-.46-1.95.6-.82-1 .96-1.79-.28-.92L1.4 8l.13-1.29 1.94-.59.46-.84-.6-1.95 1-.82 1.79.96.92-.28z"></path><circle cx="8" cy="8" r="2.2"></circle></svg></button><button class="iconbtn" aria-label="More"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"></path></svg></button></div><div class="ptabs"><button class="ptab">PRs</button><button class="ptab on">Activity</button></div><div class="bar"><button class="chip on">All owners</button><button class="chip">example-org</button><button class="chip">acme-corp</button><button class="chip">Public</button></div><div class="bar last"><label class="search"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5L14 14"></path></svg><input type="text" placeholder="Search" aria-label="Search"></label></div><div class="list"><div class="act"><span class="dot"></span><svg class="ki" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2.5"></circle><path d="M1.5 13c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4M10.5 6.5h4M12.5 4.5l2 2-2 2"></path></svg><div class="body2"><div style="display: flex; gap: 6px; align-items: baseline"><span class="k">Review requested</span><span class="m">for frontend team · 2h ago</span></div><div class="m">example-org/web #212 · Add dark mode to the settings window</div></div></div><div class="act"><span class="dot"></span><svg class="ki" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="3"></circle><path d="M11 8v1.5a1.5 1.5 0 0 0 3 0V8a6 6 0 1 0-2.3 4.7"></path></svg><div class="body2"><div style="display: flex; gap: 6px; align-items: baseline"><span class="k">Mentioned</span><span class="m">al · 40m ago</span></div><div class="t wrap" style="margin: 0">@bufferings-work could you check the retry path? I think the backoff should start at 5 s, not 60 s, otherwise the banner shows up too late.</div><div class="m">example-org/api #407 · Limit comment fetching to involved PRs</div></div></div><div class="act"><span class="dot"></span><svg class="ki" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6.5"></circle><path d="M5.5 5.5l5 5M10.5 5.5l-5 5"></path></svg><div class="body2"><div style="display: flex; gap: 6px; align-items: baseline"><span class="k">Changes requested</span><span class="m">epage · 3h ago</span></div><div class="t wrap" style="margin: 0">please add a test for the nested case</div><div class="m">rust-lang/cargo #14880 · Clarify the error for a missing workspace member</div></div></div><div class="act rd"><span class="dot off"></span><svg class="ki" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"></path></svg><div class="body2"><div style="display: flex; gap: 6px; align-items: baseline"><span class="k">Comment</span><span class="m">al · 1d ago</span></div><div class="t" style="margin: 0">pushed a fix for the timeout</div><div class="m">example-org/api #407 · Limit comment fetching to involved PRs</div></div></div><div class="act rd"><span class="dot off"></span><svg class="ki" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"></path></svg><div class="body2"><div style="display: flex; gap: 6px; align-items: baseline"><span class="k">Merged</span><span class="m">by mk · 2d ago</span></div><div class="m">acme-corp/infra #58 · Rotate the deploy key</div></div></div></div><div class="keys"><span><span class="kb">↑↓</span> Move</span><span><span class="kb">⏎</span> Open</span><span><span class="kb">⇧R</span> Mark all read</span><span><span class="kb">⌘F</span> Search</span></div></div>
+</section>
 </div>
 </body>
 </html>

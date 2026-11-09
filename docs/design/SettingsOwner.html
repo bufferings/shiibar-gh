@@ -228,27 +228,27 @@ body{margin:0;padding:24px;background:#e9e9ee}
             <div class="item"><div class="lbl"><span style="font-weight: 600">Skip draft pull requests</span><span class="sub">Events on draft PRs stay in the list but never notify.</span></div><div class="ctl"><span class="tgl on"><span></span></span></div></div>
           </div></div>
           <div><div class="gh">Events</div><div class="group">
-            <div style="padding: 4px 10px 8px"><table class="tbl"><thead><tr><th>Event</th><th>List</th><th>Todo</th><th>Notify</th></tr></thead><tbody>
-<tr class="g"><td colspan="4">Reviews and mentions</td></tr>
-<tr><td>Review requested</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
-<tr><td>Review requested to my team</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
-<tr><td>Mentioned</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
-<tr><td>My team mentioned</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
-<tr class="g"><td colspan="4">Comments</td></tr>
-<tr><td>Comment on my PR</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
-<tr><td>Reply in a thread I commented in</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
-<tr><td>Reply in a thread I was mentioned in</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
-<tr><td>Reaction to my comment</td><td><input type="checkbox" checked></td><td><input type="checkbox"></td><td><input type="checkbox" checked></td></tr>
-<tr class="g"><td colspan="4">My pull requests</td></tr>
-<tr><td>Approved</td><td><input type="checkbox" checked></td><td><input type="checkbox"></td><td><input type="checkbox" checked></td></tr>
-<tr><td>Changes requested</td><td><input type="checkbox" checked></td><td><input type="checkbox"></td><td><input type="checkbox" checked></td></tr>
-<tr><td>Checks failed</td><td><input type="checkbox" checked></td><td><input type="checkbox"></td><td><input type="checkbox" checked></td></tr>
-<tr><td>Conflicts</td><td><input type="checkbox" checked></td><td><input type="checkbox"></td><td><input type="checkbox" checked></td></tr>
-<tr><td>Mergeable</td><td><input type="checkbox" checked></td><td><input type="checkbox"></td><td><input type="checkbox" checked></td></tr>
-<tr class="g"><td colspan="4">Any pull request</td></tr>
-<tr><td>Added to merge queue</td><td><input type="checkbox" checked></td><td><input type="checkbox"></td><td><input type="checkbox"></td></tr>
-<tr><td>Removed from merge queue</td><td><input type="checkbox" checked></td><td><input type="checkbox"></td><td><input type="checkbox" checked></td></tr>
-<tr><td>Merged / Closed</td><td><input type="checkbox" checked></td><td><input type="checkbox"></td><td><input type="checkbox"></td></tr>
+            <div style="padding: 4px 10px 8px"><table class="tbl"><thead><tr><th>Event</th><th>List</th><th>Notify</th></tr></thead><tbody>
+<tr class="g"><td colspan="3">Reviews and mentions</td></tr>
+<tr><td>Review requested</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
+<tr><td>Review requested to my team</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
+<tr><td>Mentioned</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
+<tr><td>My team mentioned</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
+<tr class="g"><td colspan="3">Comments</td></tr>
+<tr><td>Comment on my PR</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
+<tr><td>Reply in a thread I commented in</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
+<tr><td>Reply in a thread I was mentioned in</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
+<tr><td>Reaction to my comment</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
+<tr class="g"><td colspan="3">My pull requests</td></tr>
+<tr><td>Approved</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
+<tr><td>Changes requested</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
+<tr><td>Checks failed</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
+<tr><td>Conflicts</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
+<tr><td>Mergeable</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
+<tr class="g"><td colspan="3">Any pull request</td></tr>
+<tr><td>Added to merge queue</td><td><input type="checkbox" checked></td><td><input type="checkbox"></td></tr>
+<tr><td>Removed from merge queue</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
+<tr><td>Merged / Closed</td><td><input type="checkbox" checked></td><td><input type="checkbox"></td></tr>
 </tbody></table></div>
             <div class="item"><div class="lbl"><span style="font-weight: 600">Copy table from another owner</span><span class="sub">Replaces the table above with that owner's.</span></div><div class="ctl"><button class="btn">Copy…</button></div></div>
           </div></div>
@@ -278,7 +278,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
           <div><div class="gh">Owner</div><div class="group">
             <div class="item"><div class="lbl"><span style="font-weight: 600">Enabled</span><span class="sub">Off hides this owner's section and stops fetching.</span></div><div class="ctl"><span class="tgl on"><span></span></span></div></div>
           </div></div>
-          <div><div class="gh">Remove</div><div class="group"><div class="item"><div class="lbl"><span style="font-weight: 600">Remove this owner</span><span class="sub">Deletes this owner from shiibar-gh: its PRs, Done marks, snoozes and settings. Nothing changes on GitHub.</span></div><div class="ctl"><button class="btn">Remove…</button></div></div></div></div>
+          <div><div class="gh">Remove</div><div class="group"><div class="item"><div class="lbl"><span style="font-weight: 600">Remove this owner</span><span class="sub">Deletes this owner from shiibar-gh: its PRs, snoozes and settings. Nothing changes on GitHub.</span></div><div class="ctl"><button class="btn">Remove…</button></div></div></div></div>
         </div>
       </div>
     </div>
@@ -303,7 +303,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
         <div class="pane">
           <div class="segtabs"><span class="">Owner</span><span class="">Notifications</span><span class="on">Exclusions</span></div>
           <div><div class="gh">Repositories</div><div class="group">
-            <div style="padding: 8px 14px 0"><span class="sub">Hidden: not in the list. List only: in the list, but no Todo and no notifications.</span></div>
+            <div style="padding: 8px 14px 0"><span class="sub">Hidden: not in the list. List only: in the list, but no notifications.</span></div>
             <div style="padding: 6px 12px 10px"><div class="listbox xbox">
 <div class="lrow xrow"><span>example-org/legacy</span><span class="seg xseg"><span class="on">Hidden</span><span class="">List only</span></span></div>
 <div class="lrow xrow"><span>example-org/infra</span><span class="seg xseg"><span class="">Hidden</span><span class="on">List only</span></span></div>
@@ -328,27 +328,27 @@ body{margin:0;padding:24px;background:#e9e9ee}
       <div class="sheet" style="width: 540px">
         <div style="font-weight: 600; font-size: 13px">Copy table to example-org</div>
         <div class="item" style="padding: 0; border: none; background: none"><div class="lbl"><span style="font-weight: 600">Copy from</span><span class="sub">acme-corp's table:</span></div><div class="ctl"><span class="sel">acme-corp &#8964;</span></div></div>
-        <div class="listbox" style="padding: 2px 8px 6px"><table class="tbl ro"><thead><tr><th>Event</th><th>List</th><th>Todo</th><th>Notify</th></tr></thead><tbody>
-<tr class="g"><td colspan="4">Reviews and mentions</td></tr>
-<tr><td>Review requested</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
-<tr><td>Review requested to my team</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
-<tr><td>Mentioned</td><td><span class="on">&#10003;</span></td><td><span class="off">&ndash;</span></td><td><span class="off">&ndash;</span></td></tr>
-<tr><td>My team mentioned</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
-<tr class="g"><td colspan="4">Comments</td></tr>
-<tr><td>Comment on my PR</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
-<tr><td>Reply in a thread I commented in</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
-<tr><td>Reply in a thread I was mentioned in</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
-<tr><td>Reaction to my comment</td><td><span class="on">&#10003;</span></td><td><span class="off">&ndash;</span></td><td><span class="off">&ndash;</span></td></tr>
-<tr class="g"><td colspan="4">My pull requests</td></tr>
-<tr><td>Approved</td><td><span class="on">&#10003;</span></td><td><span class="off">&ndash;</span></td><td><span class="off">&ndash;</span></td></tr>
-<tr><td>Changes requested</td><td><span class="on">&#10003;</span></td><td><span class="off">&ndash;</span></td><td><span class="on">&#10003;</span></td></tr>
-<tr><td>Checks failed</td><td><span class="on">&#10003;</span></td><td><span class="off">&ndash;</span></td><td><span class="off">&ndash;</span></td></tr>
-<tr><td>Conflicts</td><td><span class="on">&#10003;</span></td><td><span class="off">&ndash;</span></td><td><span class="on">&#10003;</span></td></tr>
-<tr><td>Mergeable</td><td><span class="on">&#10003;</span></td><td><span class="off">&ndash;</span></td><td><span class="on">&#10003;</span></td></tr>
-<tr class="g"><td colspan="4">Any pull request</td></tr>
-<tr><td>Added to merge queue</td><td><span class="off">&ndash;</span></td><td><span class="off">&ndash;</span></td><td><span class="off">&ndash;</span></td></tr>
-<tr><td>Removed from merge queue</td><td><span class="on">&#10003;</span></td><td><span class="off">&ndash;</span></td><td><span class="on">&#10003;</span></td></tr>
-<tr><td>Merged / Closed</td><td><span class="off">&ndash;</span></td><td><span class="off">&ndash;</span></td><td><span class="off">&ndash;</span></td></tr>
+        <div class="listbox" style="padding: 2px 8px 6px"><table class="tbl ro"><thead><tr><th>Event</th><th>List</th><th>Notify</th></tr></thead><tbody>
+<tr class="g"><td colspan="3">Reviews and mentions</td></tr>
+<tr><td>Review requested</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
+<tr><td>Review requested to my team</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
+<tr><td>Mentioned</td><td><span class="on">&#10003;</span></td><td><span class="off">&ndash;</span></td></tr>
+<tr><td>My team mentioned</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
+<tr class="g"><td colspan="3">Comments</td></tr>
+<tr><td>Comment on my PR</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
+<tr><td>Reply in a thread I commented in</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
+<tr><td>Reply in a thread I was mentioned in</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
+<tr><td>Reaction to my comment</td><td><span class="on">&#10003;</span></td><td><span class="off">&ndash;</span></td></tr>
+<tr class="g"><td colspan="3">My pull requests</td></tr>
+<tr><td>Approved</td><td><span class="on">&#10003;</span></td><td><span class="off">&ndash;</span></td></tr>
+<tr><td>Changes requested</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
+<tr><td>Checks failed</td><td><span class="on">&#10003;</span></td><td><span class="off">&ndash;</span></td></tr>
+<tr><td>Conflicts</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
+<tr><td>Mergeable</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
+<tr class="g"><td colspan="3">Any pull request</td></tr>
+<tr><td>Added to merge queue</td><td><span class="off">&ndash;</span></td><td><span class="off">&ndash;</span></td></tr>
+<tr><td>Removed from merge queue</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
+<tr><td>Merged / Closed</td><td><span class="off">&ndash;</span></td><td><span class="off">&ndash;</span></td></tr>
 </tbody></table></div>
         <div class="sub" style="font-size: 12px">Replaces example-org's table. The switches and Exclusions stay as they are.</div>
         <div style="display: flex; justify-content: flex-end; gap: 8px"><button class="btn">Cancel</button><button class="btn" style="background: #0A66D6; color: #FFFFFF; border-color: #0A66D6">Copy</button></div>
