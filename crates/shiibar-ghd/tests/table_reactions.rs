@@ -152,9 +152,7 @@ fn a_row_carries_the_comment_and_the_detection_time() {
     assert_eq!(row.text.as_deref(), Some("comment C_1"));
     assert_eq!(row.url, "https://github.example/C_1");
     assert_eq!(row.actor, None);
-    // DESIGN.md, "Row kinds and states": Reaction to my comment is not Todo
-    // by default.
-    assert!(!row.todo);
+    assert!(row.unread);
     assert!(
         row.id.starts_with("1001:")
             && row.id.contains("C_1")

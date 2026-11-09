@@ -11,6 +11,15 @@ final class WorkspaceOpener: URLOpening {
     }
 }
 
+/// Copy link: the URL as plain text on the general pasteboard.
+final class PasteboardCopier: LinkCopying {
+    func copy(_ text: String) {
+        let board = NSPasteboard.general
+        board.clearContents()
+        board.setString(text, forType: .string)
+    }
+}
+
 /// `SMAppService.mainApp` (ServiceManagement, macOS 13 and later).
 /// `register()` can leave the status at `requiresApproval` until the user
 /// allows the app in System Settings › General › Login Items.

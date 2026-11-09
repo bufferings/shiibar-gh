@@ -190,6 +190,11 @@ final class FakeNotifier: NotificationPresenting {
     func present(_ notification: DaemonNotification) { shown.append(notification) }
 }
 
+final class FakeCopier: LinkCopying {
+    var copied: [String] = []
+    func copy(_ text: String) { copied.append(text) }
+}
+
 final class FakeLoginItem: LoginItemService {
     var status: LoginItemStatus
     var registerResult: LoginItemStatus = .enabled
@@ -256,21 +261,23 @@ final class FakeAPI: DaemonAPI, @unchecked Sendable {
 
     func info() async throws -> InfoResponse { try record("info"); return InfoResponse(version: "0.1.0", startedAt: 0) }
     func list(_ query: ListQuery) async throws -> [Card] {
-        try record("list \(query.account ?? "") todo=\(query.todo) filter=\(query.filter.rawValue) snoozed=\(query.snoozed)")
-        if query.snoozed {
-            return snoozedCards.filter { !query.todo || $0.hasOpenTodo }
-        }
-        return cards
+        try record("list \(query.account ?? "") snoozed=\(query.snoozed)")
+        return query.snoozed ? snoozedCards : cards
     }
     func activity(_ query: ActivityQuery) async throws -> [Row] {
-        try record("activity \(query.account ?? "") owners=\(query.owners.joined(separator: ",")) todo=\(query.todo) filter=\(query.filter.rawValue)")
+        try record("activity \(query.account ?? "")")
         return rows
     }
-    func seen(_ rowIds: [String]) async throws { try record("seen \(rowIds.joined(separator: ","))") }
-    func popoverOpened(_ account: String) async throws { try record("popover_opened \(account)") }
+    func read(_ rowIds: [String]) async throws { try record("read \(rowIds.joined(separator: ","))") }
+    func readAll(account: String) async throws { try record("read_all \(account)") }
+    /// How long `popover_opened` takes to answer, in nanoseconds.
+    var popoverOpenedDelay: UInt64 = 0
+    func popoverOpened(_ account: String) async throws {
+        try record("popover_opened \(account)")
+        if popoverOpenedDelay > 0 { try? await Task.sleep(nanoseconds: popoverOpenedDelay) }
+        try record("answered popover_opened")
+    }
     func popoverClosed(_ account: String) async throws { try record("popover_closed \(account)") }
-    func done(_ row: String, on: Bool) async throws { try record("done \(row) \(on)") }
-    func todo(_ row: String, on: Bool) async throws { try record("todo \(row) \(on)") }
     func snooze(account: String, pr: String) async throws { try record("snooze \(account) \(pr)") }
     func unsnooze(account: String, pr: String) async throws { try record("unsnooze \(account) \(pr)") }
     func refresh(_ account: String?) async throws -> [Warning] { try record("refresh \(account ?? "")"); return refreshWarnings }

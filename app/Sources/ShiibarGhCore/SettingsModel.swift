@@ -49,7 +49,7 @@ public final class SettingsModel: ObservableObject {
     private var ownerEdits: [String: Int] = [:]
 
     public static let keys = [
-        "launch_at_login", "appearance", "status_interval_minutes", "reactions_interval_minutes",
+        "launch_at_login", "appearance", "text_size", "status_interval_minutes", "reactions_interval_minutes",
         "snooze_return_time", "keep_watching_days", "drop_after_days",
     ]
 
@@ -183,6 +183,29 @@ public final class SettingsModel: ObservableObject {
         }
     }
 
+    /// Text size from the field: a whole number from 9 to 18; anything
+    /// else shows its message and the saved value stays.
+    public func setTextSize(_ text: String) {
+        switch TextSize.parse(text) {
+        case .success(let size):
+            errors[TextSize.configKey] = nil
+            if textSize != size { set(TextSize.configKey, .int(Int64(size))) }
+        case .failure(let error):
+            errors[TextSize.configKey] = error.message
+        }
+    }
+
+    /// − and + of the stepper; nothing at the ends.
+    public func stepTextSize(_ change: TextSize.Change) {
+        guard let size = TextSize.next(textSize, change) else { return }
+        errors[TextSize.configKey] = nil
+        set(TextSize.configKey, .int(Int64(size)))
+    }
+
+    public var textSize: Int {
+        TextSize.clamp(config[TextSize.configKey]?.intValue)
+    }
+
     // MARK: - Accounts
 
     private func run(_ errorKey: String, _ request: @escaping (DaemonAPI) async throws -> Void, then: (() -> Void)? = nil) {
@@ -258,10 +281,10 @@ public final class SettingsModel: ObservableObject {
 
     /// The cell of the table, off while the daemon has not answered.
     public func cell(_ owner: String, _ kind: EventKind) -> EventCell {
-        events[owner]?[kind.rawValue] ?? EventCell(list: false, todo: false, notify: false)
+        events[owner]?[kind.rawValue] ?? EventCell(list: false, notify: false)
     }
 
-    /// Todo and Notify follow List: List off turns them off and they cannot
+    /// Notify follows List: List off turns it off and it cannot
     /// be turned on while it is off (DESIGN.md, "Applying the table").
     public static func cellEnabled(_ cell: EventCell, _ column: EventColumn) -> Bool {
         column == .list || cell.list
@@ -410,8 +433,30 @@ public final class TokenSheetModel: ObservableObject {
         !testing && !saving && pasted != nil && !TestResultLine.accountFailed(results ?? [])
     }
 
+    /// The result list, there from the start (Sheets.html): before a test
+    /// the four items and, in Edit…, one row per owner other than Public,
+    /// names only; after a test the results. Public has no row ("Public has
+    /// none"), so the daemon's row for it is left out.
+    public var resultRows: [ResultRow] {
+        if let results = shownResults { return results.map { ResultRow.result(TestResultLine($0)) } }
+        var labels = ["Account", "Scopes", "Notifications", "Team membership"]
+        labels += (account?.owners ?? []).filter { !$0.isPublic }.map(\.displayName)
+        return labels.map(ResultRow.placeholder)
+    }
+
+    /// The results without Public's row.
+    var shownResults: [TestResult]? {
+        results.map { list in list.filter { !isPublicRow($0) } }
+    }
+
+    func isPublicRow(_ result: TestResult) -> Bool {
+        guard result.item.value == .owner else { return false }
+        if let id = result.owner, let owner = account?.owner(id) { return owner.isPublic }
+        return result.label.lowercased() == "public"
+    }
+
     public var showsSaveLater: Bool {
-        guard let results else { return false }
+        guard let results = shownResults else { return false }
         return !TestResultLine.allOK(results)
     }
 
@@ -483,6 +528,13 @@ public final class TokenSheetModel: ObservableObject {
         token = ""
         results = nil
     }
+}
+
+/// A line of the token sheet's result list.
+public enum ResultRow: Equatable {
+    /// The label alone, faint, before a test.
+    case placeholder(String)
+    case result(TestResultLine)
 }
 
 /// The Add owner sheet (DESIGN.md, "Add owner… sheet").

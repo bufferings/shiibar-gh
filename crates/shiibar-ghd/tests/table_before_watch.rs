@@ -130,7 +130,7 @@ fn event_table() {
 }
 
 #[test]
-fn an_old_request_is_todo_with_a_badge() {
+fn an_old_request_still_open_is_an_unread_row_and_awaits_review() {
     let mut h = H::new();
     let e = h.ev_at("E_1", "PR_1", IngestKind::ReviewRequested, BEFORE);
     h.push(
@@ -142,7 +142,8 @@ fn an_old_request_is_todo_with_a_badge() {
         vec![],
     );
     assert_eq!(h.badge(), 1);
-    assert!(h.wire_row("E_1").unwrap().todo);
+    assert!(h.wire_row("E_1").unwrap().unread);
+    assert!(h.card(&key("PR_1")).unwrap().awaiting_review);
 }
 
 #[test]
@@ -315,7 +316,7 @@ fn the_request_exception_applies_to_a_pr_moved_into_a_new_owner() {
 fn a_removed_owner_forgets_its_prs_so_public_fetches_them_as_new() {
     // DESIGN.md, "Owners": removing an owner deletes its PRs. The PR then
     // comes to Public as a first fetch, so the still open request is kept
-    // as a silent Todo row.
+    // as a silent unread row.
     let mut h = H::new();
     let requested = IngestPr {
         requested_me: true,
@@ -332,7 +333,7 @@ fn a_removed_owner_forgets_its_prs_so_public_fetches_them_as_new() {
 }
 
 #[test]
-fn an_old_team_request_still_open_is_a_silent_todo_row() {
+fn an_old_team_request_still_open_is_a_silent_unread_row() {
     let mut h = H::new();
     let e = h.ev_at("E_1", "PR_1", IngestKind::TeamReviewRequested, BEFORE);
     h.push(
@@ -345,7 +346,8 @@ fn an_old_team_request_still_open_is_a_silent_todo_row() {
     );
     assert!(h.has_row("E_1"));
     assert_eq!(h.row("E_1").notify, NotifyState::None);
-    assert!(h.wire_row("E_1").unwrap().todo);
+    assert!(h.wire_row("E_1").unwrap().unread);
+    assert_eq!(h.badge(), 1);
     let e = h.ev_at("E_2", "PR_2", IngestKind::TeamReviewRequested, BEFORE);
     h.push(vec![other("PR_2")], vec![e], vec![]);
     assert!(!h.has_row("E_2"), "no longer requested");

@@ -1234,3 +1234,44 @@ fn a_user_mention_link_points_at_the_user_page() {
     ));
     assert!(!convert::mentions_user(&quoted_link("me"), "me"));
 }
+
+/// DESIGN.md, "Awaiting review": the newest review the account submitted,
+/// a pending one left out; and `createdAt`.
+#[test]
+fn the_account_s_newest_submitted_review_and_the_created_time() {
+    let t = teams();
+    let review = |who: &str, state: &str, submitted: Option<i64>, created: i64| {
+        json!({"state":state,"author":{"login":who},
+               "submittedAt":submitted.map(iso),"createdAt":iso(created)})
+    };
+    let cases = [
+        (json!({"nodes":[]}), None),
+        (json!(null), None),
+        (
+            json!({"nodes":[review("alice", "APPROVED", Some(T0), T0)]}),
+            None,
+        ),
+        (
+            json!({"nodes":[
+                review("ME", "COMMENTED", Some(T0 + 5), T0),
+                review("me", "CHANGES_REQUESTED", Some(T0 + 9), T0 + 1),
+                review("me", "PENDING", None, T0 + 20),
+            ]}),
+            Some(T0 + 9),
+        ),
+        (
+            json!({"nodes":[review("me", "DISMISSED", None, T0 + 3)]}),
+            Some(T0 + 3),
+        ),
+    ];
+    for (reviews, want) in cases {
+        assert_eq!(convert::my_review_at(&reviews, ctx(&t)), want, "{reviews}");
+    }
+    let node = status_node(json!({
+        "createdAt": iso(T0 - 86_400),
+        "reviews": {"nodes":[review("me", "APPROVED", Some(T0 + 1), T0 + 1)]}
+    }));
+    let pr = convert::pr_values(&node, &StatusExtra::default(), ctx(&t)).unwrap();
+    assert_eq!(pr.created_at, T0 - 86_400);
+    assert_eq!(pr.my_review_at, Some(T0 + 1));
+}

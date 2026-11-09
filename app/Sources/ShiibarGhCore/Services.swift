@@ -29,34 +29,42 @@ public protocol LoginItemService: AnyObject {
     func openSystemSettings()
 }
 
+/// Copy link: the text goes to the general pasteboard in the app.
+public protocol LinkCopying: AnyObject {
+    func copy(_ text: String)
+}
+
 public protocol ImageLoading: AnyObject, Sendable {
     func load(_ url: URL) async throws -> Data
 }
 
-/// The UI state of DESIGN.md, "Saved state", per account: the filter row,
-/// the collapsed sections, the Activity owner buttons and the window frame.
+/// The UI state of DESIGN.md, "Saved state", per account: the chip, Group
+/// by and the sort order, the collapsed sections (per Group by and
+/// section), the Activity owner buttons, the window frame and Keep on top.
 /// Keys carry the account id (the GitHub user id, numeric, as a string,
-/// which does not change with the login) and owner ids as they are. "+ N more PRs" is not kept.
+/// which does not change with the login) and owner ids as they are. The
+/// search and "+ N more PRs" are not kept.
 public final class UIStateStore {
     private let defaults: UserDefaults
     static let filterKey = "popover.filter."
     static let collapsedKey = "popover.collapsed."
     static let activityOwnersKey = "popover.activityOwners."
     static let windowFrameKey = "window.frame."
+    static let keepOnTopKey = "window.keepOnTop."
     static let didApplyLaunchDefaultKey = "launchAtLogin.didApplyDefault"
 
     public init(defaults: UserDefaults) {
         self.defaults = defaults
     }
 
-    public func filter(account: String) -> FilterState {
+    public func options(account: String) -> ListOptions {
         guard let data = defaults.data(forKey: Self.filterKey + account),
-              let filter = try? JSONDecoder().decode(FilterState.self, from: data)
-        else { return FilterState() }
-        return filter
+              let options = try? JSONDecoder().decode(ListOptions.self, from: data)
+        else { return ListOptions() }
+        return options
     }
 
-    public func setFilter(_ filter: FilterState, account: String) {
+    public func setOptions(_ filter: ListOptions, account: String) {
         defaults.set(try? JSONEncoder().encode(filter), forKey: Self.filterKey + account)
     }
 
@@ -85,6 +93,15 @@ public final class UIStateStore {
 
     public func setWindowFrame(_ frame: String, account: String) {
         defaults.set(frame, forKey: Self.windowFrameKey + account)
+    }
+
+    /// Keep on top of the account's window: on unless turned off.
+    public func keepOnTop(account: String) -> Bool {
+        defaults.object(forKey: Self.keepOnTopKey + account) as? Bool ?? true
+    }
+
+    public func setKeepOnTop(_ on: Bool, account: String) {
+        defaults.set(on, forKey: Self.keepOnTopKey + account)
     }
 
     public var didApplyLaunchDefault: Bool {

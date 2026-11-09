@@ -39,7 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             notifier = NoNotifications()
         }
         let store = UIStateStore(defaults: .standard)
-        model = AppModel(api: api, store: store, opener: WorkspaceOpener(), notifier: notifier)
+        model = AppModel(api: api, store: store, opener: WorkspaceOpener(), notifier: notifier, copier: PasteboardCopier())
         let avatars = AvatarStore(loader: URLSessionImageLoader())
         surfaces = SurfaceController(app: model, avatars: avatars) { [weak self] account in
             SurfaceActions(

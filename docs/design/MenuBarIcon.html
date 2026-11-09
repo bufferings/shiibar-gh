@@ -191,12 +191,6 @@ a{color:#0A5FC2}a:hover{color:#084A97}
 .atext{font-size:11px;color:#3A3A3F;line-height:15px}
 .abtn{width:100%;font:inherit;font-size:12px;padding:5px 0;border-radius:6px;border:1px solid #C9C9CE;background:#FFFFFF;color:#1D1D1F;margin-top:2px}
 .abtn.pri{background:#0A66D6;border-color:#0A66D6;color:#FFFFFF;margin-top:8px}
-.usage{display:flex;align-items:center;gap:6px;padding:6px 16px;border-top:1px solid #E3E3E6;font-size:10px;color:#6E6E76;white-space:nowrap}
-.usage .ul{color:#3A3A3F;font-weight:600}
-.usage .ubar{flex:0 0 64px;height:5px;border-radius:3px;background:#E0E0E4;overflow:hidden}
-.usage .ubar span{display:block;height:100%;border-radius:3px;background:#8A8A90}
-.usage .ubar span.w{background:#C98A00}
-.usage .gap{flex:0 0 10px}
 .nf{display:inline-block;width:56px;box-sizing:border-box;border:1px solid #C9C9CE;border-radius:6px;background:#FFFFFF;padding:3px 6px;font-size:12px;color:#1D1D1F;text-align:right;line-height:16px}
 body{margin:0;padding:24px;background:#e9e9ee}
 .ab{width:max-content;height:auto;overflow:visible;border-radius:8px}
@@ -205,10 +199,10 @@ body{margin:0;padding:24px;background:#e9e9ee}
 <body>
 <div class="ab">
 <section class="scene">
-    <div class="cap">Menu bar: two accounts (left), one account with the color None (right)</div>
+    <div class="cap">Menu bar: two accounts (left), one account with the color None (right). The number is the count of PRs waiting for your review (none shown at 0).</div>
     <div class="row" style="gap: 24px; align-items: center">
       <div class="mbar" style="width: 420px">
-        <div class="slot" role="img" aria-label="bufferings-work: unread, 3 need action, token expiring">
+        <div class="slot" role="img" aria-label="bufferings-work: unread, 3 PRs waiting for your review, token expiring">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#C7420D" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="4" cy="3.5" r="1.8"></circle><circle cx="4" cy="12.5" r="1.8"></circle><circle cx="12" cy="8" r="1.8"></circle><path d="M4 5.3v5.4M4 7c0 1.5 2.5 1.5 6.2 1"></path></svg>
           <span class="bdot"></span>
           <span class="num">3</span>
@@ -221,7 +215,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
         <span class="clock">9:02</span>
       </div>
       <div class="mbar" style="width: 300px">
-        <div class="slot" role="img" aria-label="bufferings: 1 needs action">
+        <div class="slot" role="img" aria-label="bufferings: 1 PR waiting for your review">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#1D1D1F" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="4" cy="3.5" r="1.8"></circle><circle cx="4" cy="12.5" r="1.8"></circle><circle cx="12" cy="8" r="1.8"></circle><path d="M4 5.3v5.4M4 7c0 1.5 2.5 1.5 6.2 1"></path></svg>
           <span class="num">1</span>
         </div>

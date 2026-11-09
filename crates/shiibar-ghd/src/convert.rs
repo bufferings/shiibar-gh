@@ -164,6 +164,21 @@ pub struct StatusExtra {
     pub failed_check: Option<String>,
 }
 
+/// DESIGN.md, "Awaiting review": the newest review the account submitted,
+/// from `reviews` of the status query. A pending review is not submitted.
+pub fn my_review_at(reviews: &Value, ctx: Ctx<'_>) -> Option<i64> {
+    nodes(reviews)
+        .iter()
+        .filter(|r| ctx.is_me(login(&r["author"])) && text(&r["state"]) != "PENDING")
+        .filter_map(|r| {
+            r["submittedAt"]
+                .as_str()
+                .or_else(|| r["createdAt"].as_str())
+                .and_then(parse_time)
+        })
+        .max()
+}
+
 /// A PR node from the status query as an `IngestPr`.
 pub fn pr_values(node: &Value, extra: &StatusExtra, ctx: Ctx<'_>) -> Option<IngestPr> {
     let id = node["id"].as_str()?.to_string();
@@ -200,6 +215,8 @@ pub fn pr_values(node: &Value, extra: &StatusExtra, ctx: Ctx<'_>) -> Option<Inge
         failed_check: extra.failed_check.clone(),
         changes_requested_by: changes_requested_by(latest),
         updated_at: time(&node["updatedAt"]),
+        created_at: time(&node["createdAt"]),
+        my_review_at: my_review_at(&node["reviews"], ctx),
         is_private: node["repository"]["isPrivate"].as_bool().unwrap_or(false),
         requested_me: asked.me,
         requested_team: asked.team,

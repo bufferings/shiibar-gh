@@ -25,48 +25,56 @@ public struct DaemonError: Error, Equatable, CustomStringConvertible {
     }
 }
 
-/// `list`: one account's PRs tab, or its Snoozed section.
+/// `list`: the PRs tab, or its Snoozed section. The app sends neither
+/// `filter` nor `search`: it filters by itself (DESIGN.md, "What the
+/// filters mean"); they stay for the CLI.
 public struct ListQuery: Equatable {
     public var account: String?
     public var owner: String?
-    public var todo: Bool
-    public var filter: PrFilter
+    public var filter: PrFilter?
+    public var search: String?
     public var snoozed: Bool
 
-    public init(account: String? = nil, owner: String? = nil, todo: Bool = false, filter: PrFilter = .all, snoozed: Bool = false) {
+    public init(account: String? = nil, owner: String? = nil, filter: PrFilter? = nil, search: String? = nil, snoozed: Bool = false) {
         self.account = account
         self.owner = owner
-        self.todo = todo
         self.filter = filter
+        self.search = search
         self.snoozed = snoozed
     }
 
     var fields: [String: Any] {
-        var fields: [String: Any] = ["cmd": "list", "todo": todo, "filter": filter.rawValue, "snoozed": snoozed]
+        var fields: [String: Any] = ["cmd": "list"]
+        if snoozed { fields["snoozed"] = true }
         if let account { fields["account"] = account }
         if let owner { fields["owner"] = owner }
+        if let filter { fields["filter"] = filter.rawValue }
+        if let search { fields["search"] = search }
         return fields
     }
 }
 
-/// `activity`: one account's Activity tab. `owners` are owner arguments
-/// (login or `public`); empty is every owner.
+/// `activity`: the Activity tab. `owners` are owner arguments (login or
+/// `public`); empty is every owner. The app sends only the account.
 public struct ActivityQuery: Equatable {
     public var account: String?
     public var owners: [String]
-    public var todo: Bool
-    public var filter: PrFilter
+    public var filter: PrFilter?
+    public var search: String?
 
-    public init(account: String? = nil, owners: [String] = [], todo: Bool = false, filter: PrFilter = .all) {
+    public init(account: String? = nil, owners: [String] = [], filter: PrFilter? = nil, search: String? = nil) {
         self.account = account
         self.owners = owners
-        self.todo = todo
         self.filter = filter
+        self.search = search
     }
 
     var fields: [String: Any] {
-        var fields: [String: Any] = ["cmd": "activity", "owners": owners, "todo": todo, "filter": filter.rawValue]
+        var fields: [String: Any] = ["cmd": "activity"]
         if let account { fields["account"] = account }
+        if !owners.isEmpty { fields["owners"] = owners }
+        if let filter { fields["filter"] = filter.rawValue }
+        if let search { fields["search"] = search }
         return fields
     }
 }
@@ -84,11 +92,13 @@ public protocol DaemonAPI: AnyObject, Sendable {
     func info() async throws -> InfoResponse
     func list(_ query: ListQuery) async throws -> [Card]
     func activity(_ query: ActivityQuery) async throws -> [Row]
-    func seen(_ rowIds: [String]) async throws
+    /// Clears the unread mark of these rows; one unknown id refuses all.
+    func read(_ rowIds: [String]) async throws
+    /// Every row of the account but the snoozed PRs' (the CLI's `read --all`;
+    /// the popover's ⇧R sends `read` instead).
+    func readAll(account: String) async throws
     func popoverOpened(_ account: String) async throws
     func popoverClosed(_ account: String) async throws
-    func done(_ row: String, on: Bool) async throws
-    func todo(_ row: String, on: Bool) async throws
     func snooze(account: String, pr: String) async throws
     func unsnooze(account: String, pr: String) async throws
     func refresh(_ account: String?) async throws -> [Warning]
@@ -184,8 +194,12 @@ public final class SocketDaemonAPI: DaemonAPI, @unchecked Sendable {
         try decode(ActivityResponse.self, try await call(query.fields)).rows
     }
 
-    public func seen(_ rowIds: [String]) async throws {
-        try await ack(["cmd": "seen", "row_ids": rowIds])
+    public func read(_ rowIds: [String]) async throws {
+        try await ack(["cmd": "read", "row_ids": rowIds])
+    }
+
+    public func readAll(account: String) async throws {
+        try await ack(["cmd": "read_all", "account": account])
     }
 
     public func popoverOpened(_ account: String) async throws {
@@ -194,14 +208,6 @@ public final class SocketDaemonAPI: DaemonAPI, @unchecked Sendable {
 
     public func popoverClosed(_ account: String) async throws {
         try await ack(["cmd": "popover_closed", "account": account])
-    }
-
-    public func done(_ row: String, on: Bool) async throws {
-        try await ack(["cmd": "done", "row": row, "on": on])
-    }
-
-    public func todo(_ row: String, on: Bool) async throws {
-        try await ack(["cmd": "todo", "row": row, "on": on])
     }
 
     public func snooze(account: String, pr: String) async throws {

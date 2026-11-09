@@ -162,7 +162,15 @@ fn malformed_requests_are_invalid() {
     assert_eq!(daemon.raw("not json")["code"], "invalid");
     assert_eq!(daemon.raw("{}")["code"], "invalid");
     assert_eq!(daemon.code(json!({"cmd":"nope"})), "invalid");
-    assert_eq!(daemon.code(json!({"cmd":"done"})), "invalid");
+    // 0.2 requests are gone.
+    for gone in [
+        json!({"cmd":"done","row":"x","on":true}),
+        json!({"cmd":"todo","row":"x","on":true}),
+        json!({"cmd":"seen","row_ids":[]}),
+    ] {
+        assert_eq!(daemon.code(gone.clone()), "invalid", "{gone}");
+    }
+    assert_eq!(daemon.code(json!({"cmd":"read"})), "invalid");
     assert_eq!(
         daemon.code(json!({"cmd":"subscribe"})),
         "invalid",
@@ -182,10 +190,11 @@ fn malformed_requests_are_invalid() {
         "invalid"
     );
     assert_eq!(
-        daemon.code(json!({"cmd":"done","row":"x"})),
+        daemon.code(json!({"cmd":"read","row_ids":"x"})),
         "invalid",
-        "on is required"
+        "row_ids is an array"
     );
+    assert_eq!(daemon.code(json!({"cmd":"read_all"})), "invalid");
     assert_eq!(daemon.code(json!({"cmd":"undone","row":"x"})), "invalid");
     assert_eq!(daemon.code(json!({"cmd":"scope_list"})), "invalid");
     assert_eq!(daemon.code(json!({"cmd":"settings_status"})), "invalid");
@@ -231,15 +240,15 @@ fn an_account_value_has_the_shape_of_the_wire_format() {
         snapshot["accounts"],
         json!([{"id":"1001","login":"me","color":"none",
             "token":{"registered":false,"expires_at":null,"last_test":null},
-            "updated_at":null,"todo_count":0,"unread":false,
+            "updated_at":null,"review_count":0,"unread":false,
             "warnings":[{"kind":"no_token","account":"1001","owner":null,
                 "message":"No token","until":null,"url":null}],
             "rate_limit":null,
             "owners":[
                 {"id":org,"name":"org","kind":"org","github_id":100,"enabled":true,
-                 "notify":true,"skip_drafts":true,"todo_count":0,"pr_count":0},
+                 "notify":true,"skip_drafts":true,"review_count":0,"pr_count":0},
                 {"id":public,"name":"Public","kind":"public","github_id":null,"enabled":true,
-                 "notify":true,"skip_drafts":true,"todo_count":0,"pr_count":0}]}])
+                 "notify":true,"skip_drafts":true,"review_count":0,"pr_count":0}]}])
     );
     assert_ne!(org, public);
     daemon.stop();
@@ -345,11 +354,10 @@ fn a_damaged_file_starts_the_waiting_state_without_touching_it() {
         json!({"cmd":"list"}),
         json!({"cmd":"activity"}),
         json!({"cmd":"status","account":"me","pr":"a/b#1"}),
-        json!({"cmd":"seen","row_ids":[]}),
+        json!({"cmd":"read","row_ids":[]}),
+        json!({"cmd":"read_all","account":"me"}),
         json!({"cmd":"popover_opened","account":"me"}),
         json!({"cmd":"popover_closed","account":"me"}),
-        json!({"cmd":"done","row":"x","on":true}),
-        json!({"cmd":"todo","row":"x","on":true}),
         json!({"cmd":"snooze","account":"me","pr":"a/b#1"}),
         json!({"cmd":"unsnooze","account":"me","pr":"a/b#1"}),
         json!({"cmd":"refresh"}),

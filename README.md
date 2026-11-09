@@ -1,7 +1,8 @@
 # shiibar-gh
 
-macOS menu bar app for the GitHub pull requests you are involved in: what
-needs your action and what happened, per owner and for public repositories.
+macOS menu bar app for the GitHub pull requests you are involved in: which
+ones wait for your review and what happened, per owner and for public
+repositories.
 It only reads from GitHub. See `docs/DESIGN.md` and `CLAUDE.md`.
 
 **Several GitHub accounts.** Each account has its own menu bar icon and one

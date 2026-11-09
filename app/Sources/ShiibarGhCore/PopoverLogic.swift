@@ -1,62 +1,11 @@
-// The popover's state without a screen: tabs, the filter row, the owner
-// sections, the selection, the keys and their hint line (DESIGN.md,
-// "Screens", "Keyboard" and "Selection and keys"), which rows count as shown
-// for `seen`, and when `popover_opened` and `popover_closed` go out.
+// The popover's state without a screen: tabs, the selection, the keys and
+// their hint line, the right-click menu (DESIGN.md, "Screens", "Keyboard"
+// and "Selection and keys"), and when `popover_opened` and
+// `popover_closed` go out.
 
 import Foundation
 
 public enum PopoverTab: String, Equatable, Codable { case prs, activity }
-
-/// The filter row: the Todo toggle and the segment. Remembered per account
-/// (DESIGN.md, "Screens"; kept in UserDefaults).
-public struct FilterState: Equatable, Codable {
-    public var todo: Bool
-    public var segment: PrFilter
-
-    public init(todo: Bool = false, segment: PrFilter = .all) {
-        self.todo = todo
-        self.segment = segment
-    }
-
-    /// The cards are narrowed down, so an empty list is "Nothing matches".
-    public var narrows: Bool { todo || segment != .all }
-
-    public static func title(_ segment: PrFilter) -> String {
-        switch segment {
-        case .all: return "All"
-        case .authored: return "Authored by me"
-        case .assigned: return "Assigned to me"
-        case .reviewRequested: return "Review requested"
-        }
-    }
-}
-
-/// A section of the PRs tab: one per enabled owner in the account's order
-/// (Public last, as the daemon sends them), then Snoozed.
-public struct SectionLayout: Equatable, Identifiable {
-    public static let snoozedKey = "snoozed"
-
-    public var key: String
-    public var title: String
-    public var isSnoozed: Bool
-    /// The red number; nil when 0 (and for Snoozed).
-    public var todoCount: Int?
-    /// "4 PRs", or "2 PRs · until Mon 09:00" for Snoozed.
-    public var detail: String
-    public var collapsed: Bool
-    /// The cards laid out under the header (none while collapsed).
-    public var cards: [Card]
-    /// "+ N more PRs": the cards without Todo left out until expanded.
-    public var more: Int
-
-    public var id: String { key }
-
-    public static func ownerKey(_ owner: String) -> String { "owner:" + owner }
-
-    public var moreText: String? {
-        more > 0 ? "+ \(more) more " + (more == 1 ? "PR" : "PRs") : nil
-    }
-}
 
 /// One stop of the selection.
 public enum SelectionItem: Equatable, Hashable {
@@ -78,18 +27,19 @@ public enum SelectionItem: Equatable, Hashable {
 }
 
 public enum Key: Equatable {
-    case up, down, open, done, todo, snooze
+    case up, down, open, snooze, markAllRead, find
 }
 
-/// What a key or a click asks for. The app carries it out.
+/// What a key, a click or a menu item asks for. The app carries it out.
 public enum PopoverAction: Equatable {
-    case open(String)
-    case done(row: String, on: Bool)
-    case todo(row: String, on: Bool)
+    /// Open the URL; `read` is the row opened, which is read too.
+    case open(String, read: String?)
+    case copyLink(String)
     case snooze(pr: String)
     case unsnooze(pr: String)
     case toggleSection(String)
     case expand(String)
+    case markAllRead
 }
 
 public struct KeyHint: Equatable {
@@ -102,68 +52,28 @@ public struct KeyHint: Equatable {
     }
 }
 
+/// An item of the right-click menu of a card header or a row (DESIGN.md,
+/// "Keyboard", the mouse table). nil in a list is a separator.
+public struct MenuEntry: Equatable {
+    public var title: String
+    public var action: PopoverAction
+
+    public init(_ title: String, _ action: PopoverAction) {
+        self.title = title
+        self.action = action
+    }
+}
+
 public enum PopoverLogic {
-    static func count(_ n: Int) -> String { n == 1 ? "1 PR" : "\(n) PRs" }
-
-    /// The sections of the PRs tab. `cards` are the account's unsnoozed
-    /// cards after the filters, `snoozed` the snoozed ones after the
-    /// filters, `allSnoozed` the snoozed PRs without filters (the Snoozed
-    /// header's count and `until` do not depend on the filters). Owner
-    /// sections start expanded and Snoozed collapsed; `collapsed` holds the
-    /// user's choices. A section shows its Todo PRs and gathers the others
-    /// into "+ N more PRs" until it is in `expanded`. While the unsnoozed
-    /// cards are empty (`showsEmpty`), "Nothing needs you" or "Nothing
-    /// matches" takes the place of the owner sections and only Snoozed
-    /// stays (DESIGN.md, "First run, failure and empty").
-    public static func sections(
-        account: Account, cards: [Card], snoozed: [Card], allSnoozed: [Card],
-        collapsed: [String: Bool], expanded: Set<String>, showsEmpty: Bool = false,
-        timeZone: TimeZone = .current
-    ) -> [SectionLayout] {
-        var out: [SectionLayout] = []
-        for owner in account.owners where owner.enabled && !showsEmpty {
-            let key = SectionLayout.ownerKey(owner.id)
-            let mine = cards.filter { $0.owner == owner.id }
-            let isCollapsed = collapsed[key] ?? false
-            let open = expanded.contains(key)
-            let shown = open ? mine : mine.filter(\.hasOpenTodo)
-            out.append(SectionLayout(
-                key: key, title: owner.displayName, isSnoozed: false,
-                todoCount: owner.todoCount > 0 ? owner.todoCount : nil,
-                detail: count(owner.prCount), collapsed: isCollapsed,
-                cards: isCollapsed ? [] : shown, more: isCollapsed ? 0 : mine.count - shown.count
-            ))
-        }
-        if !allSnoozed.isEmpty || !snoozed.isEmpty {
-            let key = SectionLayout.snoozedKey
-            let isCollapsed = collapsed[key] ?? true
-            var detail = count(max(allSnoozed.count, snoozed.count))
-            if let until = (allSnoozed + snoozed).compactMap(\.snoozedUntil).first {
-                detail += " · until " + RelativeTime.weekdayClock(until, timeZone: timeZone)
-            }
-            out.append(SectionLayout(
-                key: key, title: "Snoozed", isSnoozed: true, todoCount: nil, detail: detail,
-                collapsed: isCollapsed, cards: isCollapsed ? [] : snoozed, more: 0
-            ))
-        }
-        return out
-    }
-
-    /// "Nothing needs you" or "Nothing matches" once the list has loaded
-    /// and no unsnoozed card is left; nil otherwise.
-    public static func emptyText(loaded: Bool, cards: [Card], filter: FilterState) -> String? {
-        guard loaded && cards.isEmpty else { return nil }
-        return EmptyState.cards(filtered: filter.narrows)
-    }
-
-    /// PRs: each section's header, then its cards (header, rows) and its
-    /// "+ N more PRs", top to bottom. Activity: the rows only.
+    /// PRs: each section's header (none for Group by None), then its cards
+    /// (header, rows) and its "+ N more PRs", top to bottom. Activity: the
+    /// rows only.
     public static func items(tab: PopoverTab, sections: [SectionLayout], activity: [Row]) -> [SelectionItem] {
         switch tab {
         case .prs:
             var items: [SelectionItem] = []
             for section in sections {
-                items.append(.section(section.key))
+                if section.showsHeader { items.append(.section(section.key)) }
                 for card in section.cards {
                     items.append(.header(card: card.id))
                     items.append(contentsOf: card.rows.map { .row(id: $0.id, card: card.id) })
@@ -187,7 +97,8 @@ public enum PopoverLogic {
         return items[next]
     }
 
-    /// Keep the selection on the same item after a reload, else nothing.
+    /// Keep the selection on the same item after a reload, a row by its id
+    /// wherever it went; else nothing.
     public static func keep(_ selection: SelectionItem?, in items: [SelectionItem]) -> SelectionItem? {
         guard let selection else { return nil }
         if items.contains(selection) { return selection }
@@ -197,117 +108,104 @@ public enum PopoverLogic {
         return nil
     }
 
-    static func card(_ id: String, in sections: [SectionLayout]) -> Card? {
-        sections.lazy.flatMap(\.cards).first { $0.id == id }
+    static func card(_ id: String, in sections: [SectionLayout]) -> (Card, SectionLayout)? {
+        for section in sections {
+            if let card = section.matching.first(where: { $0.id == id }) { return (card, section) }
+        }
+        return nil
     }
 
     static func row(_ id: String, sections: [SectionLayout], activity: [Row]) -> Row? {
-        sections.lazy.flatMap(\.cards).flatMap(\.rows).first { $0.id == id } ?? activity.first { $0.id == id }
+        sections.lazy.flatMap(\.matching).flatMap(\.rows).first { $0.id == id } ?? activity.first { $0.id == id }
     }
 
-    /// ⏎, T, D and S on the selected item (DESIGN.md, "Selection and keys").
+    /// ⏎ and S on the selected item (DESIGN.md, "Selection and keys"). ⇧R
+    /// and ⌘F do not depend on the selection.
     public static func action(
         for key: Key, selection: SelectionItem?, sections: [SectionLayout], activity: [Row]
     ) -> PopoverAction? {
+        if key == .markAllRead { return .markAllRead }
         guard let selection else { return nil }
         switch selection {
         case .section(let section):
-            guard sections.contains(where: { $0.key == section }) else { return nil }
+            guard sections.contains(where: { $0.key == section && $0.showsHeader }) else { return nil }
             return key == .open ? .toggleSection(section) : nil
         case .more(let section):
             guard sections.contains(where: { $0.key == section && $0.more > 0 }) else { return nil }
             return key == .open ? .expand(section) : nil
         case .header(let cardId):
-            guard let card = card(cardId, in: sections) else { return nil }
+            guard let (card, _) = card(cardId, in: sections) else { return nil }
             switch key {
-            case .open: return .open(card.url)
+            case .open: return .open(card.url, read: nil)
             case .snooze: return card.snoozed ? .unsnooze(pr: card.pr) : .snooze(pr: card.pr)
-            case .done, .todo, .up, .down: return nil
+            default: return nil
             }
         case .row(let rowId, _):
             guard let row = row(rowId, sections: sections, activity: activity) else { return nil }
-            switch key {
-            case .open: return .open(row.url)
-            case .todo: return row.done ? nil : .todo(row: row.id, on: !row.todo)
-            case .done: return row.todo ? .done(row: row.id, on: !row.done) : nil
-            case .snooze, .up, .down: return nil
-            }
+            return key == .open ? .open(row.url, read: row.id) : nil
         }
     }
+
+    static let markAllHint = KeyHint("\u{21E7}R", "Mark all read")
+    static let searchHint = KeyHint("\u{2318}F", "Search")
 
     /// The hint line for the selection (DESIGN.md, "Keyboard"): only the
-    /// keys that do something, named by what they do.
+    /// keys that do something, named by what they do; ⇧R and ⌘F always.
     public static func hints(selection: SelectionItem?, sections: [SectionLayout], activity: [Row]) -> [KeyHint] {
-        var hints = [KeyHint("↑↓", "Move")]
-        guard let selection else { return hints }
+        var hints = [KeyHint("\u{2191}\u{2193}", "Move")]
         switch selection {
-        case .section(let key):
+        case nil:
+            break
+        case .section(let key)?:
             let collapsed = sections.first { $0.key == key }?.collapsed ?? false
-            hints.append(KeyHint("⏎", collapsed ? "Expand" : "Collapse"))
-        case .more:
-            hints.append(KeyHint("⏎", "Expand"))
-        case .header(let cardId):
-            hints.append(KeyHint("⏎", "Open"))
-            let snoozed = card(cardId, in: sections)?.snoozed ?? false
+            hints.append(KeyHint("\u{23CE}", collapsed ? "Expand" : "Collapse"))
+        case .more?:
+            hints.append(KeyHint("\u{23CE}", "Expand"))
+        case .header(let cardId)?:
+            hints.append(KeyHint("\u{23CE}", "Open"))
+            let snoozed = card(cardId, in: sections)?.0.snoozed ?? false
             hints.append(KeyHint("S", snoozed ? "Unsnooze" : "Snooze"))
-        case .row(let rowId, _):
-            hints.append(KeyHint("⏎", "Open"))
-            guard let row = row(rowId, sections: sections, activity: activity) else { break }
-            if row.todo && !row.done {
-                hints.append(KeyHint("D", "Done"))
-                hints.append(KeyHint("T", "Remove from Todo"))
-            } else if row.done {
-                if row.todo { hints.append(KeyHint("D", "Not done")) }
-            } else {
-                hints.append(KeyHint("T", "Add to Todo"))
-            }
+        case .row?:
+            hints.append(KeyHint("\u{23CE}", "Open"))
         }
-        return hints
-    }
-}
-
-// MARK: - Activity owner buttons
-
-public enum ActivityOwners {
-    /// The owner arguments to send: the buttons that are on, in the
-    /// account's order. None on is every owner.
-    public static func arguments(_ selected: Set<String>, account: Account) -> [String] {
-        account.owners.filter { $0.enabled && selected.contains($0.id) }.map(\.argument)
+        return hints + [markAllHint, searchHint]
     }
 
-    /// The buttons: the enabled owners.
-    public static func buttons(_ account: Account) -> [Owner] {
-        account.owners.filter(\.enabled)
-    }
-}
-
-// MARK: - Seen
-
-public enum Visibility {
-    /// The rows with any part inside the visible part of the list. Rows
-    /// scrolled away are not shown; rows collapsed or filtered out are not
-    /// laid out at all, so they never appear in `frames`.
-    public static func shown(frames: [String: ClosedRange<Double>], viewport: ClosedRange<Double>) -> Set<String> {
-        Set(frames.compactMap { id, frame in
-            frame.upperBound > viewport.lowerBound && frame.lowerBound < viewport.upperBound ? id : nil
-        })
-    }
-}
-
-/// The `seen` rows of one open period: each unread row is sent once.
-public struct SeenTracker: Equatable {
-    private var sent: Set<String> = []
-
-    public init() {}
-
-    public mutating func newlySeen(shown: Set<String>, unread: Set<String>) -> [String] {
-        let fresh = shown.intersection(unread).subtracting(sent)
-        sent.formUnion(fresh)
-        return fresh.sorted()
-    }
-
-    public mutating func reset() {
-        sent = []
+    /// The right-click menu of a card header or a row: Open on GitHub, Copy
+    /// link, Snooze until <time> (Unsnooze in Snoozed; none in Activity),
+    /// Mark all as read. `returnAt` is the next Return time. Nil entries
+    /// are separators; other items have no menu.
+    public static func menu(
+        for item: SelectionItem, tab: PopoverTab, sections: [SectionLayout], activity: [Row],
+        returnAt: Int64, timeZone: TimeZone = .current
+    ) -> [MenuEntry?] {
+        let url: String
+        let read: String?
+        var card: Card?
+        switch item {
+        case .header(let id):
+            guard let found = Self.card(id, in: sections)?.0 else { return [] }
+            card = found
+            url = found.url
+            read = nil
+        case .row(let id, let cardId):
+            guard let row = row(id, sections: sections, activity: activity) else { return [] }
+            url = row.url
+            read = row.id
+            if tab == .prs, let cardId { card = Self.card(cardId, in: sections)?.0 }
+        case .section, .more:
+            return []
+        }
+        var entries: [MenuEntry?] = [MenuEntry("Open on GitHub", .open(url, read: read)), MenuEntry("Copy link", .copyLink(url))]
+        if tab == .prs, let card {
+            entries.append(nil)
+            entries.append(card.snoozed
+                ? MenuEntry("Unsnooze", .unsnooze(pr: card.pr))
+                : MenuEntry("Snooze until " + RelativeTime.weekdayClock(returnAt, timeZone: timeZone), .snooze(pr: card.pr)))
+        }
+        entries.append(nil)
+        entries.append(MenuEntry("Mark all as read", .markAllRead))
+        return entries
     }
 }
 
@@ -365,7 +263,7 @@ public enum PopoverContent: Equatable {
     case unreadable
     /// "No owners yet", "Add an owner in Settings" and Settings only.
     case noOwners
-    /// The banner, tabs, filter row, list, usage and key hints.
+    /// The banner, tabs, the two filter rows, the list and key hints.
     case list
 }
 

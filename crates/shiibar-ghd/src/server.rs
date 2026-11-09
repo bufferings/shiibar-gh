@@ -26,9 +26,11 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 /// DESIGN.md brief, "Files and constants".
 const PERIODIC_PASS: Duration = Duration::from_secs(30);
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
-/// How often the real-time scheduler looks for a due fetch. The intervals
-/// themselves are minutes; this only bounds how late a fetch starts.
-const FETCH_CHECK: Duration = Duration::from_secs(5);
+/// How often the real-time scheduler looks for a due fetch. Due times are
+/// whole seconds, and a failed run is retried after as little as five
+/// seconds (DESIGN.md, "Constants"), so a fetch starts at most about a
+/// second late. A check with nothing due only reads the core's timers.
+const FETCH_CHECK: Duration = Duration::from_secs(1);
 /// No longer than the socket's own name: a Unix socket path has a small length
 /// limit, and a state directory that fits the socket must fit the draft too.
 const SOCKET_DRAFT: &str = "shiibar-ghd.new";

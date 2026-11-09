@@ -287,7 +287,7 @@ struct OwnerPane: View {
     }
 }
 
-/// The event table: List, Todo and Notify per kind, grouped. Checkboxes
+/// The event table: List and Notify per kind, grouped. Checkboxes
 /// only here (rule 2). Read only in the Copy sheet.
 struct EventTable: View {
     var cells: (EventKind) -> EventCell
@@ -484,26 +484,31 @@ struct TokenSheet: View {
                     .onSubmit { model.test() }
                 SettingsButton(title: model.testing ? "Checking…" : "Test", enabled: model.canTest) { model.test() }
             }
-            if let results = model.results, !results.isEmpty {
-                VStack(spacing: 0) {
-                    ForEach(Array(results.enumerated()), id: \.offset) { _, result in
-                        let line = TestResultLine(result)
-                        HStack(spacing: 8) {
+            // The result list is there from the start, names faint until a
+            // test fills it, so the sheet keeps its height (Sheets.html).
+            VStack(spacing: 0) {
+                ForEach(Array(model.resultRows.enumerated()), id: \.offset) { _, row in
+                    HStack(spacing: 8) {
+                        switch row {
+                        case .placeholder(let label):
+                            Text(label).foregroundColor(Palette.faded.color).frame(maxWidth: .infinity, alignment: .leading)
+                        case .result(let line):
                             Text(line.label).frame(maxWidth: .infinity, alignment: .leading)
                             Text(line.text).foregroundColor(tone(line.tone))
                             if let url = line.authorize {
                                 SettingsButton(title: "Authorize…") { app.open(url) }
                             }
                         }
-                        .font(.system(size: 12))
-                        .padding(EdgeInsets(top: 5, leading: 10, bottom: 5, trailing: 10))
-                        .overlay(alignment: .top) { Rectangle().fill(Palette.rowDivider.color).frame(height: 1) }
                     }
+                    .font(.system(size: 12))
+                    .frame(minHeight: 22)
+                    .padding(EdgeInsets(top: 3, leading: 10, bottom: 3, trailing: 10))
+                    .overlay(alignment: .top) { Rectangle().fill(Palette.rowDivider.color).frame(height: 1) }
                 }
-                .background(RoundedRectangle(cornerRadius: 6).fill(Palette.surface.color))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.groupBorder.color, lineWidth: 1))
             }
+            .background(RoundedRectangle(cornerRadius: 6).fill(Palette.surface.color))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.groupBorder.color, lineWidth: 1))
             ErrorText(text: model.error)
             HStack(spacing: 8) {
                 if model.showsSaveLater {
@@ -603,7 +608,7 @@ struct CopySheet: View {
                     .fixedSize()
                 }
             }
-            EventTable(cells: { table[$0.rawValue] ?? EventCell(list: false, todo: false, notify: false) }, editable: false) { _, _, _ in }
+            EventTable(cells: { table[$0.rawValue] ?? EventCell(list: false, notify: false) }, editable: false) { _, _, _ in }
                 .padding(EdgeInsets(top: 2, leading: 8, bottom: 6, trailing: 8))
                 .background(RoundedRectangle(cornerRadius: 6).fill(Palette.surface.color))
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.groupBorder.color, lineWidth: 1))

@@ -5,24 +5,17 @@ mod support;
 use shiibar_gh_proto::*;
 use support::*;
 
-/// Row descriptions, oldest first: `U` unread event, `R` read event, `O` open
-/// Todo row, `D` done row. The strings hold what stays, oldest first.
+/// Row descriptions, oldest first: `U` unread event, `R` read event. The
+/// strings hold what stays, oldest first.
 #[test]
 fn pruning_table() {
     let cases = [
         ("three read rows stay", "RRR", "RRR"),
         ("the fourth read row goes", "RRRR", "_RRR"),
         ("only the newest three stay", "RRRRRR", "___RRR"),
-        ("done rows share the limit", "DRDR", "_RDR"),
         ("unread rows stay and do not count", "UUUURRR", "UUUURRR"),
-        ("open rows stay and do not count", "OOOORRR", "OOOORRR"),
         ("old unread stays below pruned rows", "URRRR", "U_RRR"),
-        (
-            "open row is not pruned, older read rows are",
-            "RRRRO",
-            "_RRRO",
-        ),
-        ("mixed", "RDUORRD", "__UORRD"),
+        ("mixed", "RRURRUR", "__URRUR"),
     ];
     for (name, rows, want) in cases {
         let mut h = H::new();
@@ -30,25 +23,23 @@ fn pruning_table() {
             state: PrState::Open,
             ..other("PR_1")
         }]);
-        let mut seen = vec![];
+        h.open();
+        let mut read = vec![];
         for (i, c) in rows.chars().enumerate() {
             let id = format!("E_{i}");
-            let kind = if matches!(c, 'O' | 'D') {
+            let kind = if i % 2 == 0 {
                 IngestKind::Comment
             } else {
                 IngestKind::Closed
             };
             let e = h.ev(&id, "PR_1", kind);
             h.events(vec![e]);
-            if c == 'D' {
-                h.done(&id);
-            }
             if c != 'U' {
-                seen.push(id);
+                read.push(id);
             }
         }
-        h.engine
-            .seen(&seen.iter().map(|s| full(s)).collect::<Vec<_>>());
+        let read: Vec<&str> = read.iter().map(String::as_str).collect();
+        h.read(&read);
         h.close();
         let got: String = rows
             .chars()
@@ -73,7 +64,8 @@ fn pruning_runs_on_close_only() {
         .map(|i| h.ev_at(&format!("E_{i}"), "PR_1", IngestKind::Closed, h.at() + i))
         .collect();
     h.events(events);
-    h.seen(&["E_0", "E_1", "E_2", "E_3", "E_4"]);
+    h.open();
+    h.read(&["E_0", "E_1", "E_2", "E_3", "E_4"]);
     h.tick();
     assert!(!h.row("E_0").pruned);
     h.close();
@@ -93,8 +85,8 @@ fn pruning_is_per_pr() {
             all.push(id);
         }
     }
-    h.engine
-        .seen(&all.iter().map(|s| full(s)).collect::<Vec<_>>());
+    let all: Vec<&str> = all.iter().map(String::as_str).collect();
+    h.read(&all);
     h.close();
     assert!(all.iter().all(|id| !h.row(id).pruned));
 }
@@ -107,18 +99,18 @@ fn a_pruned_row_is_hidden_and_does_not_come_back_on_refetch() {
         .map(|i| h.ev_at(&format!("E_{i}"), "PR_1", IngestKind::Closed, h.at() + i))
         .collect();
     h.events(events.clone());
-    h.seen(&["E_0", "E_1", "E_2", "E_3"]);
+    h.read(&["E_0", "E_1", "E_2", "E_3"]);
     h.close();
     assert!(h.wire_row("E_0").is_none());
     h.events(events);
     assert!(h.row("E_0").pruned);
     assert!(h.wire_row("E_0").is_none());
     assert!(not_found(h.engine.open_row(None, &full("E_0"))));
-    assert!(not_found(h.engine.done(&full("E_0"), true)));
 }
 
 #[test]
-fn a_stale_review_request_is_pruned_like_a_read_event_but_unread_stays() {
+fn a_read_review_request_is_pruned_like_any_row_but_unread_stays() {
+    // DESIGN.md, "Review requested rows": a record like any other row.
     let mut h = H::new();
     let e = h.ev("RR", "PR_1", IngestKind::ReviewRequested);
     h.push(
@@ -129,17 +121,25 @@ fn a_stale_review_request_is_pruned_like_a_read_event_but_unread_stays() {
         vec![e],
         vec![],
     );
-    h.prs(vec![other("PR_1")]);
     let events: Vec<_> = (0..3)
         .map(|i| h.ev_at(&format!("E_{i}"), "PR_1", IngestKind::Closed, h.at() + i))
         .collect();
     h.events(events);
-    h.seen(&["E_0", "E_1", "E_2"]);
+    h.read(&["E_0", "E_1", "E_2"]);
     h.close();
     assert!(!h.row("RR").pruned, "unread stays");
-    h.seen(&["RR"]);
+    h.read(&["RR"]);
     h.close();
-    assert!(h.row("RR").pruned, "read and stale goes");
+    assert!(h.row("RR").pruned, "read and older goes");
+    // DESIGN.md, "Awaiting review": the request still counts.
+    assert_eq!(h.badge(), 1);
+    assert!(h.card(&key("PR_1")).unwrap().awaiting_review);
+    h.tick();
+    h.prs(vec![IngestPr {
+        requested_me: true,
+        ..other("PR_1")
+    }]);
+    assert!(h.row("RR").pruned, "across a pass and a fetch");
 }
 
 #[test]
@@ -156,41 +156,15 @@ fn hidden_rows_do_not_take_a_slot_and_are_not_pruned() {
         .map(|i| h.ev_at(&format!("E_{i}"), "PR_1", IngestKind::Closed, h.at() + i))
         .collect();
     h.events(events);
-    h.seen(&["BOT", "E_0", "E_1", "E_2"]);
+    h.read(&["BOT", "E_0", "E_1", "E_2"]);
     h.close();
     assert!(!h.row("BOT").pruned);
     assert!(!h.row("E_0").pruned, "hidden rows take no slot");
 }
 
 #[test]
-fn a_done_request_pruned_while_requested_stays_pruned() {
-    let mut h = H::new();
-    let requested = IngestPr {
-        requested_me: true,
-        ..other("PR_1")
-    };
-    let e = h.ev("RR", "PR_1", IngestKind::ReviewRequested);
-    h.push(vec![requested.clone()], vec![e], vec![]);
-    h.done("RR");
-    let events: Vec<_> = (0..3)
-        .map(|i| h.ev_at(&format!("E_{i}"), "PR_1", IngestKind::Closed, h.at() + i))
-        .collect();
-    h.events(events);
-    h.seen(&["RR", "E_0", "E_1", "E_2"]);
-    h.close();
-    assert!(h.row("RR").pruned);
-
-    h.tick();
-    assert!(h.row("RR").pruned, "across a periodic pass");
-    assert!(not_found(h.engine.done(&full("RR"), true)));
-    h.prs(vec![requested]);
-    assert!(h.row("RR").pruned, "across a fetch of the open PR");
-    assert!(h.wire_row("RR").is_none());
-    assert!(h.row("RR").done);
-}
-
-#[test]
-fn reopening_restores_a_pruned_request_only_on_the_transition() {
+fn a_reopened_pr_awaits_review_again_without_bringing_rows_back() {
+    // 0.2 brought a pruned request row back as Todo; 0.3 judges the PR.
     let mut h = H::new();
     let requested = IngestPr {
         requested_me: true,
@@ -202,15 +176,15 @@ fn reopening_restores_a_pruned_request_only_on_the_transition() {
         state: PrState::Closed,
         ..requested.clone()
     }]);
+    assert_eq!(h.badge(), 0, "closed");
     let events: Vec<_> = (0..3)
         .map(|i| h.ev_at(&format!("E_{i}"), "PR_1", IngestKind::Closed, h.at() + i))
         .collect();
     h.events(events);
-    h.seen(&["RR", "E_0", "E_1", "E_2"]);
+    h.read(&["RR", "E_0", "E_1", "E_2"]);
     h.close();
     assert!(h.row("RR").pruned);
-    h.tick();
-    assert!(h.row("RR").pruned, "still closed");
     h.prs(vec![requested]);
-    assert!(!h.row("RR").pruned, "reopened");
+    assert!(h.row("RR").pruned, "the row stays pruned");
+    assert_eq!(h.badge(), 1, "reopened and still requested");
 }

@@ -31,7 +31,7 @@ fn restart(daemon: TestDaemon, dir: &std::path::Path, at: i64) -> TestDaemon {
 fn everything_saved_comes_back_after_a_restart() {
     let (dir, daemon) = setup();
     let t = T0 + 10;
-    // A comment made Done, one left unread and seen, and PRs with state.
+    // A comment read, one left unread, and PRs with state.
     daemon.ingest(
         vec![
             with(pr("PR_1", "me"), json!({"checks":"passed"})),
@@ -42,14 +42,13 @@ fn everything_saved_comes_back_after_a_restart() {
             pr("PR_3", "alice"),
         ],
         vec![
-            event("DONE", "PR_1", "comment", t),
+            event("READ", "PR_1", "comment", t),
             event("SEEN", "PR_2", "comment", t + 1),
             event("HELD", "PR_3", "comment", t + 2),
         ],
         vec![reaction("C_1", "PR_1", t, json!({"HEART":2}))],
     );
-    daemon.ok(json!({"cmd":"done","row":"1001:DONE","on":true}));
-    daemon.ok(json!({"cmd":"seen","row_ids":["1001:SEEN"]}));
+    daemon.ok(json!({"cmd":"read","row_ids":["1001:READ"]}));
     daemon.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#3"}));
     daemon.ok(json!({"cmd":"account_color","account":"me","color":"purple"}));
     daemon.ingest(
@@ -62,8 +61,9 @@ fn everything_saved_comes_back_after_a_restart() {
 
     let daemon = restart(daemon, dir.path(), T0 + 100);
 
-    // Done, Snooze, unread and the dot.
-    assert_eq!(daemon.row("DONE").unwrap()["done"], true);
+    // Read, Snooze, unread, the dot and the created time.
+    assert_eq!(daemon.row("READ").unwrap()["unread"], false);
+    assert_eq!(daemon.card("PR_1").unwrap()["created_at"], T0 - 86_400);
     assert_eq!(daemon.card("PR_3").unwrap()["snoozed"], true);
     assert_eq!(daemon.row("SEEN").unwrap()["unread"], true);
     assert_eq!(daemon.account("me")["unread"], true);
@@ -80,9 +80,9 @@ fn everything_saved_comes_back_after_a_restart() {
         Value::Null
     );
 
-    // seen_pending: closing now clears the row that was shown before.
+    // Closing reads nothing.
     daemon.ok(json!({"cmd":"popover_closed","account":"me"}));
-    assert_eq!(daemon.row("SEEN").unwrap()["unread"], false);
+    assert_eq!(daemon.row("SEEN").unwrap()["unread"], true);
 
     // Watch start: older than T0 stays out.
     daemon.ingest(vec![], vec![watch_probe], vec![]);
@@ -122,7 +122,7 @@ fn everything_saved_comes_back_after_a_restart() {
     let mut app = daemon.subscribe("app");
     app.snapshot();
     let first = app.notification();
-    // SEEN, two Reaction rows and Checks failed. The Done row and the held
+    // SEEN, two Reaction rows and Checks failed. The read row and the held
     // rows stay out.
     assert_eq!(
         first["title"], "me · 4 new events",
@@ -364,7 +364,7 @@ fn a_dev_ingest_with_accounts_assignees_and_the_new_kinds_is_accepted() {
     daemon.ok(json!({"cmd":"dev_owner_add","account":"me","owner":"example-org","kind":"org","github_id":7}));
     let text = r#"{"cmd":"dev_ingest","account":"me","ingest":{
       "missing_pr_ids":[],
-      "prs":[{"id":"PR_1","owner":"example-org","repo":"app","number":1,"url":"https://github.example/1","title":"Fix","author":"me","base":"main","head":"fix","state":"open","is_draft":false,"review":"none","checks":"failed","base_status":"up_to_date","mergeable":false,"failed_check":"build","changes_requested_by":null,"updated_at":1800000000,"is_private":false,"requested_me":false,"requested_team":true,"assignees":["me"],"links":{"review":"https://github.example/1/r","checks":"https://github.example/1/c","base":"https://github.example/1/b"}}],
+      "prs":[{"id":"PR_1","owner":"example-org","repo":"app","number":1,"url":"https://github.example/1","title":"Fix","author":"me","base":"main","head":"fix","state":"open","is_draft":false,"review":"none","checks":"failed","base_status":"up_to_date","mergeable":false,"failed_check":"build","changes_requested_by":null,"updated_at":1800000000,"created_at":1799990000,"is_private":false,"requested_me":false,"requested_team":true,"assignees":["me"],"links":{"review":"https://github.example/1/r","checks":"https://github.example/1/c","base":"https://github.example/1/b"}}],
       "events":[{"id":"E_1","pr_id":"PR_1","kind":"approved","occurred_at":1800000000,"url":"https://github.example/1#r","actor":"alice","text":null,"comment_id":null},
                 {"id":"E_2","pr_id":"PR_1","kind":"team_review_requested","occurred_at":1800000000,"url":"https://github.example/1","actor":"bob","text":"for core team","comment_id":null},
                 {"id":"E_3","pr_id":"PR_1","kind":"team_mentioned","occurred_at":1800000000,"url":"https://github.example/1#c","actor":"carol","text":"hi","comment_id":"C_3"},
@@ -407,23 +407,29 @@ fn account_changed_goes_out_on_value_and_row_changes_only() {
     let mut cli = daemon.subscribe("cli");
     cli.snapshot();
     daemon.ingest(
-        vec![pr("PR_1", "alice")],
-        vec![event("E_1", "PR_1", "comment", T0 + 1)],
+        vec![with(pr("PR_1", "alice"), json!({"requested_me": true}))],
+        vec![event("E_1", "PR_1", "review_requested", T0 + 1)],
         vec![],
     );
     let event = cli.until(|e| e["event"] == "account_changed");
     assert_eq!(event["account"]["id"], ACCOUNT);
-    assert_eq!(event["account"]["todo_count"], 1);
+    assert_eq!(event["account"]["review_count"], 1);
     assert_eq!(event["account"]["unread"], true);
 
-    // Reads and `seen` change nothing a client shows.
+    // Requests that read change nothing a client shows; opening the
+    // popover clears the dot.
     daemon.ok(json!({"cmd":"list"}));
-    daemon.ok(json!({"cmd":"seen","row_ids":["1001:E_1"]}));
-    // `done` changes a row. It must be the very next event.
-    daemon.ok(json!({"cmd":"done","row":"1001:E_1","on":true}));
+    daemon.ok(json!({"cmd":"activity"}));
+    daemon.ok(json!({"cmd":"open","row":"1001:E_1"}));
+    // `read` changes a row. It must be the very next event.
+    daemon.ok(json!({"cmd":"read","row_ids":["1001:E_1"]}));
     let event = cli.next().unwrap();
     assert_eq!(event["event"], "account_changed");
-    assert_eq!(event["account"]["todo_count"], 0);
+    assert_eq!(
+        event["account"]["review_count"], 1,
+        "reading the request row keeps the PR awaiting review"
+    );
+    assert_eq!(daemon.row("E_1").unwrap()["unread"], false);
     daemon.stop();
 }
 
@@ -465,7 +471,7 @@ fn removing_an_owner_or_an_account_is_an_event_not_a_disconnect() {
 }
 
 #[test]
-fn a_disconnecting_app_ends_the_open_state_and_seen_pending_survives() {
+fn a_disconnecting_app_ends_the_open_state_and_reads_nothing() {
     let (_dir, daemon) = setup();
     daemon.ingest(
         vec![pr("PR_1", "alice")],
@@ -476,7 +482,6 @@ fn a_disconnecting_app_ends_the_open_state_and_seen_pending_survives() {
     app.snapshot();
     daemon.ok(json!({"cmd":"popover_opened","account":"me"}));
     assert_eq!(daemon.account("me")["unread"], false);
-    daemon.ok(json!({"cmd":"seen","row_ids":["1001:E_1"]}));
     app.close();
 
     // The daemon notices the close on its own task, so retry with new rows
@@ -490,7 +495,7 @@ fn a_disconnecting_app_ends_the_open_state_and_seen_pending_survives() {
     }
     assert_eq!(daemon.row("E_1").unwrap()["unread"], true);
     daemon.ok(json!({"cmd":"popover_closed","account":"me"}));
-    assert_eq!(daemon.row("E_1").unwrap()["unread"], false);
+    assert_eq!(daemon.row("E_1").unwrap()["unread"], true);
     daemon.stop();
 }
 
@@ -586,14 +591,17 @@ fn damage_under_a_running_daemon_moves_it_to_the_waiting_state() {
     daemon.ok(json!({"cmd":"dev_account_add","id":ACCOUNT,"login":ME}));
     daemon.ok(json!({"cmd":"dev_owner_add","account":"me","owner":"public","kind":"public"}));
     assert!(daemon.cards().is_empty());
-    let public = with(pr("PR_2", "alice"), json!({"owner":"stranger"}));
+    let public = with(
+        pr("PR_2", "alice"),
+        json!({"owner":"stranger","requested_me":true}),
+    );
     daemon.ingest(
         vec![public],
         vec![event("E_2", "PR_2", "comment", T0 + 1)],
         vec![],
     );
-    assert_eq!(daemon.owner("me", "public")["todo_count"], 1);
-    assert_eq!(daemon.account("me")["todo_count"], 1);
+    assert_eq!(daemon.owner("me", "public")["review_count"], 1);
+    assert_eq!(daemon.account("me")["review_count"], 1);
     daemon.stop();
 }
 
@@ -657,7 +665,17 @@ fn activity_order_and_filters_over_the_socket() {
         ["C", "A", "B", "D"]
     );
     assert_eq!(activity(json!({"filter":"authored"})), ["C"]);
-    assert_eq!(activity(json!({"account":"me","todo":true})), ["A", "B"]);
+    assert_eq!(activity(json!({"account":"me","search":"text b"})), ["B"]);
+    assert_eq!(
+        activity(json!({"search":"ORG/APP#2"})),
+        ["A", "B"],
+        "every row of the PR"
+    );
+    assert_eq!(
+        activity(json!({"search":"alice text"})),
+        ["C", "A", "B", "D"]
+    );
+    assert!(activity(json!({"search":"text nobody"})).is_empty());
     daemon.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#2"}));
     assert_eq!(activity(json!({})), ["C", "D"], "no snoozed PR in Activity");
     assert_eq!(
@@ -679,8 +697,8 @@ fn error_codes_table() {
         vec![],
     );
     let cases = [
-        (json!({"cmd":"done","row":"nope","on":true}), "not_found"),
-        (json!({"cmd":"todo","row":"nope","on":true}), "not_found"),
+        (json!({"cmd":"read","row_ids":["nope"]}), "not_found"),
+        (json!({"cmd":"read_all","account":"nobody"}), "not_found"),
         (
             json!({"cmd":"snooze","account":"me","pr":"a/b#1"}),
             "not_found",
@@ -771,8 +789,9 @@ fn error_codes_table() {
     for (request, code) in cases {
         assert_eq!(daemon.code(request.clone()), code, "{request}");
     }
-    daemon.ok(json!({"cmd":"done","row":"1001:E_1","on":true}));
-    daemon.ok(json!({"cmd":"seen","row_ids":["nope","1001:E_1"]}));
+    daemon.ok(json!({"cmd":"read","row_ids":["1001:E_1"]}));
+    daemon.ok(json!({"cmd":"read","row_ids":[]}));
+    daemon.ok(json!({"cmd":"read_all","account":"ME"}));
     daemon.ok(json!({"cmd":"open","row":"1001:E_1"}));
     daemon.ok(json!({"cmd":"open","account":"ME","row":"1001:E_1"}));
     daemon.ok(json!({"cmd":"status","account":"me","pr":"org/app#1"}));
@@ -977,12 +996,10 @@ fn account_changed_table() {
             },
         ),
         (
-            "popover_closed reads a row",
+            "read reads a row",
+            |_| {},
             |d| {
-                d.ok(json!({"cmd":"seen","row_ids":["1001:E_1"]}));
-            },
-            |d| {
-                d.ok(json!({"cmd":"popover_closed","account":"me"}));
+                d.ok(json!({"cmd":"read","row_ids":["1001:E_1"]}));
             },
         ),
         (
@@ -1013,10 +1030,10 @@ fn account_changed_table() {
             },
         ),
         (
-            "todo by hand",
+            "read_all reads the rows",
             |_| {},
             |d| {
-                d.ok(json!({"cmd":"todo","row":"1001:E_1","on":false}));
+                d.ok(json!({"cmd":"read_all","account":"me"}));
             },
         ),
         (
@@ -1068,7 +1085,7 @@ fn no_account_changed_table() {
         ("opening without a dot", |d| {
             d.ok(json!({"cmd":"popover_opened","account":"me"}));
         }),
-        ("closing with nothing seen", |d| {
+        ("closing with nothing to prune or drop", |d| {
             d.ok(json!({"cmd":"popover_closed","account":"me"}));
         }),
     ];
@@ -1156,5 +1173,28 @@ fn a_changed_setting_goes_to_every_subscriber_once_saved() {
         daemon.ok(json!({"cmd":"config_get","key":"launch_at_login"}))["value"],
         false
     );
+    daemon.stop();
+}
+
+/// DESIGN.md, "When cards appear and disappear": over the socket, a card
+/// the open popover listed stays until `popover_closed`.
+#[test]
+fn a_listed_card_stays_until_popover_closed() {
+    let (_dir, daemon) = setup();
+    daemon.ingest(
+        vec![with(pr("PR_1", "alice"), json!({"state":"merged"}))],
+        vec![event("E_1", "PR_1", "merged", T0 + 1)],
+        vec![],
+    );
+    daemon.ok(json!({"cmd":"popover_opened","account":"me"}));
+    let listed = daemon.ok(json!({"cmd":"list","account":"me"}));
+    assert_eq!(listed["cards"].as_array().unwrap().len(), 1);
+    daemon.ok(json!({"cmd":"read","row_ids":["1001:E_1"]}));
+    let card = daemon.card("PR_1").expect("held while open");
+    assert_eq!(card["rows"][0]["unread"], false);
+    assert_eq!(daemon.owner("me", "org")["pr_count"], 1);
+    daemon.ok(json!({"cmd":"popover_closed","account":"me"}));
+    assert!(daemon.card("PR_1").is_none(), "gone once closed");
+    assert_eq!(daemon.owner("me", "org")["pr_count"], 0);
     daemon.stop();
 }

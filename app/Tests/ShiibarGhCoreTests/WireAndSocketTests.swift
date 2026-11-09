@@ -7,12 +7,12 @@ final class WireTests: XCTestCase {
     {"id":"3407303","login":"me","color":"teal","token":{"registered":true,"expires_at":1800086400,
      "last_test":{"at":1799990000,"results":[{"item":"account","label":"Account","owner":null,"outcome":"ok","text":"me","url":null},
        {"item":"later","label":"New","owner":null,"outcome":"maybe","text":"?","url":null}]}},
-     "updated_at":1800000000,"todo_count":3,"unread":true,"later":1,
+     "updated_at":1800000000,"review_count":3,"unread":true,"later":1,
      "warnings":[{"kind":"token_expiring","account":"3407303","owner":null,"message":"Token expires in 1 day","until":1800086400,"url":null},
                  {"kind":"something_new","account":"3407303","owner":null,"message":"x","until":null,"url":null}],
      "rate_limit":{"graphql":{"used":1240,"limit":5000,"reset_at":1800003600},"rest":null},
      "owners":[{"id":"o2","name":"example-org","kind":"enterprise","github_id":21955855,"enabled":true,"notify":true,
-                "skip_drafts":false,"todo_count":2,"pr_count":4}]}
+                "skip_drafts":false,"review_count":2,"pr_count":4}]}
     """
 
     func testASnapshotKeepsUnknownValuesAndIgnoresUnknownFields() throws {
@@ -24,7 +24,8 @@ final class WireTests: XCTestCase {
         let account = try XCTUnwrap(accounts.first)
         XCTAssertEqual(account.color, .unknown("teal"))
         XCTAssertEqual(account.accountColor, .none, "an unknown color draws as None")
-        XCTAssertEqual(account.todoCount, 3)
+        XCTAssertEqual(account.reviewCount, 3)
+        XCTAssertEqual(account.owners.first?.reviewCount, 2)
         XCTAssertEqual(account.rateLimit?.graphql, Limit(used: 1240, limit: 5000, resetAt: 1_800_003_600))
         XCTAssertNil(account.rateLimit?.rest)
         XCTAssertEqual(account.token.lastTest?.results[1].item, .unknown("later"))
@@ -47,7 +48,7 @@ final class WireTests: XCTestCase {
             try decoder.decode(SubscribeEvent.self, from: Data(#"{"event":"keychain_changed","keychain":"unreadable"}"#.utf8)),
             .keychainChanged(.known(.unreadable))
         )
-        let public_ = try decoder.decode(Owner.self, from: Data(#"{"id":"o9","name":"public","kind":"public","github_id":null,"enabled":true,"notify":true,"skip_drafts":true,"todo_count":0,"pr_count":0}"#.utf8))
+        let public_ = try decoder.decode(Owner.self, from: Data(#"{"id":"o9","name":"public","kind":"public","github_id":null,"enabled":true,"notify":true,"skip_drafts":true,"review_count":0,"pr_count":0}"#.utf8))
         XCTAssertTrue(public_.isPublic)
         XCTAssertEqual(public_.displayName, "Public")
         XCTAssertEqual(public_.argument, "public")
@@ -63,11 +64,11 @@ final class WireTests: XCTestCase {
         let line = """
         {"id":"3407303:PR_1","pr":"org/app#1","account":"3407303","owner":"o2","title":"T","url":"u","author":"alice",
          "author_avatar_url":"https://avatars.example/a?s=32","authored_by_me":false,"assigned_to_me":true,
-         "review_requested":true,"state_label":"mergeable",
+         "review_requested":true,"awaiting_review":true,"state_label":"mergeable",
          "review":"approved","checks":"in_progress","base_status":"behind","base":"main","head":"x",
-         "snoozed":true,"snoozed_until":1800000000,"added_at":null,"links":{"review":"r","checks":"c","base":"b"},
+         "snoozed":true,"snoozed_until":1800000000,"added_at":null,"created_at":null,"updated_at":1799990000,"links":{"review":"r","checks":"c","base":"b"},
          "rows":[{"id":"3407303:E_1","pr":"org/app#1","pr_title":"T","account":"3407303","owner":"o2","kind":"team_mentioned",
-                  "todo":true,"done":false,"text":"hi","counts":{"THUMBS_UP":3},"actor":null,"url":"u","occurred_at":5,"unread":true}]}
+                  "text":"hi","counts":{"THUMBS_UP":3},"actor":null,"url":"u","occurred_at":5,"unread":true}]}
         """
         let card = try JSONDecoder().decode(Card.self, from: Data(line.utf8))
         XCTAssertEqual(card.authorAvatarUrl, "https://avatars.example/a?s=32")
@@ -77,9 +78,12 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(card.owner, "o2")
         XCTAssertEqual(card.checks, .known(.inProgress))
         XCTAssertEqual(card.rows[0].kind, .known(.teamMentioned))
-        XCTAssertTrue(card.rows[0].todo)
-        XCTAssertTrue(card.hasOpenTodo)
+        XCTAssertTrue(card.rows[0].unread)
+        XCTAssertTrue(card.hasUnread)
+        XCTAssertTrue(card.awaitingReview)
         XCTAssertNil(card.addedAt)
+        XCTAssertNil(card.createdAt, "null right after the move from 0.2")
+        XCTAssertEqual(card.updatedAt, 1_799_990_000)
     }
 
     func testANotificationDecodes() throws {
@@ -96,8 +100,8 @@ final class WireTests: XCTestCase {
     }
 
     func testTablesAndExclusionsDecode() throws {
-        let events = try JSONDecoder().decode(EventsResponse.self, from: Data(#"{"ok":true,"events":{"review_requested":{"list":true,"todo":false,"notify":true}}}"#.utf8))
-        XCTAssertEqual(events.events["review_requested"], EventCell(list: true, todo: false, notify: true))
+        let events = try JSONDecoder().decode(EventsResponse.self, from: Data(#"{"ok":true,"events":{"review_requested":{"list":true,"notify":false}}}"#.utf8))
+        XCTAssertEqual(events.events["review_requested"], EventCell(list: true, notify: false))
         let list = try JSONDecoder().decode(ExclusionsResponse.self, from: Data(#"{"ok":true,"exclusions":{"repos":[{"name":"o/r","state":"hidden"}],"users":[{"name":"bot","state":"list_only"}]}}"#.utf8))
         XCTAssertEqual(list.exclusions.list(.repo), [Exclusion(name: "o/r", state: .hidden)])
         XCTAssertEqual(list.exclusions.list(.user), [Exclusion(name: "bot", state: .listOnly)])
@@ -140,10 +144,10 @@ final class SocketClientTests: XCTestCase {
             return #"{"ok":false,"code":"keychain_unavailable","error":"Couldn't read tokens from Keychain"}"#
         }
         let api = SocketDaemonAPI(socketPath: fake.path)
-        let cards = try await api.list(ListQuery(account: "me", todo: true, filter: .reviewRequested, snoozed: true))
+        let cards = try await api.list(ListQuery(account: "me", snoozed: true))
         XCTAssertEqual(cards, [])
         do {
-            try await api.done("x", on: true)
+            try await api.read(["x"])
             XCTFail("expected an error")
         } catch let error as DaemonError {
             XCTAssertEqual(error.code, .known(.keychainUnavailable))
@@ -153,10 +157,25 @@ final class SocketClientTests: XCTestCase {
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(list.utf8)) as? [String: Any])
         XCTAssertEqual(object["cmd"] as? String, "list")
         XCTAssertEqual(object["account"] as? String, "me")
-        XCTAssertEqual(object["filter"] as? String, "review_requested")
-        XCTAssertEqual(object["todo"] as? Bool, true)
         XCTAssertEqual(object["snoozed"] as? Bool, true)
+        XCTAssertNil(object["filter"], "the app filters by itself")
+        XCTAssertNil(object["search"])
+        XCTAssertNil(object["todo"])
         XCTAssertNil(object["owner"])
+        let read = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(fake.requests[1].utf8)) as? [String: Any])
+        XCTAssertEqual(read["cmd"] as? String, "read")
+        XCTAssertEqual(read["row_ids"] as? [String], ["x"])
+    }
+
+    func testTheAppAsksForListsWithTheAccountOnly() throws {
+        func object(_ fields: [String: Any]) -> [String: String] {
+            fields.mapValues { "\($0)" }
+        }
+        XCTAssertEqual(object(ListQuery(account: "me").fields), ["cmd": "list", "account": "me"])
+        XCTAssertEqual(object(ActivityQuery(account: "me").fields), ["cmd": "activity", "account": "me"])
+        let cli = ListQuery(account: "me", filter: .authored, search: "api #407").fields
+        XCTAssertEqual(cli["search"] as? String, "api #407")
+        XCTAssertEqual(cli["filter"] as? String, "authored")
     }
 
     func testAMissingDaemonIsAnErrorWithoutACode() async {
@@ -173,7 +192,7 @@ final class SocketClientTests: XCTestCase {
 
     func testTheSubscriptionReadsALongSnapshotSentInPiecesAndSkipsUnknownEvents() {
         func account(_ n: Int, _ color: String) -> String {
-            #"{"id":"\#(5000 + n)","login":"a\#(n)","color":"\#(color)","token":{"registered":true,"expires_at":null,"last_test":null},"updated_at":null,"todo_count":0,"unread":false,"warnings":[],"rate_limit":null,"owners":[]}"#
+            #"{"id":"\#(5000 + n)","login":"a\#(n)","color":"\#(color)","token":{"registered":true,"expires_at":null,"last_test":null},"updated_at":null,"review_count":0,"unread":false,"warnings":[],"rate_limit":null,"owners":[]}"#
         }
         let accounts = (0..<200).map { account($0, "none") }
         fake.greeting = [

@@ -22,7 +22,7 @@ pub fn collapse_whitespace(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Rows kept per PR among read rows and done rows.
+/// Read rows kept per PR.
 const KEEP_ROWS: usize = 3;
 
 /// `ReactionContent` values in display order, with their emoji.
@@ -57,8 +57,8 @@ fn not_found(what: impl std::fmt::Display) -> CmdError {
 pub struct ListArgs {
     pub account: Option<String>,
     pub owner: Option<String>,
-    pub todo: bool,
     pub filter: PrFilter,
+    pub search: Option<String>,
     pub snoozed: bool,
 }
 
@@ -67,8 +67,8 @@ pub struct ListArgs {
 pub struct ActivityArgs {
     pub account: Option<String>,
     pub owners: Vec<String>,
-    pub todo: bool,
     pub filter: PrFilter,
+    pub search: Option<String>,
 }
 
 pub struct Engine {
@@ -77,6 +77,10 @@ pub struct Engine {
     rows_by_pr: HashMap<String, Vec<String>>,
     /// Accounts with an open popover or window. Never saved.
     open: BTreeSet<String>,
+    /// Per account with an open popover, the PRs a `list` answer held since
+    /// it opened: they stay in `list` until it closes. Never saved.
+    /// DESIGN.md, "When cards appear and disappear".
+    held: BTreeMap<String, BTreeSet<String>>,
     /// Rows with a notification written to a connection but not confirmed.
     in_flight: BTreeSet<String>,
     /// Rows made since the last hand-over that want an individual notification.
@@ -89,17 +93,28 @@ pub struct Engine {
     clock: Now,
     /// What the daemon could make of the Keychain item.
     keychain: proto::KeychainState,
-    /// `fetch_failed` of each account's last run: message and retry time.
-    failures: BTreeMap<String, (String, i64)>,
+    /// Failed runs in a row of each account and when the first of them
+    /// ended. Never saved: a restart forgets it.
+    failures: BTreeMap<String, Failures>,
     /// When each kind of fetch is due next, per account. Never saved.
     timers: BTreeMap<String, Timers>,
 }
 
-/// When each kind of fetch of one account is due next, in epoch seconds.
-/// The status fetch is timed per owner.
+/// DESIGN.md, "Fetch success and failure": the account's failed runs since
+/// its last success, and the end of the first of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Failures {
+    pub count: u32,
+    pub first_at: i64,
+}
+
+/// When each kind of fetch of one account may run next, in epoch seconds.
+/// `run` is the account run (every owner's search and status, and the
+/// notifications check); `notifications` is the earliest check
+/// `X-Poll-Interval` allows; `reactions` keeps its own interval.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Timers {
-    pub status: BTreeMap<String, i64>,
+    pub run: i64,
     pub reactions: i64,
     pub notifications: i64,
 }
@@ -156,6 +171,7 @@ impl Engine {
             dirty: Dirty::default(),
             rows_by_pr,
             open: BTreeSet::new(),
+            held: BTreeMap::new(),
             in_flight: BTreeSet::new(),
             fresh: Vec::new(),
             released: Vec::new(),
@@ -191,8 +207,13 @@ impl Engine {
         self.keychain
     }
 
+    /// An unreadable Keychain stops every fetch: the failures counted so far
+    /// are forgotten (DESIGN.md, "Fetch success and failure").
     pub fn set_keychain_state(&mut self, state: proto::KeychainState) {
         self.keychain = state;
+        if state != proto::KeychainState::Ok {
+            self.failures.clear();
+        }
     }
 
     pub fn row_record(&self, id: &str) -> Option<&RowRec> {
@@ -392,12 +413,13 @@ impl Engine {
         self.repo_exclusion(pr, owner) == Some(ExclusionState::Hidden)
     }
 
-    // ---------------------------------------------------------------- Todo
+    // ------------------------------------------------------ awaiting review
 
-    /// The newest shown Review requested row of a PR, of either kind.
-    fn latest_review_request(&self, pr: &PrRec, owner: &OwnerRec) -> Option<&RowRec> {
+    /// The newest row of a review request kind, recorded-only and pruned
+    /// rows included.
+    fn latest_request_row(&self, pr: &PrRec, kind: RowKind) -> Option<&RowRec> {
         self.rows_of(&pr.key)
-            .filter(|r| r.kind.is_review_request() && self.row_shown_unpruned(r, pr, owner))
+            .filter(|r| r.kind == kind)
             .min_by(|a, b| {
                 b.occurred_at
                     .cmp(&a.occurred_at)
@@ -405,53 +427,53 @@ impl Engine {
             })
     }
 
-    /// Like [`Self::row_shown`] without the pruning: a pruned request row is
-    /// still the latest one.
-    fn row_shown_unpruned(&self, row: &RowRec, pr: &PrRec, owner: &OwnerRec) -> bool {
-        owner.events.cell(row.kind.event()).list
-            && self.exclusion(row, pr, owner) != Some(ExclusionState::Hidden)
-    }
-
-    /// DESIGN.md, "Review requested rows": whether a Review requested row
-    /// is still something to do.
-    fn still_requested(&self, row: &RowRec, pr: &PrRec, owner: &OwnerRec) -> bool {
-        pr.state == PrState::Open
-            && (pr.requested_me
-                || (pr.requested_team && owner.events.cell(EventKind::TeamReviewRequested).todo))
-            && self
-                .latest_review_request(pr, owner)
-                .is_some_and(|latest| latest.id == row.id)
-    }
-
-    /// DESIGN.md, "Row state transitions": the hand value when set, else the
-    /// table's value. Review requested rows follow the table as it is now
-    /// and count only while still requested.
-    fn row_todo(&self, row: &RowRec, pr: &PrRec, owner: &OwnerRec) -> bool {
-        let rr = row.kind.is_review_request();
-        let base = match row.todo_manual {
-            Some(value) => value,
-            None if rr => {
-                owner.events.cell(row.kind.event()).todo && self.exclusion(row, pr, owner).is_none()
+    /// DESIGN.md, "Awaiting review": one request (to the account, or to its
+    /// team) counts unless the account reviewed after the newest request, or
+    /// the user who asked is Hidden or List only in the Exclusions. Without a
+    /// request row, any review of the account settles it, and an unknown
+    /// requester counts.
+    fn request_counts(&self, pr: &PrRec, owner: &OwnerRec, kind: RowKind) -> bool {
+        match self.latest_request_row(pr, kind) {
+            Some(row) => {
+                pr.my_review_at.is_none_or(|at| at <= row.occurred_at)
+                    && self.user_exclusion(row, owner).is_none()
             }
-            None => row.todo_auto,
-        };
-        base && (!rr || self.still_requested(row, pr, owner))
+            None => pr.my_review_at.is_none(),
+        }
     }
 
-    /// Unread, or Todo and not done, among the rows shown.
-    fn has_business(&self, pr: &PrRec, owner: &OwnerRec) -> bool {
-        self.rows_of(&pr.key).any(|row| {
-            self.row_shown(row, pr, owner)
-                && (row.unread || (!row.done && self.row_todo(row, pr, owner)))
-        })
+    /// DESIGN.md, "Awaiting review": an open, readable, unsnoozed PR outside
+    /// a Hidden repository, with a review still requested from the account,
+    /// or from its team while the team kind's List is on, that counts.
+    pub fn awaiting_review(&self, pr: &PrRec, owner: &OwnerRec) -> bool {
+        !pr.snoozed && self.awaiting_but_for_snooze(pr, owner)
     }
 
-    /// DESIGN.md, "When cards appear and disappear", without the Snooze rule.
+    /// [`Self::awaiting_review`] without the Snooze rule: a snoozed PR the
+    /// Snoozed section shows for this reason.
+    fn awaiting_but_for_snooze(&self, pr: &PrRec, owner: &OwnerRec) -> bool {
+        if pr.state != PrState::Open || pr.unreadable || self.repo_hidden(pr, owner) {
+            return false;
+        }
+        (pr.requested_me && self.request_counts(pr, owner, RowKind::ReviewRequested))
+            || (pr.requested_team
+                && owner.events.cell(EventKind::TeamReviewRequested).list
+                && self.request_counts(pr, owner, RowKind::TeamReviewRequested))
+    }
+
+    /// An unread row among the rows shown.
+    fn has_unread(&self, pr: &PrRec, owner: &OwnerRec) -> bool {
+        self.rows_of(&pr.key)
+            .any(|row| row.unread && self.row_shown(row, pr, owner))
+    }
+
+    /// DESIGN.md, "When cards appear and disappear", without the Snooze rule
+    /// and without the cards held while the popover is open.
     fn would_show(&self, pr: &PrRec, owner: &OwnerRec, now: i64) -> bool {
         if pr.unreadable || self.repo_hidden(pr, owner) {
             return false;
         }
-        if self.has_business(pr, owner) {
+        if self.has_unread(pr, owner) || self.awaiting_review(pr, owner) {
             return true;
         }
         if pr.state != PrState::Open {
@@ -467,24 +489,33 @@ impl Engine {
         now.saturating_sub(pr.updated_at) <= limit
     }
 
+    /// A `list` answer of the open popover had the card.
+    fn is_held(&self, pr: &PrRec) -> bool {
+        self.held
+            .get(&pr.account)
+            .is_some_and(|keys| keys.contains(&pr.key))
+    }
+
+    /// DESIGN.md, "Card states": unreadable PRs and Hidden repositories never
+    /// show; otherwise a card shows when it qualifies, or when the open
+    /// popover already showed it (it leaves when the popover closes).
+    fn shows_unsnoozed(&self, pr: &PrRec, owner: &OwnerRec, now: i64) -> bool {
+        !pr.unreadable
+            && !self.repo_hidden(pr, owner)
+            && (self.would_show(pr, owner, now) || self.is_held(pr))
+    }
+
+    /// DESIGN.md, "Watching": the card is on screen. A held card is, and so
+    /// is every snoozed PR: the Snoozed section shows it.
+    fn on_screen(&self, pr: &PrRec, owner: &OwnerRec, now: i64) -> bool {
+        self.shows(pr, owner, now)
+    }
+
     /// The card of an unsnoozed PR shows, or a snoozed one would.
     fn shows(&self, pr: &PrRec, owner: &OwnerRec, now: i64) -> bool {
         !pr.unreadable
             && !self.repo_hidden(pr, owner)
-            && (pr.snoozed || self.would_show(pr, owner, now))
-    }
-
-    fn has_open_todo(&self, pr: &PrRec, owner: &OwnerRec) -> bool {
-        self.rows_of(&pr.key)
-            .any(|row| self.row_shown(row, pr, owner) && !row.done && self.row_todo(row, pr, owner))
-    }
-
-    /// DESIGN.md, "Todo definition": not snoozed, with an open Todo row.
-    fn pr_todo(&self, pr: &PrRec, owner: &OwnerRec) -> bool {
-        !pr.snoozed
-            && !pr.unreadable
-            && !self.repo_hidden(pr, owner)
-            && self.has_open_todo(pr, owner)
+            && (pr.snoozed || self.shows_unsnoozed(pr, owner, now))
     }
 
     // ------------------------------------------------------------ wire
@@ -497,8 +528,6 @@ impl Engine {
             account: pr.account.clone(),
             owner: owner.id.clone(),
             kind: Lenient::Known(row.kind.into()),
-            todo: self.row_todo(row, pr, owner),
-            done: row.done,
             text: row.text.clone(),
             counts: row.counts.clone(),
             actor: row.actor.clone(),
@@ -539,6 +568,7 @@ impl Engine {
             authored_by_me: self.authored_by_me(pr),
             assigned_to_me: self.assigned_to_me(pr),
             review_requested: self.review_requested(pr, owner),
+            awaiting_review: self.awaiting_review(pr, owner),
             state_label: Lenient::Known(label),
             review: Lenient::Known(pr.review.into()),
             checks: Lenient::Known(pr.checks.into()),
@@ -548,6 +578,8 @@ impl Engine {
             snoozed: pr.snoozed,
             snoozed_until: pr.snoozed.then(|| now.next_return_at(return_time)),
             added_at: pr.added_at,
+            created_at: pr.created_at,
+            updated_at: pr.updated_at,
             links: proto::Links {
                 review: pr.link_review.clone(),
                 checks: pr.link_checks.clone(),
@@ -591,12 +623,13 @@ impl Engine {
         Ok(out)
     }
 
-    /// The PRs a `list` or `activity` covers, in section order.
+    /// The PRs a `list` or `activity` covers. DESIGN.md, "CLI": owner order
+    /// (accounts in registration order), and within an owner open PRs first,
+    /// then the newest `updatedAt` first (`Recently updated`).
     fn matching(
         &self,
         accounts: &[String],
         owners: Option<&BTreeSet<String>>,
-        todo: bool,
         filter: PrFilter,
         snoozed: bool,
         now: i64,
@@ -616,42 +649,56 @@ impl Engine {
             {
                 continue;
             }
-            // A snoozed PR is never a Todo PR; in the Snoozed section the
-            // Todo filter keeps the PRs with an open Todo row.
-            if todo && !self.has_open_todo(pr, owner) {
-                continue;
-            }
             out.push((pr, owner));
         }
         let account_seq = |id: &str| self.data.accounts.get(id).map_or(0, |a| a.seq);
         out.sort_by(|(a, ao), (b, bo)| {
             (account_seq(&a.account), ao.is_public(), ao.seq)
                 .cmp(&(account_seq(&b.account), bo.is_public(), bo.seq))
-                .then_with(|| b.added_at.cmp(&a.added_at))
+                .then_with(|| (a.state != PrState::Open).cmp(&(b.state != PrState::Open)))
+                .then_with(|| b.updated_at.cmp(&a.updated_at))
                 .then_with(|| a.key.cmp(&b.key))
         });
         out
     }
 
-    pub fn list(&self, args: &ListArgs, now: &Now) -> Result<Vec<proto::Card>> {
+    /// `list`. While the account's popover is open, every card of the
+    /// answer is held until it closes.
+    pub fn list(&mut self, args: &ListArgs, now: &Now) -> Result<Vec<proto::Card>> {
+        let cards = self.list_view(args, now)?;
+        for card in &cards {
+            if self.open.contains(&card.account) {
+                self.held
+                    .entry(card.account.clone())
+                    .or_default()
+                    .insert(card.id.clone());
+            }
+        }
+        Ok(cards)
+    }
+
+    /// What `list` answers, without holding anything.
+    pub fn list_view(&self, args: &ListArgs, now: &Now) -> Result<Vec<proto::Card>> {
         let accounts = self.accounts_named(args.account.as_deref())?;
         let owners = args
             .owner
             .as_ref()
             .map(|o| self.owners_named(&accounts, std::slice::from_ref(o)))
             .transpose()?;
-        Ok(self
+        let words = search_words(args.search.as_deref());
+        let cards: Vec<proto::Card> = self
             .matching(
                 &accounts,
                 owners.as_ref(),
-                args.todo,
                 args.filter,
                 args.snoozed,
                 now.at,
             )
             .into_iter()
             .map(|(pr, owner)| self.wire_card(pr, owner, now))
-            .collect())
+            .filter(|card| card_matches(card, &words))
+            .collect();
+        Ok(cards)
     }
 
     pub fn activity(&self, args: &ActivityArgs, now: &Now) -> Result<Vec<proto::Row>> {
@@ -659,18 +706,16 @@ impl Engine {
         let owners = (!args.owners.is_empty())
             .then(|| self.owners_named(&accounts, &args.owners))
             .transpose()?;
-        let mut rows: Vec<proto::Row> = self
-            .matching(
-                &accounts,
-                owners.as_ref(),
-                args.todo,
-                args.filter,
-                false,
-                now.at,
-            )
-            .into_iter()
-            .flat_map(|(pr, owner)| self.wire_rows(pr, owner))
-            .collect();
+        let words = search_words(args.search.as_deref());
+        let mut rows: Vec<proto::Row> = Vec::new();
+        for (pr, owner) in self.matching(&accounts, owners.as_ref(), args.filter, false, now.at) {
+            let fields = pr_fields(pr);
+            rows.extend(
+                self.wire_rows(pr, owner)
+                    .into_iter()
+                    .filter(|row| row_matches(&fields, row, &words)),
+            );
+        }
         sort_rows(&mut rows);
         Ok(rows)
     }
@@ -731,7 +776,7 @@ impl Engine {
             let mut cards = Vec::new();
             for snoozed in [false, true] {
                 cards.extend(
-                    self.matching(&ids, None, false, PrFilter::All, snoozed, now.at)
+                    self.matching(&ids, None, PrFilter::All, snoozed, now.at)
                         .into_iter()
                         .map(|(pr, owner)| self.wire_card(pr, owner, now)),
                 );
@@ -815,8 +860,6 @@ impl Engine {
         let key = join_key(account, &p.id);
         let existing = self.data.prs.get(&key);
         let prev = existing.and_then(|pr| pr.prev);
-        let reopened =
-            p.state == proto::PrState::Open && existing.is_some_and(|pr| pr.state != PrState::Open);
         let readable_again = existing.is_some_and(|pr| pr.unreadable);
         let record = PrRec {
             key: key.clone(),
@@ -839,6 +882,8 @@ impl Engine {
             failed_check: p.failed_check,
             changes_requested_by: p.changes_requested_by,
             updated_at: p.updated_at,
+            created_at: Some(p.created_at),
+            my_review_at: p.my_review_at,
             is_private: p.is_private,
             requested_me: p.requested_me,
             requested_team: p.requested_team,
@@ -861,9 +906,6 @@ impl Engine {
         };
         self.dirty.prs.insert(key.clone());
         self.data.prs.insert(key.clone(), record);
-        if reopened {
-            self.restore_review_request(&key);
-        }
         if readable_again && !self.data.prs[&key].snoozed {
             self.raise_dot_for_unread(&key);
         }
@@ -873,24 +915,6 @@ impl Engine {
                 false
             }
             None => true,
-        }
-    }
-
-    /// DESIGN.md, "Review requested rows": reopening returns the row to
-    /// Todo, even from the pruned rows.
-    fn restore_review_request(&mut self, key: &str) {
-        let Some(pr) = self.data.prs.get(key) else {
-            return;
-        };
-        let Some(owner) = self.owner_of(pr) else {
-            return;
-        };
-        let restored = self
-            .latest_review_request(pr, owner)
-            .filter(|latest| latest.pruned && self.row_todo(latest, pr, owner))
-            .map(|latest| latest.id.clone());
-        if let Some(row) = restored.and_then(|id| self.row_mut(&id)) {
-            row.pruned = false;
         }
     }
 
@@ -1047,9 +1071,9 @@ impl Engine {
         Some(owner_id)
     }
 
-    /// DESIGN.md, "Applying the table" and "Notification decisions": List,
-    /// Todo and Notify of the owner's table, the Exclusions and Skip draft
-    /// pull requests decide the row when it is made. The same event never
+    /// DESIGN.md, "Applying the table" and "Notification decisions": List
+    /// and Notify of the owner's table, the Exclusions and Skip draft pull
+    /// requests decide the row when it is made. The same event never
     /// makes a second row.
     fn add_row(&mut self, mut row: RowRec, silent: bool) {
         if self.data.rows.contains_key(&row.id) {
@@ -1063,11 +1087,10 @@ impl Engine {
         };
         let cell = owner.events.cell(row.kind.event());
         let exclusion = self.exclusion(&row, pr, owner);
-        // Recorded while List is off or the row is Hidden: read, no Todo,
-        // no notification.
+        // Recorded while List is off or the row is Hidden: read, no
+        // notification.
         let quiet = !cell.list || exclusion == Some(ExclusionState::Hidden);
         row.unread = !quiet;
-        row.todo_auto = !quiet && cell.todo && exclusion.is_none();
         let notifies = !silent
             && !quiet
             && exclusion.is_none()
@@ -1125,14 +1148,56 @@ impl Engine {
 
     // ------------------------------------------------------- row commands
 
-    pub fn seen(&mut self, row_ids: &[String]) {
+    /// `read`: unread falls on the given rows. An unknown id changes
+    /// nothing and is `not_found`. DESIGN.md, "Row state transitions".
+    pub fn read(&mut self, row_ids: &[String]) -> Result<()> {
+        if let Some(id) = row_ids.iter().find(|id| !self.data.rows.contains_key(*id)) {
+            return Err(not_found(format!("row {id}")));
+        }
         for id in row_ids {
-            if self.data.rows.contains_key(id)
-                && let Some(row) = self.row_mut(id)
-            {
-                row.seen_pending = true;
+            self.mark_read(id);
+        }
+        Ok(())
+    }
+
+    /// Unread falls, and a notification not handed over yet is cleared:
+    /// a read row is neither notified later nor counted in a summary.
+    fn mark_read(&mut self, id: &str) {
+        let Some(row) = self.data.rows.get(id) else {
+            return;
+        };
+        let waiting = matches!(
+            row.notify,
+            NotifyState::Pending | NotifyState::Held | NotifyState::HeldUndelivered
+        ) && !self.in_flight.contains(id);
+        if !row.unread && !waiting {
+            return;
+        }
+        if let Some(row) = self.row_mut(id) {
+            row.unread = false;
+            if waiting {
+                row.notify = NotifyState::None;
             }
         }
+    }
+
+    /// `read_all`: unread falls on every row of the account except those of
+    /// snoozed PRs, rows the list does not show included.
+    pub fn read_all(&mut self, account: &str) -> Result<()> {
+        let id = self.account_id(account)?;
+        let rows: Vec<String> = self
+            .data
+            .rows
+            .values()
+            .filter(|row| {
+                row.account == id && !self.data.prs.get(&row.pr).is_some_and(|pr| pr.snoozed)
+            })
+            .map(|row| row.id.clone())
+            .collect();
+        for row in rows {
+            self.mark_read(&row);
+        }
+        Ok(())
     }
 
     pub fn popover_opened(&mut self, account: &str) -> Result<()> {
@@ -1144,9 +1209,12 @@ impl Engine {
         Ok(())
     }
 
+    /// The popover closed: the cards it held go, and the read rows are
+    /// pruned. Unread stays as it is.
     pub fn popover_closed(&mut self, account: &str) -> Result<()> {
         let id = self.account_id(account)?;
         self.open.remove(&id);
+        self.held.remove(&id);
         let prs: Vec<String> = self
             .data
             .prs
@@ -1160,20 +1228,9 @@ impl Engine {
         Ok(())
     }
 
-    /// Unread falls on rows that were shown, then the rows of the PR are
-    /// pruned. DESIGN.md, "How many rows are kept".
+    /// The read rows of the PR beyond the newest three are pruned.
+    /// DESIGN.md, "How many rows are kept".
     fn close_rows(&mut self, key: &str) {
-        let shown: Vec<String> = self
-            .rows_of(key)
-            .filter(|row| row.seen_pending)
-            .map(|row| row.id.clone())
-            .collect();
-        for id in shown {
-            if let Some(row) = self.row_mut(&id) {
-                row.seen_pending = false;
-                row.unread = false;
-            }
-        }
         let Some(pr) = self.data.prs.get(key) else {
             return;
         };
@@ -1182,11 +1239,7 @@ impl Engine {
         };
         let mut candidates: Vec<&RowRec> = self
             .rows_of(key)
-            .filter(|row| {
-                self.row_shown(row, pr, owner)
-                    && !row.unread
-                    && (row.done || !self.row_todo(row, pr, owner))
-            })
+            .filter(|row| self.row_shown(row, pr, owner) && !row.unread)
             .collect();
         candidates.sort_by(|a, b| {
             b.occurred_at
@@ -1209,29 +1262,7 @@ impl Engine {
     /// open state ends without counting as `popover_closed`.
     pub fn app_disconnected(&mut self) {
         self.open.clear();
-    }
-
-    /// `done`: only a Todo row changes. DESIGN.md, "Row state transitions".
-    pub fn done(&mut self, id: &str, on: bool) -> Result<()> {
-        let (row, pr, owner) = self.usable_row(id)?;
-        if self.row_todo(row, pr, owner)
-            && let Some(row) = self.row_mut(id)
-        {
-            row.done = on;
-        }
-        Ok(())
-    }
-
-    /// `todo`: the hand value of a row that is not done.
-    pub fn todo(&mut self, id: &str, on: bool, now: &Now) -> Result<()> {
-        let (row, _, _) = self.usable_row(id)?;
-        if !row.done
-            && let Some(row) = self.row_mut(id)
-        {
-            row.todo_manual = Some(on);
-        }
-        self.settle(now);
-        Ok(())
+        self.held.clear();
     }
 
     pub fn snooze(&mut self, account: &str, key: &str, now: &Now) -> Result<()> {
@@ -1239,7 +1270,7 @@ impl Engine {
         let pr = self.usable_pr(account, key)?;
         let shows = self
             .enabled_owner_of(pr)
-            .is_some_and(|owner| self.would_show(pr, owner, now.at));
+            .is_some_and(|owner| self.shows_unsnoozed(pr, owner, now.at));
         if !shows {
             return Err(not_found(format!("no card for PR {key}")));
         }
@@ -1333,24 +1364,18 @@ impl Engine {
             .collect();
         for key in snoozed {
             self.end_snooze(&key);
-            let held: Vec<(String, bool)> = self
+            let held: Vec<String> = self
                 .rows_of(&key)
                 .filter(|row| {
                     matches!(row.notify, NotifyState::Held | NotifyState::HeldUndelivered)
                 })
-                .map(|row| (row.id.clone(), row.done))
+                .map(|row| row.id.clone())
                 .collect();
-            for (id, done) in held {
+            for id in held {
                 if let Some(row) = self.row_mut(&id) {
-                    row.notify = if done {
-                        NotifyState::None
-                    } else {
-                        NotifyState::Pending
-                    };
+                    row.notify = NotifyState::Pending;
                 }
-                if !done {
-                    self.released.push(id);
-                }
+                self.released.push(id);
             }
         }
     }
@@ -1481,15 +1506,15 @@ impl Engine {
     /// What an app gets when it connects: undelivered rows, grouped like any
     /// delivery (DESIGN.md, "Notification decisions").
     pub fn pending_summaries(&mut self, now: &Now) -> Vec<proto::Notification> {
-        let pending: Vec<(String, String, bool)> = self
+        let pending: Vec<(String, String)> = self
             .data
             .rows
             .values()
             .filter(|row| row.notify == NotifyState::Pending)
-            .map(|row| (row.id.clone(), row.pr.clone(), row.done))
+            .map(|row| (row.id.clone(), row.pr.clone()))
             .collect();
         let mut rows = Vec::new();
-        for (id, pr, done) in pending {
+        for (id, pr) in pending {
             if self.in_flight.contains(&id) {
                 continue;
             }
@@ -1497,10 +1522,6 @@ impl Engine {
             if snoozed {
                 if let Some(row) = self.row_mut(&id) {
                     row.notify = NotifyState::HeldUndelivered;
-                }
-            } else if done {
-                if let Some(row) = self.row_mut(&id) {
-                    row.notify = NotifyState::None;
                 }
             } else {
                 rows.push(id);
@@ -1680,13 +1701,83 @@ fn row_defaults() -> RowRec {
         occurred_at: 0,
         comment_id: None,
         unread: true,
-        seen_pending: false,
-        done: false,
         pruned: false,
         notify: NotifyState::None,
-        todo_auto: false,
-        todo_manual: None,
     }
+}
+
+/// DESIGN.md, "What the filters mean": the search text split at white
+/// space, each word lowercased. No words means no search.
+pub fn search_words(search: Option<&str>) -> Vec<String> {
+    search
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(str::to_lowercase)
+        .collect()
+}
+
+/// The PR's own fields a search word may match: the title,
+/// `owner/repo#number`, the author's login and the base and head branches,
+/// lowercased.
+fn pr_fields(pr: &PrRec) -> Vec<String> {
+    [
+        pr.title.as_str(),
+        &pr.display_key(),
+        &pr.author,
+        &pr.base,
+        &pr.head,
+    ]
+    .iter()
+    .map(|f| f.to_lowercase())
+    .collect()
+}
+
+/// The text and actor of a row, lowercased.
+fn row_fields(row: &proto::Row) -> impl Iterator<Item = String> + '_ {
+    [row.text.as_deref(), row.actor.as_deref()]
+        .into_iter()
+        .flatten()
+        .map(str::to_lowercase)
+}
+
+/// Every word is part of one of the fields, without regard to case.
+fn all_words_in(fields: &[String], words: &[String]) -> bool {
+    words
+        .iter()
+        .all(|word| fields.iter().any(|field| field.contains(word.as_str())))
+}
+
+/// DESIGN.md, "What the filters mean": a card matches when every word is in
+/// the PR's fields or in the text or actor of one of its rows.
+pub fn card_matches(card: &proto::Card, words: &[String]) -> bool {
+    if words.is_empty() {
+        return true;
+    }
+    let mut fields: Vec<String> = [
+        card.title.as_str(),
+        &card.pr,
+        &card.author,
+        &card.base,
+        &card.head,
+    ]
+    .iter()
+    .map(|f| f.to_lowercase())
+    .collect();
+    for row in &card.rows {
+        fields.extend(row_fields(row));
+    }
+    all_words_in(&fields, words)
+}
+
+/// An Activity row matches when every word is in its PR's fields or in the
+/// row's own text or actor.
+fn row_matches(pr_fields: &[String], row: &proto::Row, words: &[String]) -> bool {
+    if words.is_empty() {
+        return true;
+    }
+    let mut fields = pr_fields.to_vec();
+    fields.extend(row_fields(row));
+    all_words_in(&fields, words)
 }
 
 fn sort_rows(rows: &mut [proto::Row]) {
@@ -1709,9 +1800,10 @@ fn reaction_summary(counts: &BTreeMap<String, u32>) -> String {
     known.chain(unknown).collect::<Vec<_>>().join(" ")
 }
 
-pub const CONFIG_KEYS: [&str; 7] = [
+pub const CONFIG_KEYS: [&str; 8] = [
     "launch_at_login",
     "appearance",
+    "text_size",
     "status_interval_minutes",
     "reactions_interval_minutes",
     "snooze_return_time",
@@ -1729,6 +1821,7 @@ pub fn read_config(config: &Config, key: &str) -> Option<Value> {
             json!(format!("{hour:02}:{minute:02}"))
         }
         "appearance" => json!(config.appearance.as_str()),
+        "text_size" => json!(config.text_size),
         "keep_watching_days" => json!(config.keep_watching_days),
         "drop_after_days" => json!(config.drop_after_days),
         _ => return None,
@@ -1757,6 +1850,14 @@ pub fn write_config(
                 .as_str()
                 .and_then(Appearance::parse)
                 .ok_or_else(|| format!("{key} must be system, light or dark"))?;
+        }
+        "text_size" => {
+            config.text_size = integer(key, value, TEXT_SIZE_MIN)
+                .ok()
+                .filter(|size| *size <= TEXT_SIZE_MAX)
+                .ok_or_else(|| {
+                    format!("{key} must be an integer from {TEXT_SIZE_MIN} to {TEXT_SIZE_MAX}")
+                })?;
         }
         "keep_watching_days" => config.keep_watching_days = integer(key, value, 0)?,
         "drop_after_days" => config.drop_after_days = integer(key, value, 1)?,

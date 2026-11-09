@@ -3,7 +3,7 @@
 //! warnings. DESIGN.md, "API usage", "Rate limits", "Fetch success and
 //! failure" and "Showing warnings".
 
-use super::{DAY_SECS, Engine, Timers};
+use super::{DAY_SECS, Engine, Failures, Timers};
 use crate::clock::Now;
 use crate::model::*;
 use crate::plan::*;
@@ -19,6 +19,18 @@ const NEAR_LIMIT_PERCENT: i64 = 20;
 const EVENTS_FAILURES_WARNED: u32 = 3;
 /// The poll interval when GitHub has not named one yet.
 pub const DEFAULT_POLL_INTERVAL: i64 = 60;
+/// DESIGN.md, "Constants": the waits after the first, second, third and any
+/// later failure in a row, never longer than the interval.
+pub const RETRY_WAITS: [i64; 4] = [5, 10, 20, 40];
+/// DESIGN.md, "Constants": `fetch_failed` shows once the first failure is
+/// this old without a success.
+pub const FAILED_WARNING_AFTER: i64 = 300;
+
+/// The wait before the next run after `count` failures in a row.
+pub fn retry_wait(count: u32, interval: i64) -> i64 {
+    let index = (count.max(1) as usize - 1).min(RETRY_WAITS.len() - 1);
+    RETRY_WAITS[index].min(interval)
+}
 /// The classic PAT scopes shiibar-gh needs. DESIGN.md, "Tokens".
 pub const REQUIRED_SCOPES: [&str; 3] = ["repo", "notifications", "read:org"];
 
@@ -81,7 +93,7 @@ impl Engine {
         let Some(owner) = self.enabled_owner_of(pr) else {
             return false;
         };
-        if self.would_show(pr, owner, now) {
+        if self.on_screen(pr, owner, now) {
             return true;
         }
         let keep = self.data.config.keep_watching_days.saturating_mul(DAY_SECS);
@@ -89,11 +101,10 @@ impl Engine {
             .is_some_and(|gone| now.saturating_sub(gone) <= keep)
     }
 
+    /// A held card still shows: it leaves when the popover closes.
     fn shows_now(&self, pr: &PrRec, now: i64) -> bool {
-        !pr.unreadable
-            && self
-                .owner_of(pr)
-                .is_some_and(|owner| self.would_show(pr, owner, now))
+        self.owner_of(pr)
+            .is_some_and(|owner| self.on_screen(pr, owner, now))
     }
 
     /// The periodic pass records when cards disappear, and forgets what was
@@ -164,34 +175,34 @@ impl Engine {
             && (forced || !self.token_unusable(record, now))
     }
 
-    /// Which fetches of the account are due now. `refresh` makes all of them
-    /// due except the notifications, which keep to `X-Poll-Interval`.
+    /// Which fetches of the account are due now. DESIGN.md, "Fetch success
+    /// and failure": the account run (`status`) checks the notifications too
+    /// unless `X-Poll-Interval` has not passed; the reactions keep their own
+    /// time. `refresh` makes the run and the reactions due at once.
     pub fn due(&self, account: &str, now: i64, forced: bool) -> Due {
         let timers = self.timers(account);
-        let any_owner = self
-            .data
-            .owners
-            .values()
-            .filter(|o| o.account == account && o.enabled)
-            .any(|o| now >= timers.status.get(&o.id).copied().unwrap_or(0));
+        let run = forced || now >= timers.run;
         Due {
-            status: forced || any_owner,
+            status: run,
             reactions: forced || now >= timers.reactions,
-            notifications: now >= timers.notifications,
+            notifications: run && now >= timers.notifications,
         }
     }
 
+    /// The failed runs of the account since its last success.
+    pub fn failures(&self, account: &str) -> Option<Failures> {
+        self.failures.get(account).copied()
+    }
+
+    /// A stop begins (rate limit, 401, no token, unreadable Keychain): the
+    /// failures are forgotten, and counting starts again after it.
+    fn forget_failures(&mut self, account: &str) {
+        self.failures.remove(account);
+    }
+
     /// A copy of what a run of the account needs.
-    pub fn fetch_plan(
-        &self,
-        account: &str,
-        now: &Now,
-        due: Due,
-        forced: bool,
-        token: String,
-    ) -> Option<Plan> {
+    pub fn fetch_plan(&self, account: &str, now: &Now, due: Due, token: String) -> Option<Plan> {
         let record = self.data.accounts.get(account)?;
-        let timers = self.timers(account);
         let owners = self
             .owners_of(account)
             .into_iter()
@@ -200,8 +211,7 @@ impl Engine {
                 login: (!o.is_public()).then(|| o.name.clone()),
                 kind: o.kind,
                 enabled: o.enabled,
-                status_due: o.enabled
-                    && (forced || now.at >= timers.status.get(&o.id).copied().unwrap_or(0)),
+                status_due: o.enabled && due.status,
                 fetched_at: o.fetched_at,
                 watch_started_at: o.watch_started_at,
                 team_requests: o.events.cell(EventKind::TeamReviewRequested).list,
@@ -251,8 +261,16 @@ impl Engine {
                 .filter(|o| o.account == account && !o.is_public())
                 .map(|o| o.name.to_lowercase())
                 .collect(),
+            // DESIGN.md, "Identifying PRs": the repo#number of every saved
+            // PR of the account, those 0.2 took from notifications included.
+            pr_ids: self
+                .data
+                .prs
+                .values()
+                .filter(|pr| pr.account == account)
+                .map(|pr| (pr_key(&pr.owner, &pr.repo, pr.number), pr.id.clone()))
+                .collect(),
             prs,
-            pr_ids: fetch.pr_ids.clone(),
             threads: fetch.threads.clone(),
             own: fetch.own.clone(),
             retries: fetch
@@ -281,28 +299,40 @@ impl Engine {
             .or(self.data.accounts[account].fetch.poll_interval)
             .unwrap_or(DEFAULT_POLL_INTERVAL);
         let timers = self.timers.entry(account.to_string()).or_default();
-        for owner in &outcome.status_ran {
-            timers
-                .status
-                .insert(owner.clone(), now.at + status_interval);
-        }
         if outcome.due.reactions {
             timers.reactions = now.at + reactions_interval;
         }
-        if outcome.due.notifications {
+        // Only a check GitHub answered (200 or 304) starts the wait.
+        if outcome.due.notifications && outcome.notifications_checked {
             timers.notifications = now.at + poll.max(1);
         }
-        if outcome.ran {
-            match &outcome.failed {
-                Some(message) => {
-                    self.failures.insert(
-                        account.to_string(),
-                        (message.clone(), now.at + status_interval),
-                    );
-                }
-                None => {
-                    self.failures.remove(account);
-                }
+        // DESIGN.md, "Fetch success and failure": one account run, timed
+        // from its end. A stop (rate limit or 401) is not a failure: the
+        // count starts again after it.
+        let mut succeeded = false;
+        // A stop that began in any run, a reaction-only one included,
+        // forgets the failures.
+        let stopped = outcome.stop.is_some() || outcome.token.invalid == Some(true);
+        if stopped {
+            self.failures.remove(account);
+        }
+        if outcome.due.status {
+            if stopped {
+                timers.run = now.at + status_interval;
+            } else if outcome.failed.is_some() {
+                let failures = self
+                    .failures
+                    .entry(account.to_string())
+                    .or_insert(Failures {
+                        count: 0,
+                        first_at: now.at,
+                    });
+                failures.count += 1;
+                timers.run = now.at + retry_wait(failures.count, status_interval);
+            } else {
+                timers.run = now.at + status_interval;
+                self.failures.remove(account);
+                succeeded = true;
             }
         }
 
@@ -316,7 +346,7 @@ impl Engine {
         let Some(record) = self.data.accounts.get_mut(account) else {
             return;
         };
-        if outcome.ran {
+        if succeeded {
             record.updated_at = Some(now.at);
         }
         if let Some(login) = outcome.login.filter(|l| !l.is_empty()) {
@@ -328,9 +358,14 @@ impl Engine {
         let obs = outcome.token;
         if let Some(invalid) = obs.invalid {
             record.token.invalid = invalid;
-            record.token.sso = obs.sso;
-            record.token.sso_orgs = obs.sso_orgs;
-            record.token.sso_urls = obs.sso_urls;
+            // Only an account run searches every owner, so only it can
+            // tell that the SSO warnings went away.
+            if outcome.due.status {
+                record.token.sso = obs.sso;
+                record.token.sso_orgs = obs.sso_orgs;
+                record.token.sso_urls = obs.sso_urls;
+                record.token.sso_owners = obs.sso_owners;
+            }
         }
         if obs.expires_at.is_some() {
             record.token.expires_at = obs.expires_at;
@@ -354,9 +389,6 @@ impl Engine {
         let fetch = &mut record.fetch;
         if outcome.due.notifications && outcome.notifications_checked {
             fetch.notif_checked_at = Some(now.at);
-        }
-        for (key, id) in outcome.pr_ids {
-            fetch.pr_ids.insert(key, id);
         }
         for thread in outcome.threads {
             let merged = match fetch.threads.get(&thread.id) {
@@ -419,7 +451,7 @@ impl Engine {
     /// A token was saved for the account: record the registration and
     /// forget what was learned about the token it replaced.
     pub fn token_saved(&mut self, account: &str) {
-        self.failures.remove(account);
+        self.forget_failures(account);
         if let Some(record) = self.account_mut(account) {
             record.token = TokenRec {
                 registered: true,
@@ -430,6 +462,7 @@ impl Engine {
 
     /// The Keychain holds no token for the account.
     pub fn token_cleared(&mut self, account: &str) {
+        self.forget_failures(account);
         if let Some(record) = self.account_mut(account)
             && record.token.registered
         {
@@ -489,6 +522,10 @@ impl Engine {
             if stop.is_some() {
                 record.stopped_until = stop;
             }
+        }
+        // A rate limit a test or lookup ran into stops every fetch too.
+        if stop.is_some() {
+            self.forget_failures(account);
         }
     }
 
@@ -574,15 +611,24 @@ impl Engine {
                 None,
             ));
         }
-        let usable = token.registered && !self.token_unusable(account, now) && keychain_ok;
-        if usable && let Some((_, until)) = self.failures.get(&account.id) {
+        // DESIGN.md, "Showing warnings": only once the first failure is five
+        // minutes old, and never while fetching is stopped.
+        let usable = token.registered
+            && !self.token_unusable(account, now)
+            && keychain_ok
+            && self.stopped_until(&account.id, now).is_none();
+        if usable
+            && let Some(failures) = self.failures.get(&account.id)
+            && now - failures.first_at >= FAILED_WARNING_AFTER
+        {
+            let until = self.timers(&account.id).run;
             let minutes = ((until - now) + 59).div_euclid(60).max(1);
             out.push(warning(
                 WarningKind::FetchFailed,
                 id,
                 None,
                 format!("Couldn't reach GitHub · retrying in {minutes} min"),
-                Some(*until),
+                Some(until),
                 None,
             ));
         }
@@ -649,34 +695,27 @@ impl Engine {
                 ));
             }
         }
-        if token.registered && token.sso {
-            let url = token.sso_urls.first().cloned();
-            let owners: Vec<&OwnerRec> = self
-                .owners_of(&account.id)
-                .into_iter()
-                .filter(|o| o.github_id.is_some_and(|g| token.sso_orgs.contains(&g)))
-                .collect();
-            let unnamed = token.sso_orgs.is_empty()
-                || token
-                    .sso_orgs
-                    .iter()
-                    .any(|g| !owners.iter().any(|o| o.github_id == Some(*g)));
-            for owner in owners {
+        // DESIGN.md, "Tokens": only registered owners. An organization id of
+        // `X-GitHub-SSO` names one by its `github_id`; the single-organization
+        // form names the owner whose search it refused. Anything else is
+        // ignored.
+        if token.registered {
+            for owner in self.owners_of(&account.id) {
+                let by_id =
+                    token.sso && owner.github_id.is_some_and(|g| token.sso_orgs.contains(&g));
+                let by_search = token.sso_owners.get(&owner.id);
+                if !by_id && by_search.is_none() {
+                    continue;
+                }
+                // An owner named by its organization id gets no URL: the
+                // header's URLs may be another organization's, and the app
+                // opens the token settings without one.
+                let url = by_search.cloned().flatten();
                 out.push(warning(
                     WarningKind::SsoRequired,
                     id,
                     Some(&owner.id),
                     format!("SSO authorization required for {}", owner.name),
-                    None,
-                    url.clone(),
-                ));
-            }
-            if unnamed {
-                out.push(warning(
-                    WarningKind::SsoRequired,
-                    id,
-                    None,
-                    "SSO authorization required".into(),
                     None,
                     url,
                 ));

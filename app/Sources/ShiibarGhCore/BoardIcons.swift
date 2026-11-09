@@ -109,42 +109,63 @@ public enum BoardIcons {
         lineWidth: 1.6, roundCaps: true
     )
     public static let reviewRequest = BoardIcon([.circle(cx: 8, cy: 8, r: 5.5, dash: [2.2, 1.9])], lineWidth: 1.6, roundCaps: true)
-    /// The Done checkbox mark.
-    public static let checkbox = BoardIcon([.path("M3.5 8.5l3 3 6-7")], lineWidth: 2.2, roundCaps: true, roundJoins: true)
-}
 
-public enum RowIconTone: Equatable { case action, info, ok, merged, closed }
+    // Row kind icons of Main.html and Activity.html (`.ki`, 14 points, no
+    // tile). The mention's two arcs are `.arc` elements: `a1.5 1.5 0 0 0 3 0`
+    // from (11, 9.5) is the lower half of the circle around (12.5, 9.5), and
+    // `a6 6 0 1 0-2.3 4.7` from (14, 8) the large arc of the circle around
+    // (8, 8) through the top to (11.7, 12.7), at 51.8°.
+    public static let kindReviewRequest = BoardIcon(
+        [.circle(cx: 6, cy: 5, r: 2.5, dash: nil), .path("M1.5 13c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4M10.5 6.5h4M12.5 4.5l2 2-2 2")],
+        lineWidth: 1.4, roundCaps: true, roundJoins: true
+    )
+    public static let kindMention = BoardIcon(
+        [
+            .circle(cx: 8, cy: 8, r: 3, dash: nil), .path("M11 8v1.5"),
+            .arc(cx: 12.5, cy: 9.5, r: 1.5, start: 180, end: 0), .path("M14 9.5V8"),
+            .arc(cx: 8, cy: 8, r: 6, start: 0, end: -308.2),
+        ],
+        lineWidth: 1.4, roundCaps: true
+    )
+    public static let kindComment = BoardIcon([.path("M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z")], lineWidth: 1.4, roundJoins: true)
+    public static let kindChangesRequested = BoardIcon(
+        [.circle(cx: 8, cy: 8, r: 6.5, dash: nil), .path("M5.5 5.5l5 5M10.5 5.5l-5 5")],
+        lineWidth: 1.4, roundCaps: true
+    )
+    public static let kindMerged = BoardIcon([.path("M3 8h10M9 4l4 4-4 4")], lineWidth: 1.4, roundCaps: true, roundJoins: true)
 
-public struct RowIcon: Equatable {
-    public var icon: BoardIcon
-    public var tone: RowIconTone
+    /// Keep on top (Main.html `.pin`): filled while on, outlined while off.
+    public static let pin = BoardIcon(
+        [.path("M9.5 1.5l5 5-1.4 1.4-.7-.7-3 3 .4 2.6-1.2 1.2L5.7 11 2.5 14.2 1.3 13l3.2-3.2L1.6 6.9l1.2-1.2 2.6.4 3-3-.7-.7z")],
+        lineWidth: 1.2, roundJoins: true
+    )
+    /// The search field's magnifier (Main.html `.search`).
+    public static let search = BoardIcon([.circle(cx: 7, cy: 7, r: 4.5, dash: nil), .path("M10.5 10.5L14 14")], lineWidth: 1.6, roundCaps: true)
 }
 
 extension BoardIcons {
-    /// The icon tile of a row without a checkbox (`.ico` on the board).
-    public static func row(_ kind: Lenient<RowKind>) -> RowIcon {
+    /// The kind icon of a row (Main.html and Activity.html `.ki`). Kinds
+    /// without an icon on a board use the closest earlier one: ✓ for
+    /// Approved and Mergeable, × for Checks failed, Conflicts, Removed from
+    /// merge queue and Closed.
+    public static func row(_ kind: Lenient<RowKind>) -> BoardIcon {
         switch kind.value {
-        case .checksFailed, .changesRequested, .conflicts, .mergeQueueRemoved:
-            return RowIcon(icon: rowCross, tone: .action)
-        case .mergeable, .approved:
-            return RowIcon(icon: rowCheck, tone: .ok)
-        case .mergeQueueAdded:
-            return RowIcon(icon: mergeQueue, tone: .info)
-        case .reaction:
-            return RowIcon(icon: reaction, tone: .info)
-        case .merged:
-            return RowIcon(icon: merged, tone: .merged)
-        case .closed:
-            return RowIcon(icon: rowCross, tone: .closed)
-        case .reviewRequested, .teamReviewRequested, .mentioned, .teamMentioned, .comment, .reply, .replyMentioned, nil:
-            return RowIcon(icon: reviewRequest, tone: .info)
+        case .reviewRequested, .teamReviewRequested: return kindReviewRequest
+        case .mentioned, .teamMentioned: return kindMention
+        case .comment, .reply, .replyMentioned, nil: return kindComment
+        case .changesRequested: return kindChangesRequested
+        case .merged: return kindMerged
+        case .checksFailed, .conflicts, .mergeQueueRemoved, .closed: return rowCross
+        case .mergeable, .approved: return rowCheck
+        case .mergeQueueAdded: return mergeQueue
+        case .reaction: return reaction
         }
     }
 }
 
 /// The marks on an account's menu bar icon (DESIGN.md, "Screens";
-/// MenuBarIcon.html): the blue dot top right, the Todo PR count bottom
-/// right, the triangle bottom left.
+/// MenuBarIcon.html): the blue dot top right, the count of PRs waiting for
+/// your review bottom right, the triangle bottom left.
 public struct MenuBarMarks: Equatable {
     public var number: String?
     public var dot: Bool
@@ -157,6 +178,25 @@ public struct MenuBarMarks: Equatable {
     }
 
     public init(_ account: Account) {
-        self.init(count: account.todoCount, dot: account.unread, triangle: Warnings.hasTriangle(account))
+        self.init(count: account.reviewCount, dot: account.unread, triangle: Warnings.hasTriangle(account))
+    }
+
+    /// The icon's accessibility label: the login, then "unread", the
+    /// review requests ("2 review requests", "1 review request", "No
+    /// review requests") and "warning".
+    public static func accessibilityLabel(_ account: Account) -> String {
+        var parts = [account.login]
+        if account.unread { parts.append("unread") }
+        parts.append(reviewRequests(account.reviewCount))
+        if Warnings.hasTriangle(account) { parts.append("warning") }
+        return parts.joined(separator: ", ")
+    }
+
+    public static func reviewRequests(_ count: Int) -> String {
+        switch count {
+        case ..<1: return "No review requests"
+        case 1: return "1 review request"
+        default: return "\(count) review requests"
+        }
     }
 }

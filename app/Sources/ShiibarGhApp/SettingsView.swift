@@ -257,6 +257,36 @@ struct NumberField: View {
     }
 }
 
+/// Text size: the number and − / + (Settings.html). Only 9 to 18 is taken;
+/// other input shows its message and the saved value returns.
+struct TextSizeField: View {
+    @ObservedObject var model: SettingsModel
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: 4) {
+            TextField("", text: $text)
+                .textFieldStyle(.roundedBorder)
+                .multilineTextAlignment(.trailing)
+                .frame(width: 56)
+                .focused($focused)
+                .onSubmit(commit)
+                .onChange(of: focused) { _, isFocused in if !isFocused { commit() } }
+            Stepper("", onIncrement: { model.stepTextSize(.larger) }, onDecrement: { model.stepTextSize(.smaller) })
+                .labelsHidden()
+                .accessibilityLabel("Text size")
+        }
+        .onAppear { text = String(model.textSize) }
+        .onChange(of: model.config[TextSize.configKey]) { _, _ in text = String(model.textSize) }
+    }
+
+    func commit() {
+        model.setTextSize(text)
+        if model.errors[TextSize.configKey] != nil { text = String(model.textSize) }
+    }
+}
+
 struct GeneralTab: View {
     @ObservedObject var model: SettingsModel
 
@@ -290,6 +320,9 @@ struct GeneralTab: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .fixedSize()
+            }
+            SettingRow(title: "Text size", sub: SettingsText.textSizeDetail, error: model.errors[TextSize.configKey]) {
+                TextSizeField(model: model)
             }
         }
         Section2(title: "Polling") {

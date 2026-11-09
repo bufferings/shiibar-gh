@@ -191,12 +191,6 @@ a{color:#0A5FC2}a:hover{color:#084A97}
 .atext{font-size:11px;color:#3A3A3F;line-height:15px}
 .abtn{width:100%;font:inherit;font-size:12px;padding:5px 0;border-radius:6px;border:1px solid #C9C9CE;background:#FFFFFF;color:#1D1D1F;margin-top:2px}
 .abtn.pri{background:#0A66D6;border-color:#0A66D6;color:#FFFFFF;margin-top:8px}
-.usage{display:flex;align-items:center;gap:6px;padding:6px 16px;border-top:1px solid #E3E3E6;font-size:10px;color:#6E6E76;white-space:nowrap}
-.usage .ul{color:#3A3A3F;font-weight:600}
-.usage .ubar{flex:0 0 64px;height:5px;border-radius:3px;background:#E0E0E4;overflow:hidden}
-.usage .ubar span{display:block;height:100%;border-radius:3px;background:#8A8A90}
-.usage .ubar span.w{background:#C98A00}
-.usage .gap{flex:0 0 10px}
 .nf{display:inline-block;width:56px;box-sizing:border-box;border:1px solid #C9C9CE;border-radius:6px;background:#FFFFFF;padding:3px 6px;font-size:12px;color:#1D1D1F;text-align:right;line-height:16px}
 body{margin:0;padding:24px;background:#e9e9ee}
 .ab{width:max-content;height:auto;overflow:visible;border-radius:8px}
@@ -210,17 +204,18 @@ body{margin:0;padding:24px;background:#e9e9ee}
       <div style="width: 536px; display: flex; flex-direction: column; gap: 18px">
       <div style="display: flex; gap: 16px; align-items: flex-start">
         <div class="alert"><div class="aicon"></div><div class="atitle">Couldn't read tokens from Keychain</div><div class="atext">If macOS asked whether shiibar-gh may use the Keychain, allow it, then retry.</div><button class="abtn pri">Retry</button><button class="abtn">Not now</button></div>
-        <div class="alert"><div class="aicon"></div><div class="atitle">Saved tokens are unreadable</div><div class="atext">Reset deletes the Keychain item. You enter every token again. PRs, Done marks, snoozes and settings stay.</div><button class="abtn pri">Reset tokens</button><button class="abtn">Not now</button></div>
+        <div class="alert"><div class="aicon"></div><div class="atitle">Saved tokens are unreadable</div><div class="atext">Reset deletes the Keychain item. You enter every token again. PRs, snoozes and settings stay.</div><button class="abtn pri">Reset tokens</button><button class="abtn">Not now</button></div>
       </div>
       <div class="pop" style="width: 460px">
         <div class="phead">
           <div style="display: flex; flex-direction: column; flex: 1; min-width: 0">
             <div style="display: flex; align-items: center; gap: 8px"><span class="adot"></span><span style="font-weight: 600; font-size: 14px">bufferings-work</span></div>
-            <div class="m">Updated 1 min ago</div>
+            <div class="m">Updated 1 min ago · API 25%</div>
           </div>
           <button class="iconbtn" aria-label="Open in window"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5"></rect><path d="M2 6h12"></path></svg></button>
           <button class="iconbtn" aria-label="Refresh"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"></path><path d="M13.5 2.5v3h-3"></path></svg></button>
           <button class="iconbtn" aria-label="Settings"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.4l1.29.13.59 1.94.84.46 1.95-.6.82 1 -.96 1.79.28.92 1.79.96-.13 1.29-1.94.59-.46.84.6 1.95-1 .82-1.79-.96-.92.28-.96 1.79-1.29-.13-.59-1.94-.84-.46-1.95.6-.82-1 .96-1.79-.28-.92L1.4 8l.13-1.29 1.94-.59.46-.84-.6-1.95 1-.82 1.79.96.92-.28z"></path><circle cx="8" cy="8" r="2.2"></circle></svg></button>
+          <button class="iconbtn" aria-label="More"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"></path></svg></button>
         </div>
         <div class="banner">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M8 2l6.5 11.5h-13z"></path><path d="M8 6.5v3M8 11.6v.1"></path></svg>
@@ -235,11 +230,12 @@ body{margin:0;padding:24px;background:#e9e9ee}
         <div class="phead">
           <div style="display: flex; flex-direction: column; flex: 1; min-width: 0">
             <div style="display: flex; align-items: center; gap: 8px"><span class="adot"></span><span style="font-weight: 600; font-size: 14px">bufferings-work</span></div>
-            <div class="m">Updated 1 min ago</div>
+            <div class="m">Updated 1 min ago · API 25%</div>
           </div>
           <button class="iconbtn" aria-label="Open in window"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5"></rect><path d="M2 6h12"></path></svg></button>
           <button class="iconbtn" aria-label="Refresh"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"></path><path d="M13.5 2.5v3h-3"></path></svg></button>
           <button class="iconbtn" aria-label="Settings"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.4l1.29.13.59 1.94.84.46 1.95-.6.82 1 -.96 1.79.28.92 1.79.96-.13 1.29-1.94.59-.46.84.6 1.95-1 .82-1.79-.96-.92.28-.96 1.79-1.29-.13-.59-1.94-.84-.46-1.95.6-.82-1 .96-1.79-.28-.92L1.4 8l.13-1.29 1.94-.59.46-.84-.6-1.95 1-.82 1.79.96.92-.28z"></path><circle cx="8" cy="8" r="2.2"></circle></svg></button>
+          <button class="iconbtn" aria-label="More"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"></path></svg></button>
         </div>
         <div class="banner">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M8 2l6.5 11.5h-13z"></path><path d="M8 6.5v3M8 11.6v.1"></path></svg>
@@ -278,7 +274,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
             <div class="item"><div class="lbl"><span style="font-weight: 600">Public</span><span class="sub">Public repositories</span></div><div class="ctl"><span class="gray">&rsaquo;</span></div></div>
             <div style="padding: 8px 14px; border-top: 1px solid #ECECEF; display: flex; justify-content: flex-end"><button class="btn">Add owner…</button></div>
           </div></div>
-          <div><div class="gh">Remove</div><div class="group"><div class="item"><div class="lbl"><span style="font-weight: 600">Remove this account</span><span class="sub">Deletes this account and its owners from shiibar-gh: token, PRs, Done marks, snoozes and settings. Nothing changes on GitHub.</span></div><div class="ctl"><button class="btn" disabled>Remove…</button></div></div></div></div>
+          <div><div class="gh">Remove</div><div class="group"><div class="item"><div class="lbl"><span style="font-weight: 600">Remove this account</span><span class="sub">Deletes this account and its owners from shiibar-gh: token, PRs, snoozes and settings. Nothing changes on GitHub.</span></div><div class="ctl"><button class="btn" disabled>Remove…</button></div></div></div></div>
         </div>
       </div>
       <div class="cap" style="margin-top: 18px">Same window when the saved tokens are unreadable (one banner at a time)</div>

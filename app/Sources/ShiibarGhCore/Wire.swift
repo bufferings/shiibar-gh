@@ -123,7 +123,7 @@ public enum EventKind: String, Equatable, CaseIterable {
     case mergedClosed = "merged_closed"
 }
 
-public enum EventColumn: String, Equatable, CaseIterable { case list, todo, notify }
+public enum EventColumn: String, Equatable, CaseIterable { case list, notify }
 
 /// The segment of the filter row (DESIGN.md, "What the filters mean").
 public enum PrFilter: String, Equatable, Codable, CaseIterable {
@@ -173,20 +173,21 @@ public struct Owner: Equatable, Decodable, Identifiable {
     public var enabled: Bool
     public var notify: Bool
     public var skipDrafts: Bool
-    public var todoCount: Int
+    /// The PRs waiting for your review (DESIGN.md, "Awaiting review").
+    public var reviewCount: Int
     public var prCount: Int
 
     enum CodingKeys: String, CodingKey {
         case id, name, kind, enabled, notify
         case githubId = "github_id"
         case skipDrafts = "skip_drafts"
-        case todoCount = "todo_count"
+        case reviewCount = "review_count"
         case prCount = "pr_count"
     }
 
     public init(
         id: String, name: String, kind: OwnerKind = .org, githubId: Int64? = nil, enabled: Bool = true,
-        notify: Bool = true, skipDrafts: Bool = true, todoCount: Int = 0, prCount: Int = 0
+        notify: Bool = true, skipDrafts: Bool = true, reviewCount: Int = 0, prCount: Int = 0
     ) {
         self.id = id
         self.name = name
@@ -195,7 +196,7 @@ public struct Owner: Equatable, Decodable, Identifiable {
         self.enabled = enabled
         self.notify = notify
         self.skipDrafts = skipDrafts
-        self.todoCount = todoCount
+        self.reviewCount = reviewCount
         self.prCount = prCount
     }
 
@@ -298,7 +299,7 @@ public struct Account: Equatable, Decodable, Identifiable {
     public var color: Lenient<AccountColor>
     public var token: TokenInfo
     public var updatedAt: Int64?
-    public var todoCount: Int
+    public var reviewCount: Int
     public var unread: Bool
     public var warnings: [Warning]
     public var rateLimit: RateLimit?
@@ -307,13 +308,13 @@ public struct Account: Equatable, Decodable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case id, login, color, token, unread, warnings, owners
         case updatedAt = "updated_at"
-        case todoCount = "todo_count"
+        case reviewCount = "review_count"
         case rateLimit = "rate_limit"
     }
 
     public init(
         id: String, login: String? = nil, color: AccountColor = .none, token: TokenInfo = TokenInfo(),
-        updatedAt: Int64? = nil, todoCount: Int = 0, unread: Bool = false, warnings: [Warning] = [],
+        updatedAt: Int64? = nil, reviewCount: Int = 0, unread: Bool = false, warnings: [Warning] = [],
         rateLimit: RateLimit? = nil, owners: [Owner] = []
     ) {
         self.id = id
@@ -321,7 +322,7 @@ public struct Account: Equatable, Decodable, Identifiable {
         self.color = .known(color)
         self.token = token
         self.updatedAt = updatedAt
-        self.todoCount = todoCount
+        self.reviewCount = reviewCount
         self.unread = unread
         self.warnings = warnings
         self.rateLimit = rateLimit
@@ -352,9 +353,6 @@ public struct Row: Equatable, Decodable, Identifiable {
     public var account: String
     public var owner: String
     public var kind: Lenient<RowKind>
-    /// A Todo row now: it has the checkbox.
-    public var todo: Bool
-    public var done: Bool
     public var text: String?
     public var counts: [String: Int]?
     public var actor: String?
@@ -363,14 +361,14 @@ public struct Row: Equatable, Decodable, Identifiable {
     public var unread: Bool
 
     enum CodingKeys: String, CodingKey {
-        case id, pr, account, owner, kind, todo, done, text, counts, actor, url, unread
+        case id, pr, account, owner, kind, text, counts, actor, url, unread
         case prTitle = "pr_title"
         case occurredAt = "occurred_at"
     }
 
     public init(
         id: String, pr: String = "o/r#1", prTitle: String = "Title", account: String = "3407303",
-        owner: String = "o1", kind: RowKind, todo: Bool = false, done: Bool = false,
+        owner: String = "o1", kind: RowKind,
         text: String? = nil, counts: [String: Int]? = nil, actor: String? = nil,
         url: String = "https://github.com/o/r/pull/1", occurredAt: Int64 = 0, unread: Bool = true
     ) {
@@ -380,8 +378,6 @@ public struct Row: Equatable, Decodable, Identifiable {
         self.account = account
         self.owner = owner
         self.kind = .known(kind)
-        self.todo = todo
-        self.done = done
         self.text = text
         self.counts = counts
         self.actor = actor
@@ -389,9 +385,6 @@ public struct Row: Equatable, Decodable, Identifiable {
         self.occurredAt = occurredAt
         self.unread = unread
     }
-
-    /// An open Todo row: checkbox, orange, not done yet.
-    public var isOpenTodo: Bool { todo && !done }
 }
 
 public struct Card: Equatable, Decodable, Identifiable {
@@ -405,7 +398,11 @@ public struct Card: Equatable, Decodable, Identifiable {
     public var authorAvatarUrl: String?
     public var authoredByMe: Bool
     public var assignedToMe: Bool
+    /// GitHub's fact: you or your team is asked for a review now. The chip
+    /// and the Involvement group use it (DESIGN.md, "What the filters mean").
     public var reviewRequested: Bool
+    /// The app's "waiting for your review": the mark and the red counts.
+    public var awaitingReview: Bool
     public var stateLabel: Lenient<StateLabel>
     public var review: Lenient<ReviewStatus>
     public var checks: Lenient<ChecksStatus>
@@ -415,6 +412,10 @@ public struct Card: Equatable, Decodable, Identifiable {
     public var snoozed: Bool
     public var snoozedUntil: Int64?
     public var addedAt: Int64?
+    /// GraphQL `createdAt`; nil right after the move from 0.2.
+    public var createdAt: Int64?
+    /// GraphQL `updatedAt`.
+    public var updatedAt: Int64
     public var links: Links
     public var rows: [Row]
 
@@ -429,16 +430,19 @@ public struct Card: Equatable, Decodable, Identifiable {
         case baseStatus = "base_status"
         case snoozedUntil = "snoozed_until"
         case addedAt = "added_at"
+        case awaitingReview = "awaiting_review"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
     }
 
     public init(
         id: String, pr: String = "o/r#1", account: String = "3407303", owner: String = "o1",
         title: String = "Title", url: String = "https://github.com/o/r/pull/1", author: String = "me",
         authorAvatarUrl: String? = nil, authoredByMe: Bool = true, assignedToMe: Bool = false,
-        reviewRequested: Bool = false, stateLabel: StateLabel = .open, review: ReviewStatus = .none,
+        reviewRequested: Bool = false, awaitingReview: Bool = false, stateLabel: StateLabel = .open, review: ReviewStatus = .none,
         checks: ChecksStatus = .none, baseStatus: BaseStatus = .none, base: String = "main",
         head: String = "topic", snoozed: Bool = false, snoozedUntil: Int64? = nil, addedAt: Int64? = nil,
-        links: Links = Links(review: "r", checks: "c", base: "b"), rows: [Row] = []
+        createdAt: Int64? = nil, updatedAt: Int64 = 0, links: Links = Links(review: "r", checks: "c", base: "b"), rows: [Row] = []
     ) {
         self.id = id
         self.pr = pr
@@ -451,6 +455,7 @@ public struct Card: Equatable, Decodable, Identifiable {
         self.authoredByMe = authoredByMe
         self.assignedToMe = assignedToMe
         self.reviewRequested = reviewRequested
+        self.awaitingReview = awaitingReview
         self.stateLabel = .known(stateLabel)
         self.review = .known(review)
         self.checks = .known(checks)
@@ -460,14 +465,18 @@ public struct Card: Equatable, Decodable, Identifiable {
         self.snoozed = snoozed
         self.snoozedUntil = snoozedUntil
         self.addedAt = addedAt
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
         self.links = links
         self.rows = rows
     }
 
-    /// DESIGN.md, "Todo definition": the card has an open Todo row. (The
-    /// daemon leaves snoozed PRs out of the count; the popover only uses
-    /// this inside a section.)
-    public var hasOpenTodo: Bool { rows.contains(where: \.isOpenTodo) }
+    /// Merged and Closed come after the open PRs (Draft included).
+    public var isFinished: Bool {
+        stateLabel.value == .merged || stateLabel.value == .closed
+    }
+
+    public var hasUnread: Bool { rows.contains(where: \.unread) }
 }
 
 public struct DaemonNotification: Equatable, Decodable {
@@ -501,19 +510,16 @@ public struct DaemonNotification: Equatable, Decodable {
 
 public struct EventCell: Equatable, Decodable {
     public var list: Bool
-    public var todo: Bool
     public var notify: Bool
 
-    public init(list: Bool, todo: Bool, notify: Bool) {
+    public init(list: Bool, notify: Bool) {
         self.list = list
-        self.todo = todo
         self.notify = notify
     }
 
     public func value(_ column: EventColumn) -> Bool {
         switch column {
         case .list: return list
-        case .todo: return todo
         case .notify: return notify
         }
     }

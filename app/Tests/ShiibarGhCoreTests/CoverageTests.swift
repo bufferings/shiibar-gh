@@ -20,20 +20,24 @@ final class StoreTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = UIStateStore(defaults: defaults)
         XCTAssertNil(store.windowFrame(account: "1001"))
-        XCTAssertEqual(store.filter(account: "1001"), FilterState())
+        XCTAssertEqual(store.options(account: "1001"), ListOptions())
+        XCTAssertTrue(store.keepOnTop(account: "1001"), "Keep on top is on by default")
         XCTAssertEqual(store.collapsed(account: "1001"), [:])
         XCTAssertEqual(store.activityOwners(account: "1001"), [])
         store.setWindowFrame("{{10, 20}, {460, 620}}", account: "1001")
-        store.setFilter(FilterState(todo: true, segment: .authored), account: "1001")
+        store.setOptions(ListOptions(segment: .authored, groupBy: .status, sort: .recentlyAdded), account: "1001")
+        store.setKeepOnTop(false, account: "1001")
         store.setCollapsed(["owner:o2": true], account: "1001")
         store.setActivityOwners(["o2", "o4"], account: "1001")
         let again = UIStateStore(defaults: defaults)
         XCTAssertEqual(again.windowFrame(account: "1001"), "{{10, 20}, {460, 620}}")
-        XCTAssertEqual(again.filter(account: "1001"), FilterState(todo: true, segment: .authored))
+        XCTAssertEqual(again.options(account: "1001"), ListOptions(segment: .authored, groupBy: .status, sort: .recentlyAdded))
+        XCTAssertFalse(again.keepOnTop(account: "1001"))
+        XCTAssertTrue(again.keepOnTop(account: "583231"))
         XCTAssertEqual(again.collapsed(account: "1001"), ["owner:o2": true])
         XCTAssertEqual(again.activityOwners(account: "1001"), ["o2", "o4"])
         XCTAssertNil(again.windowFrame(account: "583231"), "another account has its own")
-        XCTAssertEqual(again.filter(account: "583231"), FilterState())
+        XCTAssertEqual(again.options(account: "583231"), ListOptions())
     }
 
     func testPaletteHasDarkVariants() {
@@ -135,29 +139,29 @@ final class SettingsModelTests: XCTestCase {
         let settings = SettingsModel(app: app, launch: nil)
         let account = sampleAccount()
         let org = account.owners[0]
-        api.events = ["mentioned": EventCell(list: true, todo: true, notify: true)]
+        api.events = ["mentioned": EventCell(list: true, notify: true)]
         api.eventsDelay = 200_000_000
         settings.select(.owner(account: "3407303", owner: "o2"))
         await settle()
         // The user unticks Notify while the read is still on its way.
-        api.events = ["mentioned": EventCell(list: true, todo: true, notify: false)]
+        api.events = ["mentioned": EventCell(list: true, notify: false)]
         settings.setEvent(org, of: account, .mentioned, .notify, false)
         try? await Task.sleep(nanoseconds: 400_000_000)
         await settle()
-        XCTAssertEqual(settings.cell("o2", .mentioned), EventCell(list: true, todo: true, notify: false), "the late read is dropped")
+        XCTAssertEqual(settings.cell("o2", .mentioned), EventCell(list: true, notify: false), "the late read is dropped")
         // A read started after the change is kept.
         api.eventsDelay = 0
-        api.events = ["mentioned": EventCell(list: false, todo: false, notify: false)]
+        api.events = ["mentioned": EventCell(list: false, notify: false)]
         settings.loadOwner(account: "3407303", owner: "o2")
         await settle()
-        XCTAssertEqual(settings.cell("o2", .mentioned), EventCell(list: false, todo: false, notify: false))
+        XCTAssertEqual(settings.cell("o2", .mentioned), EventCell(list: false, notify: false))
     }
 
     func testAFailedEditReadsTheTableAgain() async {
         let settings = SettingsModel(app: app, launch: nil)
         let account = sampleAccount()
         let org = account.owners[0]
-        let saved = ["mentioned": EventCell(list: true, todo: true, notify: true)]
+        let saved = ["mentioned": EventCell(list: true, notify: true)]
         api.events = saved
         api.eventsDelay = 200_000_000
         settings.select(.owner(account: "3407303", owner: "o2"))
@@ -191,24 +195,52 @@ final class SettingsModelTests: XCTestCase {
         XCTAssertTrue(settings.canAddAccount)
     }
 
-    func testTodoAndNotifyFollowList() {
-        XCTAssertTrue(SettingsModel.cellEnabled(EventCell(list: false, todo: false, notify: false), .list))
-        XCTAssertFalse(SettingsModel.cellEnabled(EventCell(list: false, todo: false, notify: false), .todo))
-        XCTAssertFalse(SettingsModel.cellEnabled(EventCell(list: false, todo: false, notify: false), .notify))
-        XCTAssertTrue(SettingsModel.cellEnabled(EventCell(list: true, todo: false, notify: false), .notify))
+    /// DESIGN.md, "Settings": Text size takes 9 to 18 only.
+    func testTextSizeFieldAndStepper() async {
+        let settings = SettingsModel(app: app, launch: nil)
+        XCTAssertTrue(SettingsModel.keys.contains("text_size"))
+        settings.config["text_size"] = .int(12)
+        settings.setTextSize("19")
+        XCTAssertEqual(settings.errors["text_size"], "Enter a number from 9 to 18")
+        settings.setTextSize("1.5")
+        XCTAssertEqual(settings.errors["text_size"], "Enter a whole number")
+        settings.setTextSize("12")
+        await settle()
+        XCTAssertNil(settings.errors["text_size"])
+        XCTAssertFalse(api.calls.contains { $0.hasPrefix("config_set") }, "the same value is not sent")
+        settings.setTextSize("14")
+        await settle()
+        XCTAssertTrue(api.calls.contains("config_set text_size int(14)"))
+        settings.config["text_size"] = .int(18)
+        api.clearCalls()
+        settings.stepTextSize(.larger)
+        settings.config["text_size"] = .int(9)
+        settings.stepTextSize(.smaller)
+        await settle()
+        XCTAssertEqual(api.calls, [], "the stepper stops at 9 and 18")
+        settings.stepTextSize(.larger)
+        await settle()
+        XCTAssertEqual(api.calls, ["config_set text_size int(10)"])
+    }
+
+    func testNotifyFollowsList() {
+        XCTAssertEqual(EventColumn.allCases, [.list, .notify], "two columns")
+        XCTAssertTrue(SettingsModel.cellEnabled(EventCell(list: false, notify: false), .list))
+        XCTAssertFalse(SettingsModel.cellEnabled(EventCell(list: false, notify: false), .notify))
+        XCTAssertTrue(SettingsModel.cellEnabled(EventCell(list: true, notify: false), .notify))
     }
 
     func testCopyReplacesTheTargetTable() async {
         let settings = SettingsModel(app: app, launch: nil)
         let account = sampleAccount()
-        api.events = ["mentioned": EventCell(list: true, todo: false, notify: false)]
+        api.events = ["mentioned": EventCell(list: true, notify: false)]
         XCTAssertEqual(settings.otherOwners(of: "o2", in: account).map(\.id), ["o3", "o4"])
         var copied: Bool?
         settings.copyTable(from: account.owners[1], to: account.owners[0], of: account) { copied = $0 }
         await settle()
         XCTAssertEqual(copied, true)
         XCTAssertTrue(api.calls.contains("owner_events_copy bufferings-work acme-corp example-org"))
-        XCTAssertEqual(settings.cell("o2", .mentioned), EventCell(list: true, todo: false, notify: false))
+        XCTAssertEqual(settings.cell("o2", .mentioned), EventCell(list: true, notify: false))
     }
 }
 
@@ -230,6 +262,25 @@ final class SheetTests: XCTestCase {
 
     override func tearDown() async throws {
         defaults.removePersistentDomain(forName: suite)
+    }
+
+    /// Sheets.html: the result list is there before Test, names only, so
+    /// the sheet keeps its height.
+    func testTheResultListIsReservedBeforeTheTest() async {
+        let add = TokenSheetModel(mode: .add, app: app)
+        XCTAssertEqual(add.resultRows, ["Account", "Scopes", "Notifications", "Team membership"].map(ResultRow.placeholder))
+        let edit = TokenSheetModel(mode: .edit("3407303"), app: app)
+        XCTAssertEqual(edit.resultRows, ["Account", "Scopes", "Notifications", "Team membership", "example-org", "acme-corp"].map(ResultRow.placeholder), "Public has none")
+        let result = TestResult(item: .scopes, label: "Scopes", outcome: .ok, text: "OK")
+        let org = TestResult(item: .owner, label: "example-org", owner: "o2", outcome: .ok, text: "OK")
+        let publicRow = TestResult(item: .owner, label: "Public", owner: "o4", outcome: .failed, text: "Failed")
+        api.testResults = [result, org, publicRow]
+        edit.test()
+        await settle()
+        XCTAssertEqual(edit.resultRows, [.result(TestResultLine(result)), .result(TestResultLine(org))], "the daemon's Public row is left out")
+        XCTAssertFalse(edit.showsSaveLater, "Public's failure does not count either")
+        let unknownId = TestResult(item: .owner, label: "public", owner: "gone", outcome: .ok, text: "OK")
+        XCTAssertTrue(edit.isPublicRow(unknownId), "by its label when the id is unknown")
     }
 
     func testAddAccountTestsWithoutAnAccountAndSavesWithAccountAdd() async {

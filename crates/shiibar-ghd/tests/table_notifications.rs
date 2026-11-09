@@ -446,13 +446,15 @@ fn a_new_row_on_an_unreadable_pr_neither_notifies_nor_raises_the_dot() {
 }
 
 #[test]
-fn done_rows_stay_out_of_the_reconnect_summary_outside_snooze() {
+fn a_read_row_leaves_the_reconnect_summary() {
+    // Like a Done row of 0.2: a row read before the app reconnects is not
+    // notified then.
     let mut h = H::new();
     let a = h.ev("E_1", "PR_1", IngestKind::Comment);
     let b = h.ev("E_2", "PR_2", IngestKind::Comment);
     h.push(vec![other("PR_1"), other("PR_2")], vec![a, b], vec![]);
     h.offline();
-    h.done("E_1");
+    h.read(&["E_1"]);
     let out = h.reconnect();
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].rows, [full("E_2")]);
@@ -460,48 +462,24 @@ fn done_rows_stay_out_of_the_reconnect_summary_outside_snooze() {
         out[0].title, "me · Comment on my PR",
         "one left: individual"
     );
-    assert_eq!(out[0].body.as_deref(), Some("text E_2"));
     assert_eq!(h.row("E_1").notify, NotifyState::None);
 }
 
 #[test]
-fn only_done_rows_mean_no_summary() {
+fn read_all_clears_what_is_undelivered_and_a_written_one_stays() {
     let mut h = H::new();
     let a = h.ev("E_1", "PR_1", IngestKind::Comment);
     h.push(vec![other("PR_1")], vec![a], vec![]);
     h.offline();
-    h.done("E_1");
+    h.read_all();
     assert!(h.reconnect().is_empty());
-    h.undone("E_1");
-    assert!(
-        h.reconnect().is_empty(),
-        "the record is gone at the summary"
-    );
-}
-
-#[test]
-fn undone_before_the_reconnect_keeps_a_row_in_the_summary() {
-    let mut h = H::new();
-    let a = h.ev("E_1", "PR_1", IngestKind::Comment);
-    h.push(vec![other("PR_1")], vec![a], vec![]);
-    h.offline();
-    h.done("E_1");
-    h.undone("E_1");
-    assert_eq!(h.reconnect().len(), 1);
-}
-
-#[test]
-fn a_row_done_after_a_missed_release_stays_out_of_the_summary() {
-    let mut h = H::new();
-    h.prs(vec![other("PR_1")]);
-    h.snooze(&key("PR_1"));
-    let e = h.ev("E_1", "PR_1", IngestKind::Comment);
-    h.events(vec![e]);
-    h.advance(DAY);
-    h.tick();
-    h.offline();
-    h.done("E_1");
-    assert!(h.reconnect().is_empty());
+    // A notification already written is not touched by reading.
+    let b = h.ev("E_2", "PR_1", IngestKind::Comment);
+    h.events(vec![b]);
+    let out = h.engine.take_notifications(true, &h.now);
+    h.read(&["E_2"]);
+    h.engine.mark_delivered(&out[0].rows);
+    assert_eq!(h.row("E_2").notify, NotifyState::Delivered);
 }
 
 /// DESIGN.md, "macOS notifications" and "Notification decisions": the

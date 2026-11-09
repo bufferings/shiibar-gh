@@ -191,12 +191,6 @@ a{color:#0A5FC2}a:hover{color:#084A97}
 .atext{font-size:11px;color:#3A3A3F;line-height:15px}
 .abtn{width:100%;font:inherit;font-size:12px;padding:5px 0;border-radius:6px;border:1px solid #C9C9CE;background:#FFFFFF;color:#1D1D1F;margin-top:2px}
 .abtn.pri{background:#0A66D6;border-color:#0A66D6;color:#FFFFFF;margin-top:8px}
-.usage{display:flex;align-items:center;gap:6px;padding:6px 16px;border-top:1px solid #E3E3E6;font-size:10px;color:#6E6E76;white-space:nowrap}
-.usage .ul{color:#3A3A3F;font-weight:600}
-.usage .ubar{flex:0 0 64px;height:5px;border-radius:3px;background:#E0E0E4;overflow:hidden}
-.usage .ubar span{display:block;height:100%;border-radius:3px;background:#8A8A90}
-.usage .ubar span.w{background:#C98A00}
-.usage .gap{flex:0 0 10px}
 .nf{display:inline-block;width:56px;box-sizing:border-box;border:1px solid #C9C9CE;border-radius:6px;background:#FFFFFF;padding:3px 6px;font-size:12px;color:#1D1D1F;text-align:right;line-height:16px}
 body{margin:0;padding:24px;background:#e9e9ee}
 .ab{width:max-content;height:auto;overflow:visible;border-radius:8px}
@@ -204,6 +198,30 @@ body{margin:0;padding:24px;background:#e9e9ee}
 </head>
 <body>
 <div class="ab">
+<section class="scene">
+    <div class="cap">Settings › General (Text size added under Appearance)</div>
+    <div class="desc" style="width: 600px">Text size is the body text size in points: a whole number from 9 to 18, default 12. The standard macOS stepper changes it by 1. Other text, row heights, avatars and the popover width follow it in proportion; the window keeps its saved size. It applies to every account. In the popover and the window, ⌘= (or ⌘+) makes it 1 pt larger, ⌘− 1 pt smaller, and ⌘0 sets it back to 12.</div>
+    <div class="win" style="width: 600px">
+      <div class="titlebar">
+        <div class="tl"><div class="dots" aria-hidden="true"><span style="background: #EC6A5E"></span><span style="background: #F4BF4F"></span><span style="background: #61C554"></span></div><div class="wt">General</div><div style="width: 50px"></div></div>
+        <div class="stabs">
+          <button class="stab on"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="8" cy="8" r="2.2"></circle><circle cx="8" cy="8" r="6"></circle></svg><span>General</span></button>
+          <button class="stab"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="5.5" r="3"></circle><path d="M2.5 14c.8-3 3-4.5 5.5-4.5s4.7 1.5 5.5 4.5"></path></svg><span>Accounts</span></button>
+          <button class="stab"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5l3.5 3.5"></path></svg><span>Watching</span></button>
+        </div>
+      </div>
+      <div class="body">
+        <div class="group">
+            <div class="item"><div class="lbl"><span style="font-weight: 600">Launch at login</span><span class="sub">Runs in the menu bar after you log in to your Mac</span></div><div class="ctl"><span class="tgl on"><span></span></span></div></div>
+            <div class="item"><div class="lbl"><span style="font-weight: 600">Appearance</span><span class="sub">System follows the appearance setting of your Mac</span></div><div class="ctl"><span class="sel">System &#8964;</span></div></div>
+            <div class="item"><div class="lbl"><span style="font-weight: 600">Text size</span><span class="sub">Text in the popover and its window</span></div><div class="ctl"><span class="nf">12</span><span style="display: inline-flex; flex-direction: column; border: 1px solid #C9C9CE; border-radius: 4px; background: #FFFFFF; overflow: hidden"><button class="sq" aria-label="Increment" style="width: 16px; height: 10px; border: 0; border-radius: 0; font-size: 8px">&#9650;</button><button class="sq" aria-label="Decrement" style="width: 16px; height: 10px; border: 0; border-top: 1px solid #C9C9CE; border-radius: 0; font-size: 8px">&#9660;</button></span></div></div>
+            <div class="item"><div class="lbl"><span style="font-weight: 600">PR status interval</span><span class="sub">Shorter means you notice sooner, but uses more API quota</span></div><div class="ctl"><span class="nf">1</span><span class="sub">min</span></div></div>
+            <div class="item"><div class="lbl"><span style="font-weight: 600">Reactions interval</span><span class="sub">Shorter means you notice sooner, but uses more API quota</span></div><div class="ctl"><span class="nf">3</span><span class="sub">min</span></div></div>
+            <div class="item"><div class="lbl"><span style="font-weight: 600">Return time</span><span class="sub">All snoozed PRs come back every day at this time</span></div><div class="ctl"><span class="nf">09:00</span></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
 <section class="scene">
     <div class="cap">Settings › Accounts: an account selected</div>
     <div class="win" style="width: 760px">
@@ -232,7 +250,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
             <div class="item"><div class="lbl"><span style="font-weight: 600">Public</span><span class="sub">Public repositories</span></div><div class="ctl"><span class="gray">&rsaquo;</span></div></div>
             <div style="padding: 8px 14px; border-top: 1px solid #ECECEF; display: flex; justify-content: flex-end"><button class="btn">Add owner…</button></div>
           </div></div>
-          <div><div class="gh">Remove</div><div class="group"><div class="item"><div class="lbl"><span style="font-weight: 600">Remove this account</span><span class="sub">Deletes this account and its owners from shiibar-gh: token, PRs, Done marks, snoozes and settings. Nothing changes on GitHub.</span></div><div class="ctl"><button class="btn">Remove…</button></div></div></div></div>
+          <div><div class="gh">Remove</div><div class="group"><div class="item"><div class="lbl"><span style="font-weight: 600">Remove this account</span><span class="sub">Deletes this account and its owners from shiibar-gh: token, PRs, snoozes and settings. Nothing changes on GitHub.</span></div><div class="ctl"><button class="btn">Remove…</button></div></div></div></div>
         </div>
       </div>
     </div>

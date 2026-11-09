@@ -5,9 +5,9 @@
 use shiibar_gh_client::{ClientError, request, request_json, socket_path_from_env};
 use shiibar_gh_proto::{
     AccountResponse, AccountsResponse, AckResponse, ActivityResponse, Card, ConfigResponse,
-    EventKind, EventsResponse, ExclusionsResponse, ListResponse, OpenResponse, OwnerLookupResponse,
-    PrFilter, RefreshResponse, Request, Row, StatusResponse, TestResult, TokenTestResponse,
-    Warning,
+    EventKind, EventsResponse, ExclusionsResponse, InfoResponse, ListResponse, OpenResponse,
+    OwnerLookupResponse, PrFilter, RefreshResponse, Request, Row, StatusResponse, TestResult,
+    TokenTestResponse, Warning,
 };
 use std::collections::BTreeMap;
 use std::io::{BufRead, IsTerminal};
@@ -22,8 +22,11 @@ const NOT_FOUND: u8 = 2;
 const COMMANDS: [(&str, &str, &str); 30] = [
     (
         "list",
-        "[--account <a>] [--owner <o>] [--todo] [--authored|--assigned|--review-requested] [--snoozed] [--json]",
-        "Print the PR cards of the PRs tab; --snoozed prints the Snoozed section",
+        "[--account <a>] [--owner <o>] [--authored|--assigned|--review-requested] [--search <text>] [--snoozed] [--json]",
+        "Print the PR cards of the PRs tab, by owner, open PRs first, then the most\n      \
+         recently updated. [review requested] marks a PR awaiting your review.\n      \
+         --search keeps the PRs where every word of <text> matches; --snoozed\n      \
+         prints the Snoozed section",
     ),
     (
         "status",
@@ -32,18 +35,14 @@ const COMMANDS: [(&str, &str, &str); 30] = [
     ),
     (
         "activity",
-        "[--account <a>] [--owner <o>]... [--todo] [--authored|--assigned|--review-requested] [--json]",
+        "[--account <a>] [--owner <o>]... [--authored|--assigned|--review-requested] [--search <text>] [--json]",
         "Print the rows of the shown cards, newest first",
     ),
     (
-        "done",
-        "[--off] <row>",
-        "Mark a Todo row done, or not done with --off",
-    ),
-    (
-        "todo",
-        "[--off] <row>",
-        "Add a row to Todo, or remove it with --off",
+        "read",
+        "<row>... [--account <a>] | --all --account <a>",
+        "Mark rows as read; --all marks every row of the account except those of\n      \
+         snoozed PRs. With rows, --account must name their account",
     ),
     (
         "snooze",
@@ -59,10 +58,25 @@ const COMMANDS: [(&str, &str, &str); 30] = [
     (
         "open",
         "<pr|row> [--account <a>]",
-        "Print the URL of a PR (needs --account) or of a row",
+        "Print the URL of a PR (needs --account) or of a row; a row stays unread",
     ),
-    ("config get", "<key> [--json]", "Print a setting"),
-    ("config set", "<key> <value>", "Change a setting"),
+    (
+        "config get",
+        "<key> [--json]",
+        "Print a setting. Keys: launch_at_login, appearance, text_size,\n      \
+         status_interval_minutes, reactions_interval_minutes, snooze_return_time,\n      \
+         keep_watching_days, drop_after_days",
+    ),
+    (
+        "config set",
+        "<key> <value>",
+        "Change a setting (text_size is a whole number from 9 to 18)",
+    ),
+    (
+        "version",
+        "[--json]",
+        "Print the version of this command and of the running daemon",
+    ),
     (
         "reset",
         "",
@@ -124,7 +138,7 @@ const COMMANDS: [(&str, &str, &str); 30] = [
     (
         "owner remove",
         "<owner> --account <a>",
-        "Remove an owner and its PRs, Done marks, snoozes and settings",
+        "Remove an owner and its PRs, snoozes and settings",
     ),
     ("owner enable", "<owner> --account <a>", "Enable an owner"),
     ("owner disable", "<owner> --account <a>", "Disable an owner"),
@@ -140,7 +154,7 @@ const COMMANDS: [(&str, &str, &str); 30] = [
     ),
     (
         "owner events",
-        "<owner> --account <a> [--json] | set <owner> <event> list|todo|notify on|off --account <a> | copy <from-owner> <to-owner> --account <a>",
+        "<owner> --account <a> [--json] | set <owner> <event> list|notify on|off --account <a> | copy <from-owner> <to-owner> --account <a>",
         "Print, change or copy the event table",
     ),
     (
@@ -173,28 +187,32 @@ struct Parsed {
     flags: Vec<String>,
     account: Option<String>,
     owners: Vec<String>,
+    search: Option<String>,
     positional: Vec<String>,
 }
 
-/// `allowed` lists the bare flags; `--account` and `--owner` take a value
-/// when listed.
+/// `allowed` lists the bare flags; `--account`, `--owner` and `--search`
+/// take a value when listed.
 fn parse(args: &[String], allowed: &[&str]) -> Result<Parsed, UsageError> {
     let mut parsed = Parsed::default();
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--account" | "--owner" if allowed.contains(&arg.as_str()) => {
+            "--account" | "--owner" | "--search" if allowed.contains(&arg.as_str()) => {
                 let value = args
                     .next()
                     .ok_or_else(|| UsageError(format!("{arg} needs a value")))?
                     .clone();
-                if arg == "--account" {
-                    if parsed.account.is_some() {
+                match arg.as_str() {
+                    "--account" if parsed.account.is_some() => {
                         return Err(UsageError("--account is given twice".into()));
                     }
-                    parsed.account = Some(value);
-                } else {
-                    parsed.owners.push(value);
+                    "--account" => parsed.account = Some(value),
+                    "--search" if parsed.search.is_some() => {
+                        return Err(UsageError("--search is given twice".into()));
+                    }
+                    "--search" => parsed.search = Some(value),
+                    _ => parsed.owners.push(value),
                 }
             }
             flag if flag.starts_with("--") => {
@@ -273,6 +291,8 @@ fn wire<T: serde::de::DeserializeOwned>(text: &str, what: &str) -> Result<T, Usa
 
 enum Output {
     Nothing,
+    /// `read <row>... --account <a>`: every row has to be the account's.
+    ReadAs(String),
     Warnings,
     Tests,
     Cards,
@@ -444,7 +464,7 @@ fn owner_command(sub: &str, rest: &[String]) -> Result<Command, UsageError> {
         "events" => match p.positional.first().map(String::as_str) {
             Some("set") => {
                 let [_, owner, event, column, on] =
-                    p.args("set <owner> <event> list|todo|notify on|off")?;
+                    p.args("set <owner> <event> list|notify on|off")?;
                 Command::new(
                     Request::OwnerEventsSet {
                         account,
@@ -542,7 +562,7 @@ fn config_command(sub: &str, rest: &[String]) -> Result<Command, UsageError> {
 const FILTER_FLAGS: [&str; 7] = [
     "--account",
     "--owner",
-    "--todo",
+    "--search",
     "--authored",
     "--assigned",
     "--review-requested",
@@ -563,8 +583,8 @@ fn command(name: &str, rest: &[String]) -> Result<Command, UsageError> {
                 Request::List {
                     account: p.account.clone(),
                     owner: p.owners.first().cloned(),
-                    todo: p.has("--todo"),
                     filter: p.filter()?,
+                    search: p.search.clone(),
                     snoozed: p.has("--snoozed"),
                 },
                 Output::Cards,
@@ -578,8 +598,8 @@ fn command(name: &str, rest: &[String]) -> Result<Command, UsageError> {
                 Request::Activity {
                     account: p.account.clone(),
                     owners: p.owners.clone(),
-                    todo: p.has("--todo"),
                     filter: p.filter()?,
+                    search: p.search.clone(),
                 },
                 Output::Rows,
                 p.json(),
@@ -597,15 +617,27 @@ fn command(name: &str, rest: &[String]) -> Result<Command, UsageError> {
                 p.json(),
             )
         }
-        "done" | "todo" => {
-            let p = parse(rest, &["--off"])?;
-            let [row] = p.args("<row>")?;
-            let on = !p.has("--off");
-            Command::quiet(if name == "done" {
-                Request::Done { row, on }
+        "read" => {
+            let p = parse(rest, &["--all", "--account"])?;
+            if p.has("--all") {
+                p.none()?;
+                Command::quiet(Request::ReadAll {
+                    account: p.account()?,
+                })
             } else {
-                Request::Todo { row, on }
-            })
+                if p.positional.is_empty() {
+                    return Err(UsageError("expected <row>... or --all".into()));
+                }
+                let request = Request::Read {
+                    row_ids: p.positional.clone(),
+                };
+                // DESIGN.md, "CLI": `--account` may be left out; when given,
+                // it has to name the rows' account, as with `open <row>`.
+                match p.account.clone() {
+                    Some(login) => Command::new(request, Output::ReadAs(login), false),
+                    None => Command::quiet(request),
+                }
+            }
         }
         "snooze" | "unsnooze" => {
             let p = parse(rest, &["--account"])?;
@@ -657,20 +689,20 @@ fn command(name: &str, rest: &[String]) -> Result<Command, UsageError> {
 
 fn row_line(row: &Row) -> String {
     let unread = if row.unread { "*" } else { " " };
-    let state = match (row.todo, row.done) {
-        (_, true) => " [done]",
-        (true, false) => " [todo]",
-        (false, false) => "",
-    };
     let text = row.text.as_deref().unwrap_or_default().replace('\n', " ");
-    format!("{unread} {} {}{state} {text}", row.id, row.kind.as_text())
+    format!("{unread} {} {} {text}", row.id, row.kind.as_text())
 }
 
 fn print_card(card: &Card, logins: &BTreeMap<String, String>) {
     let snoozed = if card.snoozed { " snoozed" } else { "" };
+    let awaiting = if card.awaiting_review {
+        " [review requested]"
+    } else {
+        ""
+    };
     let account = logins.get(&card.account).unwrap_or(&card.account);
     println!(
-        "{} [{}] review={} checks={} base={}{snoozed} {} ({}) account={account}",
+        "{} [{}]{awaiting} review={} checks={} base={}{snoozed} {} ({}) account={account}",
         card.pr,
         card.state_label.as_text(),
         card.review.as_text(),
@@ -737,6 +769,27 @@ fn execute(socket: &Path, command: Command) -> Result<(), ClientError> {
         Output::Nothing => {
             request::<AckResponse>(socket, &command.request)?;
         }
+        Output::ReadAs(login) => {
+            let accounts: AccountsResponse = request(socket, &Request::AccountList)?;
+            let not_found = |message: String| ClientError::Remote {
+                code: shiibar_gh_proto::Lenient::Known(shiibar_gh_proto::ErrorCode::NotFound),
+                message,
+            };
+            let id = accounts
+                .accounts
+                .iter()
+                .find(|a| a.login.eq_ignore_ascii_case(&login))
+                .map(|a| a.id.clone())
+                .ok_or_else(|| not_found(format!("not found: account {login}")))?;
+            if let Request::Read { row_ids } = &command.request
+                && let Some(other) = row_ids
+                    .iter()
+                    .find(|row| !row.starts_with(&format!("{id}:")))
+            {
+                return Err(not_found(format!("not found: row {other}")));
+            }
+            request::<AckResponse>(socket, &command.request)?;
+        }
         Output::Warnings => {
             let response: RefreshResponse = request(socket, &command.request)?;
             response.warnings.iter().for_each(print_warning);
@@ -780,12 +833,12 @@ fn execute(socket: &Path, command: Command) -> Result<(), ClientError> {
             let response: AccountsResponse = request(socket, &command.request)?;
             for a in &response.accounts {
                 println!(
-                    "{} id={} color={} token={} todo={} unread={}",
+                    "{} id={} color={} token={} review={} unread={}",
                     a.login,
                     a.id,
                     a.color.as_text(),
                     if a.token.registered { "yes" } else { "no" },
-                    a.todo_count,
+                    a.review_count,
                     a.unread
                 );
                 for w in &a.warnings {
@@ -805,7 +858,7 @@ fn execute(socket: &Path, command: Command) -> Result<(), ClientError> {
             for a in &response.accounts {
                 for o in &a.owners {
                     println!(
-                        "{} {} id={} kind={} enabled={} notify={} skip_drafts={} todo={} prs={}",
+                        "{} {} id={} kind={} enabled={} notify={} skip_drafts={} review={} prs={}",
                         a.login,
                         o.name,
                         o.id,
@@ -813,7 +866,7 @@ fn execute(socket: &Path, command: Command) -> Result<(), ClientError> {
                         o.enabled,
                         o.notify,
                         o.skip_drafts,
-                        o.todo_count,
+                        o.review_count,
                         o.pr_count
                     );
                 }
@@ -835,9 +888,8 @@ fn execute(socket: &Path, command: Command) -> Result<(), ClientError> {
                 let name = shiibar_gh_proto::Lenient::Known(kind).as_text();
                 if let Some(cell) = response.events.get(&name) {
                     println!(
-                        "{name} list={} todo={} notify={}",
+                        "{name} list={} notify={}",
                         mark(cell.list),
-                        mark(cell.todo),
                         mark(cell.notify)
                     );
                 }
@@ -897,6 +949,16 @@ fn run(args: &[String]) -> u8 {
         print!("{}", usage(&help_name));
         return OK;
     }
+    if first == "version" {
+        return match parse(rest, &["--json"]).and_then(|p| p.none().map(|()| p.json())) {
+            Ok(json) => version(json),
+            Err(UsageError(message)) => {
+                eprintln!("shiibar-gh: {message}");
+                eprint!("{}", usage("version"));
+                ERROR
+            }
+        };
+    }
     let parsed = match (first, sub) {
         ("account", Some(sub)) => account_command(sub, &rest[1..]),
         ("config", Some(sub)) => config_command(sub, &rest[1..]),
@@ -932,6 +994,23 @@ fn run(args: &[String]) -> u8 {
     }
 }
 
+/// DESIGN.md, "CLI": this command's version and the daemon's `info`
+/// version. A daemon that does not answer is `not running` (`null`), and the
+/// exit code stays 0.
+fn version(json: bool) -> u8 {
+    let cli = env!("CARGO_PKG_VERSION");
+    let daemon = socket_path_from_env()
+        .and_then(|socket| request::<InfoResponse>(&socket, &Request::Info).ok())
+        .map(|info| info.version);
+    if json {
+        println!("{}", serde_json::json!({"cli": cli, "daemon": daemon}));
+    } else {
+        println!("cli: {cli}");
+        println!("daemon: {}", daemon.as_deref().unwrap_or("not running"));
+    }
+    OK
+}
+
 /// The owners of one account. `--json` prints `{"ok":true,"owners":[...]}`.
 fn owner_list(socket: &Path, login: &str, json: bool) -> Result<(), ClientError> {
     let response: AccountsResponse = request(socket, &Request::AccountList)?;
@@ -954,7 +1033,7 @@ fn owner_list(socket: &Path, login: &str, json: bool) -> Result<(), ClientError>
     }
     for o in &account.owners {
         println!(
-            "{} {} id={} kind={} enabled={} notify={} skip_drafts={} todo={} prs={}",
+            "{} {} id={} kind={} enabled={} notify={} skip_drafts={} review={} prs={}",
             account.login,
             o.name,
             o.id,
@@ -962,7 +1041,7 @@ fn owner_list(socket: &Path, login: &str, json: bool) -> Result<(), ClientError>
             o.enabled,
             o.notify,
             o.skip_drafts,
-            o.todo_count,
+            o.review_count,
             o.pr_count
         );
     }
@@ -1021,7 +1100,40 @@ mod tests {
         assert!(owner_command("enable", &args(&["org"])).is_err());
         assert!(owner_command("enable", &args(&["org", "--account", "me"])).is_ok());
         assert!(command("snooze", &args(&["o/r#1"])).is_err());
-        assert!(command("done", &args(&["row"])).is_ok());
+        assert!(command("read", &args(&["row"])).is_ok());
+        assert!(command("read", &args(&["--all"])).is_err());
+        assert!(command("read", &args(&["--all", "--account", "me"])).is_ok());
+        assert!(command("read", &args(&[])).is_err());
         assert!(command("list", &args(&["--authored", "--assigned"])).is_err());
+    }
+
+    #[test]
+    fn the_0_2_todo_commands_are_gone() {
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(command("done", &args(&["row"])).is_err());
+        assert!(command("todo", &args(&["row"])).is_err());
+        assert!(command("list", &args(&["--todo"])).is_err());
+        assert!(command("activity", &args(&["--todo"])).is_err());
+        assert!(
+            owner_command(
+                "events",
+                &args(&["set", "o", "mentioned", "todo", "on", "--account", "me"])
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn search_takes_one_value() {
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let list = command("list", &args(&["--search", "api #407"]))
+            .ok()
+            .unwrap();
+        assert!(matches!(
+            list.request,
+            Request::List { search: Some(ref s), .. } if s == "api #407"
+        ));
+        assert!(command("list", &args(&["--search"])).is_err());
+        assert!(command("activity", &args(&["--search", "a", "--search", "b"])).is_err());
     }
 }

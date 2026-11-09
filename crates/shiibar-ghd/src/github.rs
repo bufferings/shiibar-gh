@@ -107,9 +107,20 @@ pub struct Recorder {
     pub stop: Option<i64>,
     /// At least one call was answered.
     pub answered: bool,
+    /// `X-GitHub-SSO` of the last answered call, if it had one.
+    pub last_sso: Option<String>,
+    /// The HTTP status of the last answered call.
+    pub last_status: u16,
 }
 
 impl Recorder {
+    /// The last call was a 403 with the single-organization form of
+    /// `X-GitHub-SSO`. DESIGN.md, "Tokens": only that is evaluated; the URL
+    /// form on a 200 is ignored.
+    pub fn refused_for_sso(&self) -> bool {
+        self.last_status == 403 && self.last_sso.as_deref().is_some_and(sso_single_org)
+    }
+
     pub fn new(now: i64) -> Self {
         Self {
             now,
@@ -140,6 +151,8 @@ impl Recorder {
     fn observe(&mut self, status: u16, headers: &HeaderMap) {
         let text = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
         self.answered = true;
+        self.last_sso = text("x-github-sso").map(str::to_string);
+        self.last_status = status;
         if let Some(expires) = text("github-authentication-token-expiration").and_then(parse_expiry)
         {
             self.token.expires_at = Some(expires);
@@ -160,7 +173,10 @@ impl Recorder {
                     self.token.sso_orgs.push(org);
                 }
             }
-            if let Some(url) = sso_url(sso)
+            // DESIGN.md, "Tokens": the URL form is the answer of a 403 to
+            // one organization; on any other answer it is not evaluated.
+            if status == 403
+                && let Some(url) = sso_url(sso)
                 && !self.token.sso_urls.contains(&url)
             {
                 self.token.sso_urls.push(url);
@@ -223,6 +239,13 @@ pub fn sso_orgs(header: &str) -> Vec<i64> {
         .flat_map(|ids| ids.split(','))
         .filter_map(|id| id.trim().parse().ok())
         .collect()
+}
+
+/// The single-organization form of `X-GitHub-SSO`: a URL and no
+/// organization ids, which GitHub gives with a 403 (docs.github.com/en/rest/authentication/
+/// authenticating-to-the-rest-api, checked 2026-11-10).
+pub fn sso_single_org(header: &str) -> bool {
+    sso_orgs(header).is_empty() && sso_url(header).is_some()
 }
 
 /// `https://…` from `required; url=https://…`.
@@ -386,8 +409,13 @@ impl Api {
             .bearer_auth(token)
             .json(&json!({"query": query, "variables": variables}));
         let (_, headers, body) = self.send(rec, request).await?;
+        // DESIGN.md, "Fetch success and failure": a 200 whose body is empty
+        // or cannot be read is a failure like a network one, and is retried.
         let value: Value = serde_json::from_str(&body)
-            .map_err(|e| CallError::Other(format!("unreadable GraphQL answer: {e}")))?;
+            .map_err(|e| CallError::Network(format!("unreadable GraphQL answer: {e}")))?;
+        if !value.is_object() {
+            return Err(CallError::Network("unreadable GraphQL answer".into()));
+        }
         let errors: Vec<GqlError> = value["errors"]
             .as_array()
             .into_iter()
@@ -432,6 +460,9 @@ impl Api {
                     accepted: None,
                     message,
                 });
+            }
+            if errors.is_empty() {
+                return Err(CallError::Network(message));
             }
             return Err(CallError::Other(message));
         }
@@ -496,5 +527,15 @@ mod tests {
             vec![21955855, 20582480]
         );
         assert!(sso_orgs("required; url=https://github.com/orgs/x/sso").is_empty());
+    }
+
+    #[test]
+    fn only_the_url_form_is_a_single_organization() {
+        assert!(sso_single_org(
+            "required; url=https://github.com/orgs/x/sso"
+        ));
+        assert!(!sso_single_org(
+            "partial-results; organizations=21955855,20582480"
+        ));
     }
 }

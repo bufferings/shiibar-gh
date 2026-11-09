@@ -5,6 +5,7 @@
 // Accounts are keyed by their id (the GitHub user id, numeric, as a
 // string); requests carry the login the account has now (DESIGN.md, "Wire format").
 
+import Combine
 import Foundation
 
 /// The accounts whose saved token the daemon is testing after a Save
@@ -58,6 +59,10 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var dbUnreadable = false
     @Published public private(set) var connected = false
     @Published public private(set) var checks = TokenChecks()
+    /// `text_size`: the body text of the popovers and windows.
+    @Published public private(set) var textSize = TextSize.base
+    /// `snooze_return_time`, for "Snooze until Mon 09:00".
+    @Published public private(set) var returnTime: String?
     /// The last request that failed, for the surface that made it.
     @Published public var lastError: String?
 
@@ -65,6 +70,11 @@ public final class AppModel: ObservableObject {
     public let store: UIStateStore
     private let opener: URLOpening
     private let notifier: NotificationPresenting
+    private let copier: LinkCopying?
+    /// How long `account_changed` waits for more of its kind before the
+    /// lists are read again: one read per burst (docs/tasks/M5.md, the
+    /// request count of review A5).
+    public let reloadDelay: TimeInterval
     private var surfaces = OpenSurfaces()
     private var viewModels: [String: AccountViewModel] = [:]
     /// The accounts some surface shows, open or not: their lists follow
@@ -94,12 +104,15 @@ public final class AppModel: ObservableObject {
 
     public init(
         api: DaemonAPI, store: UIStateStore, opener: URLOpening, notifier: NotificationPresenting,
+        copier: LinkCopying? = nil, reloadDelay: TimeInterval = 0.2,
         clock: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970) }
     ) {
         self.api = api
         self.store = store
         self.opener = opener
         self.notifier = notifier
+        self.copier = copier
+        self.reloadDelay = reloadDelay
         self.clock = clock
     }
 
@@ -155,7 +168,7 @@ public final class AppModel: ObservableObject {
             checks.update(account)
             accountObservers.forEach { $0(account) }
             if displayed[account.id] != nil {
-                viewModels[account.id]?.reload()
+                viewModels[account.id]?.scheduleReload()
             }
         case .accountRemoved(let id):
             accounts.removeAll { $0.id == id }
@@ -168,10 +181,50 @@ public final class AppModel: ObservableObject {
         case .notify(let notification):
             notifier.present(notification)
         case .configChanged(let key, let value):
+            configChanged(key, value)
             for observer in configObservers { observer(key, value) }
         case .unknown:
             break
         }
+    }
+
+    private func configChanged(_ key: String, _ value: ConfigValue?) {
+        switch key {
+        case TextSize.configKey:
+            textSize = TextSize.clamp(value?.intValue ?? value?.stringValue.flatMap { Int64($0) })
+        case SnoozeTime.configKey:
+            returnTime = value?.stringValue
+        default:
+            break
+        }
+    }
+
+    /// The settings the popovers use, at connection.
+    public func loadConfig() async {
+        for key in [TextSize.configKey, SnoozeTime.configKey] {
+            if let value = try? await api.configGet(key) { configChanged(key, value) }
+        }
+    }
+
+    /// ⌘=, ⌘+, ⌘− and ⌘0: `config_set` with the new size; nothing at the
+    /// ends of the range. The size shows once the daemon answers or sends
+    /// `config_changed`.
+    public func changeTextSize(_ change: TextSize.Change) {
+        guard let wanted = TextSize.next(textSize, change) else { return }
+        let api = self.api
+        Task {
+            do {
+                let value = try await api.configSet(TextSize.configKey, .int(Int64(wanted)))
+                configChanged(TextSize.configKey, value)
+            } catch {
+                lastError = "\(error)"
+            }
+        }
+    }
+
+    /// The next Return time, for "Snooze until Mon 09:00".
+    public func nextReturn(timeZone: TimeZone = .current) -> Int64 {
+        SnoozeTime.next(returnTime, now: now, timeZone: timeZone)
     }
 
     private func keychainChanged(_ state: KeychainState) {
@@ -187,51 +240,74 @@ public final class AppModel: ObservableObject {
     public func connectionChanged(_ isConnected: Bool) {
         connected = isConnected
         guard isConnected else { return }
+        Task { await loadConfig() }
         for id in surfaces.openAccounts {
             guard let login = account(id)?.login else { continue }
-            send { try await $0.popoverOpened(login) }
+            openThenReload(id, login: login)
         }
     }
 
     // MARK: - Surfaces
 
     /// A surface shows the account's list, open or not (the window keeps
-    /// showing while another app has the focus).
-    public func surfaceDisplayed(_ surface: Surface, account: String, _ shown: Bool) {
-        if !shown { viewModels[account]?.clearShown(surface) }
+    /// showing while another app has the focus). The window's search is
+    /// cleared when it closes.
+    /// `opening`: the surface opens right after (`surfaceOpened`), which
+    /// reads the lists once `popover_opened` is answered, so nothing is read
+    /// here before it.
+    public func surfaceDisplayed(_ surface: Surface, account: String, _ shown: Bool, opening: Bool = false) {
         if shown {
             let first = displayed[account] == nil
             displayed[account, default: []].insert(surface)
-            if first { viewModel(account).reload() }
+            if first && !opening { viewModel(account).reload() }
+            // A new window decides "+ N more PRs" with the list it reads.
+            if surface == .window { viewModel(account).list(.window).opened() }
         } else if var set = displayed[account] {
+            if surface == .window { viewModels[account]?.list(.window).clearSearch() }
             set.remove(surface)
             displayed[account] = set.isEmpty ? nil : set
         }
     }
 
-    /// The popover opened, or the window got the focus.
+    /// The popover opened, or the window got the focus. The popover decides
+    /// "+ N more PRs" again with the list it reads now.
     public func surfaceOpened(_ surface: Surface, account: String) {
         if surfaces.isOpen(surface, account: account) { return }
-        if surfaces.opened(surface, account: account), let login = self.account(account)?.login {
-            send { try await $0.popoverOpened(login) }
-        }
+        let first = surfaces.opened(surface, account: account)
         let model = viewModel(account)
-        model.reload()
-        if surface == .popover {
-            model.clearShown(.popover)
+        if surface == .popover { model.list(.popover).opened() }
+        if first, let login = self.account(account)?.login {
+            openThenReload(account, login: login)
         } else {
-            model.rowsShown(model.shown(.window), surface: .window)
+            model.reload()
         }
     }
 
-    /// The popover closed, or the window closed or lost the focus.
-    public func surfaceClosed(_ surface: Surface, account: String) {
-        if surface == .popover { viewModels[account]?.clearShown(.popover) }
-        if surfaces.closed(surface, account: account) {
-            viewModels[account]?.closedAll()
-            if let login = self.account(account)?.login {
-                send { try await $0.popoverClosed(login) }
+    /// `popover_opened`, and only once it is answered the lists: the daemon
+    /// keeps every card of a `list` answered after `popover_opened` until
+    /// `popover_closed` (DESIGN.md, "When a card shows and leaves"), so the
+    /// cards shown while open never leave under the user. The lists are
+    /// read even when `popover_opened` fails.
+    private func openThenReload(_ account: String, login: String) {
+        let api = self.api
+        Task {
+            do {
+                try await api.popoverOpened(login)
+            } catch {
+                lastError = "\(error)"
             }
+            viewModels[account]?.reload()
+        }
+    }
+
+    /// The popover closed, or the window closed or lost the focus: "+ N
+    /// more PRs" is decided again; the popover's search is cleared. Rows
+    /// stay unread (DESIGN.md, "How unread clears").
+    public func surfaceClosed(_ surface: Surface, account: String) {
+        guard surfaces.isOpen(surface, account: account) else { return }
+        viewModels[account]?.list(surface).closed(clearsSearch: surface == .popover)
+        if surfaces.closed(surface, account: account), let login = self.account(account)?.login {
+            send { try await $0.popoverClosed(login) }
         }
     }
 
@@ -245,25 +321,38 @@ public final class AppModel: ObservableObject {
 
     // MARK: - Actions
 
-    /// The daemon side of a popover action. Section actions stay in the
-    /// view model.
+    /// The daemon side of a popover action. Section actions, reading and
+    /// Mark all as read stay in the view model.
     func perform(_ action: PopoverAction, account id: String) {
         let login = account(id)?.login
         switch action {
-        case .open(let url):
+        case .open(let url, _):
             open(url)
-        case .done(let row, let on):
-            change(id) { try await $0.done(row, on: on) }
-        case .todo(let row, let on):
-            change(id) { try await $0.todo(row, on: on) }
+        case .copyLink(let url):
+            copier?.copy(url)
         case .snooze(let pr):
             guard let login else { return }
             change(id) { try await $0.snooze(account: login, pr: pr) }
         case .unsnooze(let pr):
             guard let login else { return }
             change(id) { try await $0.unsnooze(account: login, pr: pr) }
-        case .toggleSection, .expand:
+        case .toggleSection, .expand, .markAllRead:
             break
+        }
+    }
+
+    /// `read` for rows the user selected, opened or marked. `failed` runs
+    /// when the daemon refused, so the view can drop its local marks.
+    func read(_ rows: [String], failed: @escaping () -> Void) {
+        guard !rows.isEmpty else { return }
+        let api = self.api
+        Task {
+            do {
+                try await api.read(rows)
+            } catch {
+                lastError = "\(error)"
+                failed()
+            }
         }
     }
 
@@ -350,11 +439,6 @@ public final class AppModel: ObservableObject {
         checks.started(current, before: before, now: now)
     }
 
-    func seen(_ rows: [String]) {
-        guard !rows.isEmpty else { return }
-        send { try await $0.seen(rows) }
-    }
-
     private func change(_ account: String, _ request: @escaping (DaemonAPI) async throws -> Void) {
         let api = self.api
         Task {
@@ -386,100 +470,131 @@ public final class AppModel: ObservableObject {
     }
 }
 
-/// One account's lists for its popover and window.
+/// One account's data, shared by its popover and its window: the daemon's
+/// answers kept unfiltered, unread marks sent but not yet in a list, and
+/// what is saved per account (the chip, Group by, the sort order, collapsed
+/// sections, the Activity owner buttons, Keep on top). What each surface
+/// shows is its `SurfaceListModel`.
 @MainActor
 public final class AccountViewModel: ObservableObject {
     public let accountId: String
-    private unowned let app: AppModel
+    unowned let app: AppModel
+    /// The unsnoozed cards as the daemon sent them.
     @Published public private(set) var cards: [Card] = []
+    /// The snoozed cards as the daemon sent them.
     @Published public private(set) var snoozed: [Card] = []
-    /// The snoozed PRs without the filters: the Snoozed header.
-    @Published public private(set) var allSnoozed: [Card] = []
-    @Published public private(set) var activity: [Row] = []
+    /// The Activity rows as the daemon sent them.
+    @Published public private(set) var allActivity: [Row] = []
     @Published public private(set) var loaded = false
-    @Published public var tab: PopoverTab = .prs {
-        didSet { selection = PopoverLogic.keep(selection, in: items) }
-    }
-    @Published public var filter: FilterState {
+    @Published public var options: ListOptions {
         didSet {
-            guard filter != oldValue else { return }
-            app.store.setFilter(filter, account: accountId)
-            reload()
+            guard options != oldValue else { return }
+            app.store.setOptions(options, account: accountId)
+            lists.values.forEach { $0.keepSelection() }
         }
     }
     @Published public private(set) var collapsed: [String: Bool]
-    /// Sections whose "+ N more PRs" was opened. Not kept (DESIGN.md,
-    /// "PRs tab sections").
-    @Published public private(set) var expanded: Set<String> = []
     @Published public private(set) var activityOwners: Set<String>
-    @Published public var selection: SelectionItem?
-    var seen = SeenTracker()
-    private var shownBySurface: [Surface: Set<String>] = [:]
+    /// Keep on top of the window, kept per account.
+    @Published public private(set) var keepOnTop: Bool
+    /// Rows sent as `read` that a list may still show unread: they show
+    /// read until a list agrees.
+    private var pendingRead: Set<String> = []
     private var reloads = 0
+    private var scheduled: Task<Void, Never>?
+    private var lists: [Surface: SurfaceListModel] = [:]
 
     init(account: String, app: AppModel) {
         accountId = account
         self.app = app
-        filter = app.store.filter(account: account)
+        options = app.store.options(account: account)
         collapsed = app.store.collapsed(account: account)
         activityOwners = app.store.activityOwners(account: account)
+        keepOnTop = app.store.keepOnTop(account: account)
     }
 
     public var account: Account? { app.account(accountId) }
 
-    public var sections: [SectionLayout] {
-        guard let account else { return [] }
-        return PopoverLogic.sections(
-            account: account, cards: cards, snoozed: snoozed, allSnoozed: allSnoozed,
-            collapsed: collapsed, expanded: expanded, showsEmpty: emptyText != nil
-        )
+    /// The popover's or the window's own state: tab, search, selection and
+    /// "+ N more PRs".
+    public func list(_ surface: Surface) -> SurfaceListModel {
+        if let list = lists[surface] { return list }
+        let list = SurfaceListModel(data: self, surface: surface)
+        lists[surface] = list
+        return list
     }
 
-    /// "Nothing needs you" or "Nothing matches" in place of the owner
-    /// sections.
-    public var emptyText: String? {
-        PopoverLogic.emptyText(loaded: loaded, cards: cards, filter: filter)
+    public var usage: ApiUsage { ApiUsage(account?.rateLimit) }
+
+    // MARK: Activity owner buttons
+
+    public var allOwnersOn: Bool {
+        guard let account else { return true }
+        return ActivityOwners.allOwnersOn(activityOwners, account: account)
     }
 
-    public var items: [SelectionItem] {
-        PopoverLogic.items(tab: tab, sections: sections, activity: activity)
+    public func isOwnerOn(_ owner: String) -> Bool {
+        !allOwnersOn && activityOwners.contains(owner)
     }
-
-    public var hints: [KeyHint] {
-        PopoverLogic.hints(selection: selection, sections: sections, activity: activity)
-    }
-
-    /// The Activity owner buttons that are on, without owners that went away.
-    public func isOwnerOn(_ owner: String) -> Bool { activityOwners.contains(owner) }
 
     public func toggleOwner(_ owner: String) {
+        if let account {
+            // Removed and disabled owners do not count any more.
+            activityOwners = ActivityOwners.effective(activityOwners, account: account)
+        }
         if activityOwners.contains(owner) { activityOwners.remove(owner) } else { activityOwners.insert(owner) }
         app.store.setActivityOwners(activityOwners, account: accountId)
-        reload()
+        lists.values.forEach { $0.keepSelection() }
+    }
+
+    /// `All owners` turns every owner button off.
+    public func showAllOwners() {
+        activityOwners = []
+        app.store.setActivityOwners([], account: accountId)
+        lists.values.forEach { $0.keepSelection() }
+    }
+
+    func setCollapsed(_ key: String, _ value: Bool) {
+        collapsed[key] = value
+        app.store.setCollapsed(collapsed, account: accountId)
+        lists.values.forEach { $0.keepSelection() }
+    }
+
+    public func toggleKeepOnTop() {
+        keepOnTop.toggle()
+        app.store.setKeepOnTop(keepOnTop, account: accountId)
+    }
+
+    // MARK: Loading
+
+    /// Read the lists again after a short wait, once for a burst of
+    /// `account_changed`.
+    public func scheduleReload() {
+        scheduled?.cancel()
+        let delay = app.reloadDelay
+        scheduled = Task { [weak self] in
+            if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+            guard !Task.isCancelled else { return }
+            self?.reload()
+        }
     }
 
     public func reload() {
         guard let account else { return }
+        scheduled?.cancel()
+        scheduled = nil
         reloads += 1
         let current = reloads
-        let filter = self.filter
-        let owners = ActivityOwners.arguments(activityOwners, account: account)
         let login = account.login
         let api = app.api
         Task {
             do {
-                async let cards = api.list(ListQuery(account: login, todo: filter.todo, filter: filter.segment))
-                async let snoozed = api.list(ListQuery(account: login, todo: filter.todo, filter: filter.segment, snoozed: true))
-                async let allSnoozed = api.list(ListQuery(account: login, snoozed: true))
-                async let rows = api.activity(ActivityQuery(account: login, owners: owners, todo: filter.todo, filter: filter.segment))
-                let (newCards, newSnoozed, newAllSnoozed, newRows) = try await (cards, snoozed, allSnoozed, rows)
+                async let cards = api.list(ListQuery(account: login))
+                async let snoozed = api.list(ListQuery(account: login, snoozed: true))
+                async let rows = api.activity(ActivityQuery(account: login))
+                let (newCards, newSnoozed, newRows) = try await (cards, snoozed, rows)
                 guard current == reloads else { return }
-                self.cards = newCards
-                self.snoozed = newSnoozed
-                self.allSnoozed = newAllSnoozed
-                self.activity = newRows
-                self.loaded = true
-                self.selection = PopoverLogic.keep(selection, in: items)
+                apply(cards: newCards, snoozed: newSnoozed, rows: newRows)
             } catch {
                 guard current == reloads else { return }
                 app.lastError = "\(error)"
@@ -487,59 +602,236 @@ public final class AccountViewModel: ObservableObject {
         }
     }
 
-    /// A key while the popover or the window has the focus.
+    func apply(cards newCards: [Card], snoozed newSnoozed: [Card], rows newRows: [Row]) {
+        // A row the daemon shows read, or no longer has, needs no local mark.
+        let unreadNow = Set((newCards + newSnoozed).flatMap(\.rows).filter(\.unread).map(\.id))
+            .union(newRows.filter(\.unread).map(\.id))
+        pendingRead.formIntersection(unreadNow)
+        cards = Self.marked(newCards, read: pendingRead)
+        snoozed = Self.marked(newSnoozed, read: pendingRead)
+        allActivity = newRows.map { pendingRead.contains($0.id) ? Self.read($0) : $0 }
+        loaded = true
+        lists.values.forEach { $0.listArrived() }
+    }
+
+    static func read(_ row: Row) -> Row {
+        var row = row
+        row.unread = false
+        return row
+    }
+
+    static func marked(_ cards: [Card], read ids: Set<String>) -> [Card] {
+        guard !ids.isEmpty else { return cards }
+        return cards.map { card in
+            var card = card
+            card.rows = card.rows.map { ids.contains($0.id) ? read($0) : $0 }
+            return card
+        }
+    }
+
+    // MARK: Reading
+
+    func row(_ id: String) -> Row? {
+        (cards + snoozed).lazy.flatMap(\.rows).first { $0.id == id } ?? allActivity.first { $0.id == id }
+    }
+
+    /// Show the rows read at once and send `read`; a refusal puts them back
+    /// with the next list.
+    func markRead(_ ids: [String]) {
+        let fresh = ids.filter { row($0)?.unread ?? false }
+        guard !fresh.isEmpty else { return }
+        pendingRead.formUnion(fresh)
+        let set = Set(fresh)
+        cards = Self.marked(cards, read: set)
+        snoozed = Self.marked(snoozed, read: set)
+        allActivity = allActivity.map { set.contains($0.id) ? Self.read($0) : $0 }
+        app.read(fresh) { [weak self] in
+            self?.pendingRead.subtract(fresh)
+            self?.reload()
+        }
+    }
+}
+
+/// What one surface (the popover or the window) of an account shows: its
+/// tab, its search, its selection and its "+ N more PRs" (DESIGN.md: the
+/// popover clears its search when it closes, the window when it closes).
+/// The data and the saved choices come from the shared `AccountViewModel`.
+@MainActor
+public final class SurfaceListModel: ObservableObject {
+    public let surface: Surface
+    public unowned let data: AccountViewModel
+    @Published public var tab: PopoverTab = .prs {
+        didSet { keepSelection() }
+    }
+    /// The search of each tab. Not kept.
+    @Published public private(set) var searches: [PopoverTab: String] = [:]
+    /// Whether the search field has the keyboard.
+    @Published public var searchFocused = false
+    /// Sections whose "+ N more PRs" was opened. Not kept (DESIGN.md,
+    /// "PRs tab sections").
+    @Published public private(set) var expanded: Set<String> = []
+    @Published public private(set) var fold = FoldState()
+    @Published public private(set) var selection: SelectionItem?
+    private var forward: AnyCancellable?
+
+    init(data: AccountViewModel, surface: Surface) {
+        self.data = data
+        self.surface = surface
+        forward = data.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+    }
+
+    var app: AppModel { data.app }
+
+    // MARK: Derived lists
+
+    public var search: String {
+        get { searches[tab] ?? "" }
+        set { searches[tab] = newValue }
+    }
+
+    public var sections: [SectionLayout] {
+        guard let account = data.account else { return [] }
+        return Listing.sections(
+            account: account, cards: data.cards, snoozed: data.snoozed, options: data.options, search: searches[.prs] ?? "",
+            collapsed: data.collapsed, expanded: expanded, fold: fold
+        )
+    }
+
+    /// "Nothing needs you" or "Nothing matches" in place of the sections
+    /// other than Snoozed.
+    public var emptyText: String? {
+        Listing.emptyText(loaded: data.loaded, cards: data.cards, options: data.options, search: searches[.prs] ?? "")
+    }
+
+    /// The Activity rows shown: owner buttons, chip and search applied.
+    public var activity: [Row] {
+        guard let account = data.account else { return [] }
+        return Listing.activity(
+            data.allActivity, cards: data.cards, segment: data.options.segment,
+            owners: ActivityOwners.effective(data.activityOwners, account: account), search: searches[.activity] ?? ""
+        )
+    }
+
+    public var activityEmptyText: String? {
+        Listing.activityEmptyText(loaded: data.loaded, all: data.allActivity, shown: activity)
+    }
+
+    public var items: [SelectionItem] {
+        PopoverLogic.items(tab: tab, sections: tab == .prs ? sections : [], activity: tab == .activity ? activity : [])
+    }
+
+    public var hints: [KeyHint] {
+        PopoverLogic.hints(selection: selection, sections: sections, activity: activity)
+    }
+
+    /// The rows ⇧R and Mark all as read send.
+    public var rowsToRead: [String] {
+        Listing.rowsToRead(tab: tab, sections: tab == .prs ? sections : [], activity: tab == .activity ? activity : [])
+    }
+
+    func keepSelection() {
+        selection = PopoverLogic.keep(selection, in: items)
+    }
+
+    /// A new list arrived.
+    func listArrived() {
+        fold.update(data.cards)
+        keepSelection()
+    }
+
+    // MARK: Selection, keys and clicks
+
+    /// Select an item: by ↑↓, a click or a right click. A row is read.
+    public func select(_ item: SelectionItem?) {
+        selection = item
+        if case .row(let id, _)? = item { data.markRead([id]) }
+        // Reading the row may take a PR out of the fold.
+        fold.update(data.cards)
+    }
+
+    /// A double click: select it, then open it.
+    public func doubleClick(_ item: SelectionItem) {
+        select(item)
+        if let action = PopoverLogic.action(for: .open, selection: item, sections: sections, activity: activity) {
+            perform(action)
+        }
+    }
+
+    /// The right-click menu of an item, after selecting (and reading) it.
+    public func rightClick(_ item: SelectionItem) -> [MenuEntry?] {
+        select(item)
+        return PopoverLogic.menu(
+            for: item, tab: tab, sections: sections, activity: activity, returnAt: app.nextReturn()
+        )
+    }
+
+    /// A key while the surface has the focus and the search field does not.
     public func press(_ key: Key) {
         switch key {
         case .up, .down:
-            selection = PopoverLogic.move(selection, up: key == .up, in: items)
-        case .open, .done, .todo, .snooze:
+            select(PopoverLogic.move(selection, up: key == .up, in: items))
+        case .find:
+            searchFocused = true
+        case .open, .snooze, .markAllRead:
             if let action = PopoverLogic.action(for: key, selection: selection, sections: sections, activity: activity) {
                 perform(action)
             }
         }
     }
 
+    /// Esc or ↓ in the search field (DESIGN.md, "Search field"): Esc clears
+    /// the text, if any, and both go back to the list. The popover stays.
+    public func leaveSearch(clearing: Bool) {
+        if clearing { search = "" }
+        searchFocused = false
+    }
+
+    public func setSearch(_ text: String) {
+        search = text
+        keepSelection()
+    }
+
+    func clearSearch() {
+        searches = [:]
+        searchFocused = false
+        keepSelection()
+    }
+
     public func perform(_ action: PopoverAction) {
         switch action {
         case .toggleSection(let key):
             let section = sections.first { $0.key == key }
-            collapsed[key] = !(section?.collapsed ?? false)
-            app.store.setCollapsed(collapsed, account: accountId)
-            selection = PopoverLogic.keep(selection, in: items)
+            data.setCollapsed(Listing.collapseKey(data.options.groupBy, key), !(section?.collapsed ?? false))
         case .expand(let key):
             expanded.insert(key)
             if selection == .more(key) {
-                selection = .section(key)
+                selection = sections.first { $0.key == key }?.showsHeader == true ? .section(key) : nil
             }
+        case .markAllRead:
+            data.markRead(rowsToRead)
+        case .open(_, let row):
+            if let row { data.markRead([row]) }
+            app.perform(action, account: data.accountId)
         default:
-            app.perform(action, account: accountId)
+            app.perform(action, account: data.accountId)
         }
     }
 
-    /// The account is no longer open anywhere: `seen` starts over and the
-    /// "+ N more PRs" fold again.
-    func closedAll() {
-        seen.reset()
+    // MARK: Open and closed
+
+    /// The surface opened: "+ N more PRs" is decided with the next list,
+    /// and the search field does not take the keyboard (DESIGN.md, "Search
+    /// field"); ⌘F moves there.
+    func opened() {
+        fold.decideOnNextList()
+        searchFocused = false
+    }
+
+    /// The popover closed or the window lost the focus: "+ N more PRs" is
+    /// decided again and folds again; the popover's search is cleared.
+    func closed(clearsSearch: Bool) {
+        fold.decide(data.cards)
         expanded = []
-    }
-
-    public func shown(_ surface: Surface) -> Set<String> {
-        shownBySurface[surface] ?? []
-    }
-
-    func clearShown(_ surface: Surface) {
-        shownBySurface[surface] = nil
-    }
-
-    /// The rows now inside the visible part of one surface's list. Unread
-    /// ones not sent in this open period go out as `seen`, only while that
-    /// surface is open. Rows collapsed, folded or filtered out are not laid
-    /// out, so they never arrive here.
-    public func rowsShown(_ shown: Set<String>, surface: Surface) {
-        shownBySurface[surface] = shown
-        guard app.isOpen(surface, account: accountId) else { return }
-        let rows = tab == .prs ? sections.flatMap(\.cards).flatMap(\.rows) : activity
-        let unread = Set(rows.filter(\.unread).map(\.id))
-        app.seen(seen.newlySeen(shown: shown, unread: unread))
+        if clearsSearch { clearSearch() }
     }
 }

@@ -210,7 +210,7 @@ public enum IconMenu {
 
 /// The menu bar image of one account (docs/design/MenuBarIcon.html): the
 /// placeholder glyph in the account color, the blue dot at the top right,
-/// the Todo PR count at the bottom right and the triangle at the bottom
+/// the count of PRs waiting for your review at the bottom right and the triangle at the bottom
 /// left, each cut out of the glyph so it reads on any menu bar.
 ///
 /// The colors are resolved for `appearance`, the status button's effective

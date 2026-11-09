@@ -23,7 +23,7 @@ fn row(daemon: &mut Daemon, id: &str) {
         "id":"PR_1","owner":"stranger","repo":"app","number":1,"url":"https://github.example/1",
         "title":"T","author":"me","base":"main","head":"topic","state":"open","is_draft":false,
         "review":"none","checks":"none","base_status":"none","mergeable":false,
-        "failed_check":null,"changes_requested_by":null,"updated_at":T0,"is_private":false,
+        "failed_check":null,"changes_requested_by":null,"updated_at":T0,"created_at":T0 - 100,"is_private":false,
         "requested_me":false,"assignees":[],"links":{"review":"r","checks":"c","base":"b"}
     });
     let event = json!({"id":id,"pr_id":"PR_1","kind":"merged","occurred_at":T0 + 1,"url":"u",

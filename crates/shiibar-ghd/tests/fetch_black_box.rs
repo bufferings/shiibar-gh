@@ -166,7 +166,8 @@ fn seed_ingest() -> Value {
             "url":format!("https://github.com/org/app/pull/{number}"),"title":format!("Title {id}"),
             "author":author,"base":"main","head":"topic","state":"open","is_draft":false,
             "review":"none","checks":"none","base_status":"up_to_date","mergeable":false,
-            "failed_check":null,"changes_requested_by":null,"updated_at":T0,"is_private":false,
+            "failed_check":null,"changes_requested_by":null,"updated_at":T0,
+            "created_at":T0 - 86_400,"is_private":false,
             "requested_me":false,
             "links":{"review":format!("https://github.com/org/app/pull/{number}"),
                      "checks":format!("https://github.com/org/app/pull/{number}/checks"),
@@ -241,10 +242,15 @@ fn from_a_token_to_list_the_rows_match_a_dev_ingest() {
             .contains("author { __typename login avatarUrl(size: 32) }")
     );
     assert!(status.query().contains("assignees(first: 100)"));
-    assert_eq!(
-        fetched_cards, injected_cards,
-        "the same rows, unread and done"
+    assert!(status.query().contains("createdAt"));
+    assert!(
+        status.query().contains(
+            "reviews(last: 100) { nodes { state submittedAt createdAt author { login } } }"
+        )
     );
+    assert_eq!(card("PR_1")["created_at"], T0 - 86_400);
+    assert_eq!(card("PR_1")["awaiting_review"], true);
+    assert_eq!(fetched_cards, injected_cards, "the same rows and unread");
     let strip = |mut n: Value| {
         n["id"] = json!(null);
         n
@@ -361,15 +367,15 @@ fn two_accounts_on_the_same_owner_fetch_with_their_own_tokens_apart() {
     let searches = ops(&github, "Search");
     assert!(searches.iter().any(|r| r.token == TOKEN));
     assert!(searches.iter().any(|r| r.token == YOU_TOKEN));
-    // Done on one account leaves the other.
-    daemon.ok(json!({"cmd":"done","row":"1001:C_9","on":true}));
+    // Reading on one account leaves the other.
+    daemon.ok(json!({"cmd":"read","row_ids":["1001:C_9"]}));
     let yours = cards_of(&daemon, YOU);
     let row = yours
         .iter()
         .flat_map(|c| c["rows"].as_array().unwrap().clone())
         .find(|r| r["id"] == "1002:C_9")
         .unwrap();
-    assert_eq!(row["done"], false);
+    assert_eq!(row["unread"], true);
     daemon.stop();
 }
 
@@ -400,10 +406,9 @@ fn notifications_follow_the_poll_interval_and_if_modified_since() {
     assert!(first[0].path.contains("all=true") && first[0].path.contains("per_page=50"));
     assert!(!first[0].headers.contains_key("if-modified-since"));
     assert_eq!(first[0].token, TOKEN);
-    assert!(
-        !ops(&github, "Resolve").is_empty(),
-        "a notified PR is looked up by owner, name and number"
-    );
+    // DESIGN.md, "Identifying PRs": a PR the account never saved is not
+    // looked up from a notification.
+    assert!(ops(&github, "Resolve").is_empty());
 
     github.clear_requests();
     daemon.clock(T0 + 160);
@@ -868,31 +873,49 @@ fn a_failing_fetch_keeps_the_content_and_a_401_stops_only_its_account() {
         (req.token == TOKEN && req.op.as_deref() == Some("Status"))
             .then(|| Resp::json(502, json!({})))
     });
+    // DESIGN.md, "Fetch success and failure": the first failure shows only
+    // as an Updated time that stops moving.
     daemon.clock(T0 + 200);
+    assert!(kinds(&daemon, ME).is_empty(), "not before five minutes");
+    assert_eq!(cards_of(&daemon, ME).len(), 2, "the last content stays");
+    assert_eq!(
+        daemon.account(ME)["updated_at"],
+        T0 + 100,
+        "a failed run does not move it"
+    );
+    assert!(kinds(&daemon, YOU).is_empty(), "the other account goes on");
+    // The retry is five seconds later and fails again.
+    github.clear_requests();
+    daemon.clock(T0 + 205);
+    assert!(
+        !github.by_token(TOKEN).is_empty(),
+        "retried after 5 seconds"
+    );
+    daemon.clock(T0 + 499);
+    assert!(kinds(&daemon, ME).is_empty(), "four minutes 59 seconds");
+    daemon.clock(T0 + 500);
     let failed = warning(&daemon, ME, "fetch_failed");
-    assert_eq!(failed["until"], T0 + 260, "the next interval");
+    assert_eq!(failed["until"], T0 + 499 + 20, "the next retry");
     assert_eq!(
         failed["message"],
         "Couldn't reach GitHub · retrying in 1 min"
     );
-    assert_eq!(cards_of(&daemon, ME).len(), 2, "the last content stays");
-    assert_eq!(
-        daemon.account(ME)["updated_at"],
-        T0 + 200,
-        "failed runs count"
-    );
-    assert!(kinds(&daemon, YOU).is_empty(), "the other account goes on");
+    assert_eq!(daemon.account(ME)["updated_at"], T0 + 100);
 
     github.clear_overrides();
     github.with(|w| w.unauthorized.insert(TOKEN.into()));
-    daemon.clock(T0 + 300);
-    assert_eq!(kinds(&daemon, ME), ["token_invalid"]);
+    daemon.clock(T0 + 600);
+    assert_eq!(
+        kinds(&daemon, ME),
+        ["token_invalid"],
+        "a stop forgets the failures"
+    );
     assert_eq!(
         warning(&daemon, ME, "token_invalid")["message"],
         "Token is invalid"
     );
     github.clear_requests();
-    daemon.clock(T0 + 400);
+    daemon.clock(T0 + 700);
     assert!(
         github.by_token(TOKEN).is_empty(),
         "stopped until the token changes"
@@ -900,7 +923,7 @@ fn a_failing_fetch_keeps_the_content_and_a_401_stops_only_its_account() {
     assert!(!github.by_token(YOU_TOKEN).is_empty());
     assert_eq!(
         daemon.account(ME)["updated_at"],
-        T0 + 300,
+        T0 + 100,
         "a stop does not move it"
     );
     // refresh tries once more, and stays stopped on another 401.
@@ -913,9 +936,9 @@ fn a_failing_fetch_keeps_the_content_and_a_401_stops_only_its_account() {
         w.logins.insert("ghp_me_new".into(), ME.into());
     });
     daemon.ok(json!({"cmd":"token_set","account":ME,"token":"ghp_me_new"}));
-    daemon.clock(T0 + 500);
+    daemon.clock(T0 + 800);
     assert!(kinds(&daemon, ME).is_empty());
-    assert_eq!(daemon.account(ME)["updated_at"], T0 + 500);
+    assert_eq!(daemon.account(ME)["updated_at"], T0 + 800);
     daemon.stop();
 }
 
@@ -1292,29 +1315,67 @@ fn sso_names_the_registered_owner_by_its_numeric_id() {
     assert_eq!(w["message"], "SSO authorization required for org");
     assert_eq!(w["owner"], daemon.owner(ME, "org")["id"]);
     assert_eq!(kinds(&daemon, ME), ["sso_required"], "no stop");
+    // DESIGN.md, "Tokens": an organization no owner has is ignored.
     github.with(|w| {
         w.token_headers.insert(
             TOKEN.into(),
             vec![(
                 "X-GitHub-SSO".into(),
-                "required; url=https://github.com/orgs/acme/sso?authorization_request=1".into(),
+                "partial-results; organizations=999".into(),
             )],
         );
     });
     daemon.clock(T0 + 200);
-    let w = warning(&daemon, ME, "sso_required");
-    assert_eq!(w["message"], "SSO authorization required");
-    assert_eq!(w["owner"], Value::Null);
-    assert_eq!(
-        w["url"],
-        "https://github.com/orgs/acme/sso?authorization_request=1"
-    );
+    assert!(kinds(&daemon, ME).is_empty(), "{:?}", daemon.account(ME));
     github.with(|w| w.token_headers.clear());
+
+    // The single-organization form on an owner's search names that owner,
+    // with its URL, and is no failure.
+    const URL: &str = "https://github.com/orgs/org/sso?authorization_request=1";
+    github.intercept(|req| {
+        let org = req.op.as_deref() == Some("Search")
+            && req.vars()["q0"]
+                .as_str()
+                .is_some_and(|q| q.contains("org:org"));
+        org.then(|| {
+            Resp::json(
+                403,
+                json!({"message":"Resource protected by organization SAML enforcement."}),
+            )
+            .header("X-GitHub-SSO", format!("required; url={URL}"))
+        })
+    });
     daemon.clock(T0 + 300);
+    let w = warning(&daemon, ME, "sso_required");
+    assert_eq!(w["message"], "SSO authorization required for org");
+    assert_eq!(w["owner"], daemon.owner(ME, "org")["id"]);
+    assert_eq!(w["url"], URL);
+    assert_eq!(kinds(&daemon, ME), ["sso_required"]);
+    assert_eq!(daemon.account(ME)["updated_at"], T0 + 300, "no failure");
+    github.clear_overrides();
+
+    // The same form on a request across owners (the status) cannot name
+    // one: the run fails, without a warning.
+    github.with(|w| w.prs.push(pr_node("PR_1", "org", 1, "me", json!({}))));
+    github.intercept(|req| {
+        (req.op.as_deref() == Some("Status")).then(|| {
+            Resp::json(
+                403,
+                json!({"message":"Resource protected by organization SAML enforcement."}),
+            )
+            .header("X-GitHub-SSO", format!("required; url={URL}"))
+        })
+    });
+    daemon.clock(T0 + 400);
+    assert!(kinds(&daemon, ME).is_empty(), "{:?}", daemon.account(ME));
+    assert_eq!(daemon.account(ME)["updated_at"], T0 + 300, "a failure");
+    github.clear_overrides();
+    daemon.clock(T0 + 500);
     assert!(
         kinds(&daemon, ME).is_empty(),
         "authorized: the header is gone"
     );
+    assert_eq!(daemon.account(ME)["updated_at"], T0 + 500);
     daemon.stop();
 }
 
@@ -1367,7 +1428,11 @@ fn teams_come_from_user_teams_page_by_page() {
         .expect("a request to a team on the second page");
     assert_eq!(row["kind"], "team_review_requested");
     assert_eq!(row["text"], "for infra team");
-    assert_eq!(row["todo"], true, "the team is still asked");
+    assert_eq!(
+        daemon.card("PR_1").unwrap()["awaiting_review"],
+        true,
+        "the team is still asked"
+    );
     daemon.stop();
 }
 
@@ -1391,7 +1456,7 @@ fn a_notified_pr_of_an_owner_that_failed_is_fetched_at_the_next_run() {
         .intercept(|req| (req.op.as_deref() == Some("Status")).then(|| Resp::json(502, json!({}))));
     daemon.clock(T0 + 200);
     assert!(daemon.row("C_1").is_none());
-    assert!(kinds(&daemon, ME).contains(&"fetch_failed".to_string()));
+    assert_eq!(daemon.account(ME)["updated_at"], T0 + 100, "a failed run");
     github.clear_overrides();
     github.clear_requests();
     daemon.clock(T0 + 300);
@@ -1618,14 +1683,20 @@ fn notifications_are_read_page_by_page_through_the_link_header() {
             .push(pr_node("PR_2", "someone", 2, "alice", json!({})));
     });
     let url = github.url.clone();
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    // Public's search saves both PRs first.
+    daemon.clock(T0 + 100);
+    assert_eq!(daemon.cards().len(), 2);
     github.intercept(move |req| {
         if !req.path.starts_with("/notifications") {
             return None;
         }
         Some(if req.path.contains("page=2") {
-            Resp::json(200, json!([notified("someone", 2, T0 + 20)]))
+            Resp::json(200, json!([notified("someone", 2, T0 + 120)]))
         } else {
-            Resp::json(200, json!([notified("someone", 1, T0 + 10)]))
+            Resp::json(200, json!([notified("someone", 1, T0 + 110)]))
                 .header(
                     "Link",
                     format!("<{url}/notifications?all=true&per_page=50&page=2>; rel=\"next\""),
@@ -1634,10 +1705,8 @@ fn notifications_are_read_page_by_page_through_the_link_header() {
                 .header("X-Poll-Interval", "60")
         })
     });
-    let dir = tempfile::tempdir().unwrap();
-    let daemon = start(dir.path(), &github);
-    setup(&daemon);
-    daemon.clock(T0 + 100);
+    github.clear_requests();
+    daemon.clock(T0 + 200);
     let polled: Vec<Req> = github
         .requests()
         .into_iter()
@@ -1649,11 +1718,15 @@ fn notifications_are_read_page_by_page_through_the_link_header() {
         !polled[1].headers.contains_key("if-modified-since"),
         "only the first page"
     );
-    let resolve = ops(&github, "Resolve").remove(0);
-    let numbers: Vec<i64> = (0..2)
-        .filter_map(|i| resolve.vars()[format!("n{i}")].as_i64())
+    // Both pages' PRs are saved ones: their events are fetched again.
+    assert!(ops(&github, "Resolve").is_empty(), "no lookup");
+    let mut asked: Vec<String> = ops(&github, "Events")
+        .iter()
+        .flat_map(|r| r.vars()["ids"].as_array().cloned().unwrap_or_default())
+        .filter_map(|id| id.as_str().map(str::to_string))
         .collect();
-    assert_eq!(numbers, [1, 2], "both pages' PRs are looked up");
+    asked.sort();
+    assert_eq!(asked, ["PR_1", "PR_2"], "both pages' PRs");
     daemon.stop();
 }
 
@@ -1863,8 +1936,12 @@ fn refresh_skips_the_notifications_check_within_the_poll_interval_only() {
         !ops(&github, "Search").is_empty(),
         "the PR search still runs"
     );
+    // DESIGN.md, "Fetch success and failure": the refresh was a run, so
+    // the next one is an interval after it.
     daemon.clock(T0 + 60);
-    assert_eq!(polls(&github), 1, "the schedule checks at the interval");
+    assert_eq!(polls(&github), 0, "no run yet");
+    daemon.clock(T0 + 90);
+    assert_eq!(polls(&github), 1, "the schedule checks at the next run");
     github.clear_requests();
     daemon.ok(json!({"cmd":"refresh"}));
     assert_eq!(polls(&github), 0, "just checked");
@@ -1873,7 +1950,7 @@ fn refresh_skips_the_notifications_check_within_the_poll_interval_only() {
 }
 
 #[test]
-fn a_failing_notifications_check_warns_until_a_later_one_succeeds() {
+fn a_failing_notifications_check_fails_the_run_until_a_later_one_succeeds() {
     let github = world();
     github.with(|w| w.prs.push(pr_node("PR_1", "org", 1, "me", json!({}))));
     github.intercept(|req| {
@@ -1885,16 +1962,20 @@ fn a_failing_notifications_check_warns_until_a_later_one_succeeds() {
     let daemon = start(dir.path(), &github);
     setup(&daemon);
     daemon.clock(T0 + 100);
-    let failed = warning(&daemon, ME, "fetch_failed");
-    assert_eq!(failed["until"], T0 + 160);
     assert_eq!(
         daemon.account(ME)["updated_at"],
-        T0 + 100,
-        "fetching went on"
+        Value::Null,
+        "the notifications check is part of the run"
     );
-    assert_eq!(daemon.cards().len(), 1);
+    assert_eq!(daemon.cards().len(), 1, "the owners were fetched");
+    assert!(kinds(&daemon, ME).is_empty(), "not before five minutes");
     github.clear_overrides();
-    daemon.clock(T0 + 160);
+    github.clear_requests();
+    // A failed check starts no X-Poll-Interval wait: the retry five
+    // seconds later checks again and succeeds.
+    daemon.clock(T0 + 105);
+    assert_eq!(polls(&github), 1, "checked again");
+    assert_eq!(daemon.account(ME)["updated_at"], T0 + 105);
     assert!(kinds(&daemon, ME).is_empty(), "{:?}", daemon.account(ME));
     daemon.stop();
 }
@@ -2377,5 +2458,347 @@ fn token_set_with_a_new_login_writes_it_to_the_keychain_item() {
     assert_eq!(accounts[0]["id"], "1001");
     assert_eq!(accounts[0]["login"], "me-new");
     assert_eq!(saved_login(), ("1001".to_string(), "me-new".to_string()));
+    daemon.stop();
+}
+
+/// DESIGN.md, "Fetch success and failure": a GraphQL 200 whose body is empty
+/// or unreadable fails the run like a network failure and is retried; an
+/// empty REST body stays accepted.
+#[test]
+fn an_empty_or_unreadable_graphql_answer_fails_the_run_and_is_retried() {
+    for body in ["", "<html>busy</html>", "[]"] {
+        let github = world();
+        github.with(|w| w.prs.push(pr_node("PR_1", "org", 1, "me", json!({}))));
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = start(dir.path(), &github);
+        setup(&daemon);
+        daemon.clock(T0 + 100);
+        assert_eq!(daemon.account(ME)["updated_at"], T0 + 100, "{body:?}");
+        let empty = body.to_string();
+        github.intercept(move |req| {
+            (req.op.as_deref() == Some("Search")).then(|| Resp {
+                status: 200,
+                headers: vec![],
+                body: empty.clone(),
+            })
+        });
+        daemon.clock(T0 + 200);
+        assert_eq!(
+            daemon.account(ME)["updated_at"],
+            T0 + 100,
+            "{body:?}: a failed run"
+        );
+        assert_eq!(daemon.cards().len(), 1, "{body:?}: the content stays");
+        github.clear_overrides();
+        github.clear_requests();
+        daemon.clock(T0 + 205);
+        assert!(
+            !ops(&github, "Search").is_empty(),
+            "{body:?}: retried five seconds later"
+        );
+        assert_eq!(daemon.account(ME)["updated_at"], T0 + 205, "{body:?}");
+        daemon.stop();
+    }
+}
+
+/// DESIGN.md, "Identifying PRs": a notification of a saved PR fetches its
+/// events again; an unknown PR is neither looked up nor taken in.
+#[test]
+fn a_notification_only_signals_a_saved_pr() {
+    let github = world();
+    github.with(|w| {
+        w.prs.push(pr_node("PR_1", "org", 1, "me", json!({})));
+        // Private, so no search of Public finds it; only a notification
+        // names it.
+        w.prs.push(pr_node(
+            "PR_X",
+            "elsewhere",
+            9,
+            "bob",
+            json!({"repository":{"name":"app","isPrivate":true,"owner":{"login":"elsewhere"}}}),
+        ));
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    github.with(|w| {
+        w.timeline.insert(
+            "PR_1".into(),
+            vec![issue_comment("C_1", "alice", T0 + 150, "")],
+        );
+        w.notifications = vec![
+            notified("org", 1, T0 + 150),
+            notified("elsewhere", 9, T0 + 150),
+        ];
+        w.last_modified = "Fri, 15 Jan 2027 08:02:30 GMT".into();
+    });
+    github.clear_requests();
+    daemon.clock(T0 + 200);
+    assert!(
+        daemon.row("C_1").is_some(),
+        "the saved PR was fetched again"
+    );
+    assert!(ops(&github, "Resolve").is_empty(), "no lookup of the other");
+    let asked: Vec<Value> = ops(&github, "Status")
+        .iter()
+        .flat_map(|r| r.vars()["ids"].as_array().cloned().unwrap_or_default())
+        .collect();
+    assert!(!asked.contains(&json!("PR_X")), "{asked:?}");
+    assert!(daemon.card("PR_X").is_none());
+    daemon.stop();
+}
+
+/// The single-organization `X-GitHub-SSO` form on Public's search names no
+/// owner: Public's search spans organizations, so the run fails like any
+/// request across owners, with no `sso_required`.
+#[test]
+fn the_single_organization_sso_form_on_public_s_search_fails_the_run_only_on_a_403() {
+    const URL: &str = "https://github.com/orgs/acme/sso?authorization_request=1";
+    for status in [403, 200] {
+        let github = world();
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = start(dir.path(), &github);
+        setup(&daemon);
+        daemon.clock(T0 + 100);
+        assert_eq!(daemon.account(ME)["updated_at"], T0 + 100);
+        github.intercept(move |req| {
+            let public = req.op.as_deref() == Some("Search")
+                && req.vars()["q0"]
+                    .as_str()
+                    .is_some_and(|q| q.contains("is:public"));
+            public.then(|| {
+                let body = if status == 403 {
+                    json!({"message":"Resource protected by organization SAML enforcement."})
+                } else {
+                    json!({"data":{}})
+                };
+                Resp::json(status, body).header("X-GitHub-SSO", format!("required; url={URL}"))
+            })
+        });
+        daemon.clock(T0 + 200);
+        assert!(
+            kinds(&daemon, ME).is_empty(),
+            "{status}: {:?}",
+            daemon.account(ME)
+        );
+        if status == 200 {
+            // DESIGN.md, "Tokens": the URL form is evaluated on a 403 only.
+            assert_eq!(daemon.account(ME)["updated_at"], T0 + 200, "ignored");
+            daemon.stop();
+            continue;
+        }
+        assert_eq!(
+            daemon.account(ME)["updated_at"],
+            T0 + 100,
+            "{status}: the run failed"
+        );
+        github.clear_overrides();
+        daemon.clock(T0 + 205);
+        assert_eq!(
+            daemon.account(ME)["updated_at"],
+            T0 + 205,
+            "{status}: retried"
+        );
+        daemon.stop();
+    }
+}
+
+/// DESIGN.md, "Fetch success and failure": a notifications check that keeps
+/// failing keeps every run failing, so the band shows after five minutes
+/// and Updated stays.
+#[test]
+fn notifications_that_keep_failing_show_fetch_failed_after_five_minutes() {
+    let github = world();
+    github.with(|w| w.prs.push(pr_node("PR_1", "org", 1, "me", json!({}))));
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    assert_eq!(daemon.account(ME)["updated_at"], T0 + 100);
+    github.intercept(|req| {
+        req.path
+            .starts_with("/notifications")
+            .then(|| Resp::json(502, json!({})))
+    });
+    github.clear_requests();
+    // The run at +160 fails, then the retries after 5, 10, 20, 40, 40, ...
+    // seconds fail too.
+    let first = T0 + 160;
+    let waits = [5, 10, 20, 40];
+    let mut at = first;
+    let mut runs = 0;
+    while at - first < 300 {
+        daemon.clock(at);
+        assert!(kinds(&daemon, ME).is_empty(), "+{}", at - first);
+        at += waits[runs.min(3)];
+        runs += 1;
+    }
+    assert_eq!(polls(&github), runs, "every retry checks again");
+    daemon.clock(at);
+    let failed = warning(&daemon, ME, "fetch_failed");
+    assert_eq!(
+        failed["message"],
+        "Couldn't reach GitHub · retrying in 1 min"
+    );
+    assert_eq!(daemon.account(ME)["updated_at"], T0 + 100, "never moved");
+    daemon.stop();
+}
+
+/// DESIGN.md, "Tokens": a 403 on `GET /user/teams` with the single-
+/// organization form spans owners: a failure of the run, not a missing
+/// scope.
+#[test]
+fn a_teams_refusal_for_sso_fails_the_run() {
+    let github = world();
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    github.intercept(|req| {
+        req.path.starts_with("/user/teams").then(|| {
+            Resp::json(
+                403,
+                json!({"message":"Resource protected by organization SAML enforcement."}),
+            )
+            .header(
+                "X-GitHub-SSO",
+                "required; url=https://github.com/orgs/acme/sso",
+            )
+        })
+    });
+    daemon.clock(T0 + 200);
+    assert!(kinds(&daemon, ME).is_empty(), "{:?}", daemon.account(ME));
+    assert_eq!(daemon.account(ME)["updated_at"], T0 + 100, "a failure");
+    github.clear_overrides();
+    // A plain refusal is still a missing scope.
+    github.with(|w| {
+        w.teams_forbidden.insert(TOKEN.into());
+    });
+    daemon.clock(T0 + 205);
+    assert_eq!(kinds(&daemon, ME), ["scope_missing"]);
+    assert_eq!(daemon.account(ME)["updated_at"], T0 + 205);
+    daemon.stop();
+}
+
+/// DESIGN.md, "Tokens": the URL form on an owner's search counts on a 403
+/// only; on a 200 the search result is used and nothing is warned.
+#[test]
+fn the_url_form_on_a_200_search_is_ignored() {
+    let github = world();
+    github.with(|w| {
+        w.prs.push(pr_node("PR_1", "org", 1, "me", json!({})));
+        w.token_headers.insert(
+            TOKEN.into(),
+            vec![(
+                "X-GitHub-SSO".into(),
+                "required; url=https://github.com/orgs/acme/sso".into(),
+            )],
+        );
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    assert!(kinds(&daemon, ME).is_empty(), "{:?}", daemon.account(ME));
+    assert_eq!(daemon.account(ME)["updated_at"], T0 + 100);
+    assert_eq!(daemon.cards().len(), 1);
+    daemon.stop();
+}
+
+/// DESIGN.md, "Fetch success and failure": the Reaction fetch keeps its own
+/// time and plays no part in the account's success or failure.
+#[test]
+fn a_failing_reaction_fetch_does_not_touch_the_account_s_success() {
+    let github = world();
+    github.with(|w| {
+        w.prs.push(pr_node("PR_1", "org", 1, "alice", json!({})));
+        w.threads.insert(
+            "PR_1".into(),
+            vec![
+                json!({"id":"T_1","comments":[{"id":"C_ME","url":"https://github.com/c/C_ME",
+                "createdAt":iso(T0 - 1000),"bodyText":"mine","bodyHTML":"",
+                "author":{"__typename":"User","login":"me"}}]}),
+            ],
+        );
+        w.reactables.insert("C_ME".into(), reaction_node("C_ME", 1));
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.ok(json!({"cmd":"config_set","key":"status_interval_minutes","value":10}));
+    daemon.ok(json!({"cmd":"config_set","key":"reactions_interval_minutes","value":1}));
+    daemon.clock(T0 + 100);
+    // The first run collects the account's comment; later runs fetch its
+    // reactions.
+    assert_eq!(daemon.account(ME)["updated_at"], T0 + 100);
+    github.intercept(|req| {
+        (req.op.as_deref() == Some("Reactions")).then(|| Resp::json(502, json!({})))
+    });
+    // Reaction-only runs every minute until the account run at +600.
+    for at in [T0 + 160, T0 + 220, T0 + 400, T0 + 460, T0 + 520] {
+        github.clear_requests();
+        daemon.clock(at);
+        assert!(!ops(&github, "Reactions").is_empty(), "+{}: tried", at - T0);
+        assert!(
+            ops(&github, "Search").is_empty(),
+            "+{}: no account run",
+            at - T0
+        );
+        assert!(
+            kinds(&daemon, ME).is_empty(),
+            "+{}: {:?}",
+            at - T0,
+            daemon.account(ME)
+        );
+        assert_eq!(daemon.account(ME)["updated_at"], T0 + 100, "+{}", at - T0);
+    }
+    // The account run succeeds although its Reaction fetch fails again.
+    github.clear_requests();
+    daemon.clock(T0 + 700);
+    assert!(!ops(&github, "Search").is_empty());
+    assert!(!ops(&github, "Reactions").is_empty());
+    assert_eq!(daemon.account(ME)["updated_at"], T0 + 700);
+    assert!(kinds(&daemon, ME).is_empty(), "{:?}", daemon.account(ME));
+    daemon.stop();
+}
+
+/// DESIGN.md, "Tokens": the single-organization form of a 403 on the
+/// notifications request names no owner: the run fails, with no
+/// `sso_required` and no missing scope.
+#[test]
+fn a_notifications_refusal_for_sso_fails_the_run() {
+    let github = world();
+    github.with(|w| w.prs.push(pr_node("PR_1", "org", 1, "me", json!({}))));
+    github.intercept(|req| {
+        req.path.starts_with("/notifications").then(|| {
+            Resp::json(
+                403,
+                json!({"message":"Resource protected by organization SAML enforcement."}),
+            )
+            .header(
+                "X-GitHub-SSO",
+                "required; url=https://github.com/orgs/acme/sso",
+            )
+        })
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    assert!(kinds(&daemon, ME).is_empty(), "{:?}", daemon.account(ME));
+    assert_eq!(daemon.account(ME)["updated_at"], Value::Null, "a failure");
+    assert_eq!(daemon.cards().len(), 1, "the owners were fetched");
+    // Still failing five minutes later: the band, and still no SSO warning.
+    let waits = [5, 10, 20, 40];
+    let mut at = T0 + 100;
+    let mut n = 0;
+    while at - (T0 + 100) < 300 {
+        at += waits[n.min(3)];
+        n += 1;
+        daemon.clock(at);
+    }
+    assert_eq!(kinds(&daemon, ME), ["fetch_failed"]);
+    assert_eq!(daemon.account(ME)["updated_at"], Value::Null);
     daemon.stop();
 }
