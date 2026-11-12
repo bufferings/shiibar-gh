@@ -194,6 +194,16 @@ a{color:#0A5FC2}a:hover{color:#084A97}
 .nf{display:inline-block;width:56px;box-sizing:border-box;border:1px solid #C9C9CE;border-radius:6px;background:#FFFFFF;padding:3px 6px;font-size:12px;color:#1D1D1F;text-align:right;line-height:16px}
 body{margin:0;padding:24px;background:#e9e9ee}
 .ab{width:max-content;height:auto;overflow:visible;border-radius:8px}
+
+/* 0.4 tab row and header usage */
+.ptabs{align-items:flex-end}
+.ptab .uc{font-size:10px;font-weight:700;color:#0A66D6;margin-left:5px}
+.dbtn{margin-left:auto;align-self:center;height:22px;border:none;background:transparent;border-radius:6px;color:#55555B;display:flex;align-items:center;gap:4px;padding:0 6px;font:inherit;font-size:11px;margin-bottom:3px}
+.api{white-space:nowrap}
+.apibar{display:inline-block;width:36px;height:4px;border-radius:2px;background:#DCDCE0;vertical-align:middle;position:relative;overflow:hidden;margin:0 5px 1px 4px}
+.apibar i{position:absolute;left:0;top:0;bottom:0;background:#8A8A90;border-radius:2px}
+
+.errt{font-size:11px;color:#A0390A}
 </style>
 </head>
 <body>
@@ -206,7 +216,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
           <div class="phead">
             <div style="display: flex; flex-direction: column; flex: 1; min-width: 0">
               <div style="display: flex; align-items: center; gap: 8px"><span class="adot"></span><span style="font-weight: 600; font-size: 14px">bufferings-work</span></div>
-              <div class="m">Updated 1 min ago · API 25%</div>
+              <div class="m">Updated 1 min ago · <span class="api" title="GraphQL API 1,240 / 5,000 · REST API 100 / 5,000">API<span class="apibar"><i style="width: 25%"></i></span>1,240 / 5,000</span></div>
             </div>
             <button class="iconbtn" aria-label="Open in window"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5"></rect><path d="M2 6h12"></path></svg></button>
           <button class="iconbtn" aria-label="Refresh"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"></path><path d="M13.5 2.5v3h-3"></path></svg></button>
@@ -218,8 +228,8 @@ body{margin:0;padding:24px;background:#e9e9ee}
             <div style="flex: 1">SSO authorization required for example-org</div>
             <button class="btn">Authorize…</button>
           </div>
-          <div class="ptabs"><button class="ptab on">PRs</button><button class="ptab">Activity</button></div>
-          <div style="padding: 10px 12px 14px; color: #6E6E76; font-size: 12px">(example-org stays empty; acme-corp and Public still fetch. No triangle.)</div>
+          <div class="ptabs"><button class="ptab">All<span class="uc">6</span></button><button class="ptab on">Review<span class="uc">4</span></button><button class="ptab">Mine<span class="uc">2</span></button><button class="dbtn" aria-label="Dismissed" title="Dismissed"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><rect x="1.8" y="2.8" width="12.4" height="3.2" rx="1"></rect><path d="M3 6v7h10V6M6.5 8.8h3"></path></svg><span>12</span></button></div>
+          <div style="padding: 10px 12px 14px; color: #6E6E76; font-size: 12px">(PRs in example-org are not fetched; acme-corp and Public still fetch. No triangle.)</div>
         </div>
         <div><div class="gh">Account</div><div class="group">
           <div class="item"><div class="lbl"><span style="font-weight: 600">Token</span><span class="sub">Expires 2027-02-01</span></div><div class="ctl"><span class="st2 warn">SSO authorization required</span><button class="btn">Edit…</button></div></div>
@@ -243,11 +253,24 @@ body{margin:0;padding:24px;background:#e9e9ee}
     <div class="cap">Sheets: Add owner (left) and Add account after Test (right)</div>
     <div class="row" style="gap: 24px; align-items: flex-start">
       <div class="sheet" style="width: 440px">
-<div style="font-weight: 600; font-size: 13px">Add owner to bufferings-work</div><div style="font-size: 12px"><div style="font-weight: 600">Owner</div><div class="sub" style="margin-top: 2px">The login of an organization or a personal account.</div></div><div style="border: 1px solid #C9C9CE; border-radius: 6px; background: #FFFFFF; padding: 5px 8px; font-size: 12px; color: #1D1D1F">example-org</div><div class="sub">Pull requests in example-org's repositories get their own section. The account's token reads them.</div><div style="display: flex; justify-content: space-between; align-items: center; gap: 8px"><div><button class="btn">Add Public instead</button></div><div style="display: flex; gap: 8px"><button class="btn">Cancel</button><button class="btn" style="background: #0A66D6; color: #FFFFFF; border-color: #0A66D6">Add</button></div></div>
+<div style="font-weight: 600; font-size: 13px">Add owner to bufferings-work</div><div style="font-size: 12px"><div style="font-weight: 600">Owner</div><div class="sub" style="margin-top: 2px">The login of an organization or a personal account.</div></div><div style="border: 1px solid #C9C9CE; border-radius: 6px; background: #FFFFFF; padding: 5px 8px; font-size: 12px; color: #1D1D1F">example-org</div><div class="sub">The account's token reads pull requests in example-org's repositories.</div><div style="display: flex; justify-content: space-between; align-items: center; gap: 8px"><div><button class="btn">Add Public instead</button></div><div style="display: flex; gap: 8px"><button class="btn">Cancel</button><button class="btn" style="background: #0A66D6; color: #FFFFFF; border-color: #0A66D6">Add</button></div></div>
       </div>
       <div class="sheet" style="width: 520px">
 <div style="font-weight: 600; font-size: 13px">Add account</div><div class="sub">One classic token per account. The token's owner becomes the account. It reads notifications, pull requests and checks in every owner you add.</div><div class="listbox" style="background: #FFFFFF"><div class="item" style="padding: 10px 12px"><div class="lbl"><span style="font-weight: 600">1. Create a token on GitHub</span><span class="sub">Opens GitHub with the scopes filled in: repo, notifications, read:org.</span></div><div class="ctl" style="flex-basis: 130px"><button class="btn">Create token…</button></div></div><div style="padding: 0 12px 10px"><span class="sub">If an organization enforces SAML SSO, authorize the token for it after creating it (Configure SSO on the token page).</span></div></div><div style="font-size: 12px"><div style="font-weight: 600">2. Paste the token and test it</div><div class="sub" style="margin-top: 2px">The field always shows dots. Test checks the token without saving it.</div></div><div style="display: flex; gap: 8px; align-items: center"><div style="flex: 1; border: 1px solid #C9C9CE; border-radius: 6px; background: #FFFFFF; padding: 5px 8px; font-size: 12px; color: #1D1D1F; letter-spacing: 1px">••••••••••••••••••••••••••••••••••••••••</div><button class="btn">Test</button></div><div class="listbox"><div class="lrow" style="display: flex; justify-content: space-between; align-items: center"><span>Account</span><span style="color: #6E6E76">bufferings</span></div><div class="lrow" style="display: flex; justify-content: space-between; align-items: center"><span>Scopes</span><span style="color: #A0390A">&#10007; Missing (read:org)</span></div><div class="lrow" style="display: flex; justify-content: space-between; align-items: center"><span>Notifications</span><span style="color: #1F6E35">&#10003; OK</span></div><div class="lrow" style="display: flex; justify-content: space-between; align-items: center"><span>Team membership</span><span style="color: #A0390A">&#10007; Failed (read:org)</span></div></div><div style="display: flex; justify-content: space-between; align-items: center; gap: 8px"><span class="sub">You can save now and test again later.</span><div style="display: flex; gap: 8px"><button class="btn">Cancel</button><button class="btn" style="background: #0A66D6; color: #FFFFFF; border-color: #0A66D6">Save</button></div></div>
       </div>
+    </div>
+  </section>
+<section class="scene">
+    <div class="cap">In progress and errors: Add owner while adding (left), after Owner not found (middle), Token row after Save (right)</div>
+    <div class="desc" style="width: 1100px">Anything that asks GitHub shows progress right after the click and cannot be clicked again: <b>Add</b> reads <b>Adding…</b>, <b>Test</b> reads <b>Checking…</b>, <b>Save</b> reads <b>Saving…</b>, and the status column shows <b>Checking…</b>. <b>Owner not found</b> or <b>Couldn't reach GitHub</b> appears below the field and the sheet stays open. <b>Add Public instead</b> is off here because this account already has Public.</div>
+    <div class="row" style="gap: 24px; align-items: flex-start">
+      <div class="sheet" style="width: 360px">
+<div style="font-weight: 600; font-size: 13px">Add owner to bufferings-work</div><div style="font-size: 12px"><div style="font-weight: 600">Owner</div><div class="sub" style="margin-top: 2px">The login of an organization or a personal account.</div></div><div style="border: 1px solid #C9C9CE; border-radius: 6px; background: #FFFFFF; padding: 5px 8px; font-size: 12px; color: #1D1D1F">example-org</div><div class="sub">The account's token reads pull requests in example-org's repositories.</div><div style="display: flex; justify-content: space-between; align-items: center; gap: 8px"><div><button class="btn" disabled>Add Public instead</button></div><div style="display: flex; gap: 8px"><button class="btn">Cancel</button><button class="btn" style="background: #0A66D6; color: #FFFFFF; border-color: #0A66D6" disabled>Adding…</button></div></div>
+      </div>
+      <div class="sheet" style="width: 360px">
+<div style="font-weight: 600; font-size: 13px">Add owner to bufferings-work</div><div style="font-size: 12px"><div style="font-weight: 600">Owner</div><div class="sub" style="margin-top: 2px">The login of an organization or a personal account.</div></div><div style="border: 1px solid #C9C9CE; border-radius: 6px; background: #FFFFFF; padding: 5px 8px; font-size: 12px; color: #1D1D1F">example-orgg</div><div class="errt" style="margin-top: -6px">Owner not found</div><div class="sub">The account's token reads pull requests in example-org's repositories.</div><div style="display: flex; justify-content: space-between; align-items: center; gap: 8px"><div><button class="btn" disabled>Add Public instead</button></div><div style="display: flex; gap: 8px"><button class="btn">Cancel</button><button class="btn" style="background: #0A66D6; color: #FFFFFF; border-color: #0A66D6">Add</button></div></div>
+      </div>
+      <div style="width: 420px"><div><div class="gh">Account</div><div class="group"><div class="item"><div class="lbl"><span style="font-weight: 600">Token</span><span class="sub">Expires 2027-02-01</span></div><div class="ctl"><span class="st2 gray">Checking…</span><button class="btn" disabled>Edit…</button></div></div></div></div></div>
     </div>
   </section>
 </div>
