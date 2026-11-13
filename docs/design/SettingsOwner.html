@@ -206,7 +206,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
         <div class="stabs">
           <button class="stab"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="8" cy="8" r="2.2"></circle><circle cx="8" cy="8" r="6"></circle></svg><span>General</span></button>
           <button class="stab on"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="5.5" r="3"></circle><path d="M2.5 14c.8-3 3-4.5 5.5-4.5s4.7 1.5 5.5 4.5"></path></svg><span>Accounts</span></button>
-          <button class="stab"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5l3.5 3.5"></path></svg><span>Watching</span></button>
+          <button class="stab"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><rect x="1.8" y="2.8" width="12.4" height="3.2" rx="1"></rect><path d="M3 6v7h10V6M6.5 8.8h3"></path></svg><span>Dismissed</span></button>
         </div>
       </div>
       <div style="display: flex; min-height: 0">
@@ -216,7 +216,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
           <button class="btn" style="width: 100%">Add account…</button>
         </div>
         <div class="pane">
-          <div class="segtabs"><span class="">Owner</span><span class="on">Notifications</span><span class="">Exclusions</span></div>
+          <div class="segtabs"><span class="">Owner</span><span class="on">Notifications</span></div>
           <div><div class="gh">Notifications</div><div class="group">
             <div class="item"><div class="lbl"><span style="font-weight: 600">Notify for example-org</span><span class="sub">Off keeps the table below but sends no notifications for this owner.</span></div><div class="ctl"><span class="tgl on"><span></span></span></div></div>
             <div class="item"><div class="lbl"><span style="font-weight: 600">Skip draft pull requests</span><span class="sub">Events on draft PRs stay in the list but never notify.</span></div><div class="ctl"><span class="tgl on"><span></span></span></div></div>
@@ -230,6 +230,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
 <tr><td>My team mentioned</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
 <tr class="g"><td colspan="3">Comments</td></tr>
 <tr><td>Comment on my PR</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
+<tr><td>Comment on other PRs</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
 <tr><td>Reply in a thread I commented in</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
 <tr><td>Reply in a thread I was mentioned in</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
 <tr><td>Reaction to my comment</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
@@ -237,12 +238,14 @@ body{margin:0;padding:24px;background:#e9e9ee}
 <tr><td>Approved</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
 <tr><td>Changes requested</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
 <tr><td>Checks failed</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
+<tr><td>Checks passed</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
 <tr><td>Conflicts</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
 <tr><td>Mergeable</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
 <tr class="g"><td colspan="3">Any pull request</td></tr>
 <tr><td>Added to merge queue</td><td><input type="checkbox" checked></td><td><input type="checkbox"></td></tr>
 <tr><td>Removed from merge queue</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
 <tr><td>Merged / Closed</td><td><input type="checkbox" checked></td><td><input type="checkbox"></td></tr>
+<tr><td>Reopened</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
 </tbody></table></div>
             <div class="item"><div class="lbl"><span style="font-weight: 600">Copy table from another owner</span><span class="sub">Replaces the table above with that owner's.</span></div><div class="ctl"><button class="btn">Copy…</button></div></div>
           </div></div>
@@ -258,7 +261,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
         <div class="stabs">
           <button class="stab"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="8" cy="8" r="2.2"></circle><circle cx="8" cy="8" r="6"></circle></svg><span>General</span></button>
           <button class="stab on"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="5.5" r="3"></circle><path d="M2.5 14c.8-3 3-4.5 5.5-4.5s4.7 1.5 5.5 4.5"></path></svg><span>Accounts</span></button>
-          <button class="stab"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5l3.5 3.5"></path></svg><span>Watching</span></button>
+          <button class="stab"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><rect x="1.8" y="2.8" width="12.4" height="3.2" rx="1"></rect><path d="M3 6v7h10V6M6.5 8.8h3"></path></svg><span>Dismissed</span></button>
         </div>
       </div>
       <div style="display: flex; min-height: 0">
@@ -268,50 +271,11 @@ body{margin:0;padding:24px;background:#e9e9ee}
           <button class="btn" style="width: 100%">Add account…</button>
         </div>
         <div class="pane">
-          <div class="segtabs"><span class="on">Owner</span><span class="">Notifications</span><span class="">Exclusions</span></div>
+          <div class="segtabs"><span class="on">Owner</span><span class="">Notifications</span></div>
           <div><div class="gh">Owner</div><div class="group">
-            <div class="item"><div class="lbl"><span style="font-weight: 600">Enabled</span><span class="sub">Off hides this owner's section and stops fetching.</span></div><div class="ctl"><span class="tgl on"><span></span></span></div></div>
+            <div class="item"><div class="lbl"><span style="font-weight: 600">Enabled</span><span class="sub">Off hides this owner's PRs and stops fetching.</span></div><div class="ctl"><span class="tgl on"><span></span></span></div></div>
           </div></div>
-          <div><div class="gh">Remove</div><div class="group"><div class="item"><div class="lbl"><span style="font-weight: 600">Remove this owner</span><span class="sub">Deletes this owner from shiibar-gh: its PRs, snoozes and settings. Nothing changes on GitHub.</span></div><div class="ctl"><button class="btn">Remove…</button></div></div></div></div>
-        </div>
-      </div>
-    </div>
-  </section>
-<section class="scene">
-    <div class="cap">Exclusions tab</div>
-    <div class="win" style="width: 760px">
-      <div class="titlebar">
-        <div class="tl"><div class="dots" aria-hidden="true"><span style="background: #EC6A5E"></span><span style="background: #F4BF4F"></span><span style="background: #61C554"></span></div><div class="wt">Accounts</div><div style="width: 50px"></div></div>
-        <div class="stabs">
-          <button class="stab"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="8" cy="8" r="2.2"></circle><circle cx="8" cy="8" r="6"></circle></svg><span>General</span></button>
-          <button class="stab on"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="5.5" r="3"></circle><path d="M2.5 14c.8-3 3-4.5 5.5-4.5s4.7 1.5 5.5 4.5"></path></svg><span>Accounts</span></button>
-          <button class="stab"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5l3.5 3.5"></path></svg><span>Watching</span></button>
-        </div>
-      </div>
-      <div style="display: flex; min-height: 0">
-        <div class="side">
-          <div class="srow "><span class="adot" style="background: #C7420D"></span>bufferings-work</div><div class="srow sub on">example-org</div><div class="srow sub">acme-corp</div><div class="srow sub">Public</div><div class="srow"><span class="adot" style="background: #0A66D6"></span>bufferings</div><div class="srow sub">example-person</div><div class="srow sub">Public</div>
-          <div style="flex: 1"></div>
-          <button class="btn" style="width: 100%">Add account…</button>
-        </div>
-        <div class="pane">
-          <div class="segtabs"><span class="">Owner</span><span class="">Notifications</span><span class="on">Exclusions</span></div>
-          <div><div class="gh">Repositories</div><div class="group">
-            <div style="padding: 8px 14px 0"><span class="sub">Hidden: not in the list. List only: in the list, but no notifications.</span></div>
-            <div style="padding: 6px 12px 10px"><div class="listbox xbox">
-<div class="lrow xrow"><span>example-org/legacy</span><span class="seg xseg"><span class="on">Hidden</span><span class="">List only</span></span></div>
-<div class="lrow xrow"><span>example-org/infra</span><span class="seg xseg"><span class="">Hidden</span><span class="on">List only</span></span></div>
-            <div class="lfoot"><button class="sq">+</button><button class="sq">&minus;</button></div>
-            </div></div>
-          </div></div>
-          <div><div class="gh">Users</div><div class="group">
-            <div style="padding: 8px 14px 0"><span class="sub">Same for a user. Bots are users too.</span></div>
-            <div style="padding: 6px 12px 10px"><div class="listbox xbox">
-<div class="lrow xrow"><span>octo-release-bot</span><span class="seg xseg"><span class="on">Hidden</span><span class="">List only</span></span></div>
-<div class="lrow xrow"><span>renovate</span><span class="seg xseg"><span class="">Hidden</span><span class="on">List only</span></span></div>
-            <div class="lfoot"><button class="sq">+</button><button class="sq">&minus;</button></div>
-            </div></div>
-          </div></div>
+          <div><div class="gh">Remove</div><div class="group"><div class="item"><div class="lbl"><span style="font-weight: 600">Remove this owner</span><span class="sub">Deletes this owner from shiibar-gh: its PRs and settings. Nothing changes on GitHub.</span></div><div class="ctl"><button class="btn">Remove…</button></div></div></div></div>
         </div>
       </div>
     </div>
@@ -330,6 +294,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
 <tr><td>My team mentioned</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
 <tr class="g"><td colspan="3">Comments</td></tr>
 <tr><td>Comment on my PR</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
+<tr><td>Comment on other PRs</td><td><span class="on">&#10003;</span></td><td><span class="off">&ndash;</span></td></tr>
 <tr><td>Reply in a thread I commented in</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
 <tr><td>Reply in a thread I was mentioned in</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
 <tr><td>Reaction to my comment</td><td><span class="on">&#10003;</span></td><td><span class="off">&ndash;</span></td></tr>
@@ -337,14 +302,16 @@ body{margin:0;padding:24px;background:#e9e9ee}
 <tr><td>Approved</td><td><span class="on">&#10003;</span></td><td><span class="off">&ndash;</span></td></tr>
 <tr><td>Changes requested</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
 <tr><td>Checks failed</td><td><span class="on">&#10003;</span></td><td><span class="off">&ndash;</span></td></tr>
+<tr><td>Checks passed</td><td><span class="off">&ndash;</span></td><td><span class="off">&ndash;</span></td></tr>
 <tr><td>Conflicts</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
 <tr><td>Mergeable</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
 <tr class="g"><td colspan="3">Any pull request</td></tr>
 <tr><td>Added to merge queue</td><td><span class="off">&ndash;</span></td><td><span class="off">&ndash;</span></td></tr>
 <tr><td>Removed from merge queue</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
 <tr><td>Merged / Closed</td><td><span class="off">&ndash;</span></td><td><span class="off">&ndash;</span></td></tr>
+<tr><td>Reopened</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
 </tbody></table></div>
-        <div class="sub" style="font-size: 12px">Replaces example-org's table. The switches and Exclusions stay as they are.</div>
+        <div class="sub" style="font-size: 12px">Replaces example-org's table. The switches stay as they are.</div>
         <div style="display: flex; justify-content: flex-end; gap: 8px"><button class="btn">Cancel</button><button class="btn" style="background: #0A66D6; color: #FFFFFF; border-color: #0A66D6">Copy</button></div>
       </div>
     </div>

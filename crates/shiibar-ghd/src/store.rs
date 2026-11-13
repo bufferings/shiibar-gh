@@ -14,21 +14,23 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// M5 (0.3). Version 4 is the 0.2 schema, moved to 5 at startup. Versions 1
-/// to 3 are the 0.1 schema, which is not migrated: such a database is treated
-/// like an unreadable one (DESIGN.md, "Saved state").
-pub const SCHEMA_VERSION: i64 = 5;
-/// The 0.2 schema.
-const V02_VERSION: i64 = 4;
+/// M6 (0.4). Versions 5 (0.3) and 4 (0.2) move to 6 at startup, keeping
+/// only the accounts. Versions 1 to 3 are the 0.1 schema, which is not
+/// migrated: such a database is treated like an unreadable one (DESIGN.md,
+/// "Saved state").
+pub const SCHEMA_VERSION: i64 = 6;
+/// The 0.3 and 0.2 schemas, moved to 6 at startup.
+const MOVED_VERSIONS: [i64; 2] = [4, 5];
 /// The newest version of the 0.1 schema.
 const LAST_V01_VERSION: i64 = 3;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 const FILE_MODE: u32 = 0o600;
 const SIDE_FILES: [&str; 2] = ["-wal", "-shm"];
 
-/// The 0.2 schema with the 0.3 changes already made: the columns
-/// [`MIGRATE_V4_TO_V5`] drops are absent and the ones it adds come last.
-const SCHEMA_V5: &str = "
+/// The 0.4 schema. A PR's placement, Dismiss state, Checks results and
+/// newest review request are columns of `prs`; Mute lists hang off the
+/// account; deleted row ids and Dismiss records have their own tables.
+const SCHEMA_V6: &str = "
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE accounts (
@@ -44,6 +46,13 @@ CREATE TABLE accounts (
     rest_limit TEXT,
     stopped_until INTEGER,
     fetch TEXT NOT NULL
+);
+CREATE TABLE mutes (
+    account TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    PRIMARY KEY (account, kind, position)
 );
 CREATE TABLE owners (
     id TEXT PRIMARY KEY,
@@ -65,14 +74,6 @@ CREATE TABLE owner_events (
     notify INTEGER NOT NULL,
     PRIMARY KEY (owner, event)
 );
-CREATE TABLE exclusions (
-    owner TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    position INTEGER NOT NULL,
-    name TEXT NOT NULL,
-    state TEXT NOT NULL,
-    PRIMARY KEY (owner, kind, position)
-);
 CREATE TABLE prs (
     key TEXT PRIMARY KEY,
     account TEXT NOT NULL,
@@ -86,6 +87,7 @@ CREATE TABLE prs (
     author_avatar_url TEXT,
     base TEXT NOT NULL,
     head TEXT NOT NULL,
+    head_oid TEXT,
     state TEXT NOT NULL,
     is_draft INTEGER NOT NULL,
     review TEXT NOT NULL,
@@ -95,6 +97,9 @@ CREATE TABLE prs (
     failed_check TEXT,
     changes_requested_by TEXT,
     updated_at INTEGER NOT NULL,
+    created_at INTEGER,
+    my_review_at INTEGER,
+    last_request_at INTEGER,
     is_private INTEGER NOT NULL,
     requested_me INTEGER NOT NULL,
     requested_team INTEGER NOT NULL,
@@ -103,16 +108,27 @@ CREATE TABLE prs (
     link_checks TEXT NOT NULL,
     link_base TEXT NOT NULL,
     unreadable INTEGER NOT NULL,
-    snoozed INTEGER NOT NULL,
     added_at INTEGER,
     prev_review TEXT,
     prev_checks TEXT,
     prev_base_status TEXT,
     prev_mergeable INTEGER,
-    gone_at INTEGER,
-    collected INTEGER NOT NULL,
-    created_at INTEGER,
-    my_review_at INTEGER
+    settled TEXT,
+    settled_head TEXT,
+    watch_reset INTEGER NOT NULL,
+    place_tab TEXT,
+    place_section TEXT,
+    place_rank INTEGER,
+    closed_at INTEGER,
+    done_at INTEGER,
+    keep_after_close INTEGER NOT NULL,
+    dismissed_at INTEGER,
+    restored INTEGER NOT NULL,
+    seen_closed INTEGER NOT NULL,
+    quiet_from INTEGER,
+    quiet_until INTEGER,
+    merged_event_at INTEGER,
+    collected INTEGER NOT NULL
 );
 CREATE TABLE pr_rows (
     id TEXT PRIMARY KEY,
@@ -126,8 +142,17 @@ CREATE TABLE pr_rows (
     occurred_at INTEGER NOT NULL,
     comment_id TEXT,
     unread INTEGER NOT NULL,
-    pruned INTEGER NOT NULL,
+    listed INTEGER NOT NULL,
+    made_at INTEGER NOT NULL,
     notify TEXT NOT NULL
+);
+CREATE TABLE deleted_rows (id TEXT PRIMARY KEY, pr TEXT NOT NULL);
+CREATE TABLE dismiss_records (
+    key TEXT PRIMARY KEY,
+    account TEXT NOT NULL,
+    pr_id TEXT NOT NULL,
+    owner TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
 );
 CREATE TABLE reaction_baselines (
     key TEXT PRIMARY KEY,
@@ -136,29 +161,57 @@ CREATE TABLE reaction_baselines (
 );
 ";
 
-/// docs/tasks/M5.md, "Database and migration": the Todo and Done columns
-/// go, `prs.created_at` comes (null until the next fetch), and so does
-/// `prs.my_review_at` (null until the next fetch; the brief leaves to the
-/// implementer whether the review state has a column). Every other table and
-/// value stays. `ALTER TABLE DROP COLUMN` exists since SQLite 3.35.0 and
-/// refuses a column an index, a key or a constraint refers to; none of these
-/// does (sqlite.org/lang_altertable.html).
-const MIGRATE_V4_TO_V5: [&str; 7] = [
-    "ALTER TABLE owner_events DROP COLUMN todo",
-    "ALTER TABLE pr_rows DROP COLUMN seen_pending",
-    "ALTER TABLE pr_rows DROP COLUMN done",
-    "ALTER TABLE pr_rows DROP COLUMN todo_auto",
-    "ALTER TABLE pr_rows DROP COLUMN todo_manual",
-    "ALTER TABLE prs ADD COLUMN created_at INTEGER",
-    "ALTER TABLE prs ADD COLUMN my_review_at INTEGER",
-];
-
-/// Run the migration inside the caller's transaction, ending with the new
-/// `user_version`. Any error leaves the transaction for the caller to roll
-/// back.
-fn migrate_v4(tx: &Transaction<'_>) -> rusqlite::Result<()> {
-    for statement in MIGRATE_V4_TO_V5 {
-        tx.execute_batch(statement)?;
+/// DESIGN.md, "Updating from 0.3 and 0.2": inside the caller's transaction,
+/// keep each account's id, login, color and order, drop every table, create
+/// the version 6 tables, put the accounts back and set `user_version`. The
+/// `accounts` table of versions 4 and 5 has the same four columns. Any error
+/// leaves the transaction for the caller to roll back.
+fn migrate_to_v6(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    let mut accounts: Vec<(String, String, String, i64)> = Vec::new();
+    {
+        let mut statement = tx.prepare("SELECT id, login, color, seq FROM accounts")?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?;
+        for row in rows {
+            let (id, login, color, seq): (String, String, String, i64) = row?;
+            // A color no build knows would make the moved state unreadable.
+            stored(2, &color, AccountColor::parse)?;
+            accounts.push((id, login, color, seq));
+        }
+    }
+    let tables: Vec<String> = {
+        let mut statement = tx.prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+        )?;
+        let names = statement.query_map([], |row| row.get(0))?;
+        names.collect::<rusqlite::Result<_>>()?
+    };
+    for table in tables {
+        tx.execute_batch(&format!("DROP TABLE \"{}\"", table.replace('"', "\"\"")))?;
+    }
+    tx.execute_batch(SCHEMA_V6)?;
+    let token = to_json(&TokenRec::default());
+    let fetch = to_json(&FetchRec::default());
+    let mut seq = 0;
+    for (id, login, color, order) in &accounts {
+        tx.execute(
+            "INSERT INTO accounts
+             (id, login, color, seq, token, updated_at, dot, teams, graphql_limit, rest_limit,
+              stopped_until, fetch)
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL, 0, '[]', NULL, NULL, NULL, ?6)",
+            params![id, login, color, order, token, fetch],
+        )?;
+        seq = seq.max(*order);
+    }
+    for (key, value) in [
+        ("seq", seq.to_string()),
+        ("restore_accounts", "false".to_string()),
+    ] {
+        tx.execute(
+            "INSERT INTO meta (key, value) VALUES (?1, ?2)",
+            params![key, value],
+        )?;
     }
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)
 }
@@ -354,31 +407,32 @@ impl Store {
             return Ok(OpenOutcome::Unreadable);
         }
         if version == 0 {
-            tx.execute_batch(SCHEMA_V5)?;
+            tx.execute_batch(SCHEMA_V6)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
-        let migrating = version == V02_VERSION;
+        let migrating = MOVED_VERSIONS.contains(&version);
         if migrating {
-            // DESIGN.md, "Saved state": a failed move rolls back and leaves
-            // the 0.2 database as it was, in the unreadable state.
-            if let Err(e) = migrate_v4(&tx) {
+            // DESIGN.md, "Updating from 0.3 and 0.2": a failed move rolls
+            // back and leaves the database as it was, in the unreadable
+            // state.
+            if let Err(e) = migrate_to_v6(&tx) {
                 drop(tx);
                 crate::logging::error(format_args!(
-                    "cannot move the 0.2 database to schema version {SCHEMA_VERSION}: {e}"
+                    "cannot move the database of schema version {version} to {SCHEMA_VERSION}: {e}"
                 ));
                 return Ok(OpenOutcome::Unreadable);
             }
         }
         // The moved state is read back inside the move's transaction: a
-        // failure rolls everything back, so the database stays at version 4
-        // and every start shows the unreadable state, never an exit.
+        // failure rolls everything back, so the database stays at its old
+        // version and every start shows the unreadable state, never an exit.
         let moved = if migrating {
             match load(&tx) {
                 Ok(data) => Some(data),
                 Err(e) => {
                     drop(tx);
                     crate::logging::error(format_args!(
-                        "cannot read the 0.2 database moved to schema version {SCHEMA_VERSION}: {e:#}"
+                        "cannot read the database moved to schema version {SCHEMA_VERSION}: {e:#}"
                     ));
                     return Ok(OpenOutcome::Unreadable);
                 }
@@ -400,7 +454,7 @@ impl Store {
         }
         if migrating {
             crate::logging::info(format_args!(
-                "moved the 0.2 database to schema version {SCHEMA_VERSION}"
+                "moved the database of schema version {version} to {SCHEMA_VERSION}; only the accounts were kept"
             ));
         }
 
@@ -453,7 +507,6 @@ impl Store {
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         if dirty.meta {
             for (key, value) in [
-                ("last_release_at", data.last_release_at.to_string()),
                 ("seq", data.seq.to_string()),
                 ("restore_accounts", data.restore_accounts.to_string()),
             ] {
@@ -474,6 +527,7 @@ impl Store {
             }
         }
         for id in &dirty.accounts {
+            tx.execute("DELETE FROM mutes WHERE account = ?1", params![id])?;
             match data.accounts.get(id) {
                 Some(account) => save_account(&tx, account)?,
                 None => {
@@ -483,7 +537,6 @@ impl Store {
         }
         for id in &dirty.owners {
             tx.execute("DELETE FROM owner_events WHERE owner = ?1", params![id])?;
-            tx.execute("DELETE FROM exclusions WHERE owner = ?1", params![id])?;
             match data.owners.get(id) {
                 Some(owner) => save_owner(&tx, owner)?,
                 None => {
@@ -504,6 +557,33 @@ impl Store {
                 Some(row) => save_row(&tx, row)?,
                 None => {
                     tx.execute("DELETE FROM pr_rows WHERE id = ?1", params![id])?;
+                }
+            }
+        }
+        for id in &dirty.deleted_rows {
+            match data.deleted_rows.get(id) {
+                Some(pr) => {
+                    tx.execute(
+                        "INSERT OR REPLACE INTO deleted_rows (id, pr) VALUES (?1, ?2)",
+                        params![id, pr],
+                    )?;
+                }
+                None => {
+                    tx.execute("DELETE FROM deleted_rows WHERE id = ?1", params![id])?;
+                }
+            }
+        }
+        for key in &dirty.records {
+            match data.records.get(key) {
+                Some(r) => {
+                    tx.execute(
+                        "INSERT OR REPLACE INTO dismiss_records (key, account, pr_id, owner, updated_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        params![r.key, r.account, r.pr_id, r.owner, r.updated_at],
+                    )?;
+                }
+                None => {
+                    tx.execute("DELETE FROM dismiss_records WHERE key = ?1", params![key])?;
                 }
             }
         }
@@ -614,6 +694,18 @@ fn save_account(tx: &Transaction<'_>, a: &AccountRec) -> rusqlite::Result<()> {
             to_json(&a.fetch),
         ],
     )?;
+    for (kind, list) in [
+        ("repo", &a.mutes.repos),
+        ("user", &a.mutes.users),
+        ("pr", &a.mutes.prs),
+    ] {
+        for (position, name) in list.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO mutes (account, kind, position, name) VALUES (?1, ?2, ?3, ?4)",
+                params![a.id, kind, position as i64, name],
+            )?;
+        }
+    }
     Ok(())
 }
 
@@ -644,15 +736,6 @@ fn save_owner(tx: &Transaction<'_>, o: &OwnerRec) -> rusqlite::Result<()> {
             params![o.id, kind.as_str(), cell.list, cell.notify],
         )?;
     }
-    for (kind, list) in [("repo", &o.repos), ("user", &o.users)] {
-        for (position, item) in list.iter().enumerate() {
-            tx.execute(
-                "INSERT INTO exclusions (owner, kind, position, name, state)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![o.id, kind, position as i64, item.name, item.state.as_str()],
-            )?;
-        }
-    }
     Ok(())
 }
 
@@ -660,65 +743,93 @@ fn save_pr(tx: &Transaction<'_>, pr: &PrRec) -> rusqlite::Result<()> {
     tx.execute(
         "INSERT OR REPLACE INTO prs
          (key, account, id, owner, repo, number, url, title, author, author_avatar_url, base,
-          head, state, is_draft, review, checks, base_status, mergeable, failed_check,
-          changes_requested_by, updated_at, is_private, requested_me, requested_team,
-          assignees, link_review, link_checks, link_base, unreadable, snoozed, added_at,
-          prev_review, prev_checks, prev_base_status, prev_mergeable, gone_at, collected,
-          created_at, my_review_at)
+          head, head_oid, state, is_draft, review, checks, base_status, mergeable, failed_check,
+          changes_requested_by, updated_at, created_at, my_review_at, last_request_at,
+          is_private, requested_me, requested_team, assignees, link_review, link_checks,
+          link_base, unreadable, added_at, prev_review, prev_checks, prev_base_status,
+          prev_mergeable, settled, settled_head, watch_reset, place_tab, place_section,
+          place_rank, closed_at, done_at, keep_after_close, dismissed_at, restored,
+          seen_closed, quiet_from, quiet_until, merged_event_at, collected)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
                  ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32,
-                 ?33, ?34, ?35, ?36, ?37, ?38, ?39)",
-        params![
-            pr.key,
-            pr.account,
-            pr.id,
-            pr.owner,
-            pr.repo,
-            pr.number as i64,
-            pr.url,
-            pr.title,
-            pr.author,
-            pr.author_avatar_url,
-            pr.base,
-            pr.head,
-            pr.state.as_str(),
-            pr.is_draft,
-            pr.review.as_str(),
-            pr.checks.as_str(),
-            pr.base_status.as_str(),
-            pr.mergeable,
-            pr.failed_check,
-            pr.changes_requested_by,
-            pr.updated_at,
-            pr.is_private,
-            pr.requested_me,
-            pr.requested_team,
-            to_json(&pr.assignees),
-            pr.link_review,
-            pr.link_checks,
-            pr.link_base,
-            pr.unreadable,
-            pr.snoozed,
-            pr.added_at,
-            pr.prev.map(|p| p.review.as_str()),
-            pr.prev.map(|p| p.checks.as_str()),
-            pr.prev.map(|p| p.base_status.as_str()),
-            pr.prev.map(|p| p.mergeable),
-            pr.gone_at,
-            pr.collected,
-            pr.created_at,
-            pr.my_review_at,
-        ],
+                 ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47,
+                 ?48, ?49, ?50, ?51, ?52, ?53, ?54)",
+        rusqlite::params_from_iter(pr_params(pr)),
     )?;
     Ok(())
+}
+
+fn pr_params(pr: &PrRec) -> Vec<rusqlite::types::Value> {
+    use rusqlite::types::Value as V;
+    let text = |t: &str| V::Text(t.to_string());
+    let opt_text = |t: Option<&str>| t.map_or(V::Null, |t| V::Text(t.to_string()));
+    let int = |n: i64| V::Integer(n);
+    let opt_int = |n: Option<i64>| n.map_or(V::Null, V::Integer);
+    let flag = |b: bool| V::Integer(i64::from(b));
+    vec![
+        text(&pr.key),
+        text(&pr.account),
+        text(&pr.id),
+        text(&pr.owner),
+        text(&pr.repo),
+        int(pr.number as i64),
+        text(&pr.url),
+        text(&pr.title),
+        text(&pr.author),
+        opt_text(pr.author_avatar_url.as_deref()),
+        text(&pr.base),
+        text(&pr.head),
+        opt_text(pr.head_oid.as_deref()),
+        text(pr.state.as_str()),
+        flag(pr.is_draft),
+        text(pr.review.as_str()),
+        text(pr.checks.as_str()),
+        text(pr.base_status.as_str()),
+        flag(pr.mergeable),
+        opt_text(pr.failed_check.as_deref()),
+        opt_text(pr.changes_requested_by.as_deref()),
+        int(pr.updated_at),
+        opt_int(pr.created_at),
+        opt_int(pr.my_review_at),
+        opt_int(pr.last_request_at),
+        flag(pr.is_private),
+        flag(pr.requested_me),
+        flag(pr.requested_team),
+        text(&to_json(&pr.assignees)),
+        text(&pr.link_review),
+        text(&pr.link_checks),
+        text(&pr.link_base),
+        flag(pr.unreadable),
+        opt_int(pr.added_at),
+        opt_text(pr.prev.map(|p| p.review.as_str())),
+        opt_text(pr.prev.map(|p| p.checks.as_str())),
+        opt_text(pr.prev.map(|p| p.base_status.as_str())),
+        pr.prev.map_or(V::Null, |p| flag(p.mergeable)),
+        opt_text(pr.settled.map(Checks::as_str)),
+        opt_text(pr.settled_head.as_deref()),
+        flag(pr.watch_reset),
+        opt_text(pr.place.map(|p| p.tab.as_str())),
+        opt_text(pr.place.map(|p| p.section.as_str())),
+        opt_int(pr.place.map(|p| p.rank)),
+        opt_int(pr.closed_at),
+        opt_int(pr.done_at),
+        flag(pr.keep_after_close),
+        opt_int(pr.dismissed_at),
+        flag(pr.restored),
+        flag(pr.seen_closed),
+        opt_int(pr.quiet_from),
+        opt_int(pr.quiet_until),
+        opt_int(pr.merged_event_at),
+        flag(pr.collected),
+    ]
 }
 
 fn save_row(tx: &Transaction<'_>, row: &RowRec) -> rusqlite::Result<()> {
     tx.execute(
         "INSERT OR REPLACE INTO pr_rows
          (id, account, pr, kind, text, counts, actor, url, occurred_at, comment_id, unread,
-          pruned, notify)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+          listed, made_at, notify)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             row.id,
             row.account,
@@ -731,7 +842,8 @@ fn save_row(tx: &Transaction<'_>, row: &RowRec) -> rusqlite::Result<()> {
             row.occurred_at,
             row.comment_id,
             row.unread,
-            row.pruned,
+            row.listed,
+            row.made_at,
             row.notify.as_str(),
         ],
     )?;
@@ -747,18 +859,11 @@ fn meta(conn: &Connection, key: &str) -> anyhow::Result<Option<String>> {
 }
 
 fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
-    let Some(last_release_at) = meta(conn, "last_release_at")? else {
+    let Some(seq) = meta(conn, "seq")? else {
         return Ok(None);
     };
     let mut data = Data {
-        last_release_at: last_release_at
-            .parse()
-            .context("stored last_release_at is not a number")?,
-        seq: meta(conn, "seq")?
-            .map(|text| text.parse())
-            .transpose()
-            .context("stored seq is not a number")?
-            .unwrap_or(0),
+        seq: seq.parse().context("stored seq is not a number")?,
         restore_accounts: meta(conn, "restore_accounts")?.as_deref() == Some("true"),
         ..Data::default()
     };
@@ -797,11 +902,32 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
             rest: rest.as_deref().map(from_json).transpose()?,
             stopped_until: row.get(10)?,
             fetch: from_json(&row.get::<_, String>(11)?)?,
+            mutes: MuteRec::default(),
         })
     })?;
     for account in accounts {
         let account = account?;
         data.accounts.insert(account.id.clone(), account);
+    }
+    let mut statement =
+        conn.prepare("SELECT account, kind, name FROM mutes ORDER BY account, kind, position")?;
+    let mutes = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    for mute in mutes {
+        let (account, kind, name) = mute?;
+        if let Some(account) = data.accounts.get_mut(&account) {
+            match kind.as_str() {
+                "repo" => account.mutes.repos.push(name),
+                "user" => account.mutes.users.push(name),
+                "pr" => account.mutes.prs.push(name),
+                other => anyhow::bail!("unknown stored mute kind: {other}"),
+            }
+        }
     }
 
     let mut statement = conn.prepare(
@@ -823,8 +949,6 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
             watch_started_at: row.get(9)?,
             fetched_at: row.get(10)?,
             events: EventTable::default(),
-            repos: Vec::new(),
-            users: Vec::new(),
         })
     })?;
     for owner in owners {
@@ -848,50 +972,42 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
             owner.events.0.insert(kind, cell);
         }
     }
-    let mut statement = conn.prepare(
-        "SELECT owner, kind, name, state FROM exclusions ORDER BY owner, kind, position",
-    )?;
-    let items = statement.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            ExclusionRec {
-                name: row.get(2)?,
-                state: stored(3, &row.get::<_, String>(3)?, ExclusionState::parse)?,
-            },
-        ))
-    })?;
-    for item in items {
-        let (owner, kind, item) = item?;
-        if let Some(owner) = data.owners.get_mut(&owner) {
-            match kind.as_str() {
-                "repo" => owner.repos.push(item),
-                "user" => owner.users.push(item),
-                other => anyhow::bail!("unknown stored exclusion kind: {other}"),
-            }
-        }
-    }
 
     let mut statement = conn.prepare(
         "SELECT key, account, id, owner, repo, number, url, title, author, author_avatar_url,
-                base, head, state, is_draft, review, checks, base_status, mergeable,
-                failed_check, changes_requested_by, updated_at, is_private, requested_me,
-                requested_team, assignees, link_review, link_checks, link_base, unreadable,
-                snoozed, added_at, prev_review, prev_checks, prev_base_status, prev_mergeable,
-                gone_at, collected, created_at, my_review_at
+                base, head, head_oid, state, is_draft, review, checks, base_status, mergeable,
+                failed_check, changes_requested_by, updated_at, created_at, my_review_at,
+                last_request_at, is_private, requested_me, requested_team, assignees,
+                link_review, link_checks, link_base, unreadable, added_at, prev_review,
+                prev_checks, prev_base_status, prev_mergeable, settled, settled_head,
+                watch_reset, place_tab, place_section, place_rank, closed_at, done_at,
+                keep_after_close, dismissed_at, restored, seen_closed, quiet_from,
+                quiet_until, merged_event_at, collected
          FROM prs",
     )?;
     let prs = statement.query_map([], |row| {
-        let prev_review: Option<String> = row.get(31)?;
-        let prev_checks: Option<String> = row.get(32)?;
-        let prev_base: Option<String> = row.get(33)?;
-        let prev_mergeable: Option<bool> = row.get(34)?;
+        let prev_review: Option<String> = row.get(34)?;
+        let prev_checks: Option<String> = row.get(35)?;
+        let prev_base: Option<String> = row.get(36)?;
+        let prev_mergeable: Option<bool> = row.get(37)?;
         let prev = match (prev_review, prev_checks, prev_base, prev_mergeable) {
             (Some(review), Some(checks), Some(base), Some(mergeable)) => Some(PrevValues {
-                review: stored(31, &review, Review::parse)?,
-                checks: stored(32, &checks, Checks::parse)?,
-                base_status: stored(33, &base, BaseStatus::parse)?,
+                review: stored(34, &review, Review::parse)?,
+                checks: stored(35, &checks, Checks::parse)?,
+                base_status: stored(36, &base, BaseStatus::parse)?,
                 mergeable,
+            }),
+            _ => None,
+        };
+        let settled: Option<String> = row.get(38)?;
+        let place_tab: Option<String> = row.get(41)?;
+        let place_section: Option<String> = row.get(42)?;
+        let place_rank: Option<i64> = row.get(43)?;
+        let place = match (place_tab, place_section, place_rank) {
+            (Some(tab), Some(section), Some(rank)) => Some(PlaceRec {
+                tab: stored(41, &tab, PlacedTab::parse)?,
+                section: stored(42, &section, Section::parse)?,
+                rank,
             }),
             _ => None,
         };
@@ -908,30 +1024,46 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
             author_avatar_url: row.get(9)?,
             base: row.get(10)?,
             head: row.get(11)?,
-            state: stored(12, &row.get::<_, String>(12)?, PrState::parse)?,
-            is_draft: row.get(13)?,
-            review: stored(14, &row.get::<_, String>(14)?, Review::parse)?,
-            checks: stored(15, &row.get::<_, String>(15)?, Checks::parse)?,
-            base_status: stored(16, &row.get::<_, String>(16)?, BaseStatus::parse)?,
-            mergeable: row.get(17)?,
-            failed_check: row.get(18)?,
-            changes_requested_by: row.get(19)?,
-            updated_at: row.get(20)?,
-            is_private: row.get(21)?,
-            requested_me: row.get(22)?,
-            requested_team: row.get(23)?,
-            assignees: from_json(&row.get::<_, String>(24)?)?,
-            link_review: row.get(25)?,
-            link_checks: row.get(26)?,
-            link_base: row.get(27)?,
-            unreadable: row.get(28)?,
-            snoozed: row.get(29)?,
-            added_at: row.get(30)?,
+            head_oid: row.get(12)?,
+            state: stored(13, &row.get::<_, String>(13)?, PrState::parse)?,
+            is_draft: row.get(14)?,
+            review: stored(15, &row.get::<_, String>(15)?, Review::parse)?,
+            checks: stored(16, &row.get::<_, String>(16)?, Checks::parse)?,
+            base_status: stored(17, &row.get::<_, String>(17)?, BaseStatus::parse)?,
+            mergeable: row.get(18)?,
+            failed_check: row.get(19)?,
+            changes_requested_by: row.get(20)?,
+            updated_at: row.get(21)?,
+            created_at: row.get(22)?,
+            my_review_at: row.get(23)?,
+            last_request_at: row.get(24)?,
+            is_private: row.get(25)?,
+            requested_me: row.get(26)?,
+            requested_team: row.get(27)?,
+            assignees: from_json(&row.get::<_, String>(28)?)?,
+            link_review: row.get(29)?,
+            link_checks: row.get(30)?,
+            link_base: row.get(31)?,
+            unreadable: row.get(32)?,
+            added_at: row.get(33)?,
             prev,
-            gone_at: row.get(35)?,
-            collected: row.get(36)?,
-            created_at: row.get(37)?,
-            my_review_at: row.get(38)?,
+            settled: settled
+                .as_deref()
+                .map(|s| stored(38, s, Checks::parse))
+                .transpose()?,
+            settled_head: row.get(39)?,
+            watch_reset: row.get(40)?,
+            place,
+            closed_at: row.get(44)?,
+            done_at: row.get(45)?,
+            keep_after_close: row.get(46)?,
+            dismissed_at: row.get(47)?,
+            restored: row.get(48)?,
+            seen_closed: row.get(49)?,
+            quiet_from: row.get(50)?,
+            quiet_until: row.get(51)?,
+            merged_event_at: row.get(52)?,
+            collected: row.get(53)?,
         })
     })?;
     for pr in prs {
@@ -941,7 +1073,7 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
 
     let mut statement = conn.prepare(
         "SELECT id, account, pr, kind, text, counts, actor, url, occurred_at, comment_id, unread,
-                pruned, notify
+                listed, made_at, notify
          FROM pr_rows",
     )?;
     let rows = statement.query_map([], |row| {
@@ -958,13 +1090,39 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
             occurred_at: row.get(8)?,
             comment_id: row.get(9)?,
             unread: row.get(10)?,
-            pruned: row.get(11)?,
-            notify: stored(12, &row.get::<_, String>(12)?, NotifyState::parse)?,
+            listed: row.get(11)?,
+            made_at: row.get(12)?,
+            notify: stored(13, &row.get::<_, String>(13)?, NotifyState::parse)?,
         })
     })?;
     for row in rows {
         let row = row?;
         data.rows.insert(row.id.clone(), row);
+    }
+
+    let mut statement = conn.prepare("SELECT id, pr FROM deleted_rows")?;
+    let deleted = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for item in deleted {
+        let (id, pr) = item?;
+        data.deleted_rows.insert(id, pr);
+    }
+
+    let mut statement =
+        conn.prepare("SELECT key, account, pr_id, owner, updated_at FROM dismiss_records")?;
+    let records = statement.query_map([], |row| {
+        Ok(DismissRecord {
+            key: row.get(0)?,
+            account: row.get(1)?,
+            pr_id: row.get(2)?,
+            owner: row.get(3)?,
+            updated_at: row.get(4)?,
+        })
+    })?;
+    for record in records {
+        let record = record?;
+        data.records.insert(record.key.clone(), record);
     }
 
     let mut statement = conn.prepare("SELECT key, pr, counts FROM reaction_baselines")?;

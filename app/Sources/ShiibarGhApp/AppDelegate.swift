@@ -76,6 +76,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
         }
         model.onOpenPopover = { [weak self] account in self?.surfaces.showPopover(account: account) }
+        model.onShowAccount = { [weak self] account, surface in
+            if surface == .window {
+                self?.surfaces.openWindow(account: account)
+            } else {
+                self?.surfaces.showPopover(account: account)
+            }
+        }
         model.onOpenSettings = { [weak self] destination in self?.showSettings(destination) }
         // Shown from the next turn of the run loop so a dialog never runs
         // inside the event handler that raised it.
@@ -85,8 +92,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 self.keychainAlerts.show(dialog) { [weak self] chosen in self?.model.keychainAction(chosen) }
             }
         }
-        presenter?.onClick = { [weak self] type, account, url in
-            self?.model.notificationClicked(type: type, account: account, url: url)
+        presenter?.onClick = { [weak self] type, account, url, pr in
+            self?.model.notificationClicked(type: type, account: account, url: url, pr: pr)
         }
 
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
@@ -220,6 +227,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func quit() {
         NSApp.terminate(nil)
+    }
+
+    /// Edit › Copy (no target) when nothing before the app in the responder
+    /// chain takes it: in a popover or window, what ⌘C does there.
+    @objc func copy(_ sender: Any?) {
+        _ = surfaces?.copyFromMenu()
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

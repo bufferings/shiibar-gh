@@ -47,7 +47,7 @@ final class MenuBarImageTests: XCTestCase {
     func testTheGlyphTakesTheSystemColorOfTheAppearance() throws {
         for dark in [false, true] {
             let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)!
-            let image = MenuBarImage.make(color: .red, marks: MenuBarMarks(count: 0, dot: false, triangle: false), appearance: appearance)
+            let image = MenuBarImage.make(color: .red, marks: MenuBarMarks(dot: false, triangle: false), appearance: appearance)
             XCTAssertFalse(image.isTemplate, "a template would lose the tint")
             let inks = inks(try render(image, dark: dark))
             XCTAssertGreaterThan(inks.count, 20)
@@ -58,7 +58,7 @@ final class MenuBarImageTests: XCTestCase {
 
     func testNoneIsBlackInLightAndWhiteInDark() throws {
         for dark in [false, true] {
-            let image = MenuBarImage.make(color: .none, marks: MenuBarMarks(count: 0, dot: false, triangle: false), appearance: NSAppearance(named: dark ? .darkAqua : .aqua)!)
+            let image = MenuBarImage.make(color: .none, marks: MenuBarMarks(dot: false, triangle: false), appearance: NSAppearance(named: dark ? .darkAqua : .aqua)!)
             let want: NSColor = dark ? .white : .black
             let inks = inks(try render(image, dark: dark))
             XCTAssertGreaterThan(inks.count, 20)
@@ -68,11 +68,11 @@ final class MenuBarImageTests: XCTestCase {
 
     func testTheMarksAreDrawn() throws {
         let appearance = NSAppearance(named: .aqua)!
-        let plain = inks(try render(MenuBarImage.make(color: .blue, marks: MenuBarMarks(count: 0, dot: false, triangle: false), appearance: appearance), dark: false))
-        let marked = inks(try render(MenuBarImage.make(color: .blue, marks: MenuBarMarks(count: 3, dot: true, triangle: true), appearance: appearance), dark: false))
+        let plain = inks(try render(MenuBarImage.make(color: .blue, marks: MenuBarMarks(dot: false, triangle: false), appearance: appearance), dark: false))
+        let marked = inks(try render(MenuBarImage.make(color: .blue, marks: MenuBarMarks(dot: true, triangle: true), appearance: appearance), dark: false))
         let dot = Palette.blueDot.light.nsColor.usingColorSpace(.sRGB)!
         XCTAssertFalse(plain.contains { close($0, dot) && !close($0, resolved(.systemBlue, dark: false)) })
-        XCTAssertTrue(marked.contains { close($0, .black.usingColorSpace(.sRGB)!) }, "the number in the menu bar text color")
-        XCTAssertGreaterThan(marked.count, plain.count, "the dot, number and triangle add ink")
+        XCTAssertFalse(marked.contains { close($0, .black.usingColorSpace(.sRGB)!) }, "no number in the menu bar text color")
+        XCTAssertGreaterThan(marked.count, plain.count, "the dot and the triangle add ink")
     }
 }

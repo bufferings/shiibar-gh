@@ -4,10 +4,10 @@
 
 use shiibar_gh_client::{ClientError, request, request_json, socket_path_from_env};
 use shiibar_gh_proto::{
-    AccountResponse, AccountsResponse, AckResponse, ActivityResponse, Card, ConfigResponse,
-    EventKind, EventsResponse, ExclusionsResponse, InfoResponse, ListResponse, OpenResponse,
-    OwnerLookupResponse, PrFilter, RefreshResponse, Request, Row, StatusResponse, TestResult,
-    TokenTestResponse, Warning,
+    AccountResponse, AccountsResponse, AckResponse, ActivityResponse, At, Card, ConfigResponse,
+    DismissedFilter, EventKind, EventsResponse, InfoResponse, ListResponse, MuteKind,
+    MutesResponse, OpenResponse, OwnerLookupResponse, PlaceTab, PrFilter, RefreshResponse, Request,
+    Row, Section, StatusResponse, Tab, TestResult, TokenTestResponse, Warning,
 };
 use std::collections::BTreeMap;
 use std::io::{BufRead, IsTerminal};
@@ -19,14 +19,17 @@ const ERROR: u8 = 1;
 const NOT_FOUND: u8 = 2;
 
 /// `(command words, arguments, what it does)`.
-const COMMANDS: [(&str, &str, &str); 30] = [
+const COMMANDS: [(&str, &str, &str); 33] = [
     (
         "list",
-        "[--account <a>] [--owner <o>] [--authored|--assigned|--review-requested] [--search <text>] [--snoozed] [--json]",
-        "Print the PR cards of the PRs tab, by owner, open PRs first, then the most\n      \
-         recently updated. [review requested] marks a PR awaiting your review.\n      \
-         --search keeps the PRs where every word of <text> matches; --snoozed\n      \
-         prints the Snoozed section",
+        "[--account <a>] [--tab all|review|mine] [--owner <o>] [--authored|--assigned|--review-requested] [--search <text>] [--dismissed] [--json]",
+        "Print the PR cards of a tab (default all). all: by owner, open PRs first,\n      \
+         then the most recently updated; review: Doing, Todo, Waiting, Done in\n      \
+         order; mine: in order, then Done. --dismissed prints the Dismissed list\n      \
+         instead, newest first (--tab is ignored). Marks: [review:todo] or [mine]\n      \
+         for the place, [review requested] for a PR awaiting your review, [muted],\n      \
+         and the days left of a dismissed card. --search keeps the PRs where every\n      \
+         word of <text> matches",
     ),
     (
         "status",
@@ -36,20 +39,45 @@ const COMMANDS: [(&str, &str, &str); 30] = [
     (
         "activity",
         "[--account <a>] [--owner <o>]... [--authored|--assigned|--review-requested] [--search <text>] [--json]",
-        "Print the rows of the shown cards, newest first",
+        "Print the rows of the cards that are not dismissed, newest first",
     ),
     (
         "read",
         "<row>... [--account <a>] | --all --account <a>",
         "Mark rows as read; --all marks every row of the account except those of\n      \
-         snoozed PRs. With rows, --account must name their account",
+         dismissed PRs. With rows, --account must name their account",
     ),
     (
-        "snooze",
-        "<pr> --account <a>",
-        "Snooze a PR until the next Return time",
+        "place",
+        "<pr> review doing|todo|waiting [--top|--bottom|--before <pr>] --account <a> | <pr> review done --account <a> | <pr> mine [--top|--bottom|--before <pr>] --account <a> | <pr> mine done --account <a> | <pr> none --account <a>",
+        "Put a PR in a section of Review, in Mine, in the Done of either, or in\n      \
+         neither. Without a position it goes to the end, or to the top of todo\n      \
+         from doing or waiting. Done takes no position: newest first by the time\n      \
+         a card entered it. A merged or closed PR not in Review or Mine goes\n      \
+         straight to Done",
     ),
-    ("unsnooze", "<pr> --account <a>", "End the Snooze of a PR"),
+    (
+        "dismiss",
+        "<pr> --account <a> [--json]",
+        "Dismiss a PR: it leaves the lists for the Dismissed list",
+    ),
+    (
+        "restore",
+        "<pr> --account <a> [--json]",
+        "Bring a dismissed PR back to its place",
+    ),
+    (
+        "mute",
+        "pr|repo|user <name> --account <a>",
+        "Mute a pull request (owner/repo#number), a repository (owner/repo) or a\n      \
+         user (login): its cards turn gray and only mentions notify",
+    ),
+    ("unmute", "pr|repo|user <name> --account <a>", "End a Mute"),
+    (
+        "mutes",
+        "--account <a> [--json]",
+        "Print the Mute lists of an account",
+    ),
     (
         "refresh",
         "[--account <a>]",
@@ -64,13 +92,14 @@ const COMMANDS: [(&str, &str, &str); 30] = [
         "config get",
         "<key> [--json]",
         "Print a setting. Keys: launch_at_login, appearance, text_size,\n      \
-         status_interval_minutes, reactions_interval_minutes, snooze_return_time,\n      \
-         keep_watching_days, drop_after_days",
+         status_interval_minutes, reactions_interval_minutes,\n      \
+         auto_dismiss_after_days, dismissed_keep_days",
     ),
     (
         "config set",
         "<key> <value>",
-        "Change a setting (text_size is a whole number from 9 to 18)",
+        "Change a setting (text_size is a whole number from 9 to 18,\n      \
+         auto_dismiss_after_days at least 0, dismissed_keep_days at least 1)",
     ),
     (
         "version",
@@ -95,7 +124,7 @@ const COMMANDS: [(&str, &str, &str); 30] = [
     (
         "account remove",
         "<account>",
-        "Remove an account, its owners, PRs and its token",
+        "Remove an account, its owners, PRs, mutes and its token",
     ),
     (
         "account color",
@@ -138,7 +167,7 @@ const COMMANDS: [(&str, &str, &str); 30] = [
     (
         "owner remove",
         "<owner> --account <a>",
-        "Remove an owner and its PRs, snoozes and settings",
+        "Remove an owner and its PRs, places and settings",
     ),
     ("owner enable", "<owner> --account <a>", "Enable an owner"),
     ("owner disable", "<owner> --account <a>", "Disable an owner"),
@@ -156,11 +185,6 @@ const COMMANDS: [(&str, &str, &str); 30] = [
         "owner events",
         "<owner> --account <a> [--json] | set <owner> <event> list|notify on|off --account <a> | copy <from-owner> <to-owner> --account <a>",
         "Print, change or copy the event table",
-    ),
-    (
-        "owner exclusions",
-        "<owner> --account <a> [--json] | set <owner> repo|user <name> hidden|list-only --account <a> | remove <owner> repo|user <name> --account <a>",
-        "Print, set or remove Exclusions",
     ),
     (
         "help",
@@ -188,17 +212,21 @@ struct Parsed {
     account: Option<String>,
     owners: Vec<String>,
     search: Option<String>,
+    /// `--tab` and `--before`.
+    values: BTreeMap<String, String>,
     positional: Vec<String>,
 }
 
-/// `allowed` lists the bare flags; `--account`, `--owner` and `--search`
-/// take a value when listed.
+/// `allowed` lists the bare flags; `--account`, `--owner`, `--search`,
+/// `--tab` and `--before` take a value when listed.
 fn parse(args: &[String], allowed: &[&str]) -> Result<Parsed, UsageError> {
     let mut parsed = Parsed::default();
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--account" | "--owner" | "--search" if allowed.contains(&arg.as_str()) => {
+            "--account" | "--owner" | "--search" | "--tab" | "--before"
+                if allowed.contains(&arg.as_str()) =>
+            {
                 let value = args
                     .next()
                     .ok_or_else(|| UsageError(format!("{arg} needs a value")))?
@@ -212,6 +240,12 @@ fn parse(args: &[String], allowed: &[&str]) -> Result<Parsed, UsageError> {
                         return Err(UsageError("--search is given twice".into()));
                     }
                     "--search" => parsed.search = Some(value),
+                    "--tab" | "--before" if parsed.values.contains_key(arg.as_str()) => {
+                        return Err(UsageError(format!("{arg} is given twice")));
+                    }
+                    "--tab" | "--before" => {
+                        parsed.values.insert(arg.clone(), value);
+                    }
                     _ => parsed.owners.push(value),
                 }
             }
@@ -291,6 +325,9 @@ fn wire<T: serde::de::DeserializeOwned>(text: &str, what: &str) -> Result<T, Usa
 
 enum Output {
     Nothing,
+    /// A card answer (`place`, `dismiss`, `restore`): its PR and place.
+    Placed,
+    Mutes,
     /// `read <row>... --account <a>`: every row has to be the account's.
     ReadAs(String),
     Warnings,
@@ -305,7 +342,6 @@ enum Output {
     Owners,
     Lookup,
     Events,
-    Exclusions,
 }
 
 struct Command {
@@ -498,44 +534,6 @@ fn owner_command(sub: &str, rest: &[String]) -> Result<Command, UsageError> {
                 )
             }
         },
-        "exclusions" => match p.positional.first().map(String::as_str) {
-            Some("set") => {
-                let [_, owner, kind, name, state] =
-                    p.args("set <owner> repo|user <name> hidden|list-only")?;
-                Command::new(
-                    Request::OwnerExclusionsSet {
-                        account,
-                        owner,
-                        kind: wire(&kind, "kind")?,
-                        name,
-                        state: wire(&state.replace('-', "_"), "state")?,
-                    },
-                    Output::Exclusions,
-                    json,
-                )
-            }
-            Some("remove") => {
-                let [_, owner, kind, name] = p.args("remove <owner> repo|user <name>")?;
-                Command::new(
-                    Request::OwnerExclusionsRemove {
-                        account,
-                        owner,
-                        kind: wire(&kind, "kind")?,
-                        name,
-                    },
-                    Output::Exclusions,
-                    json,
-                )
-            }
-            _ => {
-                let [owner] = p.args("<owner>")?;
-                Command::new(
-                    Request::OwnerExclusionsGet { account, owner },
-                    Output::Exclusions,
-                    json,
-                )
-            }
-        },
         other => return Err(UsageError(format!("unknown command: owner {other}"))),
     })
 }
@@ -573,19 +571,28 @@ fn command(name: &str, rest: &[String]) -> Result<Command, UsageError> {
     Ok(match name {
         "list" => {
             let mut allowed = FILTER_FLAGS.to_vec();
-            allowed.push("--snoozed");
+            allowed.extend(["--tab", "--dismissed"]);
             let p = parse(rest, &allowed)?;
             p.none()?;
             if p.owners.len() > 1 {
                 return Err(UsageError("list takes one --owner".into()));
             }
+            let tab: Tab = match p.values.get("--tab") {
+                Some(tab) => wire(tab, "tab")?,
+                None => Tab::All,
+            };
             Command::new(
                 Request::List {
                     account: p.account.clone(),
+                    tab,
                     owner: p.owners.first().cloned(),
                     filter: p.filter()?,
                     search: p.search.clone(),
-                    snoozed: p.has("--snoozed"),
+                    dismissed: if p.has("--dismissed") {
+                        DismissedFilter::Only
+                    } else {
+                        DismissedFilter::Exclude
+                    },
                 },
                 Output::Cards,
                 p.json(),
@@ -639,15 +646,48 @@ fn command(name: &str, rest: &[String]) -> Result<Command, UsageError> {
                 }
             }
         }
-        "snooze" | "unsnooze" => {
-            let p = parse(rest, &["--account"])?;
+        "place" => place_command(rest)?,
+        "dismiss" | "restore" => {
+            let p = parse(rest, &["--account", "--json"])?;
             let [pr] = p.args("<pr>")?;
             let account = p.account()?;
-            Command::quiet(if name == "snooze" {
-                Request::Snooze { account, pr }
+            let request = if name == "dismiss" {
+                Request::Dismiss { account, pr }
             } else {
-                Request::Unsnooze { account, pr }
-            })
+                Request::Restore { account, pr }
+            };
+            Command::new(request, Output::Placed, p.json())
+        }
+        "mute" | "unmute" => {
+            let p = parse(rest, &["--account", "--json"])?;
+            let [kind, name_arg] = p.args("pr|repo|user <name>")?;
+            let account = p.account()?;
+            let kind: MuteKind = wire(&kind, "kind")?;
+            let request = if name == "mute" {
+                Request::Mute {
+                    account,
+                    kind,
+                    name: name_arg,
+                }
+            } else {
+                Request::Unmute {
+                    account,
+                    kind,
+                    name: name_arg,
+                }
+            };
+            Command::new(request, Output::Nothing, p.json())
+        }
+        "mutes" => {
+            let p = parse(rest, &["--account", "--json"])?;
+            p.none()?;
+            Command::new(
+                Request::MutesGet {
+                    account: p.account()?,
+                },
+                Output::Mutes,
+                p.json(),
+            )
         }
         "refresh" => {
             let p = parse(rest, &["--account"])?;
@@ -687,30 +727,151 @@ fn command(name: &str, rest: &[String]) -> Result<Command, UsageError> {
     })
 }
 
-fn row_line(row: &Row) -> String {
-    let unread = if row.unread { "*" } else { " " };
-    let text = row.text.as_deref().unwrap_or_default().replace('\n', " ");
-    format!("{unread} {} {} {text}", row.id, row.kind.as_text())
+/// `place <pr> review <section> | mine [done] | none` with an optional
+/// position.
+fn place_command(rest: &[String]) -> Result<Command, UsageError> {
+    let p = parse(
+        rest,
+        &["--account", "--top", "--bottom", "--before", "--json"],
+    )?;
+    let account = p.account()?;
+    let (pr, tab, section) = match p.positional.as_slice() {
+        [pr, tab, section] if tab == "review" => (pr.clone(), PlaceTab::Review, Some(section)),
+        [pr, tab, section] if tab == "mine" && section == "done" => {
+            (pr.clone(), PlaceTab::Mine, Some(section))
+        }
+        [pr, tab] if tab == "mine" => (pr.clone(), PlaceTab::Mine, None),
+        [pr, tab] if tab == "none" => (pr.clone(), PlaceTab::None, None),
+        _ => {
+            return Err(UsageError(
+                "expected <pr> review doing|todo|waiting|done, <pr> mine [done] or <pr> none"
+                    .into(),
+            ));
+        }
+    };
+    let section = match section {
+        Some(text) => {
+            let section: Section = wire(text, "section")?;
+            if !matches!(
+                section,
+                Section::Doing | Section::Todo | Section::Waiting | Section::Done
+            ) {
+                return Err(UsageError(format!(
+                    "review takes doing, todo, waiting or done, not {text}"
+                )));
+            }
+            Some(section)
+        }
+        None => None,
+    };
+    let before = p.values.get("--before").cloned();
+    let at = match (p.has("--top"), p.has("--bottom")) {
+        (true, true) => return Err(UsageError("--top and --bottom exclude each other".into())),
+        (true, false) => Some(At::Top),
+        (false, true) => Some(At::Bottom),
+        (false, false) => None,
+    };
+    if before.is_some() && at.is_some() {
+        return Err(UsageError("--before excludes --top and --bottom".into()));
+    }
+    if tab == PlaceTab::None && (before.is_some() || at.is_some()) {
+        return Err(UsageError("place none takes no position".into()));
+    }
+    if section == Some(Section::Done) && (before.is_some() || at.is_some()) {
+        return Err(UsageError(
+            "done takes no position: it keeps the newest first".into(),
+        ));
+    }
+    Ok(Command::new(
+        Request::Place {
+            account,
+            pr,
+            tab,
+            section,
+            before,
+            at,
+        },
+        Output::Placed,
+        p.json(),
+    ))
 }
 
-fn print_card(card: &Card, logins: &BTreeMap<String, String>) {
-    let snoozed = if card.snoozed { " snoozed" } else { "" };
+fn row_line(row: &Row) -> String {
+    let unread = if row.unread { "*" } else { " " };
+    let muted = if row.muted { " [muted]" } else { "" };
+    let text = row.text.as_deref().unwrap_or_default().replace('\n', " ");
+    format!("{unread} {} {}{muted} {text}", row.id, row.kind.as_text())
+}
+
+/// `[review:todo]`, `[mine]` or `[mine:done]`.
+fn place_mark(card: &Card) -> String {
+    match &card.placement {
+        None => String::new(),
+        Some(p) => {
+            let tab = p.tab.as_text();
+            let section = p.section.as_text();
+            if tab == "mine" && section == "main" {
+                " [mine]".into()
+            } else {
+                format!(" [{tab}:{section}]")
+            }
+        }
+    }
+}
+
+/// DESIGN.md, "Dismissed list": whole days left, rounded up; past the end
+/// while the popover holds it, `0 days left`.
+fn days_left(expires_at: i64, now: i64) -> String {
+    let left = expires_at - now;
+    let days = if left <= 0 {
+        0
+    } else {
+        (left + 86_399) / 86_400
+    };
+    if days == 1 {
+        "1 day left".into()
+    } else {
+        format!("{days} days left")
+    }
+}
+
+fn now_epoch() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
+fn card_line(card: &Card, logins: &BTreeMap<String, String>) -> String {
     let awaiting = if card.awaiting_review {
         " [review requested]"
     } else {
         ""
     };
+    let muted = if card.muted.is_empty() {
+        ""
+    } else {
+        " [muted]"
+    };
+    let left = card
+        .dismiss_expires_at
+        .map(|at| format!(" [{}]", days_left(at, now_epoch())))
+        .unwrap_or_default();
     let account = logins.get(&card.account).unwrap_or(&card.account);
-    println!(
-        "{} [{}]{awaiting} review={} checks={} base={}{snoozed} {} ({}) account={account}",
+    format!(
+        "{} [{}]{}{awaiting}{muted}{left} review={} checks={} base={} {} ({}) account={account}",
         card.pr,
         card.state_label.as_text(),
+        place_mark(card),
         card.review.as_text(),
         card.checks.as_text(),
         card.base_status.as_text(),
         card.title,
         card.author
-    );
+    )
+}
+
+fn print_card(card: &Card, logins: &BTreeMap<String, String>) {
+    println!("{}", card_line(card, logins));
     for row in &card.rows {
         println!("  {}", row_line(row));
     }
@@ -768,6 +929,29 @@ fn execute(socket: &Path, command: Command) -> Result<(), ClientError> {
     match command.output {
         Output::Nothing => {
             request::<AckResponse>(socket, &command.request)?;
+        }
+        Output::Placed => {
+            let response: StatusResponse = request(socket, &command.request)?;
+            let card = response.card;
+            let place = place_mark(&card);
+            let dismissed = if card.dismissed_at.is_some() {
+                " [dismissed]"
+            } else {
+                ""
+            };
+            println!("{}{place}{dismissed}", card.pr);
+        }
+        Output::Mutes => {
+            let response: MutesResponse = request(socket, &command.request)?;
+            for name in &response.mutes.repos {
+                println!("repo {name}");
+            }
+            for name in &response.mutes.users {
+                println!("user {name}");
+            }
+            for name in &response.mutes.prs {
+                println!("pr {name}");
+            }
         }
         Output::ReadAs(login) => {
             let accounts: AccountsResponse = request(socket, &Request::AccountList)?;
@@ -833,12 +1017,11 @@ fn execute(socket: &Path, command: Command) -> Result<(), ClientError> {
             let response: AccountsResponse = request(socket, &command.request)?;
             for a in &response.accounts {
                 println!(
-                    "{} id={} color={} token={} review={} unread={}",
+                    "{} id={} color={} token={} unread={}",
                     a.login,
                     a.id,
                     a.color.as_text(),
                     if a.token.registered { "yes" } else { "no" },
-                    a.review_count,
                     a.unread
                 );
                 for w in &a.warnings {
@@ -858,7 +1041,7 @@ fn execute(socket: &Path, command: Command) -> Result<(), ClientError> {
             for a in &response.accounts {
                 for o in &a.owners {
                     println!(
-                        "{} {} id={} kind={} enabled={} notify={} skip_drafts={} review={} prs={}",
+                        "{} {} id={} kind={} enabled={} notify={} skip_drafts={} prs={}",
                         a.login,
                         o.name,
                         o.id,
@@ -866,7 +1049,6 @@ fn execute(socket: &Path, command: Command) -> Result<(), ClientError> {
                         o.enabled,
                         o.notify,
                         o.skip_drafts,
-                        o.review_count,
                         o.pr_count
                     );
                 }
@@ -893,18 +1075,6 @@ fn execute(socket: &Path, command: Command) -> Result<(), ClientError> {
                         mark(cell.notify)
                     );
                 }
-            }
-        }
-        Output::Exclusions => {
-            let response: ExclusionsResponse = request(socket, &command.request)?;
-            let state = |s: &shiibar_gh_proto::Lenient<shiibar_gh_proto::ExclusionState>| {
-                s.as_text().replace('_', "-")
-            };
-            for e in &response.exclusions.repos {
-                println!("repo {} {}", e.name, state(&e.state));
-            }
-            for e in &response.exclusions.users {
-                println!("user {} {}", e.name, state(&e.state));
             }
         }
     }
@@ -1033,7 +1203,7 @@ fn owner_list(socket: &Path, login: &str, json: bool) -> Result<(), ClientError>
     }
     for o in &account.owners {
         println!(
-            "{} {} id={} kind={} enabled={} notify={} skip_drafts={} review={} prs={}",
+            "{} {} id={} kind={} enabled={} notify={} skip_drafts={} prs={}",
             account.login,
             o.name,
             o.id,
@@ -1041,7 +1211,6 @@ fn owner_list(socket: &Path, login: &str, json: bool) -> Result<(), ClientError>
             o.enabled,
             o.notify,
             o.skip_drafts,
-            o.review_count,
             o.pr_count
         );
     }
@@ -1099,7 +1268,9 @@ mod tests {
         let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert!(owner_command("enable", &args(&["org"])).is_err());
         assert!(owner_command("enable", &args(&["org", "--account", "me"])).is_ok());
-        assert!(command("snooze", &args(&["o/r#1"])).is_err());
+        assert!(command("dismiss", &args(&["o/r#1"])).is_err());
+        assert!(command("dismiss", &args(&["o/r#1", "--account", "me"])).is_ok());
+        assert!(command("place", &args(&["o/r#1", "mine"])).is_err());
         assert!(command("read", &args(&["row"])).is_ok());
         assert!(command("read", &args(&["--all"])).is_err());
         assert!(command("read", &args(&["--all", "--account", "me"])).is_ok());
@@ -1121,6 +1292,106 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn the_0_3_commands_are_gone() {
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(command("snooze", &args(&["o/r#1", "--account", "me"])).is_err());
+        assert!(command("unsnooze", &args(&["o/r#1", "--account", "me"])).is_err());
+        assert!(command("list", &args(&["--snoozed"])).is_err());
+        assert!(owner_command("exclusions", &args(&["o", "--account", "me"])).is_err());
+    }
+
+    #[test]
+    fn place_reads_its_section_and_position() {
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let place = command(
+            "place",
+            &args(&[
+                "o/r#1",
+                "review",
+                "todo",
+                "--before",
+                "o/r#2",
+                "--account",
+                "me",
+            ]),
+        )
+        .ok()
+        .unwrap();
+        assert!(matches!(
+            place.request,
+            Request::Place { tab: PlaceTab::Review, section: Some(Section::Todo), before: Some(ref b), at: None, .. } if b == "o/r#2"
+        ));
+        let top = command(
+            "place",
+            &args(&["o/r#1", "mine", "--top", "--account", "me"]),
+        )
+        .ok()
+        .unwrap();
+        assert!(matches!(
+            top.request,
+            Request::Place {
+                tab: PlaceTab::Mine,
+                section: None,
+                at: Some(At::Top),
+                ..
+            }
+        ));
+        for (words, tab) in [
+            (
+                &["o/r#1", "review", "done", "--account", "me"][..],
+                PlaceTab::Review,
+            ),
+            (
+                &["o/r#1", "mine", "done", "--account", "me"],
+                PlaceTab::Mine,
+            ),
+        ] {
+            let done = command("place", &args(words)).ok().unwrap();
+            assert!(
+                matches!(done.request, Request::Place { tab: t, section: Some(Section::Done), before: None, at: None, .. } if t == tab),
+                "{words:?}"
+            );
+        }
+        for bad in [
+            &["o/r#1", "review", "done", "--top", "--account", "me"][..],
+            &[
+                "o/r#1",
+                "mine",
+                "done",
+                "--before",
+                "o/r#2",
+                "--account",
+                "me",
+            ],
+            &["o/r#1", "mine", "main", "--account", "me"],
+            &["o/r#1", "review", "main", "--account", "me"],
+            &["o/r#1", "review", "--account", "me"],
+            &["o/r#1", "mine", "--top", "--bottom", "--account", "me"],
+            &["o/r#1", "none", "--top", "--account", "me"],
+            &[
+                "o/r#1",
+                "mine",
+                "--top",
+                "--before",
+                "o/r#2",
+                "--account",
+                "me",
+            ],
+        ] {
+            assert!(command("place", &args(bad)).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn days_left_round_up() {
+        assert_eq!(days_left(1_000 + 86_400 * 6, 1_000), "6 days left");
+        assert_eq!(days_left(1_000 + 86_400 * 5 + 1, 1_000), "6 days left");
+        assert_eq!(days_left(1_000 + 10, 1_000), "1 day left");
+        assert_eq!(days_left(1_000, 1_000), "0 days left");
+        assert_eq!(days_left(900, 1_000), "0 days left");
     }
 
     #[test]

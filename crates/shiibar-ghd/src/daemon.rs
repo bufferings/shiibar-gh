@@ -3,7 +3,7 @@
 //! a client.
 
 use crate::clock::{Clock, Now};
-use crate::engine::{ActivityArgs, CmdError, Engine, ListArgs};
+use crate::engine::{ActivityArgs, CmdError, Digest, Engine, ListArgs, PlaceArgs};
 use crate::github::{CallError, Recorder, Rest};
 use crate::keychain::{Keychain, KeychainError, StoredAccount};
 use crate::logging;
@@ -14,7 +14,7 @@ use crate::tokentest::{Expect, OwnerProbe};
 use shiibar_gh_proto as proto;
 use shiibar_gh_proto::paths::StateDir;
 use shiibar_gh_proto::{ClientKind, KeychainState, Lenient, Request, SubscribeEvent, codec};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 
@@ -58,8 +58,6 @@ pub struct Subscribed {
     pub rx: mpsc::Receiver<Outgoing>,
     pub kill: oneshot::Receiver<()>,
 }
-
-type Digest = BTreeMap<String, (proto::Account, Vec<proto::Card>)>;
 
 pub struct Daemon {
     engine: Engine,
@@ -225,19 +223,21 @@ impl Daemon {
         Ok(match request {
             Request::List {
                 account,
+                tab,
                 owner,
                 filter,
                 search,
-                snoozed,
+                dismissed,
             } => line(&proto::ListResponse {
                 ok: true,
                 cards: self.engine.list(
                     &ListArgs {
                         account,
+                        tab,
                         owner,
                         filter,
                         search,
-                        snoozed,
+                        dismissed,
                     },
                     now,
                 )?,
@@ -279,14 +279,54 @@ impl Daemon {
                 self.engine.popover_closed(&account)?;
                 ack()
             }
-            Request::Snooze { account, pr } => {
-                self.engine.snooze(&account, &pr, now)?;
-                ack()
-            }
-            Request::Unsnooze { account, pr } => {
-                self.engine.unsnooze(&account, &pr, now)?;
-                ack()
-            }
+            Request::Place {
+                account,
+                pr,
+                tab,
+                section,
+                before,
+                at,
+            } => line(&proto::StatusResponse {
+                ok: true,
+                card: self.engine.place(
+                    &account,
+                    &pr,
+                    &PlaceArgs {
+                        tab,
+                        section,
+                        before,
+                        at,
+                    },
+                )?,
+            }),
+            Request::Dismiss { account, pr } => line(&proto::StatusResponse {
+                ok: true,
+                card: self.engine.dismiss(&account, &pr, now)?,
+            }),
+            Request::Restore { account, pr } => line(&proto::StatusResponse {
+                ok: true,
+                card: self.engine.restore_pr(&account, &pr)?,
+            }),
+            Request::Mute {
+                account,
+                kind,
+                name,
+            } => line(&proto::MutesResponse {
+                ok: true,
+                mutes: self.engine.mute(&account, kind, &name)?,
+            }),
+            Request::Unmute {
+                account,
+                kind,
+                name,
+            } => line(&proto::MutesResponse {
+                ok: true,
+                mutes: self.engine.unmute(&account, kind, &name)?,
+            }),
+            Request::MutesGet { account } => line(&proto::MutesResponse {
+                ok: true,
+                mutes: self.engine.mutes_get(&account)?,
+            }),
             Request::Open { account, pr, row } => {
                 let url = match (account, pr, row) {
                     (Some(account), Some(pr), None) => self.engine.open_pr(&account, &pr)?,
@@ -390,42 +430,6 @@ impl Daemon {
                 line(&proto::EventsResponse {
                     ok: true,
                     events: self.engine.owner_events(&to),
-                })
-            }
-            Request::OwnerExclusionsGet { account, owner } => {
-                let (_, owner) = self.owner_of(&account, &owner)?;
-                line(&proto::ExclusionsResponse {
-                    ok: true,
-                    exclusions: self.engine.owner_exclusions(&owner),
-                })
-            }
-            Request::OwnerExclusionsSet {
-                account,
-                owner,
-                kind,
-                name,
-                state,
-            } => {
-                let (_, owner) = self.owner_of(&account, &owner)?;
-                self.engine
-                    .owner_exclusions_set(&owner, kind, &name, state, now)?;
-                line(&proto::ExclusionsResponse {
-                    ok: true,
-                    exclusions: self.engine.owner_exclusions(&owner),
-                })
-            }
-            Request::OwnerExclusionsRemove {
-                account,
-                owner,
-                kind,
-                name,
-            } => {
-                let (_, owner) = self.owner_of(&account, &owner)?;
-                self.engine
-                    .owner_exclusions_remove(&owner, kind, &name, now)?;
-                line(&proto::ExclusionsResponse {
-                    ok: true,
-                    exclusions: self.engine.owner_exclusions(&owner),
                 })
             }
             Request::OwnerAdd { account, owner } if owner.eq_ignore_ascii_case(PUBLIC) => {
@@ -815,7 +819,7 @@ impl Daemon {
         let changed: Vec<proto::Account> = digest
             .iter()
             .filter(|(id, value)| self.digest.get(*id) != Some(value))
-            .map(|(_, (account, _))| account.clone())
+            .map(|(_, (account, _, _))| account.clone())
             .collect();
         self.digest = digest;
         for id in removed {
@@ -1064,7 +1068,18 @@ impl Daemon {
             let Some(token) = self.tokens.get(&id).cloned() else {
                 continue;
             };
-            plans.extend(self.engine.fetch_plan(&id, &now, due, token));
+            // DESIGN.md, "Fetch success and failure": `refresh` is a full
+            // run (every request), never only the failed ones.
+            plans.extend(
+                self.engine
+                    .fetch_plan(&id, &now, due, token)
+                    .map(|mut plan| {
+                        if forced {
+                            plan.failed_requests.clear();
+                        }
+                        plan
+                    }),
+            );
         }
         plans
     }

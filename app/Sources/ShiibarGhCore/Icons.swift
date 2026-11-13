@@ -139,10 +139,15 @@ public struct HoverButtonStyle: ButtonStyle {
 /// separator.
 public struct IconMenuItem {
     public var title: String
+    /// A check mark before the title (the current value of a pop-up).
+    public var checked: Bool
+    public var enabled: Bool
     public var action: () -> Void
 
-    public init(_ title: String, action: @escaping () -> Void) {
+    public init(_ title: String, checked: Bool = false, enabled: Bool = true, action: @escaping () -> Void) {
         self.title = title
+        self.checked = checked
+        self.enabled = enabled
         self.action = action
     }
 }
@@ -182,6 +187,8 @@ public enum IconMenu {
                 continue
             }
             let entry = NSMenuItem(title: item.title, action: #selector(Target.run(_:)), keyEquivalent: "")
+            entry.state = item.checked ? .on : .off
+            entry.isEnabled = item.enabled
             let target = Target(item.action)
             entry.target = target
             entry.representedObject = target
@@ -190,28 +197,28 @@ public enum IconMenu {
         return menu
     }
 
-    static func popUp(_ items: [IconMenuItem?]) {
+    public static func popUp(_ items: [IconMenuItem?]) {
         // Positioned at the pointer, in screen coordinates (view nil).
         make(items).popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
     }
 
-    final class Target: NSObject {
+    public final class Target: NSObject {
         let action: () -> Void
 
-        init(_ action: @escaping () -> Void) {
+        public init(_ action: @escaping () -> Void) {
             self.action = action
         }
 
-        @objc func run(_ sender: Any?) {
+        @objc public func run(_ sender: Any?) {
             action()
         }
     }
 }
 
 /// The menu bar image of one account (docs/design/MenuBarIcon.html): the
-/// placeholder glyph in the account color, the blue dot at the top right,
-/// the count of PRs waiting for your review at the bottom right and the triangle at the bottom
-/// left, each cut out of the glyph so it reads on any menu bar.
+/// placeholder glyph in the account color, the blue dot at the top right and
+/// the triangle at the bottom left, each cut out of the glyph so it reads on
+/// any menu bar.
 ///
 /// The colors are resolved for `appearance`, the status button's effective
 /// appearance, inside `performAsCurrentDrawingAppearance` (Apple:
@@ -219,7 +226,8 @@ public enum IconMenu {
 /// color and asset resolution"). Apple's documentation of
 /// NSImage(size:flipped:drawingHandler:) only promises a new drawing when the
 /// pixel density or color space changes, not the appearance, so the
-/// controller makes a new image whenever the button's appearance changes.
+/// controller makes a new image when the button turns light or dark (and
+/// only then, or when the color or the marks change: `StatusItemLook`).
 /// The image is not a template: a template image "should consist of only
 /// black and clear colors" (NSImage.isTemplate), which would lose the tint
 /// and the blue dot.
@@ -262,16 +270,6 @@ public enum MenuBarImage {
             context.restoreGState()
         }
 
-        if let text = marks.number {
-            let attributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 9, weight: .bold),
-                .foregroundColor: plain,
-            ]
-            let size = (text as NSString).size(withAttributes: attributes)
-            let box = CGRect(x: width - size.width - 0.5, y: 0, width: size.width, height: size.height - 1)
-            knockOut(CGPath(roundedRect: box.insetBy(dx: -1.2, dy: -0.6), cornerWidth: 2, cornerHeight: 2, transform: nil))
-            (text as NSString).draw(at: CGPoint(x: box.minX, y: box.minY - 1.5), withAttributes: attributes)
-        }
         if marks.dot {
             let center = CGPoint(x: 20, y: height - 4.5)
             knockOut(CGPath(ellipseIn: CGRect(x: center.x - 5, y: center.y - 5, width: 10, height: 10), transform: nil))

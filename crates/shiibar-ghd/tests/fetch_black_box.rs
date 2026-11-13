@@ -188,6 +188,8 @@ fn seed_ingest() -> Value {
         "events":[
             {"id":"RR_1","pr_id":"PR_1","kind":"review_requested","occurred_at":T0 + 10,
              "url":"https://github.com/org/app/pull/1","actor":"alice","text":"for you","comment_id":null},
+            {"id":"C_1","pr_id":"PR_1","kind":"comment_other","occurred_at":T0 + 20,
+             "url":"https://github.com/c/C_1","actor":"bob","text":"text C_1","comment_id":"C_1"},
             {"id":"C_2","pr_id":"PR_1","kind":"mentioned","occurred_at":T0 + 30,
              "url":"https://github.com/c/C_2","actor":"carol","text":"text C_2","comment_id":"C_2"},
             {"id":"C_3","pr_id":"PR_2","kind":"comment","occurred_at":T0 + 40,
@@ -256,7 +258,7 @@ fn from_a_token_to_list_the_rows_match_a_dev_ingest() {
         n
     };
     assert_eq!(strip(fetched_note.clone()), strip(injected_note));
-    assert_eq!(fetched_note["title"], "me · 3 new events");
+    assert_eq!(fetched_note["title"], "me · 4 new events");
     assert_eq!(fetched_note["subtitle"], "org · in 2 PRs");
     let account = daemon.account(ME);
     assert_eq!(account["updated_at"], T0 + 100);
@@ -286,6 +288,17 @@ fn from_a_token_to_list_the_rows_match_a_dev_ingest() {
         "is:pr is:open review-requested:@me org:org",
         "the team kind's List is on"
     );
+    // DESIGN.md, "API usage": the closed PRs since the start of the owner's
+    // event window, here its watch start.
+    assert_eq!(
+        search.vars()["q4"],
+        "is:pr is:closed involves:@me updated:>=2027-01-15T08:00:00Z org:org"
+    );
+    assert_eq!(
+        search.vars()["q5"],
+        "is:pr is:closed reviewed-by:@me updated:>=2027-01-15T08:00:00Z org:org"
+    );
+    assert!(search.query().contains("updatedAt state repository"));
     assert!(
         github
             .requests()
@@ -508,7 +521,7 @@ fn an_exhausted_primary_limit_waits_for_its_reset() {
 }
 
 #[test]
-fn usage_under_a_fifth_of_the_limit_warns_and_keeps_the_interval() {
+fn usage_of_80_percent_or_more_warns_and_keeps_the_interval() {
     let github = world();
     github.with(|w| w.limits = Some((999, 999)));
     let dir = tempfile::tempdir().unwrap();
@@ -537,7 +550,14 @@ fn usage_under_a_fifth_of_the_limit_warns_and_keeps_the_interval() {
     assert!(!ops(&github, "Search").is_empty(), "the interval stays");
     github.with(|w| w.limits = Some((1000, 1000)));
     daemon.clock(T0 + 220);
-    assert!(kinds(&daemon, ME).is_empty(), "20% left is not under it");
+    assert_eq!(
+        kinds(&daemon, ME),
+        ["graphql_near_limit", "rest_near_limit"],
+        "80% used warns"
+    );
+    github.with(|w| w.limits = Some((1001, 1001)));
+    daemon.clock(T0 + 280);
+    assert!(kinds(&daemon, ME).is_empty(), "under 80% used");
     daemon.stop();
 }
 
@@ -869,9 +889,10 @@ fn a_failing_fetch_keeps_the_content_and_a_401_stops_only_its_account() {
     daemon.clock(T0 + 100);
     assert_eq!(cards_of(&daemon, ME).len(), 2);
 
+    // A 500 is no reason to split: the owner's status request fails.
     github.intercept(|req| {
         (req.token == TOKEN && req.op.as_deref() == Some("Status"))
-            .then(|| Resp::json(502, json!({})))
+            .then(|| Resp::json(500, json!({})))
     });
     // DESIGN.md, "Fetch success and failure": the first failure shows only
     // as an Updated time that stops moving.
@@ -1354,8 +1375,8 @@ fn sso_names_the_registered_owner_by_its_numeric_id() {
     assert_eq!(daemon.account(ME)["updated_at"], T0 + 300, "no failure");
     github.clear_overrides();
 
-    // The same form on a request across owners (the status) cannot name
-    // one: the run fails, without a warning.
+    // DESIGN.md, "Tokens": the status of an organization owner is a request
+    // of that owner, so the same form names it as its search does.
     github.with(|w| w.prs.push(pr_node("PR_1", "org", 1, "me", json!({}))));
     github.intercept(|req| {
         (req.op.as_deref() == Some("Status")).then(|| {
@@ -1367,8 +1388,9 @@ fn sso_names_the_registered_owner_by_its_numeric_id() {
         })
     });
     daemon.clock(T0 + 400);
-    assert!(kinds(&daemon, ME).is_empty(), "{:?}", daemon.account(ME));
-    assert_eq!(daemon.account(ME)["updated_at"], T0 + 300, "a failure");
+    assert_eq!(kinds(&daemon, ME), ["sso_required"]);
+    assert_eq!(warning(&daemon, ME, "sso_required")["url"], URL);
+    assert_eq!(daemon.account(ME)["updated_at"], T0 + 400, "no failure");
     github.clear_overrides();
     daemon.clock(T0 + 500);
     assert!(
@@ -1438,6 +1460,9 @@ fn teams_come_from_user_teams_page_by_page() {
 
 #[test]
 fn a_notified_pr_of_an_owner_that_failed_is_fetched_at_the_next_run() {
+    // DESIGN.md, "Fetch success and failure": what the events request
+    // brought is taken though the owner's status failed, and the signal
+    // waits for the owner to succeed.
     let github = world();
     github.with(|w| w.prs.push(pr_node("PR_1", "org", 1, "me", json!({}))));
     let dir = tempfile::tempdir().unwrap();
@@ -1453,13 +1478,20 @@ fn a_notified_pr_of_an_owner_that_failed_is_fetched_at_the_next_run() {
         w.last_modified = "Fri, 15 Jan 2027 08:02:30 GMT".into();
     });
     github
-        .intercept(|req| (req.op.as_deref() == Some("Status")).then(|| Resp::json(502, json!({}))));
+        .intercept(|req| (req.op.as_deref() == Some("Status")).then(|| Resp::json(500, json!({}))));
     daemon.clock(T0 + 200);
-    assert!(daemon.row("C_1").is_none());
+    assert!(daemon.row("C_1").is_some(), "the events request succeeded");
     assert_eq!(daemon.account(ME)["updated_at"], T0 + 100, "a failed run");
     github.clear_overrides();
     github.clear_requests();
     daemon.clock(T0 + 300);
+    let events = ops(&github, "Events");
+    assert!(
+        events
+            .iter()
+            .any(|r| r.vars()["ids"].as_array().unwrap().contains(&json!("PR_1"))),
+        "the signal was kept for the owner's next run"
+    );
     let polled: Vec<bool> = github
         .requests()
         .iter()
@@ -1506,19 +1538,23 @@ fn a_pr_that_returns_to_the_watch_sets_its_reaction_baseline_without_rows() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = start(dir.path(), &github);
     setup(&daemon);
-    daemon.ok(json!({"cmd":"config_set","key":"keep_watching_days","value":0}));
-    daemon.ok(json!({"cmd":"config_set","key":"drop_after_days","value":1}));
     daemon.clock(T0 + 100);
     assert_eq!(reaction_rows(&daemon), 0, "the first count is the baseline");
+    // DESIGN.md, "Dismiss": a dismissed card is not watched for reactions.
+    daemon.ok(json!({"cmd":"dismiss","account":ME,"pr":"org/app#1"}));
     let gone = T0 + 2 * DAY;
     daemon.clock(gone);
-    daemon.clock(gone + 1);
-    assert!(daemon.cards().is_empty());
     github.with(|w| w.reactables.insert("C_ME".into(), reaction_node("C_ME", 5)));
     daemon.clock(gone + 400);
-    github.with(|w| w.prs[0]["updatedAt"] = json!(iso(gone + 500)));
+    daemon.ok(json!({"cmd":"restore","account":ME,"pr":"org/app#1"}));
     daemon.clock(gone + 600);
-    assert_eq!(daemon.cards().len(), 1);
+    assert_eq!(
+        daemon.ok(json!({"cmd":"list"}))["cards"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     daemon.clock(gone + 1000);
     assert_eq!(
         reaction_rows(&daemon),
@@ -1636,6 +1672,9 @@ fn a_connection_is_read_up_to_ten_pages_then_warns() {
 
 #[test]
 fn a_refused_merge_queue_read_keeps_the_other_events() {
+    // DESIGN.md, "Row text and targets": the removal row is still made, with
+    // the reason only and the PR's Checks page for `failed_checks` (the PR
+    // page for any other reason).
     let github = world();
     github.with(|w| {
         w.prs.push(pr_node("PR_1", "org", 1, "me", json!({})));
@@ -1643,8 +1682,12 @@ fn a_refused_merge_queue_read_keeps_the_other_events() {
             "PR_1".into(),
             vec![
                 issue_comment("C_1", "alice", T0 + 10, ""),
+                json!({"__typename":"AddedToMergeQueueEvent","id":"A_1","createdAt":iso(T0 + 15),
+                       "actor":{"login":"alice"}}),
                 json!({"__typename":"RemovedFromMergeQueueEvent","id":"X_1","createdAt":iso(T0 + 20),
                        "actor":{"login":"github-merge-queue"},"reason":"failed_checks"}),
+                json!({"__typename":"RemovedFromMergeQueueEvent","id":"X_2","createdAt":iso(T0 + 30),
+                       "actor":{"login":"alice"},"reason":"manual"}),
             ],
         );
     });
@@ -1663,7 +1706,21 @@ fn a_refused_merge_queue_read_keeps_the_other_events() {
     setup(&daemon);
     daemon.clock(T0 + 100);
     assert!(daemon.row("C_1").is_some(), "the comment is kept");
-    assert!(daemon.row("X_1").is_none(), "the removal needed the queue");
+    let failed = daemon.row("X_1").expect("the removal is still a row");
+    assert_eq!(
+        failed["text"], "Checks failed",
+        "no one to name as the adder"
+    );
+    assert_eq!(
+        failed["url"],
+        format!(
+            "{}/checks",
+            daemon.card("PR_1").unwrap()["url"].as_str().unwrap()
+        )
+    );
+    let manual = daemon.row("X_2").expect("the removal is still a row");
+    assert_eq!(manual["text"], "Removed manually");
+    assert_eq!(manual["url"], daemon.card("PR_1").unwrap()["url"]);
     assert!(!kinds(&daemon, ME).contains(&"fetch_failed".to_string()));
     daemon.stop();
 }
@@ -1809,17 +1866,37 @@ fn merge_queue_removals_name_the_reason_and_the_person_who_added_the_pr() {
         json!({"__typename":"RemovedFromMergeQueueEvent","id":id,"createdAt":iso(at),
                "actor":{"login":who},"reason":reason})
     };
+    // The checks of the commit the queue made, as bevyengine/bevy#26450
+    // answered them (2026-11-13): an optional failure first, then the
+    // required one.
+    let check = |name: &str, conclusion: &str, required: bool| {
+        json!({"__typename":"CheckRun","name":name,"conclusion":conclusion,
+               "detailsUrl":format!("https://github.com/org/app/actions/runs/1/job/{name}"),
+               "isRequired":required})
+    };
+    let before = json!({"statusCheckRollup":{"contexts":{"nodes":[
+        check("lint", "SUCCESS", true),
+        check("unused", "FAILURE", false),
+        check("build", "FAILURE", true),
+    ]}}});
     github.with(|w| {
-        w.prs.push(pr_node("PR_1", "org", 1, "me", json!({})));
+        w.prs.push(pr_node("PR_1", "org", 7, "me", json!({})));
+        let mut x1 = removed("X_1", T0 + 20, "github-merge-queue", "failed_checks");
+        x1["beforeCommit"] = before;
+        x1["enqueuer"] = json!({"login":"github-merge-queue[bot]"});
         w.timeline.insert(
             "PR_1".into(),
             vec![
                 added("A_1", T0 + 10, "alice"),
-                removed("X_1", T0 + 20, "github-merge-queue", "failed_checks"),
+                x1,
                 added("A_2", T0 + 30, "bob"),
                 removed("X_2", T0 + 40, "bob", "manual"),
                 added("A_3", T0 + 50, "carol"),
                 removed("X_3", T0 + 60, "github-merge-queue", "merged"),
+                added("A_4", T0 + 70, "dave"),
+                removed("X_4", T0 + 80, "github-merge-queue", "merge_conflict"),
+                added("A_5", T0 + 82, "erin"),
+                removed("X_5", T0 + 84, "github-merge-queue", "failed_checks"),
             ],
         );
     });
@@ -1829,15 +1906,40 @@ fn merge_queue_removals_name_the_reason_and_the_person_who_added_the_pr() {
     daemon.clock(T0 + 100);
     let x1 = daemon.row("X_1").unwrap();
     assert_eq!(x1["kind"], "merge_queue_removed");
-    assert_eq!(x1["text"], "Checks failed · added by alice");
-    assert_eq!(x1["actor"], "github-merge-queue");
-    assert_eq!(x1["url"], "https://github.com/org/app/pull/1");
     assert_eq!(
-        daemon.row("X_2").unwrap()["text"],
-        "Removed manually · added by bob"
+        x1["text"], "Checks failed · added by alice",
+        "not the enqueuer"
     );
+    assert_eq!(x1["actor"], "github-merge-queue");
+    assert_eq!(
+        x1["url"], "https://github.com/org/app/actions/runs/1/job/build",
+        "the failed required check of the queue's commit"
+    );
+    let x2 = daemon.row("X_2").unwrap();
+    assert_eq!(x2["text"], "Removed manually · added by bob");
+    assert_eq!(x2["url"], "https://github.com/org/app/pull/7");
     assert!(daemon.row("X_3").is_none(), "a merged removal makes no row");
     assert_eq!(daemon.row("A_3").unwrap()["kind"], "merge_queue_added");
+    let x4 = daemon.row("X_4").unwrap();
+    assert_eq!(x4["text"], "Merge conflict · added by dave");
+    assert_eq!(x4["url"], "https://github.com/org/app/pull/7");
+    assert_eq!(
+        daemon.row("X_5").unwrap()["url"],
+        "https://github.com/org/app/pull/7/checks",
+        "no checks to name: the Checks page"
+    );
+    let queue = ops(&github, "MergeQueue").remove(0);
+    assert_eq!(queue.vars()["number"], 7);
+    for field in [
+        "enqueuer { login }",
+        "beforeCommit { statusCheckRollup { contexts(first: 100)",
+        "isRequired(pullRequestNumber: $number)",
+        "... on StatusContext { context state targetUrl",
+    ] {
+        assert!(queue.query().contains(field), "{field}: {}", queue.query());
+    }
+    let events = ops(&github, "Events").remove(0);
+    assert!(events.query().contains("enqueuer { login } reason"));
     daemon.stop();
 }
 
@@ -1870,13 +1972,11 @@ fn approved_reviews_on_my_pr_make_a_row_each_and_a_comment_with_a_body() {
     }
     assert_eq!(daemon.row("R_2").unwrap()["kind"], "comment", "the body");
     assert!(daemon.row("R_1").is_none());
-    // A bot is a user for the Exclusions, by its GraphQL login (no
-    // `[bot]`); a hidden one leaves no row.
-    daemon.ok(
-        json!({"cmd":"owner_exclusions_set","account":ME,"owner":"org",
-        "kind":"user","name":"renovate","state":"hidden"}),
-    );
-    assert!(daemon.row("R_3:approved").is_none());
+    // A bot is a user for Mute, by its GraphQL login (no `[bot]`): its
+    // row turns gray.
+    daemon.ok(json!({"cmd":"mute","account":ME,"kind":"user","name":"renovate"}));
+    assert_eq!(daemon.row("R_3:approved").unwrap()["muted"], true);
+    assert_eq!(daemon.row("R_2:approved").unwrap()["muted"], false);
     daemon.stop();
 }
 
@@ -2800,5 +2900,699 @@ fn a_notifications_refusal_for_sso_fails_the_run() {
     }
     assert_eq!(kinds(&daemon, ME), ["fetch_failed"]);
     assert_eq!(daemon.account(ME)["updated_at"], Value::Null);
+    daemon.stop();
+}
+
+// ------------------------------------------- 0.4: requests and their failures
+
+/// How many ids each request of this query name carried.
+fn id_counts(github: &FakeGitHub, op: &str) -> Vec<usize> {
+    ops(github, op)
+        .iter()
+        .map(|r| r.vars()["ids"].as_array().map_or(0, Vec::len))
+        .collect()
+}
+
+fn carries(req: &Req, id: &str) -> bool {
+    req.vars()["ids"]
+        .as_array()
+        .is_some_and(|ids| ids.contains(&json!(id)))
+}
+
+#[test]
+fn id_requests_carry_fifty_ids_and_events_five() {
+    let github = world();
+    github.with(|w| {
+        for n in 1..=60 {
+            let id = format!("PR_{n}");
+            w.prs.push(pr_node(&id, "org", n, "me", json!({})));
+            w.threads.insert(
+                id.clone(),
+                vec![json!({"id":format!("T_{n}"),"comments":[
+                    {"id":format!("RC_{n}"),"url":"https://github.com/rc","createdAt":iso(T0 - 50),
+                     "bodyText":"mine","bodyHTML":"mine","author":{"__typename":"User","login":"me"}}]})],
+            );
+        }
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    assert_eq!(daemon.cards().len(), 60);
+    assert_eq!(id_counts(&github, "Status"), [50, 10]);
+    let compare: Vec<usize> = ops(&github, "Compare")
+        .iter()
+        .map(|r| r.vars().as_object().unwrap().len() / 2)
+        .collect();
+    assert_eq!(compare, [50, 10], "one id and one head per PR");
+    let events = id_counts(&github, "Events");
+    assert!(events.iter().all(|n| *n <= 5), "{events:?}");
+    assert_eq!(events.iter().sum::<usize>(), 60);
+
+    // The checks of every PR fail: the names are asked 50 at a time, and
+    // the reactions of my 120 posts (60 PR bodies, 60 review comments) too.
+    github.with(|w| {
+        for pr in &mut w.prs {
+            pr["statusCheckRollup"] = json!({"state":"FAILURE"});
+        }
+        for n in 1..=60 {
+            w.reactables
+                .insert(format!("RC_{n}"), reaction_node(&format!("RC_{n}"), 0));
+        }
+    });
+    github.clear_requests();
+    daemon.clock(T0 + 10_000);
+    assert_eq!(id_counts(&github, "Contexts"), [50, 10]);
+    assert_eq!(id_counts(&github, "Reactions"), [50, 50, 20]);
+    daemon.stop();
+}
+
+#[test]
+fn a_502_splits_the_request_down_to_one_item_and_logs_each_failure() {
+    let github = world();
+    github.with(|w| {
+        for n in 1..=4 {
+            w.prs
+                .push(pr_node(&format!("PR_{n}"), "org", n, "alice", json!({})));
+        }
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let (daemon, log) = start_logged(dir.path(), &github, "info");
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    assert_eq!(daemon.cards().len(), 4);
+
+    // DESIGN.md, "Fetch success and failure": only the failing half is
+    // made again, down to the one PR that keeps failing.
+    github.intercept(|req| {
+        (req.op.as_deref() == Some("Status") && carries(req, "PR_3")).then(|| {
+            Resp::json(502, json!({"message":"Server Error"}))
+                .header("X-GitHub-Request-Id", "ABCD:1234")
+        })
+    });
+    github.clear_requests();
+    daemon.clock(T0 + 200);
+    assert_eq!(id_counts(&github, "Status"), [4, 2, 2, 1, 1]);
+    assert_eq!(
+        kinds(&daemon, ME),
+        ["status_fetch_failed"],
+        "the owner succeeded"
+    );
+    let w = warning(&daemon, ME, "status_fetch_failed");
+    assert_eq!(
+        w["message"],
+        "Couldn't fetch status for org/app #3 · retrying"
+    );
+    assert_eq!(w["owner"], daemon.owner(ME, "org")["id"]);
+    assert_eq!(daemon.account(ME)["updated_at"], T0 + 200);
+
+    // Every run asks for it again; once it answers, the warning goes.
+    github.clear_overrides();
+    github.clear_requests();
+    daemon.clock(T0 + 300);
+    assert!(ops(&github, "Status").iter().any(|r| carries(r, "PR_3")));
+    assert!(kinds(&daemon, ME).is_empty());
+    daemon.stop();
+
+    // DESIGN.md, "Logs": a local time with its offset first, and one line
+    // per failed request with its size and the request id.
+    let text = std::fs::read_to_string(&log).unwrap();
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|l| l.contains("request of me failed after "))
+        .collect();
+    let sizes: Vec<&str> = lines
+        .iter()
+        .map(|l| l.split(" ms: ").nth(1).unwrap())
+        .collect();
+    let failed = |n: usize| {
+        format!("GraphQL Status (ids: {n}): network: GitHub answered 502 (request id ABCD:1234)")
+    };
+    assert_eq!(sizes, [failed(4), failed(2), failed(1)], "{text}");
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        let (stamp, rest) = line.split_at("2027-01-15 08:00:00+09:00".len());
+        assert!(rest.starts_with(" shiibar-ghd "), "{line}");
+        jiff::fmt::strtime::parse("%Y-%m-%d %H:%M:%S%:z", stamp)
+            .and_then(|t| t.to_timestamp())
+            .unwrap_or_else(|e| panic!("{line}: {e}"));
+    }
+}
+
+#[test]
+fn a_search_is_split_on_502_and_one_search_that_fails_alone_fails_the_owner() {
+    let github = world();
+    github.with(|w| w.prs.push(pr_node("PR_1", "org", 1, "alice", json!({}))));
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    // Every search request with more than one search answers 502.
+    github.intercept(|req| {
+        let many = req.vars().as_object().is_some_and(|v| v.len() > 1);
+        (req.op.as_deref() == Some("Search") && many).then(|| Resp::json(504, json!({})))
+    });
+    daemon.clock(T0 + 100);
+    let one: Vec<String> = ops(&github, "Search")
+        .iter()
+        .filter(|r| r.vars().as_object().unwrap().len() == 1)
+        .map(|r| {
+            r.vars()
+                .as_object()
+                .unwrap()
+                .values()
+                .next()
+                .unwrap()
+                .to_string()
+        })
+        .collect();
+    assert_eq!(one.len(), 12, "six searches of org and of Public: {one:?}");
+    assert_eq!(daemon.cards().len(), 1);
+    assert_eq!(daemon.account(ME)["updated_at"], T0 + 100);
+
+    // One search fails even alone: the owner failed, and the next run makes
+    // only that search again.
+    github.clear_overrides();
+    github.intercept(|req| {
+        let vars = req.vars().to_string();
+        let closed = req.op.as_deref() == Some("Search")
+            && vars.contains("is:pr is:closed involves:@me")
+            && vars.contains("org:org");
+        closed.then(|| Resp::json(502, json!({})))
+    });
+    github.clear_requests();
+    daemon.clock(T0 + 200);
+    assert_eq!(daemon.account(ME)["updated_at"], T0 + 100, "a failure");
+    github.clear_requests();
+    daemon.clock(T0 + 205);
+    let searches = ops(&github, "Search");
+    assert_eq!(searches.len(), 1, "only the failed search");
+    assert_eq!(
+        searches[0]
+            .vars()
+            .as_object()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap(),
+        "is:pr is:closed involves:@me updated:>=2027-01-15T08:00:00Z org:org"
+    );
+    assert!(ops(&github, "Status").is_empty());
+    assert_eq!(polls(&github), 0, "the notifications check did not fail");
+    assert_eq!(daemon.account(ME)["updated_at"], T0 + 100, "failed again");
+    github.clear_overrides();
+    github.clear_requests();
+    daemon.clock(T0 + 215);
+    assert_eq!(ops(&github, "Search").len(), 1);
+    assert_eq!(
+        daemon.account(ME)["updated_at"],
+        T0 + 215,
+        "the retry succeeded"
+    );
+    daemon.stop();
+}
+
+#[test]
+fn failed_requests_alone_are_made_again_until_the_interval_brings_a_full_run() {
+    let github = world();
+    github.with(|w| {
+        w.owners.insert("org2".into(), "Organization".into());
+        w.prs.push(pr_node("PR_1", "org", 1, "alice", json!({})));
+        w.prs.push(pr_node("PR_2", "org2", 2, "alice", json!({})));
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    add_owner(&daemon, ME, "org2");
+    github.intercept(|req| {
+        (req.op.as_deref() == Some("Status") && carries(req, "PR_2"))
+            .then(|| Resp::json(500, json!({})))
+    });
+    daemon.clock(T0 + 1000);
+    // DESIGN.md, "Fetch success and failure": what succeeded is taken.
+    assert!(daemon.card("PR_1").is_some());
+    assert!(daemon.card("PR_2").is_none());
+    assert_eq!(daemon.account(ME)["updated_at"], Value::Null, "a failure");
+
+    github.clear_requests();
+    daemon.clock(T0 + 1005);
+    let made: Vec<String> = github
+        .requests()
+        .iter()
+        .map(|r| r.op.clone().unwrap_or_else(|| r.path.clone()))
+        .collect();
+    assert_eq!(made, ["Viewer", "Status"], "only the failed request");
+    assert_eq!(id_counts(&github, "Status"), [1]);
+
+    github.clear_overrides();
+    github.clear_requests();
+    daemon.clock(T0 + 1015);
+    assert!(daemon.card("PR_2").is_some());
+    assert!(ops(&github, "Search").is_empty());
+    assert_eq!(daemon.account(ME)["updated_at"], T0 + 1015);
+
+    // A minute after the full run started, every request again; org2's
+    // window starts from that full run, not from the retry.
+    github.clear_requests();
+    daemon.clock(T0 + 1100);
+    let org2: Vec<Req> = ops(&github, "Search")
+        .into_iter()
+        .filter(|r| {
+            r.vars()["q4"]
+                .as_str()
+                .is_some_and(|q| q.contains("org:org2"))
+        })
+        .collect();
+    assert_eq!(org2.len(), 1);
+    assert_eq!(
+        org2[0].vars()["q4"],
+        format!(
+            "is:pr is:closed involves:@me updated:>={} org:org2",
+            iso(T0 + 1000 - 300)
+        )
+    );
+    assert_eq!(polls(&github), 1);
+    daemon.stop();
+}
+
+#[test]
+fn a_refresh_after_a_failure_makes_every_request() {
+    let github = world();
+    github.with(|w| w.prs.push(pr_node("PR_1", "org", 1, "alice", json!({}))));
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    github
+        .intercept(|req| (req.op.as_deref() == Some("Status")).then(|| Resp::json(500, json!({}))));
+    daemon.clock(T0 + 100);
+    github.clear_overrides();
+    github.clear_requests();
+    daemon.clock(T0 + 101);
+    daemon.ok(json!({"cmd":"refresh","account":ME}));
+    assert_eq!(ops(&github, "Search").len(), 2, "org and Public");
+    assert_eq!(daemon.account(ME)["updated_at"], T0 + 101);
+    daemon.stop();
+}
+
+#[test]
+fn a_dismissed_card_has_only_its_events_fetched_once_it_moved() {
+    let github = world();
+    github.with(|w| w.prs.push(pr_node("PR_1", "org", 1, "alice", json!({}))));
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    daemon.ok(json!({"cmd":"dismiss","account":ME,"pr":"org/app#1"}));
+
+    github.clear_requests();
+    daemon.clock(T0 + 200);
+    assert!(
+        !ops(&github, "Status").iter().any(|r| carries(r, "PR_1")),
+        "no status for a dismissed card"
+    );
+    assert!(!ops(&github, "Events").iter().any(|r| carries(r, "PR_1")));
+
+    // A plain comment moves it: its events are read, no row, still dismissed.
+    github.with(|w| {
+        w.prs[0]["updatedAt"] = json!(iso(T0 + 250));
+        w.timeline.insert(
+            "PR_1".into(),
+            vec![issue_comment("C_1", "bob", T0 + 250, "")],
+        );
+    });
+    github.clear_requests();
+    daemon.clock(T0 + 300);
+    assert!(ops(&github, "Events").iter().any(|r| carries(r, "PR_1")));
+    assert!(!ops(&github, "Status").iter().any(|r| carries(r, "PR_1")));
+    assert!(daemon.row("C_1").is_none());
+    assert!(daemon.card("PR_1").unwrap()["dismissed_at"].is_number());
+    // Its kept `updatedAt` moved on: no events until it moves again.
+    github.clear_requests();
+    daemon.clock(T0 + 400);
+    assert!(!ops(&github, "Events").iter().any(|r| carries(r, "PR_1")));
+
+    // A mention brings it back.
+    github.with(|w| {
+        w.prs[0]["updatedAt"] = json!(iso(T0 + 450));
+        w.timeline.get_mut("PR_1").unwrap().push(issue_comment(
+            "C_2",
+            "carol",
+            T0 + 450,
+            &mention_link("me"),
+        ));
+    });
+    daemon.clock(T0 + 500);
+    assert_eq!(daemon.row("C_2").unwrap()["kind"], "mentioned");
+    assert!(daemon.card("PR_1").unwrap()["dismissed_at"].is_null());
+    daemon.stop();
+}
+
+#[test]
+fn a_record_only_pr_is_read_only_when_it_moved_and_shows_only_on_a_return() {
+    let github = world();
+    github.with(|w| w.prs.push(pr_node("PR_1", "org", 1, "alice", json!({}))));
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    daemon.ok(json!({"cmd":"dismiss","account":ME,"pr":"org/app#1"}));
+    // Seven days later the card leaves the Dismissed list: a record stays.
+    let later = T0 + 8 * 86_400;
+    daemon.clock(later);
+    daemon.clock(later + 100);
+    assert!(daemon.card("PR_1").is_none(), "{:?}", daemon.cards());
+    github.clear_requests();
+    daemon.clock(later + 200);
+    assert!(!ops(&github, "Status").iter().any(|r| carries(r, "PR_1")));
+    assert!(!ops(&github, "Events").iter().any(|r| carries(r, "PR_1")));
+
+    // Moved by a plain comment: read, not shown, and not read again.
+    github.with(|w| {
+        w.prs[0]["updatedAt"] = json!(iso(later + 250));
+        w.timeline.insert(
+            "PR_1".into(),
+            vec![issue_comment("C_1", "bob", later + 250, "")],
+        );
+    });
+    github.clear_requests();
+    daemon.clock(later + 300);
+    assert!(ops(&github, "Events").iter().any(|r| carries(r, "PR_1")));
+    assert!(daemon.card("PR_1").is_none());
+    // DESIGN.md, "Identifying PRs": a notification of a record-only PR is
+    // no signal either.
+    github.with(|w| {
+        w.notifications = vec![notified("org", 1, later + 350)];
+        w.last_modified = "Sat, 23 Jan 2027 08:05:50 GMT".into();
+    });
+    github.clear_requests();
+    daemon.clock(later + 400);
+    assert_eq!(polls(&github), 1);
+    assert!(!ops(&github, "Events").iter().any(|r| carries(r, "PR_1")));
+
+    // A request for my review brings it back as a new PR.
+    github.with(|w| {
+        w.prs[0]["updatedAt"] = json!(iso(later + 450));
+        w.timeline.get_mut("PR_1").unwrap().push(
+            json!({"__typename":"ReviewRequestedEvent","id":"RR_1","createdAt":iso(later + 450),
+                   "actor":{"login":"alice"},"requestedReviewer":{"__typename":"User","login":"me"}}),
+        );
+    });
+    daemon.clock(later + 500);
+    assert!(daemon.card("PR_1").is_some());
+    assert_eq!(daemon.row("RR_1").unwrap()["kind"], "review_requested");
+    daemon.stop();
+}
+
+#[test]
+fn an_unknown_closed_pr_is_taken_only_with_a_return_trigger() {
+    let github = world();
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    github.with(|w| {
+        w.prs.push(pr_node(
+            "PR_9",
+            "org",
+            9,
+            "alice",
+            json!({"state":"CLOSED","updatedAt":iso(T0 + 150)}),
+        ));
+        w.timeline.insert(
+            "PR_9".into(),
+            vec![issue_comment("C_1", "bob", T0 + 150, "")],
+        );
+    });
+    github.clear_requests();
+    daemon.clock(T0 + 200);
+    assert!(
+        ops(&github, "Events").iter().any(|r| carries(r, "PR_9")),
+        "found by the closed search"
+    );
+    assert!(ops(&github, "Collect").is_empty(), "nothing collected");
+    assert!(daemon.card("PR_9").is_none(), "no trigger, not taken");
+
+    github.with(|w| {
+        w.prs[0]["updatedAt"] = json!(iso(T0 + 250));
+        w.timeline.get_mut("PR_9").unwrap().push(issue_comment(
+            "C_2",
+            "carol",
+            T0 + 250,
+            &mention_link("me"),
+        ));
+    });
+    daemon.clock(T0 + 300);
+    let card = daemon.card("PR_9").expect("a mention brings it in");
+    assert_eq!(card["state_label"], "closed");
+    assert_eq!(daemon.row("C_2").unwrap()["kind"], "mentioned");
+    daemon.stop();
+}
+
+#[test]
+fn reopened_and_merged_events_make_rows_without_the_paired_closed() {
+    let github = world();
+    github.with(|w| {
+        w.prs.push(pr_node("PR_1", "org", 1, "alice", json!({})));
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    github.with(|w| {
+        w.prs[0]["updatedAt"] = json!(iso(T0 + 160));
+        w.timeline.insert(
+            "PR_1".into(),
+            vec![
+                json!({"__typename":"ClosedEvent","id":"CL_1","createdAt":iso(T0 + 110),
+                       "url":"https://github.com/org/app/pull/1#closed","actor":{"login":"bob"}}),
+                json!({"__typename":"ReopenedEvent","id":"RO_1","createdAt":iso(T0 + 120),
+                       "actor":{"login":"bob"}}),
+            ],
+        );
+    });
+    daemon.clock(T0 + 200);
+    let reopened = daemon.row("RO_1").unwrap();
+    assert_eq!(reopened["kind"], "reopened");
+    assert_eq!(reopened["actor"], "bob");
+    assert_eq!(reopened["url"], "https://github.com/org/app/pull/1");
+    assert_eq!(daemon.row("CL_1").unwrap()["kind"], "closed");
+    let events = ops(&github, "Events").pop().unwrap();
+    assert!(events.query().contains("REOPENED_EVENT"));
+    assert!(
+        events
+            .query()
+            .contains("... on ReopenedEvent { id createdAt actor { login } }")
+    );
+
+    github.with(|w| {
+        w.prs[0]["state"] = json!("MERGED");
+        w.prs[0]["updatedAt"] = json!(iso(T0 + 260));
+        let timeline = w.timeline.get_mut("PR_1").unwrap();
+        timeline.push(json!({"__typename":"MergedEvent","id":"M_1","createdAt":iso(T0 + 250),
+                             "url":"https://github.com/org/app/pull/1#merged","actor":{"login":"bob"}}));
+        timeline.push(json!({"__typename":"ClosedEvent","id":"CL_2","createdAt":iso(T0 + 250),
+                             "url":"https://github.com/org/app/pull/1#closed2","actor":{"login":"bob"}}));
+    });
+    daemon.clock(T0 + 300);
+    assert_eq!(daemon.row("M_1").unwrap()["kind"], "merged");
+    assert!(
+        daemon.row("CL_2").is_none(),
+        "the CLOSED_EVENT of the merge"
+    );
+    daemon.stop();
+}
+
+#[test]
+fn a_rest_404_is_logged_only_at_debug() {
+    let log_of = |level: &str| {
+        let github = world();
+        github.with(|w| w.prs.push(pr_node("PR_1", "org", 1, "me", json!({}))));
+        github.intercept(|req| {
+            req.path
+                .contains("/actions/runs?")
+                .then(|| Resp::json(404, json!({"message":"Not Found"})))
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let (daemon, log) = start_logged(dir.path(), &github, level);
+        setup(&daemon);
+        daemon.clock(T0 + 100);
+        github.with(|w| w.prs[0]["statusCheckRollup"] = json!({"state":"FAILURE"}));
+        daemon.clock(T0 + 200);
+        daemon.stop();
+        std::fs::read_to_string(log).unwrap()
+    };
+    let line = |text: &str| {
+        text.lines()
+            .find(|l| l.contains("request of me failed after "))
+            .map(str::to_string)
+    };
+    assert_eq!(line(&log_of("info")), None);
+    let debug = line(&log_of("debug")).expect("a debug line");
+    assert!(debug.contains(" shiibar-ghd debug: "), "{debug}");
+    assert!(
+        debug
+            .ends_with(" ms: GET /repos/org/app/actions/runs?head_sha=abc&per_page=100: not found (GitHub answered 404)"),
+        "REST names its path and no size: {debug}"
+    );
+}
+
+#[test]
+fn a_4xx_names_its_status_and_request_id_and_a_failed_run_logs_one_line() {
+    // DESIGN.md, "Logs": the status code and `x-github-request-id` of a
+    // failed request, and one `fetch of <login> failed` line per failed
+    // account fetch, however many of its requests failed.
+    let github = world();
+    github.intercept(|req| {
+        (req.op.as_deref() == Some("Search")).then(|| {
+            Resp::json(403, json!({"message":"Forbidden"}))
+                .header("X-GitHub-Request-Id", "EF01:5678")
+        })
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let (daemon, log) = start_logged(dir.path(), &github, "info");
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    daemon.stop();
+    let text = std::fs::read_to_string(log).unwrap();
+    let requests: Vec<&str> = text
+        .lines()
+        .filter(|l| l.contains("request of me failed after "))
+        .collect();
+    assert!(requests.len() >= 2, "{text}");
+    for line in &requests {
+        assert!(
+            line.ends_with(": forbidden: Forbidden (GitHub answered 403, request id EF01:5678)"),
+            "{line}"
+        );
+    }
+    let runs = text
+        .lines()
+        .filter(|l| l.contains("fetch of me failed"))
+        .count();
+    assert_eq!(runs, 1, "{text}");
+}
+
+#[test]
+fn an_unknown_closed_pr_whose_events_failed_is_fetched_again_from_that_window() {
+    // DESIGN.md, "Fetch success and failure": a failed event fetch is made
+    // again from the window it failed in, also for a closed PR found by a
+    // search that the core does not know yet; the owner's window moving on
+    // loses nothing.
+    let github = world();
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    github.with(|w| {
+        w.prs.push(pr_node(
+            "PR_9",
+            "org",
+            9,
+            "alice",
+            json!({"state":"CLOSED","updatedAt":iso(T0 + 150)}),
+        ));
+        w.timeline.insert(
+            "PR_9".into(),
+            vec![issue_comment("C_1", "carol", T0 + 150, &mention_link("me"))],
+        );
+    });
+    github.intercept(|req| {
+        (req.op.as_deref() == Some("Events") && carries(req, "PR_9"))
+            .then(|| Resp::json(500, json!({"message":"Server Error"})))
+    });
+    daemon.clock(T0 + 600);
+    assert!(daemon.card("PR_9").is_none(), "its events failed");
+    assert!(
+        !kinds(&daemon, ME).contains(&"fetch_failed".to_string()),
+        "a PR's events never fail the owner"
+    );
+    github.clear_overrides();
+    github.clear_requests();
+    // The next run: the owner's closed search starts five minutes before
+    // T0 + 600, after PR_9's update, so only the retry brings it back.
+    daemon.clock(T0 + 1200);
+    let card = daemon.card("PR_9").expect("the retry brings it in");
+    assert_eq!(card["state_label"], "closed");
+    assert_eq!(daemon.row("C_1").unwrap()["kind"], "mentioned");
+    daemon.stop();
+}
+
+#[test]
+fn a_split_public_search_keeps_the_hits_of_the_parts_that_answered() {
+    // DESIGN.md, "Tokens": a part of Public's search refused with the
+    // single-organization SSO form fails that request; the parts GitHub
+    // answered still bring their PRs.
+    const URL: &str = "https://github.com/orgs/acme/sso?authorization_request=1";
+    let github = world();
+    github.with(|w| {
+        w.prs
+            .push(pr_node("PR_1", "someone", 1, "alice", json!({})));
+    });
+    github.intercept(|req| {
+        let vars = req.vars();
+        let public = req.op.as_deref() == Some("Search")
+            && vars
+                .as_object()
+                .unwrap()
+                .values()
+                .any(|q| q.as_str().is_some_and(|q| q.contains("is:public")));
+        if !public {
+            return None;
+        }
+        let count = vars.as_object().unwrap().len();
+        if count == 6 {
+            return Some(Resp::json(502, json!({"message":"Server Error"})));
+        }
+        vars.get("q3").is_some().then(|| {
+            Resp::json(
+                403,
+                json!({"message":"Resource protected by organization SAML enforcement."}),
+            )
+            .header("X-GitHub-SSO", format!("required; url={URL}"))
+        })
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    assert!(
+        daemon.card("PR_1").is_some(),
+        "found by the part that answered"
+    );
+    assert!(daemon.account(ME)["updated_at"].is_null(), "the run failed");
+    assert!(
+        !kinds(&daemon, ME).contains(&"sso_required".to_string()),
+        "Public names no owner"
+    );
+    daemon.stop();
+}
+
+#[test]
+fn only_a_node_reported_not_found_makes_a_pr_unreadable() {
+    // A null node GitHub reports as FORBIDDEN keeps the card and is fetched
+    // again like a status that failed alone (`status_fetch_failed`); one
+    // reported as NOT_FOUND makes the PR unreadable.
+    let github = world();
+    github.with(|w| w.prs.push(pr_node("PR_1", "org", 1, "alice", json!({}))));
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    assert!(daemon.card("PR_1").is_some());
+    for (kind, kept) in [("FORBIDDEN", true), ("NOT_FOUND", false)] {
+        github.intercept(move |req| {
+            (req.op.as_deref() == Some("Status") && carries(req, "PR_1")).then(|| {
+                Resp::json(200, json!({
+                    "data":{"rateLimit":{"cost":1,"limit":5000,"remaining":4999,"resetAt":iso(T0 + 3600)},
+                            "nodes":[null]},
+                    "errors":[{"type":kind,"path":["nodes",0],"message":"refused"}]
+                }))
+            })
+        });
+        daemon.ok(json!({"cmd":"refresh","account":ME}));
+        assert_eq!(daemon.card("PR_1").is_some(), kept, "{kind}");
+        if kept {
+            assert_eq!(kinds(&daemon, ME), ["status_fetch_failed"], "{kind}");
+        }
+        github.clear_overrides();
+    }
     daemon.stop();
 }

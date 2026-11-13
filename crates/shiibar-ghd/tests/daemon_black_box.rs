@@ -49,7 +49,12 @@ fn everything_saved_comes_back_after_a_restart() {
         vec![reaction("C_1", "PR_1", t, json!({"HEART":2}))],
     );
     daemon.ok(json!({"cmd":"read","row_ids":["1001:READ"]}));
-    daemon.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#3"}));
+    daemon.ok(
+        json!({"cmd":"place","account":"me","pr":"org/app#3","tab":"review","section":"waiting"}),
+    );
+    daemon.ok(json!({"cmd":"mute","account":"me","kind":"user","name":"bob"}));
+    daemon.ingest(vec![pr("PR_4", "alice")], vec![], vec![]);
+    daemon.ok(json!({"cmd":"dismiss","account":"me","pr":"org/app#4"}));
     daemon.ok(json!({"cmd":"account_color","account":"me","color":"purple"}));
     daemon.ingest(
         vec![],
@@ -61,10 +66,19 @@ fn everything_saved_comes_back_after_a_restart() {
 
     let daemon = restart(daemon, dir.path(), T0 + 100);
 
-    // Read, Snooze, unread, the dot and the created time.
+    // Read, place, Dismiss, Mute, unread, the dot and the created time.
     assert_eq!(daemon.row("READ").unwrap()["unread"], false);
     assert_eq!(daemon.card("PR_1").unwrap()["created_at"], T0 - 86_400);
-    assert_eq!(daemon.card("PR_3").unwrap()["snoozed"], true);
+    assert_eq!(
+        daemon.card("PR_3").unwrap()["placement"],
+        json!({"tab":"review","section":"waiting","position":0})
+    );
+    assert_eq!(daemon.card("PR_1").unwrap()["placement"]["tab"], "mine");
+    assert_eq!(daemon.card("PR_4").unwrap()["dismissed_at"], T0);
+    assert_eq!(
+        daemon.ok(json!({"cmd":"mutes_get","account":"me"}))["mutes"],
+        json!({"repos":[],"users":["bob"],"prs":[]})
+    );
     assert_eq!(daemon.row("SEEN").unwrap()["unread"], true);
     assert_eq!(daemon.account("me")["unread"], true);
     assert_eq!(daemon.card("PR_2").unwrap()["added_at"], added);
@@ -117,36 +131,16 @@ fn everything_saved_comes_back_after_a_restart() {
         .unwrap();
     assert_eq!(newest["counts"]["HEART"], 1);
 
-    // last_release_at: no release before the Return time; the held rows then
-    // arrive through the summary record.
+    // The undelivered rows arrive as one summary: SEEN, HELD, HELD2, two
+    // Reaction rows and Checks failed. The read row stays out.
     let mut app = daemon.subscribe("app");
     app.snapshot();
     let first = app.notification();
-    // SEEN, two Reaction rows and Checks failed. The read row and the held
-    // rows stay out.
     assert_eq!(
-        first["title"], "me · 4 new events",
+        first["title"], "me · 6 new events",
         "undelivered rows are one summary"
     );
-    assert_eq!(first["subtitle"], "org · in 2 PRs");
-    daemon.clock(NEXT_0900);
-    let summary = app.notification();
-    assert_eq!(summary["title"], "me · Back from Snooze");
-    assert_eq!(summary["rows"].as_array().unwrap().len(), 2);
-    daemon.stop();
-}
-
-#[test]
-fn last_release_at_survives_a_restart() {
-    let (dir, daemon) = setup();
-    daemon.ingest(vec![pr("PR_1", "me")], vec![], vec![]);
-    daemon.clock(NEXT_0900 + 60);
-    daemon.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#1"}));
-    // Restarting after today's release must not release again.
-    let daemon = restart(daemon, dir.path(), NEXT_0900 + 120);
-    assert_eq!(daemon.card("PR_1").unwrap()["snoozed"], true);
-    daemon.clock(NEXT_0900 + DAY);
-    assert_eq!(daemon.card("PR_1").unwrap()["snoozed"], false);
+    assert_eq!(first["subtitle"], "org · in 3 PRs");
     daemon.stop();
 }
 
@@ -216,7 +210,7 @@ fn a_cli_subscriber_sees_notifications_too() {
 }
 
 #[test]
-fn absence_becomes_one_summary_per_scope_including_snooze_rows() {
+fn absence_becomes_one_summary_per_scope() {
     let (_dir, daemon) = setup();
     daemon.ok(json!({"cmd":"dev_owner_add","account":"me","owner":"second","kind":"org"}));
     let second = with(pr("PR_3", "alice"), json!({"owner":"second"}));
@@ -225,7 +219,6 @@ fn absence_becomes_one_summary_per_scope_including_snooze_rows() {
         vec![],
         vec![],
     );
-    daemon.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#1"}));
     daemon.ingest(
         vec![],
         vec![
@@ -236,8 +229,7 @@ fn absence_becomes_one_summary_per_scope_including_snooze_rows() {
         ],
         vec![],
     );
-    // The release happens with no app connected.
-    daemon.clock(NEXT_0900);
+    // Made with no app connected.
     let mut app = daemon.subscribe("app");
     app.snapshot();
     let first = app.notification();
@@ -280,32 +272,19 @@ fn a_summary_written_once_does_not_repeat_on_the_next_reconnect() {
 }
 
 #[test]
-fn back_from_snooze_goes_to_a_connected_app() {
-    let (_dir, daemon) = setup();
-    let mut app = daemon.subscribe("app");
-    app.snapshot();
-    daemon.ingest(vec![pr("PR_1", "alice")], vec![], vec![]);
-    daemon.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#1"}));
-    daemon.ingest(
-        vec![],
-        vec![event("E_1", "PR_1", "comment", T0 + 1)],
-        vec![],
-    );
-    daemon.clock(NEXT_0900);
-    let notification = app.notification();
-    assert_eq!(notification["title"], "me · Back from Snooze");
-    assert_eq!(notification["subtitle"], "org · 1 PR had new events");
-    assert_eq!(notification["rows"], json!(["1001:E_1"]));
-    daemon.stop();
-}
-
-#[test]
-fn the_release_runs_at_startup_for_a_sleeping_or_stopped_daemon() {
+fn the_automatic_dismiss_runs_at_startup_for_a_sleeping_or_stopped_daemon() {
+    // DESIGN.md, "Dismiss": n days after the merge was detected.
     let (dir, daemon) = setup();
     daemon.ingest(vec![pr("PR_1", "me")], vec![], vec![]);
-    daemon.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#1"}));
-    let daemon = restart(daemon, dir.path(), NEXT_0900 + 3 * DAY);
-    assert_eq!(daemon.card("PR_1").unwrap()["snoozed"], false);
+    daemon.ingest(
+        vec![with(pr("PR_1", "me"), json!({"state":"merged"}))],
+        vec![],
+        vec![],
+    );
+    let daemon = restart(daemon, dir.path(), T0 + 3 * DAY);
+    let card = daemon.card("PR_1").unwrap();
+    assert_eq!(card["dismissed_at"], T0 + 3 * DAY);
+    assert_eq!(card["dismiss_expires_at"], T0 + 10 * DAY);
     daemon.stop();
 }
 
@@ -313,10 +292,19 @@ fn the_release_runs_at_startup_for_a_sleeping_or_stopped_daemon() {
 fn dev_clock_set_runs_the_periodic_pass_before_answering() {
     let (_dir, daemon) = setup();
     daemon.ingest(vec![pr("PR_1", "alice")], vec![], vec![]);
+    daemon.ingest(
+        vec![with(pr("PR_1", "alice"), json!({"state":"closed"}))],
+        vec![],
+        vec![],
+    );
     let mut cli = daemon.subscribe("cli");
     cli.snapshot();
-    daemon.clock(T0 + 15 * DAY);
-    assert!(daemon.card("PR_1").is_none(), "dropped after 14 days");
+    daemon.clock(T0 + 3 * DAY);
+    let listed = daemon.ok(json!({"cmd":"list"}))["cards"].clone();
+    assert!(
+        listed.as_array().unwrap().is_empty(),
+        "dismissed after 3 days"
+    );
     let event = cli.until(|e| e["event"] == "account_changed");
     assert_eq!(event["account"]["id"], ACCOUNT);
     assert_eq!(event["account"]["owners"][0]["pr_count"], 0);
@@ -413,7 +401,7 @@ fn account_changed_goes_out_on_value_and_row_changes_only() {
     );
     let event = cli.until(|e| e["event"] == "account_changed");
     assert_eq!(event["account"]["id"], ACCOUNT);
-    assert_eq!(event["account"]["review_count"], 1);
+    assert!(event["account"].get("review_count").is_none());
     assert_eq!(event["account"]["unread"], true);
 
     // Requests that read change nothing a client shows; opening the
@@ -425,11 +413,12 @@ fn account_changed_goes_out_on_value_and_row_changes_only() {
     daemon.ok(json!({"cmd":"read","row_ids":["1001:E_1"]}));
     let event = cli.next().unwrap();
     assert_eq!(event["event"], "account_changed");
+    assert_eq!(daemon.row("E_1").unwrap()["unread"], false);
     assert_eq!(
-        event["account"]["review_count"], 1,
+        daemon.card("PR_1").unwrap()["awaiting_review"],
+        true,
         "reading the request row keeps the PR awaiting review"
     );
-    assert_eq!(daemon.row("E_1").unwrap()["unread"], false);
     daemon.stop();
 }
 
@@ -523,9 +512,11 @@ fn a_slow_client_is_disconnected_and_recovers_by_reconnecting() {
     // one slow client does not hold the others back.
     let text = "x".repeat(4096);
     let events = 400;
+    // Each row is newer than the last: the newest 20 stay and the older
+    // ones go, but every row is notified when made.
     for n in 0..events {
         let long = with(
-            event(&format!("E_{n}"), "PR_1", "comment", T0 + 1),
+            event(&format!("E_{n}"), "PR_1", "comment", T0 + 1 + n),
             json!({"text": text}),
         );
         daemon.ingest(vec![], vec![long], vec![]);
@@ -533,7 +524,7 @@ fn a_slow_client_is_disconnected_and_recovers_by_reconnecting() {
     }
     // A connection that stayed open would time out here and fail the test.
     let received = slow.until_closed();
-    assert!(received.len() < 2 * events, "{}", received.len());
+    assert!(received.len() < 2 * events as usize, "{}", received.len());
     let snapshot = daemon.subscribe("cli").snapshot();
     assert_eq!(snapshot["accounts"].as_array().unwrap().len(), 1);
     daemon.stop();
@@ -600,8 +591,8 @@ fn damage_under_a_running_daemon_moves_it_to_the_waiting_state() {
         vec![event("E_2", "PR_2", "comment", T0 + 1)],
         vec![],
     );
-    assert_eq!(daemon.owner("me", "public")["review_count"], 1);
-    assert_eq!(daemon.account("me")["review_count"], 1);
+    assert_eq!(daemon.owner("me", "public")["pr_count"], 1);
+    assert_eq!(daemon.card("PR_2").unwrap()["awaiting_review"], true);
     daemon.stop();
 }
 
@@ -676,8 +667,8 @@ fn activity_order_and_filters_over_the_socket() {
         ["C", "A", "B", "D"]
     );
     assert!(activity(json!({"search":"text nobody"})).is_empty());
-    daemon.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#2"}));
-    assert_eq!(activity(json!({})), ["C", "D"], "no snoozed PR in Activity");
+    daemon.ok(json!({"cmd":"dismiss","account":"me","pr":"org/app#2"}));
+    assert_eq!(activity(json!({})), ["C", "D"], "no dismissed PR");
     assert_eq!(
         daemon.code(json!({"cmd":"activity","owners":["nobody"]})),
         "not_found"
@@ -700,13 +691,42 @@ fn error_codes_table() {
         (json!({"cmd":"read","row_ids":["nope"]}), "not_found"),
         (json!({"cmd":"read_all","account":"nobody"}), "not_found"),
         (
-            json!({"cmd":"snooze","account":"me","pr":"a/b#1"}),
+            json!({"cmd":"dismiss","account":"me","pr":"a/b#1"}),
             "not_found",
         ),
         (
-            json!({"cmd":"unsnooze","account":"me","pr":"a/b#1"}),
+            json!({"cmd":"restore","account":"me","pr":"a/b#1"}),
             "not_found",
         ),
+        (
+            json!({"cmd":"place","account":"me","pr":"a/b#1","tab":"mine"}),
+            "not_found",
+        ),
+        (
+            json!({"cmd":"restore","account":"me","pr":"org/app#2"}),
+            "invalid",
+        ),
+        (
+            json!({"cmd":"place","account":"me","pr":"org/app#2","tab":"review"}),
+            "invalid",
+        ),
+        (
+            json!({"cmd":"place","account":"me","pr":"org/app#2","tab":"review","section":"todo","before":"org/app#9"}),
+            "invalid",
+        ),
+        (
+            json!({"cmd":"mute","account":"me","kind":"repo","name":"noslash"}),
+            "invalid",
+        ),
+        (
+            json!({"cmd":"mute","account":"me","kind":"pr","name":"org/app#99"}),
+            "not_found",
+        ),
+        (
+            json!({"cmd":"unmute","account":"me","kind":"user","name":"nobody"}),
+            "not_found",
+        ),
+        (json!({"cmd":"mutes_get","account":"nobody"}), "not_found"),
         (
             json!({"cmd":"status","account":"me","pr":"a/b#1"}),
             "not_found",
@@ -725,10 +745,6 @@ fn error_codes_table() {
             json!({"cmd":"open","account":"nobody","row":"1001:E_1"}),
             "not_found",
         ),
-        (
-            json!({"cmd":"snooze","account":"me","pr":"org/app#1"}),
-            "not_found",
-        ),
         (json!({"cmd":"list","account":"nobody"}), "not_found"),
         (json!({"cmd":"list","owner":"nobody"}), "not_found"),
         (
@@ -745,7 +761,19 @@ fn error_codes_table() {
         ),
         (json!({"cmd":"config_get","key":"nope"}), "invalid"),
         (
-            json!({"cmd":"config_set","key":"drop_after_days","value":"nope"}),
+            json!({"cmd":"config_set","key":"dismissed_keep_days","value":"nope"}),
+            "invalid",
+        ),
+        (
+            json!({"cmd":"config_set","key":"dismissed_keep_days","value":0}),
+            "invalid",
+        ),
+        (
+            json!({"cmd":"config_set","key":"auto_dismiss_after_days","value":-1}),
+            "invalid",
+        ),
+        (
+            json!({"cmd":"config_set","key":"drop_after_days","value":3}),
             "invalid",
         ),
         (
@@ -777,12 +805,12 @@ fn error_codes_table() {
             "invalid",
         ),
         (
-            json!({"cmd":"owner_exclusions_set","account":"me","owner":"org","kind":"repo","name":"noslash","state":"hidden"}),
+            json!({"cmd":"owner_exclusions_get","account":"me","owner":"org"}),
             "invalid",
         ),
         (
-            json!({"cmd":"owner_exclusions_remove","account":"me","owner":"org","kind":"user","name":"nobody"}),
-            "not_found",
+            json!({"cmd":"snooze","account":"me","pr":"org/app#2"}),
+            "invalid",
         ),
         (json!({"cmd":"token_test"}), "invalid"),
     ];
@@ -826,12 +854,13 @@ fn state_change_rows_from_the_same_second_are_told_apart_by_moving_the_clock() {
     daemon.ingest(vec![failed.clone()], vec![], vec![]);
     daemon.ingest(vec![passed.clone()], vec![], vec![]);
     daemon.ingest(vec![failed.clone()], vec![], vec![]);
+    // Checks failed and Checks passed, each once in this second.
     assert_eq!(
         daemon.card("PR_1").unwrap()["rows"]
             .as_array()
             .unwrap()
             .len(),
-        1
+        2
     );
     daemon.clock(T0 + 1);
     daemon.ingest(vec![passed], vec![], vec![]);
@@ -841,86 +870,8 @@ fn state_change_rows_from_the_same_second_are_told_apart_by_moving_the_clock() {
             .as_array()
             .unwrap()
             .len(),
-        2
+        4
     );
-    daemon.stop();
-}
-
-const NEW_YORK: &str = "America/New_York";
-
-#[test]
-fn a_return_time_inside_a_dst_gap_lands_after_the_gap() {
-    let (_dir, daemon) = setup();
-    daemon.ingest(vec![pr("PR_1", "me")], vec![], vec![]);
-    let after_gap = epoch("2027-03-14 03:30 -0400");
-    daemon.clock_in(epoch("2027-03-14 00:00 -0500"), NEW_YORK);
-    daemon.ok(json!({"cmd":"config_set","key":"snooze_return_time","value":"02:30"}));
-    daemon.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#1"}));
-    assert_eq!(daemon.card("PR_1").unwrap()["snoozed_until"], after_gap);
-    daemon.clock_in(after_gap - 1, NEW_YORK);
-    assert_eq!(daemon.card("PR_1").unwrap()["snoozed"], true);
-    daemon.clock_in(after_gap, NEW_YORK);
-    assert_eq!(daemon.card("PR_1").unwrap()["snoozed"], false);
-    daemon.stop();
-}
-
-#[test]
-fn a_return_time_inside_a_dst_fold_fires_once() {
-    let (_dir, daemon) = setup();
-    daemon.ingest(vec![pr("PR_1", "me")], vec![], vec![]);
-    let first = epoch("2027-11-07 01:30 -0400");
-    let second = epoch("2027-11-07 01:30 -0500");
-    daemon.clock_in(first - 3600, NEW_YORK);
-    daemon.ok(json!({"cmd":"config_set","key":"snooze_return_time","value":"01:30"}));
-    daemon.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#1"}));
-    assert_eq!(daemon.card("PR_1").unwrap()["snoozed_until"], first);
-    daemon.clock_in(first, NEW_YORK);
-    assert_eq!(daemon.card("PR_1").unwrap()["snoozed"], false);
-    daemon.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#1"}));
-    daemon.clock_in(second, NEW_YORK);
-    assert_eq!(daemon.card("PR_1").unwrap()["snoozed"], true);
-    daemon.stop();
-}
-
-#[test]
-fn a_time_zone_change_moves_snoozed_until_for_a_snoozed_pr() {
-    let (_dir, daemon) = setup();
-    daemon.ingest(vec![pr("PR_1", "me")], vec![], vec![]);
-    daemon.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#1"}));
-    assert_eq!(daemon.card("PR_1").unwrap()["snoozed_until"], NEXT_0900);
-    daemon.clock_in(T0 + 60, "Europe/London");
-    assert_eq!(daemon.card("PR_1").unwrap()["snoozed_until"], T0 + 3600);
-    daemon.stop();
-}
-
-#[test]
-fn a_startup_release_without_an_app_is_a_new_events_summary() {
-    let (dir, daemon) = setup();
-    daemon.ingest(vec![pr("PR_1", "alice")], vec![], vec![]);
-    daemon.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#1"}));
-    daemon.ingest(
-        vec![],
-        vec![
-            event("A", "PR_1", "comment", T0 + 1),
-            event("B", "PR_1", "reply", T0 + 2),
-        ],
-        vec![],
-    );
-    let daemon = restart(daemon, dir.path(), NEXT_0900 + 60);
-    assert_eq!(daemon.card("PR_1").unwrap()["snoozed"], false);
-    let mut app = daemon.subscribe("app");
-    app.snapshot();
-    let summary = app.notification();
-    assert_eq!(summary["title"], "me · 2 new events");
-    assert_eq!(summary["subtitle"], "org · in 1 PR");
-    // A later row proves no `Back from Snooze` follows the summary.
-    daemon.ingest(
-        vec![],
-        vec![event("C", "PR_1", "comment", NEXT_0900 + 61)],
-        vec![],
-    );
-    let next = app.notification();
-    assert_eq!(next["rows"], json!(["1001:C"]));
     daemon.stop();
 }
 
@@ -933,9 +884,9 @@ fn a_slow_app_loses_no_row_and_gets_none_twice() {
     slow.snapshot();
     let text = "x".repeat(4096);
     let total = 400;
-    for n in 0..total {
+    for n in 0i64..total {
         let long = with(
-            event(&format!("E_{n}"), "PR_1", "comment", T0 + 1),
+            event(&format!("E_{n}"), "PR_1", "comment", T0 + 1 + n),
             json!({"text": text}),
         );
         daemon.ingest(vec![], vec![long], vec![]);
@@ -963,7 +914,13 @@ fn a_slow_app_loses_no_row_and_gets_none_twice() {
     unique.sort();
     unique.dedup();
     assert_eq!(unique.len(), received.len(), "a row arrived twice");
-    assert_eq!(received.len(), total, "a row was lost");
+    // Rows deleted with the newest 20 before the app read them are not
+    // notified any more (DESIGN.md, "Notification decisions"); the rest
+    // arrive exactly once.
+    assert!(received.len() <= total as usize, "{}", received.len());
+    for n in total - 20..total {
+        assert!(received.contains(&format!("1001:E_{n}")), "E_{n} was lost");
+    }
     daemon.stop();
 }
 
@@ -971,21 +928,44 @@ fn a_slow_app_loses_no_row_and_gets_none_twice() {
 #[test]
 fn account_changed_table() {
     type Step = fn(&TestDaemon);
-    let cases: [(&str, Step, Step); 10] = [
+    let cases: [(&str, Step, Step); 13] = [
         (
-            "release at the Return time",
+            "dismiss",
+            |_| {},
             |d| {
-                d.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#1"}));
+                d.ok(json!({"cmd":"dismiss","account":"me","pr":"org/app#1"}));
             },
-            |d| d.clock(NEXT_0900),
         ),
         (
-            "manual unsnooze",
+            "restore",
             |d| {
-                d.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#1"}));
+                d.ok(json!({"cmd":"dismiss","account":"me","pr":"org/app#1"}));
             },
             |d| {
-                d.ok(json!({"cmd":"unsnooze","account":"me","pr":"org/app#1"}));
+                d.ok(json!({"cmd":"restore","account":"me","pr":"org/app#1"}));
+            },
+        ),
+        (
+            "place",
+            |_| {},
+            |d| {
+                d.ok(json!({"cmd":"place","account":"me","pr":"org/app#1","tab":"review","section":"doing"}));
+            },
+        ),
+        (
+            "mute",
+            |_| {},
+            |d| {
+                d.ok(json!({"cmd":"mute","account":"me","kind":"repo","name":"org/app"}));
+            },
+        ),
+        (
+            "unmute",
+            |d| {
+                d.ok(json!({"cmd":"mute","account":"me","kind":"repo","name":"org/app"}));
+            },
+            |d| {
+                d.ok(json!({"cmd":"unmute","account":"me","kind":"repo","name":"org/app"}));
             },
         ),
         (
@@ -1013,16 +993,6 @@ fn account_changed_table() {
             },
         ),
         (
-            "an Exclusion hides a row",
-            |_| {},
-            |d| {
-                d.ok(
-                    json!({"cmd":"owner_exclusions_set","account":"me","owner":"org",
-                    "kind":"user","name":"alice","state":"hidden"}),
-                );
-            },
-        ),
-        (
             "an owner switch",
             |_| {},
             |d| {
@@ -1037,20 +1007,34 @@ fn account_changed_table() {
             },
         ),
         (
-            "drop_after_days drops a card",
-            |d| d.clock(T0 + 2 * DAY),
+            "dismissed_keep_days moves dismiss_expires_at",
             |d| {
-                d.ok(json!({"cmd":"config_set","key":"drop_after_days","value":1}));
+                d.ok(json!({"cmd":"dismiss","account":"me","pr":"org/app#1"}));
+            },
+            |d| {
+                d.ok(json!({"cmd":"config_set","key":"dismissed_keep_days","value":3}));
             },
         ),
         (
-            "snooze_return_time moves snoozed_until",
+            "auto_dismiss_after_days dismisses a closed card",
             |d| {
-                d.ok(json!({"cmd":"snooze","account":"me","pr":"org/app#1"}));
+                d.ingest(
+                    vec![with(pr("PR_1", "alice"), json!({"state":"closed"}))],
+                    vec![],
+                    vec![],
+                );
+                d.clock(T0 + DAY);
             },
             |d| {
-                d.ok(json!({"cmd":"config_set","key":"snooze_return_time","value":"10:00"}));
+                d.ok(json!({"cmd":"config_set","key":"auto_dismiss_after_days","value":1}));
             },
+        ),
+        (
+            "the end of the Dismissed list",
+            |d| {
+                d.ok(json!({"cmd":"dismiss","account":"me","pr":"org/app#1"}));
+            },
+            |d| d.clock(T0 + 7 * DAY),
         ),
     ];
     for (name, arrange, act) in cases {
@@ -1085,7 +1069,7 @@ fn no_account_changed_table() {
         ("opening without a dot", |d| {
             d.ok(json!({"cmd":"popover_opened","account":"me"}));
         }),
-        ("closing with nothing to prune or drop", |d| {
+        ("closing with nothing to dismiss", |d| {
             d.ok(json!({"cmd":"popover_closed","account":"me"}));
         }),
     ];
@@ -1137,8 +1121,14 @@ fn a_pr_key_ignores_the_case_of_owner_and_repository() {
         assert_eq!(card["pr"], "org/app#1", "{key}");
         daemon.ok(json!({"cmd":"open","account":"me","pr":key}));
     }
-    daemon.ok(json!({"cmd":"snooze","account":"me","pr":"ORG/App#1"}));
-    daemon.ok(json!({"cmd":"unsnooze","account":"me","pr":"org/aPP#1"}));
+    daemon.ok(json!({"cmd":"dismiss","account":"me","pr":"ORG/App#1"}));
+    daemon.ok(json!({"cmd":"restore","account":"me","pr":"org/aPP#1"}));
+    daemon.ok(json!({"cmd":"mute","account":"me","kind":"pr","name":"ORG/APP#1"}));
+    assert_eq!(
+        daemon.ok(json!({"cmd":"mutes_get","account":"me"}))["mutes"]["prs"],
+        json!(["org/app#1"]),
+        "kept as GitHub spells it"
+    );
     assert_eq!(
         daemon.code(json!({"cmd":"status","account":"me","pr":"org/app#2"})),
         "not_found"
@@ -1164,10 +1154,10 @@ fn a_changed_setting_goes_to_every_subscriber_once_saved() {
     // event is the next change.
     daemon.ok(json!({"cmd":"config_set","key":"launch_at_login","value":false}));
     daemon.code(json!({"cmd":"config_set","key":"launch_at_login","value":"maybe"}));
-    daemon.ok(json!({"cmd":"config_set","key":"drop_after_days","value":20}));
+    daemon.ok(json!({"cmd":"config_set","key":"dismissed_keep_days","value":20}));
     assert_eq!(
         cli.next().unwrap(),
-        json!({"event":"config_changed","key":"drop_after_days","value":20})
+        json!({"event":"config_changed","key":"dismissed_keep_days","value":20})
     );
     assert_eq!(
         daemon.ok(json!({"cmd":"config_get","key":"launch_at_login"}))["value"],
@@ -1176,25 +1166,75 @@ fn a_changed_setting_goes_to_every_subscriber_once_saved() {
     daemon.stop();
 }
 
-/// DESIGN.md, "When cards appear and disappear": over the socket, a card
-/// the open popover listed stays until `popover_closed`.
+/// The `dev_ingest` shape of 0.4: the new kinds, `head_oid`, search hits and
+/// the owner success times, with Dismiss and its clocks over the socket.
 #[test]
-fn a_listed_card_stays_until_popover_closed() {
+fn dismiss_and_its_clocks_over_the_socket() {
     let (_dir, daemon) = setup();
+    daemon.ok(json!({"cmd":"dev_ingest","account":"me","ingest":{
+        "prs":[
+            with(pr("PR_1", "alice"), json!({"head_oid":"abc"})),
+            pr("PR_2", "me"),
+        ],
+        "events":[
+            event("CO", "PR_1", "comment_other", T0 + 1),
+            event("RO", "PR_1", "reopened", T0 + 2),
+        ],
+        "search":[{"id":"PR_1","updated_at":T0,"open":true,"events_fetched":true}],
+        "succeeded_owners":["org"],
+        "owner_run_started":{"org":T0 - 30}
+    }}));
+    let card = daemon.card("PR_1").unwrap();
+    let kinds: Vec<&str> = card["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["reopened", "comment_other"]);
+    assert_eq!(card["placement"], Value::Null);
+    assert_eq!(card["muted"], json!([]));
+    assert_eq!(card["older_rows"], false);
+    assert_eq!(card["rows"][0]["muted"], false);
+    assert_eq!(
+        daemon.card("PR_2").unwrap()["placement"],
+        json!({"tab":"mine","section":"main","position":0})
+    );
+    let tab = |tab: &str| {
+        daemon.ok(json!({"cmd":"list","tab":tab}))["cards"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["pr"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(tab("mine"), ["org/app#2"]);
+    assert!(tab("review").is_empty());
+
+    let card = daemon.ok(json!({"cmd":"dismiss","account":"me","pr":"org/app#1"}))["card"].clone();
+    assert_eq!(card["dismissed_at"], T0);
+    assert_eq!(card["dismiss_expires_at"], T0 + 7 * DAY);
+    assert_eq!(tab("all"), ["org/app#2"]);
+    let only = daemon.ok(json!({"cmd":"list","dismissed":"only"}))["cards"].clone();
+    assert_eq!(only.as_array().unwrap().len(), 1);
+    // The end of the Dismissed list, by the clock: a record is left.
+    daemon.clock(T0 + 7 * DAY);
+    assert!(daemon.card("PR_1").is_none());
+    // A later comment does not bring it back; a mention does.
+    let later = with(pr("PR_1", "alice"), json!({"updated_at": T0 + 7 * DAY + 5}));
     daemon.ingest(
-        vec![with(pr("PR_1", "alice"), json!({"state":"merged"}))],
-        vec![event("E_1", "PR_1", "merged", T0 + 1)],
+        vec![later.clone()],
+        vec![event("C2", "PR_1", "comment_other", T0 + 7 * DAY + 1)],
         vec![],
     );
-    daemon.ok(json!({"cmd":"popover_opened","account":"me"}));
-    let listed = daemon.ok(json!({"cmd":"list","account":"me"}));
-    assert_eq!(listed["cards"].as_array().unwrap().len(), 1);
-    daemon.ok(json!({"cmd":"read","row_ids":["1001:E_1"]}));
-    let card = daemon.card("PR_1").expect("held while open");
-    assert_eq!(card["rows"][0]["unread"], false);
-    assert_eq!(daemon.owner("me", "org")["pr_count"], 1);
-    daemon.ok(json!({"cmd":"popover_closed","account":"me"}));
-    assert!(daemon.card("PR_1").is_none(), "gone once closed");
-    assert_eq!(daemon.owner("me", "org")["pr_count"], 0);
+    assert!(daemon.card("PR_1").is_none());
+    daemon.ingest(
+        vec![later],
+        vec![event("M", "PR_1", "mentioned", T0 + 7 * DAY + 2)],
+        vec![],
+    );
+    let back = daemon.card("PR_1").expect("back through the mention");
+    assert_eq!(back["rows"].as_array().unwrap().len(), 1);
+    assert_eq!(back["dismissed_at"], Value::Null);
     daemon.stop();
 }

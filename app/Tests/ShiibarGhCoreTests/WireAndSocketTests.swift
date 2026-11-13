@@ -24,8 +24,7 @@ final class WireTests: XCTestCase {
         let account = try XCTUnwrap(accounts.first)
         XCTAssertEqual(account.color, .unknown("teal"))
         XCTAssertEqual(account.accountColor, .none, "an unknown color draws as None")
-        XCTAssertEqual(account.reviewCount, 3)
-        XCTAssertEqual(account.owners.first?.reviewCount, 2)
+        XCTAssertEqual(account.owners.first?.prCount, 4)
         XCTAssertEqual(account.rateLimit?.graphql, Limit(used: 1240, limit: 5000, resetAt: 1_800_003_600))
         XCTAssertNil(account.rateLimit?.rest)
         XCTAssertEqual(account.token.lastTest?.results[1].item, .unknown("later"))
@@ -66,9 +65,13 @@ final class WireTests: XCTestCase {
          "author_avatar_url":"https://avatars.example/a?s=32","authored_by_me":false,"assigned_to_me":true,
          "review_requested":true,"awaiting_review":true,"state_label":"mergeable",
          "review":"approved","checks":"in_progress","base_status":"behind","base":"main","head":"x",
-         "snoozed":true,"snoozed_until":1800000000,"added_at":null,"created_at":null,"updated_at":1799990000,"links":{"review":"r","checks":"c","base":"b"},
+         "added_at":null,"created_at":null,"updated_at":1799990000,"links":{"review":"r","checks":"c","base":"b"},
+         "placement":{"tab":"review","section":"waiting","position":2},"muted":["repo","author","later"],
+         "dismissed_at":null,"dismiss_expires_at":null,"older_rows":true,
          "rows":[{"id":"3407303:E_1","pr":"org/app#1","pr_title":"T","account":"3407303","owner":"o2","kind":"team_mentioned",
-                  "text":"hi","counts":{"THUMBS_UP":3},"actor":null,"url":"u","occurred_at":5,"unread":true}]}
+                  "text":"hi","counts":{"THUMBS_UP":3},"actor":null,"url":"u","occurred_at":5,"unread":true,"muted":true},
+                 {"id":"3407303:E_2","pr":"org/app#1","pr_title":"T","account":"3407303","owner":"o2","kind":"reopened",
+                  "text":null,"counts":null,"actor":"bob","url":"u","occurred_at":4,"unread":false,"muted":false}]}
         """
         let card = try JSONDecoder().decode(Card.self, from: Data(line.utf8))
         XCTAssertEqual(card.authorAvatarUrl, "https://avatars.example/a?s=32")
@@ -79,11 +82,42 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(card.checks, .known(.inProgress))
         XCTAssertEqual(card.rows[0].kind, .known(.teamMentioned))
         XCTAssertTrue(card.rows[0].unread)
+        XCTAssertTrue(card.rows[0].muted)
+        XCTAssertEqual(card.rows[1].kind, .known(.reopened))
         XCTAssertTrue(card.hasUnread)
+        XCTAssertFalse(card.hasBlueUnread, "its only unread row is muted")
         XCTAssertTrue(card.awaitingReview)
         XCTAssertNil(card.addedAt)
-        XCTAssertNil(card.createdAt, "null right after the move from 0.2")
+        XCTAssertNil(card.createdAt)
         XCTAssertEqual(card.updatedAt, 1_799_990_000)
+        XCTAssertEqual(card.placement, Placement(tab: .review, section: .waiting, position: 2))
+        XCTAssertEqual(card.muted, [.known(.repo), .known(.author), .unknown("later")])
+        XCTAssertTrue(card.isMuted(for: .author))
+        XCTAssertFalse(card.isMuted(for: .pr))
+        XCTAssertNil(card.dismissedAt)
+        XCTAssertTrue(card.olderRows)
+    }
+
+    /// A card without the 0.4 fields (an older daemon) still reads, with
+    /// no placement, nothing muted and nothing dismissed.
+    func testACardWithoutTheNewFieldsReads() throws {
+        let line = """
+        {"id":"c","pr":"o/r#1","account":"1","owner":"o2","title":"T","url":"u","author":"a","author_avatar_url":null,
+         "authored_by_me":true,"state_label":"merged","review":"none","checks":"none","base_status":"none","base":"main","head":"x",
+         "updated_at":1,"links":{"review":"r","checks":"c","base":"b"},"rows":[]}
+        """
+        let card = try JSONDecoder().decode(Card.self, from: Data(line.utf8))
+        XCTAssertNil(card.placement)
+        XCTAssertEqual(card.muted, [])
+        XCTAssertFalse(card.olderRows)
+        let dismissed = try JSONDecoder().decode(Card.self, from: Data(line.replacingOccurrences(of: #""rows":[]"#, with: #""rows":[],"dismissed_at":10,"dismiss_expires_at":604810,"placement":{"tab":"mine","section":"done","position":0}"#).utf8))
+        XCTAssertEqual(dismissed.dismissedAt, 10)
+        XCTAssertEqual(dismissed.dismissExpiresAt, 604_810)
+        XCTAssertEqual(dismissed.placement?.isDone, true)
+        XCTAssertNil(dismissed.autoDismissAt)
+        let due = try JSONDecoder().decode(Card.self, from: Data(line.replacingOccurrences(of: #""rows":[]"#, with: #""rows":[],"auto_dismiss_at":259200"#).utf8))
+        XCTAssertEqual(due.autoDismissAt, 259_200)
+        XCTAssertEqual(dismissed.tab, .mine)
     }
 
     func testANotificationDecodes() throws {
@@ -99,12 +133,19 @@ final class WireTests: XCTestCase {
         XCTAssertNil(note.body)
     }
 
-    func testTablesAndExclusionsDecode() throws {
+    func testTablesAndMutesDecode() throws {
         let events = try JSONDecoder().decode(EventsResponse.self, from: Data(#"{"ok":true,"events":{"review_requested":{"list":true,"notify":false}}}"#.utf8))
         XCTAssertEqual(events.events["review_requested"], EventCell(list: true, notify: false))
-        let list = try JSONDecoder().decode(ExclusionsResponse.self, from: Data(#"{"ok":true,"exclusions":{"repos":[{"name":"o/r","state":"hidden"}],"users":[{"name":"bot","state":"list_only"}]}}"#.utf8))
-        XCTAssertEqual(list.exclusions.list(.repo), [Exclusion(name: "o/r", state: .hidden)])
-        XCTAssertEqual(list.exclusions.list(.user), [Exclusion(name: "bot", state: .listOnly)])
+        let mutes = try JSONDecoder().decode(MutesResponse.self, from: Data(#"{"ok":true,"mutes":{"repos":["o/r"],"users":["renovate"],"prs":["o/r#2"]}}"#.utf8)).mutes
+        XCTAssertEqual(mutes, Mutes(repos: ["o/r"], users: ["renovate"], prs: ["o/r#2"]))
+        XCTAssertTrue(mutes.contains(.user, "Renovate"))
+        XCTAssertEqual(mutes.list(.pr), ["o/r#2"])
+        XCTAssertEqual(EventKind.allCases.map(\.rawValue), [
+            "review_requested", "team_review_requested", "mentioned", "team_mentioned", "comment", "comment_other", "reply",
+            "reply_mentioned", "reaction", "approved", "changes_requested", "checks_failed", "checks_passed", "conflicts", "mergeable",
+            "merge_queue_added", "merge_queue_removed", "merged_closed", "reopened",
+        ], "DESIGN.md, Wire format")
+        XCTAssertEqual(WarningKind(rawValue: "status_fetch_failed"), .statusFetchFailed)
     }
 
     func testConfigValuesTellBooleansFromNumbers() throws {
@@ -144,7 +185,7 @@ final class SocketClientTests: XCTestCase {
             return #"{"ok":false,"code":"keychain_unavailable","error":"Couldn't read tokens from Keychain"}"#
         }
         let api = SocketDaemonAPI(socketPath: fake.path)
-        let cards = try await api.list(ListQuery(account: "me", snoozed: true))
+        let cards = try await api.list(.app("me"))
         XCTAssertEqual(cards, [])
         do {
             try await api.read(["x"])
@@ -157,7 +198,8 @@ final class SocketClientTests: XCTestCase {
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(list.utf8)) as? [String: Any])
         XCTAssertEqual(object["cmd"] as? String, "list")
         XCTAssertEqual(object["account"] as? String, "me")
-        XCTAssertEqual(object["snoozed"] as? Bool, true)
+        XCTAssertEqual(object["dismissed"] as? String, "include")
+        XCTAssertNil(object["tab"])
         XCTAssertNil(object["filter"], "the app filters by itself")
         XCTAssertNil(object["search"])
         XCTAssertNil(object["todo"])
@@ -171,11 +213,47 @@ final class SocketClientTests: XCTestCase {
         func object(_ fields: [String: Any]) -> [String: String] {
             fields.mapValues { "\($0)" }
         }
-        XCTAssertEqual(object(ListQuery(account: "me").fields), ["cmd": "list", "account": "me"])
-        XCTAssertEqual(object(ActivityQuery(account: "me").fields), ["cmd": "activity", "account": "me"])
+        XCTAssertEqual(object(ListQuery.app("me").fields), ["cmd": "list", "account": "me", "dismissed": "include"])
+        XCTAssertEqual(object(ListQuery(account: "me", tab: .review, dismissed: .only).fields),
+                       ["cmd": "list", "account": "me", "tab": "review", "dismissed": "only"])
         let cli = ListQuery(account: "me", filter: .authored, search: "api #407").fields
         XCTAssertEqual(cli["search"] as? String, "api #407")
         XCTAssertEqual(cli["filter"] as? String, "authored")
+    }
+
+    /// `place`, `dismiss`, `restore`, `mute`, `unmute` and `mutes_get` as
+    /// DESIGN.md, "Wire format" names their arguments.
+    func testTheOperationsOfZeroFourGoOutAsTheWireSays() async throws {
+        fake.respond = { line in
+            line.contains("mute") ? ok(["mutes": ["repos": ["o/r"], "users": [], "prs": []]]) : ok(["card": [:]])
+        }
+        let api = SocketDaemonAPI(socketPath: fake.path)
+        try await api.place(account: "me", pr: "o/r#1", target: .review(.todo), position: .before("o/r#2"))
+        try await api.place(account: "me", pr: "o/r#1", target: .mine, position: .bottom)
+        try await api.place(account: "me", pr: "o/r#1", target: .none, position: .byDefault)
+        try await api.place(account: "me", pr: "o/r#1", target: .review(.waiting), position: .top)
+        try await api.place(account: "me", pr: "o/r#1", target: .review(.done), position: .byDefault)
+        try await api.place(account: "me", pr: "o/r#1", target: .mineDone, position: .byDefault)
+        try await api.dismiss(account: "me", pr: "o/r#1")
+        try await api.restore(account: "me", pr: "o/r#1")
+        let muted = try await api.mute(account: "me", kind: .repo, name: "o/r")
+        XCTAssertEqual(muted.repos, ["o/r"])
+        _ = try await api.unmute(account: "me", kind: .user, name: "renovate")
+        _ = try await api.mutes(account: "me")
+        let sent = try fake.requests.map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]).mapValues { "\($0)" } }
+        XCTAssertEqual(sent, [
+            ["cmd": "place", "account": "me", "pr": "o/r#1", "tab": "review", "section": "todo", "before": "o/r#2"],
+            ["cmd": "place", "account": "me", "pr": "o/r#1", "tab": "mine", "at": "bottom"],
+            ["cmd": "place", "account": "me", "pr": "o/r#1", "tab": "none"],
+            ["cmd": "place", "account": "me", "pr": "o/r#1", "tab": "review", "section": "waiting", "at": "top"],
+            ["cmd": "place", "account": "me", "pr": "o/r#1", "tab": "review", "section": "done"],
+            ["cmd": "place", "account": "me", "pr": "o/r#1", "tab": "mine", "section": "done"],
+            ["cmd": "dismiss", "account": "me", "pr": "o/r#1"],
+            ["cmd": "restore", "account": "me", "pr": "o/r#1"],
+            ["cmd": "mute", "account": "me", "kind": "repo", "name": "o/r"],
+            ["cmd": "unmute", "account": "me", "kind": "user", "name": "renovate"],
+            ["cmd": "mutes_get", "account": "me"],
+        ])
     }
 
     func testAMissingDaemonIsAnErrorWithoutACode() async {
@@ -185,6 +263,7 @@ final class SocketClientTests: XCTestCase {
             XCTFail("expected an error")
         } catch let error as DaemonError {
             XCTAssertNil(error.code)
+            XCTAssertTrue(error.isUnreachable, "the band reads daemon not running")
         } catch {
             XCTFail("\(error)")
         }

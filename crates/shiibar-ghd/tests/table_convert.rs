@@ -4,7 +4,7 @@
 //! DESIGN.md (M4), "Row kind decisions".
 
 use serde_json::{Value, json};
-use shiibar_gh_proto::{BaseStatus, Checks, IngestKind as EventKind, Review};
+use shiibar_gh_proto::{BaseStatus, Checks, IngestKind as EventKind, Review, SearchHit};
 use shiibar_ghd::convert::{self, Ctx, EventInput, StatusExtra};
 use shiibar_ghd::model::{self, OwnComment, TeamRec, ThreadRec};
 use std::collections::{BTreeMap, BTreeSet};
@@ -528,8 +528,10 @@ fn comment_kinds_by_author_and_pr() {
         (true, bot("ci[bot]"), Some(Comment)),
         (true, user(ME), None),
         (true, user("Me"), None),
-        (false, user("alice"), None),
-        (false, bot("ci[bot]"), None),
+        // DESIGN.md, "Comment and Reply sources": Comment on other PRs.
+        (false, user("alice"), Some(CommentOther)),
+        (false, bot("ci[bot]"), Some(CommentOther)),
+        (false, user(ME), None),
     ];
     for (mine, author, expect) in cases {
         let mut pr = if mine { Pr::mine() } else { Pr::others() };
@@ -646,8 +648,11 @@ fn a_team_mention_link_of_my_team_is_a_mention() {
         pr.kinds(),
         [
             ("C_1".to_string(), EventKind::TeamMentioned),
+            ("C_2".to_string(), EventKind::CommentOther),
+            ("C_3".to_string(), EventKind::CommentOther),
             ("I_1".to_string(), EventKind::TeamMentioned)
-        ]
+        ],
+        "another team's link and plain text are plain comments"
     );
 }
 
@@ -828,8 +833,8 @@ fn review_requests_for_me_and_my_teams() {
 fn merged_and_closed_carry_who_and_no_text() {
     let mut pr = Pr::others();
     pr.timeline = vec![
-        json!({"__typename":"MergedEvent","id":"ME_1","createdAt":iso(T0 + 1),"url":"https://m","actor":{"login":"bob"}}),
-        json!({"__typename":"ClosedEvent","id":"CE_1","createdAt":iso(T0 + 2),"url":"https://c","actor":{"login":"me"}}),
+        json!({"__typename":"MergedEvent","id":"ME_1","createdAt":iso(T0 + 2),"url":"https://m","actor":{"login":"bob"}}),
+        json!({"__typename":"ClosedEvent","id":"CE_1","createdAt":iso(T0 + 1),"url":"https://c","actor":{"login":"me"}}),
     ];
     let out = pr.run().events;
     assert_eq!(out[0].kind, EventKind::Merged);
@@ -838,12 +843,148 @@ fn merged_and_closed_carry_who_and_no_text() {
         (Some("bob"), None)
     );
     assert_eq!(out[0].url, "https://m");
-    assert_eq!(out[1].kind, EventKind::Closed);
+    assert_eq!(out[1].kind, EventKind::Closed, "a close before the merge");
     assert_eq!(
         out[1].actor.as_deref(),
         Some("me"),
         "who did it does not matter"
     );
+}
+
+#[test]
+fn the_closed_event_paired_with_a_merge_makes_no_row() {
+    // DESIGN.md, "Merged, Closed and Reopened rows": GitHub makes both at
+    // the same time for a merge (0.3.0, bufferings/shiibar-gh #10).
+    let mut pr = Pr::others();
+    pr.timeline = vec![
+        json!({"__typename":"ClosedEvent","id":"CE_0","createdAt":iso(T0 + 1),"url":"https://c0","actor":{"login":"bob"}}),
+        json!({"__typename":"ReopenedEvent","id":"RE_1","createdAt":iso(T0 + 2),"actor":{"login":"me"}}),
+        json!({"__typename":"MergedEvent","id":"ME_1","createdAt":iso(T0 + 3),"url":"https://m","actor":{"login":"bob"}}),
+        json!({"__typename":"ClosedEvent","id":"CE_1","createdAt":iso(T0 + 3),"url":"https://c","actor":{"login":"bob"}}),
+    ];
+    assert_eq!(
+        pr.kinds(),
+        [
+            ("CE_0".to_string(), EventKind::Closed),
+            ("RE_1".to_string(), EventKind::Reopened),
+            ("ME_1".to_string(), EventKind::Merged),
+        ]
+    );
+    let reopened = pr.run().events.remove(1);
+    assert_eq!(
+        reopened.url, "https://github.com/o/r/pull/1",
+        "no URL of its own"
+    );
+    assert_eq!(reopened.actor.as_deref(), Some("me"));
+    assert_eq!(reopened.text, None);
+}
+
+#[test]
+fn conversation_comments_on_other_prs_are_comment_other() {
+    // DESIGN.md, "Comment and Reply sources": conversation comments only,
+    // by anyone but me; a mention or a reply wins.
+    let mut pr = Pr::others();
+    pr.record("T_1", Some(T0), None);
+    pr.timeline = vec![
+        comment("C_1", user("alice"), T0 + 10, ""),
+        comment("C_2", bot("renovate"), T0 + 20, ""),
+        comment("C_3", user(ME), T0 + 30, ""),
+        comment("C_4", user("bob"), T0 + 40, &mention_link(ME)),
+        review("R_1", user("bob"), T0 + 50, "COMMENTED", "a review body"),
+    ];
+    pr.threads = vec![thread("T_2", vec![inline("I_1", user("bob"), T0 + 60, "")])];
+    assert_eq!(
+        pr.kinds(),
+        [
+            ("C_1".to_string(), EventKind::CommentOther),
+            ("C_2".to_string(), EventKind::CommentOther),
+            ("C_4".to_string(), EventKind::Mentioned),
+        ]
+    );
+    let mut mine = Pr::mine();
+    mine.timeline = vec![comment("C_1", user("alice"), T0 + 10, "")];
+    assert_eq!(mine.kinds(), [("C_1".to_string(), EventKind::Comment)]);
+}
+
+/// A check of `beforeCommit` as bevyengine/bevy#26450 answered (2026-11-13).
+fn run_check(name: &str, conclusion: Option<&str>, required: bool) -> Value {
+    json!({"__typename":"CheckRun","name":name,"conclusion":conclusion,
+           "detailsUrl":format!("https://run/{name}"),"isRequired":required})
+}
+
+fn status_check(name: &str, state: &str, required: bool) -> Value {
+    json!({"__typename":"StatusContext","context":name,"state":state,
+           "targetUrl":format!("https://status/{name}"),"isRequired":required})
+}
+
+#[test]
+fn a_removal_for_failed_checks_opens_the_failed_required_check() {
+    let removal = |reason: &str, checks: Vec<Value>| {
+        json!({"__typename":"RemovedFromMergeQueueEvent","id":"X","reason":reason,
+               "beforeCommit":{"statusCheckRollup":{"contexts":{"nodes":checks}}}})
+    };
+    let pr = "https://github.com/o/r/pull/1";
+    // DESIGN.md, "Row text and targets": a failed required CheckRun, a
+    // failed required StatusContext, the first failed check, the Checks
+    // page; any other reason opens the PR.
+    let cases = [
+        (
+            "failed_checks",
+            vec![
+                status_check("ci/status", "FAILURE", true),
+                run_check("lint", Some("FAILURE"), false),
+                run_check("pending", None, true),
+                run_check("ok", Some("SUCCESS"), true),
+                run_check("skipped", Some("SKIPPED"), true),
+                run_check("build", Some("TIMED_OUT"), true),
+            ],
+            "https://run/build",
+        ),
+        (
+            "failed_checks",
+            vec![
+                run_check("lint", Some("FAILURE"), false),
+                status_check("ci/pending", "PENDING", true),
+                status_check("ci/status", "ERROR", true),
+            ],
+            "https://status/ci/status",
+        ),
+        (
+            "failed_checks",
+            vec![
+                run_check("ok", Some("NEUTRAL"), true),
+                status_check("ci/optional", "FAILURE", false),
+                run_check("lint", Some("FAILURE"), false),
+            ],
+            "https://status/ci/optional",
+        ),
+        (
+            "failed_checks",
+            vec![run_check("ok", Some("SUCCESS"), true)],
+            "https://github.com/o/r/pull/1/checks",
+        ),
+        (
+            "failed_checks",
+            vec![],
+            "https://github.com/o/r/pull/1/checks",
+        ),
+        (
+            "merge_conflict",
+            vec![run_check("build", Some("FAILURE"), true)],
+            pr,
+        ),
+        ("manual", vec![], pr),
+    ];
+    for (reason, checks, expect) in cases {
+        assert_eq!(
+            convert::removal_url(&removal(reason, checks.clone()), pr),
+            expect,
+            "{reason} {checks:?}"
+        );
+    }
+    let conflict = json!({"__typename":"RemovedFromMergeQueueEvent","id":"X",
+                          "reason":"merge_conflict","beforeCommit":null});
+    assert_eq!(convert::removal_url(&conflict, pr), pr);
 }
 
 #[test]
@@ -1071,34 +1212,47 @@ fn notified_prs_and_the_newest_update() {
 // ------------------------------------------------------------------ search
 
 #[test]
-fn the_four_searches_of_an_owner() {
+fn the_six_searches_of_an_owner() {
+    // DESIGN.md, "API usage": D is a date, T the start of the owner's event
+    // window to the second.
     assert_eq!(
-        convert::search_queries("org:acme", "2027-01-01", true),
+        convert::search_queries("org:acme", "2027-01-01", "2027-01-15T07:55:00Z", true),
         [
             "is:pr is:open involves:@me updated:>=2027-01-01 org:acme",
             "is:pr is:open reviewed-by:@me updated:>=2027-01-01 org:acme",
             "is:pr is:open author:@me org:acme",
             "is:pr is:open review-requested:@me org:acme",
+            "is:pr is:closed involves:@me updated:>=2027-01-15T07:55:00Z org:acme",
+            "is:pr is:closed reviewed-by:@me updated:>=2027-01-15T07:55:00Z org:acme",
         ]
     );
     assert_eq!(
-        convert::search_queries("is:public", "2027-01-01", false)[3],
+        convert::search_queries("is:public", "2027-01-01", "2027-01-15T07:55:00Z", false)[3],
         "is:pr is:open user-review-requested:@me is:public"
     );
 }
 
 #[test]
-fn public_search_leaves_out_registered_owners() {
+fn search_hits_carry_updated_at_and_state_and_public_leaves_out_registered_owners() {
     let connection = json!({"nodes":[
-        {"id":"A","repository":{"owner":{"login":"Acme"}}},
-        {"id":"B","repository":{"owner":{"login":"other"}}},
+        {"id":"A","updatedAt":iso(T0),"state":"OPEN","repository":{"owner":{"login":"Acme"}}},
+        {"id":"B","updatedAt":iso(T0 + 5),"state":"MERGED","repository":{"owner":{"login":"other"}}},
         {}
     ]});
     let exclude = BTreeSet::from(["acme".to_string()]);
-    assert_eq!(convert::search_ids(&connection, &exclude), ["B"]);
+    let hit = |id: &str, at: i64, open: bool| SearchHit {
+        id: id.into(),
+        updated_at: at,
+        open,
+        events_fetched: false,
+    };
     assert_eq!(
-        convert::search_ids(&connection, &BTreeSet::new()),
-        ["A", "B"]
+        convert::search_hits(&connection, &exclude),
+        [hit("B", T0 + 5, false)]
+    );
+    assert_eq!(
+        convert::search_hits(&connection, &BTreeSet::new()),
+        [hit("A", T0, true), hit("B", T0 + 5, false)]
     );
 }
 
@@ -1188,20 +1342,30 @@ fn what_is_not_a_mention_of_me() {
     // (author, bodyHTML, PR is mine, row)
     let cases = [
         // A quote reply keeps the link but loses the class.
-        (user("bob"), quoted_link(ME), false, None),
+        (user("bob"), quoted_link(ME), false, Some(CommentOther)),
         (user("bob"), quoted_link(ME), true, Some(Comment)),
         // My own post linking to me.
         (user(ME), mention_link(ME), false, None),
         // A link to someone else.
-        (user("bob"), mention_link("someone"), false, None),
-        (user("bob"), mention_link("meme"), false, None),
+        (
+            user("bob"),
+            mention_link("someone"),
+            false,
+            Some(CommentOther),
+        ),
+        (user("bob"), mention_link("meme"), false, Some(CommentOther)),
         // The login compares without case.
         (user("bob"), mention_link("ME"), false, Some(Mentioned)),
         // A bot is not special: its mention of me is a mention.
         (bot("ci[bot]"), mention_link(ME), false, Some(Mentioned)),
         (bot("ci[bot]"), mention_link(ME), true, Some(Mentioned)),
         // Plain text `@me` is no link.
-        (user("bob"), "<p>@me</p>".to_string(), false, None),
+        (
+            user("bob"),
+            "<p>@me</p>".to_string(),
+            false,
+            Some(CommentOther),
+        ),
     ];
     for (author, html, mine, expect) in cases {
         let mut pr = if mine { Pr::mine() } else { Pr::others() };

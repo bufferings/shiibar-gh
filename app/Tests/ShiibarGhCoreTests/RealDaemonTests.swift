@@ -112,8 +112,8 @@ final class RealDaemonTests: XCTestCase {
             ],
             "succeeded_owners": ["example-org"],
         ]])
-        try await wait { model.account("3407303")?.reviewCount == 1 }
-        XCTAssertEqual(MenuBarMarks.accessibilityLabel(try XCTUnwrap(model.account("3407303"))), "me, unread, 1 review request")
+        try await wait { model.account("3407303")?.unread == true }
+        XCTAssertEqual(MenuBarMarks.accessibilityLabel(try XCTUnwrap(model.account("3407303"))), "shiibar-gh, me, unread")
         try await wait { !notifier.shown.isEmpty }
         XCTAssertEqual(notifier.shown.first?.title, "me · Review requested")
         XCTAssertEqual(notifier.shown.first?.account, "3407303")
@@ -124,21 +124,20 @@ final class RealDaemonTests: XCTestCase {
         model.surfaceOpened(.popover, account: "3407303")
         try await wait { data.cards.count == 2 }
         let section = try XCTUnwrap(view.sections.first)
-        XCTAssertEqual(section.title, "example-org")
-        XCTAssertEqual(section.reviewCount, 1)
+        XCTAssertEqual(section.title, "example-org/api", "Group by Repository at first")
         XCTAssertEqual(section.detail, "2 PRs")
-        XCTAssertEqual(section.cards.map(\.pr), ["example-org/api#1", "example-org/api#2"], "both have unread rows")
         let first = try XCTUnwrap(data.cards.first { $0.pr == "example-org/api#1" })
         XCTAssertTrue(first.awaitingReview)
         XCTAssertTrue(first.reviewRequested)
+        XCTAssertEqual(first.placement, Placement(tab: .review, section: .todo, position: 0), "a review request adds it to Todo")
         XCTAssertEqual(first.createdAt, T0 - 3 * 86_400)
         XCTAssertEqual(first.updatedAt, T0)
         XCTAssertEqual(data.cards.first { $0.pr == "example-org/api#2" }?.assignedToMe, true)
+        XCTAssertEqual(view.unreadCount(.review), 1)
 
-        // The chips and the search are the app's own.
-        data.options.segment = .assigned
-        XCTAssertEqual(view.sections.first?.cards.map(\.pr), ["example-org/api#2"])
-        data.options.segment = .all
+        // Group by and the search are the app's own.
+        data.setGroupBy(.involvement)
+        XCTAssertEqual(view.sections.map(\.title), ["Review requested", "Assigned to me"])
         view.setSearch("api #1")
         XCTAssertEqual(view.sections.first?.cards.map(\.pr), ["example-org/api#1"])
         view.setSearch("")
@@ -156,9 +155,8 @@ final class RealDaemonTests: XCTestCase {
         }
         XCTAssertEqual(afterRead.flatMap(\.rows).first { $0.id == "3407303:RR_1" }?.unread, false, "the daemon has it read")
         XCTAssertEqual(afterRead.first { $0.pr == "example-org/api#1" }?.awaitingReview, true, "the mark stays")
-        XCTAssertEqual(model.account("3407303")?.reviewCount, 1)
 
-        // ⇧R reads the rest with `read`.
+        // ⇧R reads the rest of the tab with `read`.
         view.press(.markAllRead)
         try await wait { data.cards.flatMap(\.rows).allSatisfy { !$0.unread } }
         var allRead: [Card] = []
@@ -169,18 +167,44 @@ final class RealDaemonTests: XCTestCase {
         }
         XCTAssertTrue(allRead.flatMap(\.rows).allSatisfy { !$0.unread }, "the daemon has every row read")
 
-        // S snoozes; the Snoozed section has it.
+        // ⌫ dismisses; the Dismissed list has it and Restore brings it back.
         view.select(.header(card: "3407303:PR_2"))
-        view.press(.snooze)
-        try await wait { data.snoozed.count == 1 }
-        XCTAssertEqual(view.sections.last?.title, "Snoozed")
-
-        // Activity by owner, in the app.
-        view.tab = .activity
-        data.toggleOwner(account.owners[1].id)
-        XCTAssertEqual(view.activityEmptyText, "Nothing matches")
-        data.showAllOwners()
-        XCTAssertFalse(view.activity.isEmpty)
+        view.press(.delete)
+        // The card leaves at once, before the daemon answers: ask the daemon
+        // until it has it.
+        XCTAssertNotNil(data.cards.first { $0.pr == "example-org/api#2" }?.dismissedAt)
+        var only: [Card] = []
+        for _ in 0..<100 {
+            only = try await api.list(ListQuery(account: "me", dismissed: .only))
+            if !only.isEmpty { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertNil(data.failure)
+        XCTAssertEqual(only.map(\.pr), ["example-org/api#2"])
+        view.openDismissedList()
+        XCTAssertEqual(view.dismissedCards.map(\.pr), ["example-org/api#2"])
+        view.select(.header(card: "3407303:PR_2"))
+        view.press(.delete)
+        XCTAssertNil(data.cards.first { $0.pr == "example-org/api#2" }?.dismissedAt, "back at once")
+        for _ in 0..<100 {
+            if try await api.list(ListQuery(account: "me", dismissed: .only)).isEmpty { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        let restored = try await api.list(ListQuery(account: "me", dismissed: .only))
+        XCTAssertEqual(restored, [], "the daemon has it restored")
+        view.press(.back)
+        // A move in Review goes through `place`.
+        view.openTab(.review)
+        view.select(.header(card: "3407303:PR_1"))
+        view.press(.moveTo(.doing))
+        var placed: [Card] = []
+        for _ in 0..<100 {
+            placed = try await api.list(ListQuery(account: "me"))
+            if placed.first(where: { $0.pr == "example-org/api#1" })?.placement?.section == .known(.doing) { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertEqual(placed.first { $0.pr == "example-org/api#1" }?.placement?.section, .known(.doing), "the daemon moved it")
+        XCTAssertNil(data.failure)
         model.surfaceClosed(.popover, account: "3407303")
 
         // Text size goes through the daemon and comes back as config_changed.
@@ -201,13 +225,15 @@ final class RealDaemonTests: XCTestCase {
         let org = try XCTUnwrap(model.account("3407303")?.owners.first)
         let table = try await api.ownerEventsSet(account: "me", owner: org.argument, event: .reviewRequested, column: .list, on: false)
         XCTAssertEqual(table["review_requested"], EventCell(list: false, notify: false), "List off turns Notify off")
-        XCTAssertEqual(table.count, 16)
+        XCTAssertEqual(table.count, EventKind.allCases.count)
         let copied = try await api.ownerEventsCopy(account: "me", from: "public", to: org.argument)
         XCTAssertEqual(copied["review_requested"]?.list, true)
-        var excluded = try await api.ownerExclusionsSet(account: "me", owner: org.argument, kind: .repo, name: "example-org/legacy", state: .hidden)
-        XCTAssertEqual(excluded.repos, [Exclusion(name: "example-org/legacy", state: .hidden)])
-        excluded = try await api.ownerExclusionsRemove(account: "me", owner: org.argument, kind: .repo, name: "example-org/legacy")
-        XCTAssertEqual(excluded.repos, [])
+        var mutes = try await api.mute(account: "me", kind: .repo, name: "example-org/legacy")
+        XCTAssertEqual(mutes.repos, ["example-org/legacy"])
+        mutes = try await api.unmute(account: "me", kind: .repo, name: "example-org/legacy")
+        XCTAssertEqual(mutes.repos, [])
+        let fetched = try await api.mutes(account: "me")
+        XCTAssertEqual(fetched, Mutes())
         try await api.ownerNotify(account: "me", owner: org.argument, on: false)
         try await api.ownerSkipDrafts(account: "me", owner: org.argument, on: false)
         try await api.ownerEnabled(account: "me", owner: "public", on: false)
@@ -215,8 +241,8 @@ final class RealDaemonTests: XCTestCase {
             let owners = model.account("3407303")?.owners ?? []
             return owners.first?.notify == false && owners.first?.skipDrafts == false && owners.last?.enabled == false
         }
-        let returnTime = try await api.configGet("snooze_return_time")
-        XCTAssertEqual(returnTime, .string("09:00"))
+        let keep = try await api.configGet("dismissed_keep_days")
+        XCTAssertEqual(keep, .int(7))
         do {
             _ = try await api.configSet("status_interval_minutes", .int(0))
             XCTFail("expected invalid")
@@ -244,67 +270,6 @@ final class RealDaemonTests: XCTestCase {
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         XCTAssertFalse(launcher.isRunning, "Quit stops the daemon")
-    }
-
-    /// DESIGN.md, "When a card shows and leaves": a card shown while the
-    /// popover is open stays when its last unread row is read, and leaves
-    /// after `popover_closed`.
-    @MainActor
-    func testACardShownWhileOpenStaysUntilThePopoverCloses() async throws {
-        let supervisor = DaemonSupervisor(
-            socketPath: StateDirectory.socket(root: dir), appVersion: "0.1.0", launcher: launcher(),
-            callbackQueue: .main, backoff: { _ in 0.1 }
-        )
-        let (defaults, suite) = testDefaults()
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let api = SocketDaemonAPI(socketPath: StateDirectory.socket(root: dir))
-        let model = AppModel(api: api, store: UIStateStore(defaults: defaults), opener: FakeOpener(), notifier: FakeNotifier(), reloadDelay: 0.05)
-        var connected = false
-        supervisor.onEvent = { model.handle($0) }
-        supervisor.onConnectionChange = { connected = $0; model.connectionChanged($0) }
-        supervisor.start()
-        try await wait { connected }
-        try await dev(api, ["cmd": "dev_clock_set", "now": T0, "tz": "UTC"])
-        try await dev(api, ["cmd": "dev_account_add", "id": "3407303", "login": "me", "token": "t1"])
-        try await dev(api, ["cmd": "dev_owner_add", "account": "me", "owner": "example-org", "kind": "org", "github_id": 100])
-        var closed = pr("PR_9", number: 9)
-        closed["state"] = "closed"
-        try await dev(api, ["cmd": "dev_ingest", "account": "me", "ingest": [
-            "prs": [closed],
-            "events": [event("CL_9", pr: "PR_9", kind: "closed", at: T0 + 10)],
-            "succeeded_owners": ["example-org"],
-        ]])
-        try await wait { model.account("3407303")?.unread == true }
-
-        let data = model.viewModel("3407303")
-        let view = data.list(.popover)
-        model.surfaceDisplayed(.popover, account: "3407303", true)
-        model.surfaceOpened(.popover, account: "3407303")
-        try await wait { data.cards.map(\.pr) == ["example-org/api#9"] }
-        view.select(.row(id: "3407303:CL_9", card: "3407303:PR_9"))
-        var listed: [Card] = []
-        for _ in 0..<100 {
-            listed = try await api.list(ListQuery(account: "me"))
-            if listed.flatMap(\.rows).allSatisfy({ !$0.unread }) { break }
-            try await Task.sleep(nanoseconds: 50_000_000)
-        }
-        XCTAssertEqual(listed.map(\.pr), ["example-org/api#9"], "read, closed, and still listed while open")
-        XCTAssertTrue(listed.flatMap(\.rows).allSatisfy { !$0.unread })
-        try await Task.sleep(nanoseconds: 300_000_000)
-        XCTAssertEqual(data.cards.map(\.pr), ["example-org/api#9"], "the app still shows it")
-
-        model.surfaceClosed(.popover, account: "3407303")
-        model.surfaceDisplayed(.popover, account: "3407303", false)
-        var after: [Card] = listed
-        for _ in 0..<100 {
-            after = try await api.list(ListQuery(account: "me"))
-            if after.isEmpty { break }
-            try await Task.sleep(nanoseconds: 50_000_000)
-        }
-        XCTAssertEqual(after, [], "gone after popover_closed")
-        let stopped = expectation(description: "stopped")
-        supervisor.shutdown { stopped.fulfill() }
-        await fulfillment(of: [stopped], timeout: 10)
     }
 
     /// An unreadable test Keychain shows the dialog, and Reset tokens clears

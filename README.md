@@ -1,15 +1,24 @@
 # shiibar-gh
 
-macOS menu bar app for the GitHub pull requests you are involved in: which
-ones wait for your review and what happened, per owner and for public
-repositories.
+macOS menu bar app for the GitHub pull requests you are involved in. It
+tells you what happened on them (unread marks and notifications), and you
+keep the PRs you review and your own PRs in the order you choose: the
+popover has the tabs All, Review (Doing, Todo, Waiting, Done) and Mine.
+Dismiss a PR when you are done with it; it comes back when someone mentions
+you, replies in a thread you commented in, requests your review, or reopens
+it. Mute a repository, a user or a single PR to keep its cards in gray
+without notifications, except for mentions.
 It only reads from GitHub. See `docs/DESIGN.md` and `CLAUDE.md`.
 
 **Several GitHub accounts.** Each account has its own menu bar icon and one
 classic personal access token (scopes `repo`, `notifications`, `read:org`).
 Under an account you add owners (organizations or personal accounts) and,
-if you like, Public. Version 0.2 does not read the saved state or tokens of
-0.1: add your accounts again.
+if you like, Public.
+
+**Upgrading.** Version 0.4 keeps only the accounts (with their colors and
+order) and their tokens from 0.3 and 0.2. Owners, event tables, settings,
+PRs and rows start empty: add your owners again. Version 0.2 and later do
+not read the saved state or tokens of 0.1: add your accounts again.
 
 ## Install / Uninstall
 

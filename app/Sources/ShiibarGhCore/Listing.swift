@@ -1,7 +1,8 @@
-// What the popover lists, worked out by the app from the unfiltered `list`
-// and `activity` answers (DESIGN.md, "What the filters mean"): the chips,
-// the search, Group by, the sort order and "+ N more PRs" (DESIGN.md,
-// "Screens" and "PRs tab sections").
+// What the popover lists, worked out by the app from the one unfiltered
+// `list` answer (DESIGN.md, "What the filters mean"): the tabs All, Review
+// and Mine, the Dismissed list, the search, Group by and Then by with their
+// group order, the sort order, and "+ N more PRs" (DESIGN.md, "Tabs", "All",
+// "Review", "Mine", "Section size", "Dismissed list").
 
 import Foundation
 
@@ -32,50 +33,56 @@ public enum SortOrder: String, Equatable, Codable, CaseIterable {
     }
 }
 
-/// The chip, Group by and the sort order: remembered per account (DESIGN.md,
-/// "Saved state"). The chip keeps the name `segment` of 0.2, so the chip
-/// saved by 0.2 carries over; fields missing from saved data take their
-/// defaults.
+/// Group by, Then by and the sort order of All: remembered per account
+/// (DESIGN.md, "Saved state"). Group by starts at Repository, Then by at
+/// None (DESIGN.md, "All").
 public struct ListOptions: Equatable, Codable {
-    public var segment: PrFilter
-    public var groupBy: GroupBy
+    public private(set) var groupBy: GroupBy
+    public private(set) var thenBy: GroupBy
     public var sort: SortOrder
 
-    public init(segment: PrFilter = .all, groupBy: GroupBy = .owner, sort: SortOrder = .recentlyUpdated) {
-        self.segment = segment
+    public init(groupBy: GroupBy = .repository, thenBy: GroupBy = .none, sort: SortOrder = .recentlyUpdated) {
         self.groupBy = groupBy
+        self.thenBy = .none
         self.sort = sort
+        setThenBy(thenBy)
     }
 
-    enum CodingKeys: String, CodingKey { case segment, groupBy, sort }
+    enum CodingKeys: String, CodingKey { case groupBy, thenBy, sort }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        segment = (try? c.decodeIfPresent(PrFilter.self, forKey: .segment)) ?? .all
-        groupBy = (try? c.decodeIfPresent(GroupBy.self, forKey: .groupBy)) ?? .owner
-        sort = (try? c.decodeIfPresent(SortOrder.self, forKey: .sort)) ?? .recentlyUpdated
+        self.init(
+            groupBy: (try? c.decodeIfPresent(GroupBy.self, forKey: .groupBy)) ?? .repository,
+            thenBy: (try? c.decodeIfPresent(GroupBy.self, forKey: .thenBy)) ?? .none,
+            sort: (try? c.decodeIfPresent(SortOrder.self, forKey: .sort)) ?? .recentlyUpdated
+        )
     }
 
-    public static func title(_ segment: PrFilter) -> String {
-        switch segment {
-        case .all: return "All"
-        case .authored: return "Authored by me"
-        case .assigned: return "Assigned to me"
-        case .reviewRequested: return "Review requested"
-        }
+    /// The same value cannot be on both levels: choosing Then by's value in
+    /// Group by sets Then by to None, and so does Group by None.
+    public mutating func setGroupBy(_ value: GroupBy) {
+        groupBy = value
+        if value == .none || value == thenBy { thenBy = .none }
     }
-}
 
-extension PrFilter {
-    /// DESIGN.md, "What the filters mean". Review requested is GitHub's
-    /// fact (`review_requested`), not the app's "waiting for your review".
-    public func admits(_ card: Card) -> Bool {
-        switch self {
-        case .all: return true
-        case .authored: return card.authoredByMe
-        case .assigned: return card.assignedToMe
-        case .reviewRequested: return card.reviewRequested
+    /// Ignored while Group by is None or for Group by's own value.
+    public mutating func setThenBy(_ value: GroupBy) {
+        guard groupBy != .none, value != groupBy else {
+            thenBy = .none
+            return
         }
+        thenBy = value
+    }
+
+    /// The values the Then by pop-up offers: all but Group by's.
+    public var thenByChoices: [GroupBy] {
+        GroupBy.allCases.filter { $0 != groupBy }
+    }
+
+    /// The Then by button reads `Then by` while it is None.
+    public var thenByTitle: String {
+        thenBy == .none ? "Then by" : thenBy.title
     }
 }
 
@@ -122,96 +129,202 @@ public enum Search {
     public static func matches(_ card: Card, words: [String]) -> Bool {
         matches(words, fields: prFields(card) + card.rows.flatMap(rowFields))
     }
+}
 
-    /// An Activity row matches with its PR's fields or its own text and
-    /// actor. Without the card, the row's `pr` and `pr_title` stand for it.
-    public static func matches(_ row: Row, card: Card?, words: [String]) -> Bool {
-        let pr = card.map(prFields) ?? [row.prTitle, row.pr]
-        return matches(words, fields: pr + rowFields(row))
+// MARK: - Tabs
+
+public enum ListTab: String, Equatable, Codable, CaseIterable {
+    case all, review, mine
+
+    public var title: String {
+        switch self {
+        case .all: return "All"
+        case .review: return "Review"
+        case .mine: return "Mine"
+        }
+    }
+}
+
+extension PlacementSection {
+    public var title: String {
+        switch self {
+        case .doing: return "Doing"
+        case .todo: return "Todo"
+        case .waiting: return "Waiting"
+        case .done: return "Done"
+        case .main: return "Mine"
+        }
+    }
+
+    /// Review's sections from the top (DESIGN.md, "Review").
+    public static let review: [PlacementSection] = [.doing, .todo, .waiting, .done]
+}
+
+extension Card {
+    /// The tab a card is placed in, or All.
+    public var tab: ListTab {
+        switch placement?.tab.value {
+        case .review?: return .review
+        case .mine?: return .mine
+        case nil: return .all
+        }
+    }
+
+    /// The placement tag of All: `Review · Todo`, `Mine`, `Mine · Done`.
+    public var placementTag: String? {
+        guard let placement, let tab = placement.tab.value, let section = placement.section.value else { return nil }
+        switch tab {
+        case .review: return "Review · " + section.title
+        case .mine: return section == .done ? "Mine · Done" : "Mine"
+        }
+    }
+
+    /// The card's section key in its own tab, nil without a placement.
+    public var sectionKey: String? {
+        guard let placement, let tab = placement.tab.value, let section = placement.section.value else { return nil }
+        return SectionKey.placed(tab, section)
+    }
+
+    /// The grip and dragging: placed in Review or Mine, Done included, not
+    /// muted (DESIGN.md, "What a press does").
+    public var canDrag: Bool {
+        guard let placement, placement.section.value != nil else { return false }
+        return !isMuted
+    }
+
+    /// ⌥↑↓ and a drop among the cards: as `canDrag`, not in Done, which
+    /// keeps its own order.
+    public var canReorder: Bool {
+        canDrag && placement?.isDone == false
     }
 }
 
 // MARK: - Sections
 
-/// A section of the PRs tab.
-public struct SectionLayout: Equatable, Identifiable {
-    public static let snoozedKey = "snoozed"
-    public static let noneKey = "none"
+public enum SectionKey {
+    /// A section of Review or Mine.
+    public static func placed(_ tab: PlacementTab, _ section: PlacementSection) -> String {
+        tab.rawValue + "|" + section.rawValue
+    }
 
+    /// A group of All: Group by, Then by, the first-level and the
+    /// second-level group (empty for the first level itself or without Then
+    /// by). DESIGN.md, "Section size".
+    public static func all(_ groupBy: GroupBy, _ thenBy: GroupBy, _ first: String, _ second: String) -> String {
+        ["all", groupBy.rawValue, thenBy.rawValue, first, second].joined(separator: "|")
+    }
+
+    /// The Review or Mine section of a key, nil for All.
+    public static func placement(_ key: String) -> (PlacementTab, PlacementSection)? {
+        let parts = key.split(separator: "|", omittingEmptySubsequences: false)
+        guard parts.count == 2, let tab = PlacementTab(rawValue: String(parts[0])),
+              let section = PlacementSection(rawValue: String(parts[1])) else { return nil }
+        return (tab, section)
+    }
+}
+
+/// One heading and the cards under it. In All with Then by, a first-level
+/// group is a heading only (`level` 1, `isLeaf` false) followed by its
+/// second-level groups (`level` 2).
+public struct SectionLayout: Equatable, Identifiable {
     public var key: String
     public var title: String
-    /// False for the one list of Group by None.
-    public var showsHeader: Bool
-    public var isSnoozed: Bool
-    /// The red number: PRs waiting for your review; nil when 0.
-    public var reviewCount: Int?
-    /// "4 PRs", or "2 PRs · until Mon 09:00" for Snoozed.
+    /// 0: no heading (Group by None, the first list of Mine); 1: a band;
+    /// 2: an indented small heading.
+    public var level: Int
+    /// Holds cards (the innermost group).
+    public var isLeaf: Bool
+    /// `6 PRs`, whatever the search.
     public var detail: String
     public var collapsed: Bool
-    /// The cards laid out (none while collapsed, folded ones left out).
+    /// The cards laid out (none while collapsed; the first 5 while folded).
     public var cards: [Card]
-    /// "+ N more PRs".
+    /// The cards folded into "+ N more PRs".
     public var more: Int
-    /// Every card that passes the chip and the search, collapsed or folded
-    /// ones too, in order.
+    /// Expanded past 5: `Show less` on the last line and in the heading.
+    public var showLess: Bool
+    /// The mark of "+ N more PRs" for the folded cards.
+    public var moreMark: UnreadMark
+    /// Every card after the search, in order, folded and collapsed ones too.
     public var matching: [Card]
+    /// Review or Mine, Done included: cards move by drag, keys and menus.
+    public var accepts: Bool
+    public var isDone: Bool
 
     public var id: String { key }
 
-    public static func ownerKey(_ owner: String) -> String { "owner:" + owner }
+    public var showsHeader: Bool { level > 0 }
 
-    public var moreText: String? {
-        more > 0 ? "+ \(more) more " + (more == 1 ? "PR" : "PRs") : nil
+    /// The last line: "+ N more PRs" or "Show less".
+    public var foldLine: String? {
+        if more > 0 { return "+ \(more) more " + (more == 1 ? "PR" : "PRs") }
+        if showLess { return "Show less" }
+        return nil
     }
+
+    /// The Review or Mine section, nil in All.
+    public var placement: (PlacementTab, PlacementSection)? { SectionKey.placement(key) }
 }
 
-/// When "+ N more PRs" folds a PR (DESIGN.md, "PRs tab sections"): decided
-/// for every PR when the popover opens, and for a PR when it first appears.
-/// While open, decisions only move toward shown: a PR left out of the fold
-/// stays out, and a folded PR that gets an unread row (or starts waiting
-/// for your review) comes out at once.
-public struct FoldState: Equatable {
-    /// The PRs decided to stay out of the fold.
-    public private(set) var unfolded: Set<String> = []
-    private var decideAll = false
+/// Group orders per Group by value, as group keys (owner ids, repository
+/// names, the status and involvement keys).
+public typealias GroupOrders = [GroupBy: [String]]
 
-    public init() {}
-
-    /// A PR with unread rows or waiting for your review stays out.
-    public static func staysOut(_ card: Card) -> Bool {
-        card.hasUnread || card.awaitingReview
-    }
-
-    /// Decide every PR again now.
-    public mutating func decide(_ cards: [Card]) {
-        unfolded = Set(cards.filter(Self.staysOut).map(\.id))
-        decideAll = false
-    }
-
-    /// Decide every PR again when the next list arrives (the popover opened).
-    public mutating func decideOnNextList() {
-        decideAll = true
-    }
-
-    /// A new list: PRs that need to be out come out; none goes back in.
-    public mutating func update(_ cards: [Card]) {
-        if decideAll {
-            decide(cards)
-            return
-        }
-        for card in cards where Self.staysOut(card) {
-            unfolded.insert(card.id)
-        }
-    }
+public struct GroupItem: Equatable, Identifiable {
+    public var key: String
+    public var title: String
+    public var id: String { key }
 }
 
 public enum Listing {
+    /// Six or more cards fold to the first five (DESIGN.md, "Section size").
+    public static let foldAt = 6
+    public static let shownWhenFolded = 5
+    /// A card shows its newest three rows (DESIGN.md, "Rows in a card").
+    public static let rowsShown = 3
+
     static func count(_ n: Int) -> String { n == 1 ? "1 PR" : "\(n) PRs" }
 
-    /// Open PRs (Draft included) first, then Merged and Closed; inside each,
-    /// the chosen order, newest first; the id breaks ties.
+    /// `owner/repo` of `owner/repo#123`.
+    public static func repository(_ pr: String) -> String {
+        guard let hash = pr.lastIndex(of: "#") else { return pr }
+        return String(pr[..<hash])
+    }
+
+    // MARK: Cards of a tab
+
+    /// The cards of a tab, not dismissed.
+    public static func cards(_ cards: [Card], tab: ListTab) -> [Card] {
+        cards.filter { !$0.isDismissed && (tab == .all || $0.tab == tab) }
+    }
+
+    /// The unread count of a tab: its cards with a blue unread row; muted
+    /// gray ones do not count (DESIGN.md, "Tabs").
+    public static func unreadCount(_ cards: [Card], tab: ListTab) -> Int {
+        Self.cards(cards, tab: tab).filter(\.hasBlueUnread).count
+    }
+
+    /// The Dismissed list: newest dismissal first.
+    public static func dismissed(_ cards: [Card]) -> [Card] {
+        cards.filter(\.isDismissed).sorted {
+            let (a, b) = ($0.dismissedAt ?? 0, $1.dismissedAt ?? 0)
+            return a != b ? a > b : $0.id < $1.id
+        }
+    }
+
+    public static func search(_ cards: [Card], _ text: String) -> [Card] {
+        let words = Search.words(text)
+        return words.isEmpty ? cards : cards.filter { Search.matches($0, words: words) }
+    }
+
+    // MARK: Order
+
+    /// All's order inside the innermost group (DESIGN.md, "All"): open PRs
+    /// (Draft included) first, then Merged and Closed, each newest first by
+    /// the chosen order; muted cards after all of them, in the same way.
     public static func sorted(_ cards: [Card], by order: SortOrder) -> [Card] {
         cards.sorted { a, b in
+            if a.isMuted != b.isMuted { return !a.isMuted }
             if a.isFinished != b.isFinished { return !a.isFinished }
             let (ka, kb): (Int64, Int64) = order == .recentlyUpdated
                 ? (a.updatedAt, b.updatedAt)
@@ -221,177 +334,235 @@ public enum Listing {
         }
     }
 
-    /// `owner/repo` of `owner/repo#123`.
-    public static func repository(_ pr: String) -> String {
-        guard let hash = pr.lastIndex(of: "#") else { return pr }
-        return String(pr[..<hash])
+    /// Review and Mine: the daemon's rank, muted cards last.
+    public static func ranked(_ cards: [Card]) -> [Card] {
+        cards.sorted { a, b in
+            if a.isMuted != b.isMuted { return !a.isMuted }
+            let (pa, pb) = (a.placement?.position ?? 0, b.placement?.position ?? 0)
+            if pa != pb { return pa < pb }
+            return a.id < b.id
+        }
     }
 
-    struct Group {
-        var key: String
-        var title: String
-        var cards: [Card]
-    }
+    // MARK: Groups
 
-    /// The sections of a Group by in their order, each with its cards
-    /// before the chips and the search.
-    static func groups(_ cards: [Card], by groupBy: GroupBy, account: Account) -> [Group] {
-        switch groupBy {
-        case .owner:
-            return account.owners.filter(\.enabled).map { owner in
-                Group(key: SectionLayout.ownerKey(owner.id), title: owner.displayName, cards: cards.filter { $0.owner == owner.id })
-            }
-        case .repository:
-            let names = Set(cards.map { repository($0.pr) }).sorted {
-                let (a, b) = ($0.lowercased(), $1.lowercased())
-                return a != b ? a < b : $0 < $1
-            }
-            return names.map { name in
-                Group(key: "repo:" + name, title: name, cards: cards.filter { repository($0.pr) == name })
-            }
+    static let statusGroups = [("open", "Open"), ("draft", "Draft"), ("merged", "Merged"), ("closed", "Closed")]
+    static let involvementGroups = [
+        ("review_requested", "Review requested"), ("authored", "Authored by me"),
+        ("assigned", "Assigned to me"), ("others", "Others"),
+    ]
+
+    /// The group of a card under a Group by value.
+    public static func groupKey(_ card: Card, _ by: GroupBy) -> String {
+        switch by {
+        case .owner: return card.owner
+        case .repository: return repository(card.pr)
         case .status:
-            func status(_ card: Card) -> String {
-                switch card.stateLabel.value {
-                case .draft: return "draft"
-                case .merged: return "merged"
-                case .closed: return "closed"
-                case .open, .mergeable, nil: return "open"
-                }
-            }
-            return [("open", "Open"), ("draft", "Draft"), ("merged", "Merged"), ("closed", "Closed")].map { key, title in
-                Group(key: "status:" + key, title: title, cards: cards.filter { status($0) == key })
+            switch card.stateLabel.value {
+            case .draft: return "draft"
+            case .merged: return "merged"
+            case .closed: return "closed"
+            case .open, .mergeable, nil: return "open"
             }
         case .involvement:
-            func involvement(_ card: Card) -> String {
-                if card.reviewRequested { return "review_requested" }
-                if card.authoredByMe { return "authored" }
-                if card.assignedToMe { return "assigned" }
-                return "others"
-            }
-            return [
-                ("review_requested", "Review requested"), ("authored", "Authored by me"),
-                ("assigned", "Assigned to me"), ("others", "Others"),
-            ].map { key, title in
-                Group(key: "involvement:" + key, title: title, cards: cards.filter { involvement($0) == key })
-            }
+            // A PR you authored is Authored by me even with a team asked
+            // for its review; otherwise the first that applies.
+            if card.authoredByMe { return "authored" }
+            if card.reviewRequested { return "review_requested" }
+            if card.assignedToMe { return "assigned" }
+            return "others"
+        case .none: return ""
+        }
+    }
+
+    /// The groups a Group by value offers in their default order: the
+    /// enabled owners in registration order (Public last); the repositories
+    /// seen so far (`repositories`, kept in the order they came); the four
+    /// statuses and involvements.
+    public static func defaultGroups(_ by: GroupBy, account: Account, repositories: [String]) -> [GroupItem] {
+        switch by {
+        case .owner:
+            return account.owners.filter(\.enabled).map { GroupItem(key: $0.id, title: $0.displayName) }
+        case .repository:
+            return repositories.map { GroupItem(key: $0, title: $0) }
+        case .status:
+            return statusGroups.map { GroupItem(key: $0.0, title: $0.1) }
+        case .involvement:
+            return involvementGroups.map { GroupItem(key: $0.0, title: $0.1) }
         case .none:
-            return [Group(key: SectionLayout.noneKey, title: "", cards: cards)]
+            return [GroupItem(key: "", title: "")]
         }
     }
 
-    /// The key a fold is remembered under: per Group by and section. Owner
-    /// sections and Snoozed under Owner keep the keys of 0.2.
-    public static func collapseKey(_ groupBy: GroupBy, _ section: String) -> String {
-        groupBy == .owner ? section : groupBy.rawValue + "|" + section
-    }
-
-    /// The PRs tab. `cards` are the unsnoozed cards and `snoozed` the
-    /// snoozed ones, both as the daemon sent them (no filters). Sections
-    /// without a card after the chip and the search are left out; Snoozed
-    /// stays while any PR is snoozed. Counts ignore the chip and the search.
-    public static func sections(
-        account: Account, cards: [Card], snoozed: [Card], options: ListOptions, search: String,
-        collapsed: [String: Bool], expanded: Set<String>, fold: FoldState, timeZone: TimeZone = .current
-    ) -> [SectionLayout] {
-        let words = Search.words(search)
-        func passes(_ card: Card) -> Bool { options.segment.admits(card) && Search.matches(card, words: words) }
-        var out: [SectionLayout] = []
-        for group in groups(cards, by: options.groupBy, account: account) {
-            let matching = sorted(group.cards.filter(passes), by: options.sort)
-            guard !matching.isEmpty else { continue }
-            let isNone = options.groupBy == .none
-            let isCollapsed = isNone ? false : collapsed[collapseKey(options.groupBy, group.key)] ?? false
-            let open = !words.isEmpty || expanded.contains(group.key)
-            let shown = open ? matching : matching.filter { fold.unfolded.contains($0.id) }
-            let review = group.cards.filter(\.awaitingReview).count
-            out.append(SectionLayout(
-                key: group.key, title: group.title, showsHeader: !isNone, isSnoozed: false,
-                reviewCount: review > 0 ? review : nil, detail: count(group.cards.count), collapsed: isCollapsed,
-                cards: isCollapsed ? [] : shown, more: isCollapsed ? 0 : matching.count - shown.count, matching: matching
-            ))
-        }
-        if !snoozed.isEmpty {
-            let key = SectionLayout.snoozedKey
-            let isCollapsed = collapsed[collapseKey(options.groupBy, key)] ?? true
-            var detail = count(snoozed.count)
-            if let until = snoozed.compactMap(\.snoozedUntil).first {
-                detail += " · until " + RelativeTime.weekdayClock(until, timeZone: timeZone)
-            }
-            let matching = sorted(snoozed.filter(passes), by: options.sort)
-            out.append(SectionLayout(
-                key: key, title: "Snoozed", showsHeader: true, isSnoozed: true, reviewCount: nil, detail: detail,
-                collapsed: isCollapsed, cards: isCollapsed ? [] : matching, more: 0, matching: matching
-            ))
-        }
+    /// The groups in the user's order: the saved order first (groups gone
+    /// left out), then the rest in their default order.
+    public static func orderedGroups(_ by: GroupBy, account: Account, repositories: [String], orders: GroupOrders) -> [GroupItem] {
+        let defaults = defaultGroups(by, account: account, repositories: repositories)
+        guard let saved = orders[by], !saved.isEmpty else { return defaults }
+        var byKey: [String: GroupItem] = [:]
+        for item in defaults { byKey[item.key] = item }
+        var out = saved.compactMap { byKey.removeValue(forKey: $0) }
+        out += defaults.filter { byKey[$0.key] != nil }
         return out
     }
 
-    /// "Nothing needs you" without unsnoozed cards, "Nothing matches" when
-    /// the chip and the search leave none; nil otherwise or before the
-    /// first answer.
-    public static func emptyText(loaded: Bool, cards: [Card], options: ListOptions, search: String) -> String? {
-        guard loaded else { return nil }
-        if cards.isEmpty { return EmptyState.cards(filtered: false) }
-        let words = Search.words(search)
-        let any = cards.contains { options.segment.admits($0) && Search.matches($0, words: words) }
-        return any ? nil : EmptyState.cards(filtered: true)
+    /// The repositories seen so far: the first ones by name, those that
+    /// appear later at the end (DESIGN.md, "All").
+    public static func knownRepositories(_ known: [String], cards: [Card]) -> [String] {
+        let seen = Set(known)
+        let new = Set(cards.map { repository($0.pr) }).subtracting(seen).sorted {
+            let (a, b) = ($0.lowercased(), $1.lowercased())
+            return a != b ? a < b : $0 < $1
+        }
+        return known + new
     }
 
-    /// The Activity tab: the rows of the owners on (all with `All owners`),
-    /// whose PR passes the chip, matching the search. `cards` find each
-    /// row's PR.
-    public static func activity(
-        _ rows: [Row], cards: [Card], segment: PrFilter, owners: Set<String>, search: String
-    ) -> [Row] {
-        let words = Search.words(search)
-        var byPR: [String: Card] = [:]
-        for card in cards { byPR[card.pr] = card }
-        return rows.filter { row in
-            if !owners.isEmpty && !owners.contains(row.owner) { return false }
-            let card = byPR[row.pr]
-            if segment != .all && !(card.map(segment.admits) ?? false) { return false }
-            return Search.matches(row, card: card, words: words)
+    // MARK: Layout
+
+    /// The fold state of the account and the surface's search.
+    public struct Folding: Equatable {
+        public var collapsed: Set<String>
+        public var expanded: Set<String>
+        public var search: String
+
+        public init(collapsed: Set<String> = [], expanded: Set<String> = [], search: String = "") {
+            self.collapsed = collapsed
+            self.expanded = expanded
+            self.search = search
         }
     }
 
-    /// "No activity", or "Nothing matches" when the chip, the owner buttons
-    /// or the search leave no row.
-    public static func activityEmptyText(loaded: Bool, all: [Row], shown: [Row]) -> String? {
-        guard loaded, shown.isEmpty else { return nil }
-        return all.isEmpty ? EmptyState.activity : EmptyState.cards(filtered: true)
+    static func leaf(
+        key: String, title: String, level: Int, all: [Card], matching: [Card], folding: Folding, searching: Bool,
+        accepts: Bool, isDone: Bool
+    ) -> SectionLayout {
+        let isCollapsed = level > 0 && folding.collapsed.contains(key)
+        let folds = !searching && matching.count >= foldAt
+        let expanded = folds && folding.expanded.contains(key)
+        let shown = isCollapsed ? [] : (folds && !expanded ? Array(matching.prefix(shownWhenFolded)) : matching)
+        let folded = isCollapsed ? [] : Array(matching.dropFirst(shown.count))
+        return SectionLayout(
+            key: key, title: title, level: level, isLeaf: true, detail: count(all.count), collapsed: isCollapsed,
+            cards: shown, more: folded.count, showLess: !isCollapsed && expanded, moreMark: UnreadMark.of(cards: folded),
+            matching: matching, accepts: accepts, isDone: isDone
+        )
     }
 
-    /// ⇧R and Mark all as read: the unread rows of the tab as displayed now,
-    /// after the chip, the search and the owner buttons; collapsed sections
-    /// count, Snoozed does not (DESIGN.md, "How unread clears"). Rows
-    /// already read need nothing, so only unread ids go out.
-    public static func rowsToRead(tab: PopoverTab, sections: [SectionLayout], activity: [Row]) -> [String] {
+    /// The sections of a tab. `cards` are every card as the daemon sent
+    /// them (dismissed ones included). Sections without a card after the
+    /// search are left out; the counts ignore the search. Review and Mine
+    /// keep their empty sections (Done and Mine's first list included) while
+    /// the tab has a card and nothing is searched, so that a card can be
+    /// dropped there.
+    public static func sections(
+        tab: ListTab, cards allCards: [Card], account: Account, options: ListOptions, orders: GroupOrders,
+        repositories: [String], folding: Folding
+    ) -> [SectionLayout] {
+        let tabCards = cards(allCards, tab: tab)
+        let searching = !Search.words(folding.search).isEmpty
+        let found = Set(search(tabCards, folding.search).map(\.id))
         switch tab {
-        case .prs:
-            return sections.filter { !$0.isSnoozed }.flatMap(\.matching).flatMap(\.rows).filter(\.unread).map(\.id)
-        case .activity:
-            return activity.filter(\.unread).map(\.id)
+        case .review, .mine:
+            let placementTab: PlacementTab = tab == .review ? .review : .mine
+            let sections: [PlacementSection] = tab == .review ? PlacementSection.review : [.main, .done]
+            return sections.compactMap { section in
+                let all = ranked(tabCards.filter { $0.placement?.section.value == section })
+                let matching = all.filter { found.contains($0.id) }
+                let keepsEmpty = !searching && !tabCards.isEmpty
+                guard !matching.isEmpty || keepsEmpty else { return nil }
+                return leaf(
+                    key: SectionKey.placed(placementTab, section), title: section.title,
+                    level: section == .main ? 0 : 1, all: all, matching: matching, folding: folding, searching: searching,
+                    accepts: true, isDone: section == .done
+                )
+            }
+        case .all:
+            let first = orderedGroups(options.groupBy, account: account, repositories: repositories, orders: orders)
+            let second = options.thenBy == .none
+                ? [GroupItem(key: "", title: "")]
+                : orderedGroups(options.thenBy, account: account, repositories: repositories, orders: orders)
+            var out: [SectionLayout] = []
+            for group in first {
+                let all = options.groupBy == .none ? tabCards : tabCards.filter { groupKey($0, options.groupBy) == group.key }
+                let matching = all.filter { found.contains($0.id) }
+                guard !matching.isEmpty else { continue }
+                let headerKey = SectionKey.all(options.groupBy, options.thenBy, group.key, "")
+                if options.thenBy == .none {
+                    out.append(leaf(
+                        key: headerKey, title: group.title, level: options.groupBy == .none ? 0 : 1, all: all,
+                        matching: sorted(matching, by: options.sort), folding: folding, searching: searching,
+                        accepts: false, isDone: false
+                    ))
+                    continue
+                }
+                let isCollapsed = folding.collapsed.contains(headerKey)
+                out.append(SectionLayout(
+                    key: headerKey, title: group.title, level: 1, isLeaf: false, detail: count(all.count),
+                    collapsed: isCollapsed, cards: [], more: 0, showLess: false, moreMark: .none,
+                    matching: sorted(matching, by: options.sort), accepts: false, isDone: false
+                ))
+                guard !isCollapsed else { continue }
+                for sub in second {
+                    let subAll = all.filter { groupKey($0, options.thenBy) == sub.key }
+                    let subMatching = sorted(subAll.filter { found.contains($0.id) }, by: options.sort)
+                    guard !subMatching.isEmpty else { continue }
+                    out.append(leaf(
+                        key: SectionKey.all(options.groupBy, options.thenBy, group.key, sub.key), title: sub.title, level: 2,
+                        all: subAll, matching: subMatching, folding: folding, searching: searching, accepts: false, isDone: false
+                    ))
+                }
+            }
+            return out
         }
     }
-}
 
-// MARK: - Activity owner buttons
-
-public enum ActivityOwners {
-    /// The buttons after `All owners`: the enabled owners.
-    public static func buttons(_ account: Account) -> [Owner] {
-        account.owners.filter(\.enabled)
+    /// The text in place of an empty tab or Dismissed list: `Nothing
+    /// matches` when the search leaves no card; nil before the first
+    /// answer or when something shows.
+    public static func emptyText(loaded: Bool, tab: ListTab?, cards: [Card], search: String) -> String? {
+        guard loaded else { return nil }
+        let list = tab.map { Self.cards(cards, tab: $0) } ?? dismissed(cards)
+        if list.isEmpty {
+            switch tab {
+            case .all?: return EmptyState.all
+            case .review?: return EmptyState.review
+            case .mine?: return EmptyState.mine
+            case nil: return EmptyState.dismissed
+            }
+        }
+        return Self.search(list, search).isEmpty ? EmptyState.nothingMatches : nil
     }
 
-    /// The remembered owners that still count: removed and disabled ones
-    /// are ignored.
-    public static func effective(_ selected: Set<String>, account: Account) -> Set<String> {
-        Set(buttons(account).map(\.id)).intersection(selected)
+    /// ⇧R and Mark all as read: every unread row of the tab's cards after
+    /// the search, in collapsed and folded sections and in "+ N more" too,
+    /// muted rows included (DESIGN.md, "How unread clears").
+    public static func rowsToRead(tab: ListTab, cards: [Card], search: String) -> [String] {
+        Self.search(Self.cards(cards, tab: tab), search).flatMap(\.rows).filter(\.unread).map(\.id)
     }
 
-    /// `All owners` is on while no owner counts, even when every owner is
-    /// on one by one.
-    public static func allOwnersOn(_ selected: Set<String>, account: Account) -> Bool {
-        effective(selected, account: account).isEmpty
+    /// The rows a card shows: the newest three, or all while expanded.
+    public static func visibleRows(_ card: Card, expanded: Bool) -> [Row] {
+        expanded ? card.rows : Array(card.rows.prefix(rowsShown))
+    }
+
+    /// "+ N more" in a card, nil when all rows show.
+    public static func moreRows(_ card: Card, expanded: Bool) -> Int? {
+        guard !expanded, card.rows.count > rowsShown else { return nil }
+        return card.rows.count - rowsShown
+    }
+
+    public static func moreRowsText(_ count: Int) -> String {
+        "+ \(count) more"
+    }
+
+    /// The mark of "+ N more" in a card.
+    public static func moreRowsMark(_ card: Card) -> UnreadMark {
+        UnreadMark.of(Array(card.rows.dropFirst(rowsShown)))
+    }
+
+    /// `Older activity on GitHub` ends the expanded rows of a PR that lost
+    /// rows past the 20 kept.
+    public static func showsOlderActivity(_ card: Card, expanded: Bool) -> Bool {
+        expanded && card.olderRows
     }
 }

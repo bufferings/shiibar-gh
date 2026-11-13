@@ -292,8 +292,7 @@ fn reset_brings_the_accounts_back_from_the_item_without_owners() {
     daemon.stop();
 }
 
-/// `account_changed` follows every change of an owner, its table and its
-/// Exclusions.
+/// `account_changed` follows every change of an owner and its table.
 #[test]
 fn owner_settings_send_account_changed() {
     let dir = tempfile::tempdir().unwrap();
@@ -321,7 +320,7 @@ fn owner_settings_send_account_changed() {
     assert_eq!(account["owners"][0]["skip_drafts"], false);
     assert_eq!(account["owners"][0]["enabled"], false);
 
-    // The table and the Exclusions answer with their new values.
+    // The table answers with its new values.
     let events = daemon.ok(
         json!({"cmd":"owner_events_set","account":"me","owner":"org",
         "event":"merged_closed","column":"notify","on":true}),
@@ -332,28 +331,23 @@ fn owner_settings_send_account_changed() {
         events["review_requested"],
         json!({"list":true,"notify":true})
     );
-    assert_eq!(events.as_object().unwrap().len(), 16);
+    assert_eq!(events.as_object().unwrap().len(), 19);
     let copied = daemon.ok(json!({"cmd":"owner_events_copy","account":"me",
         "from_owner":"org","to_owner":"public"}))["events"]
         .clone();
     assert_eq!(copied, events);
-    let exclusions = daemon.ok(
-        json!({"cmd":"owner_exclusions_set","account":"me","owner":"org",
-        "kind":"user","name":"renovate","state":"list_only"}),
-    )["exclusions"]
-        .clone();
+    // The Mute lists answer with their new values (DESIGN.md, "Wire
+    // format": `mutes`).
+    let mutes =
+        daemon.ok(json!({"cmd":"mute","account":"me","kind":"user","name":"renovate"}))["mutes"]
+            .clone();
+    assert_eq!(mutes, json!({"repos":[],"users":["renovate"],"prs":[]}));
+    let mutes =
+        daemon.ok(json!({"cmd":"mute","account":"me","kind":"user","name":"Renovate"}))["mutes"]
+            .clone();
     assert_eq!(
-        exclusions,
-        json!({"repos":[],"users":[{"name":"renovate","state":"list_only"}]})
-    );
-    let exclusions = daemon.ok(
-        json!({"cmd":"owner_exclusions_set","account":"me","owner":"org",
-        "kind":"user","name":"Renovate","state":"hidden"}),
-    )["exclusions"]
-        .clone();
-    assert_eq!(
-        exclusions["users"],
-        json!([{"name":"renovate","state":"hidden"}]),
+        mutes["users"],
+        json!(["renovate"]),
         "the same user without case"
     );
     daemon.stop();

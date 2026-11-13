@@ -107,10 +107,13 @@ pub struct Recorder {
     pub stop: Option<i64>,
     /// At least one call was answered.
     pub answered: bool,
-    /// `X-GitHub-SSO` of the last answered call, if it had one.
+    /// `X-GitHub-SSO` of the last call, if GitHub answered it with one.
     pub last_sso: Option<String>,
-    /// The HTTP status of the last answered call.
+    /// The HTTP status of the last call; 0 when GitHub did not answer it.
     pub last_status: u16,
+    /// `x-github-request-id` of the last call, if GitHub answered it with
+    /// one.
+    pub last_request_id: Option<String>,
 }
 
 impl Recorder {
@@ -125,6 +128,19 @@ impl Recorder {
         Self {
             now,
             ..Self::default()
+        }
+    }
+
+    /// DESIGN.md, "Logs": what a 4xx answer adds to the log line of a failed
+    /// request, ` (GitHub answered 403, request id …)`. A 5xx error carries
+    /// both in its own text; any other call adds nothing.
+    pub fn client_error_detail(&self) -> String {
+        if !(400..500).contains(&self.last_status) {
+            return String::new();
+        }
+        match &self.last_request_id {
+            Some(id) => format!(" (GitHub answered {}, request id {id})", self.last_status),
+            None => format!(" (GitHub answered {})", self.last_status),
         }
     }
 
@@ -153,6 +169,7 @@ impl Recorder {
         self.answered = true;
         self.last_sso = text("x-github-sso").map(str::to_string);
         self.last_status = status;
+        self.last_request_id = text("x-github-request-id").map(str::to_string);
         if let Some(expires) = text("github-authentication-token-expiration").and_then(parse_expiry)
         {
             self.token.expires_at = Some(expires);
@@ -312,6 +329,10 @@ impl Api {
         rec: &mut Recorder,
         request: reqwest::RequestBuilder,
     ) -> Result<(u16, HeaderMap, String), CallError> {
+        // A call that gets no answer leaves nothing of the one before.
+        rec.last_status = 0;
+        rec.last_sso = None;
+        rec.last_request_id = None;
         let response = request
             .send()
             .await
@@ -347,7 +368,16 @@ impl Api {
                 })
             }
             404 => Err(CallError::NotFound),
-            500..=599 => Err(CallError::Network(format!("GitHub answered {status}"))),
+            500..=599 => {
+                // DESIGN.md, "Logs": the request id is what tells GitHub
+                // which request failed.
+                let id = headers
+                    .get("x-github-request-id")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|id| format!(" (request id {id})"))
+                    .unwrap_or_default();
+                Err(CallError::Network(format!("GitHub answered {status}{id}")))
+            }
             200..=299 | 304 => Ok((status, headers, body)),
             other => Err(CallError::Other(format!("GitHub answered {other}"))),
         }

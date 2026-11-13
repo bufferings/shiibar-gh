@@ -1,6 +1,6 @@
-//! Rule table: PRs awaiting the account's review, `awaiting_review` and
-//! `review_count`. DESIGN.md, sections "Awaiting review", "Card states" and
-//! "What the filters mean".
+//! Rule table: PRs awaiting the account's review (`awaiting_review`).
+//! DESIGN.md, sections "Awaiting review", "Card states" and "What the
+//! filters mean".
 
 mod support;
 
@@ -8,7 +8,8 @@ use shiibar_gh_proto::*;
 use shiibar_ghd::engine::ListArgs;
 use support::*;
 
-/// Who asks for the review in the request rows of the table.
+/// Who asks for the review in the request rows of the table, and the author
+/// of the PR.
 const ASKER: &str = "alice";
 
 /// The request of a row in a case.
@@ -23,14 +24,16 @@ enum Request {
 struct Case {
     name: &'static str,
     request: Request,
-    /// A Review requested row (of the request's kind) at this time.
+    /// A Review requested event (of the request's kind) at this time.
     row_at: Option<i64>,
     /// The account's newest review.
     reviewed_at: Option<i64>,
     /// Off: the team kind's List, or the account kind's List.
     list_off: Option<EventKind>,
-    /// An Exclusion of the user who asked.
-    asker: Option<ExclusionState>,
+    /// The author is muted.
+    muted: bool,
+    /// The account's own PR.
+    mine: bool,
     want: bool,
 }
 
@@ -41,7 +44,8 @@ const fn case(name: &'static str, request: Request, row_at: Option<i64>, want: b
         row_at,
         reviewed_at: None,
         list_off: None,
-        asker: None,
+        muted: false,
+        mine: false,
         want,
     }
 }
@@ -106,34 +110,25 @@ fn awaiting_review_table() {
         },
         Case {
             list_off: Some(EventKind::ReviewRequested),
-            asker: Some(ExclusionState::ListOnly),
+            reviewed_at: Some(T0 + 5),
             ..case(
-                "a recorded-only row still names the asker",
+                "a request recorded without a row still dates the request",
                 Request::Me,
-                Some(T0),
-                false,
+                Some(T0 + 8),
+                true,
             )
         },
         Case {
-            asker: Some(ExclusionState::Hidden),
-            ..case("the asker is Hidden", Request::Me, Some(T0), false)
+            muted: true,
+            ..case("Mute plays no part", Request::Me, Some(T0), true)
         },
         Case {
-            asker: Some(ExclusionState::ListOnly),
-            ..case("the asker is List only", Request::Me, Some(T0), false)
+            mine: true,
+            ..case("my own PR", Request::Me, Some(T0), false)
         },
         Case {
-            asker: Some(ExclusionState::ListOnly),
-            ..case(
-                "the team's asker is List only",
-                Request::Team,
-                Some(T0),
-                false,
-            )
-        },
-        Case {
-            asker: Some(ExclusionState::Hidden),
-            ..case("no row: the asker is unknown", Request::Me, None, true)
+            mine: true,
+            ..case("my own PR, a team request", Request::Team, Some(T0), false)
         },
     ];
     for c in cases {
@@ -141,14 +136,14 @@ fn awaiting_review_table() {
         if let Some(kind) = c.list_off {
             h.table(kind, EventColumn::List, false);
         }
-        if let Some(state) = c.asker {
-            h.exclude(ExclusionKind::User, ASKER, state);
+        if c.muted {
+            h.mute(MuteKind::User, ASKER);
         }
         let pr = IngestPr {
             requested_me: matches!(c.request, Request::Me),
             requested_team: matches!(c.request, Request::Team),
             my_review_at: c.reviewed_at,
-            ..other("PR_1")
+            ..if c.mine { pr("PR_1") } else { other("PR_1") }
         };
         let events = match (c.row_at, c.request) {
             (Some(at), Request::Team) => {
@@ -166,17 +161,10 @@ fn awaiting_review_table() {
             "{}: card",
             c.name
         );
-        assert_eq!(h.badge(), u32::from(c.want), "{}: account", c.name);
-        assert_eq!(
-            h.owner(ORG).review_count,
-            u32::from(c.want),
-            "{}: owner",
-            c.name
-        );
     }
 }
 
-/// A PR asking the account for a review, with a request row of `alice`.
+/// A PR asking the account for a review, with a request row.
 fn asked(h: &mut H, id: &str) {
     let e = h.ev(&format!("RR_{id}"), id, IngestKind::ReviewRequested);
     h.push(
@@ -190,47 +178,24 @@ fn asked(h: &mut H, id: &str) {
 }
 
 #[test]
-fn the_badge_counts_prs_not_rows() {
-    let mut h = H::new();
-    let a = h.ev("E_1", "PR_1", IngestKind::ReviewRequested);
-    let b = h.ev("E_2", "PR_1", IngestKind::Mentioned);
-    let c = h.ev("E_3", "PR_2", IngestKind::Comment);
-    h.push(
-        vec![
-            IngestPr {
-                requested_me: true,
-                ..other("PR_1")
-            },
-            other("PR_2"),
-        ],
-        vec![a, b, c],
-        vec![],
-    );
-    assert_eq!(h.badge(), 1);
-    assert_eq!(h.awaiting_ids(), ["PR_1"]);
-}
-
-#[test]
 fn awaiting_review_is_apart_from_the_read_state() {
-    // DESIGN.md, "How unread goes away": reading the Review requested row
-    // keeps the mark and the number.
+    // DESIGN.md, "How unread rows go away": reading the Review requested row
+    // keeps the mark.
     let mut h = H::new();
     asked(&mut h, "PR_1");
     h.read(&["RR_PR_1"]);
     h.open();
     h.close();
     assert!(h.card(&key("PR_1")).unwrap().awaiting_review);
-    assert_eq!(h.badge(), 1);
-    assert!(h.visible("PR_1"), "a PR awaiting review keeps its card");
 }
 
 #[test]
 fn the_request_ends_when_github_drops_it_and_comes_back_when_asked_again() {
     let mut h = H::new();
     asked(&mut h, "PR_1");
-    assert_eq!(h.badge(), 1);
+    assert_eq!(h.awaiting_ids(), ["PR_1"]);
     h.prs(vec![other("PR_1")]);
-    assert_eq!(h.badge(), 0, "the request was withdrawn");
+    assert!(h.awaiting_ids().is_empty(), "the request was withdrawn");
     let e = h.ev("RR_2", "PR_1", IngestKind::ReviewRequested);
     h.push(
         vec![IngestPr {
@@ -241,18 +206,14 @@ fn the_request_ends_when_github_drops_it_and_comes_back_when_asked_again() {
         vec![e],
         vec![],
     );
-    assert_eq!(h.badge(), 1, "asked again after the review");
+    assert_eq!(h.awaiting_ids(), ["PR_1"], "asked again after the review");
 }
 
 #[test]
-fn snoozed_unreadable_hidden_closed_and_disabled_never_count() {
+fn unreadable_closed_and_disabled_never_await() {
     type Change = fn(&mut H);
-    let cases: [(&str, Change); 5] = [
-        ("snoozed", |h| h.snooze(&key("PR_1"))),
+    let cases: [(&str, Change); 3] = [
         ("unreadable", |h| h.missing("PR_1")),
-        ("Hidden repository", |h| {
-            h.exclude(ExclusionKind::Repo, "org/app", ExclusionState::Hidden)
-        }),
         ("closed", |h| {
             h.prs(vec![IngestPr {
                 requested_me: true,
@@ -268,40 +229,28 @@ fn snoozed_unreadable_hidden_closed_and_disabled_never_count() {
     for (name, change) in cases {
         let mut h = H::new();
         asked(&mut h, "PR_1");
-        assert_eq!(h.badge(), 1, "{name}: before");
+        assert_eq!(h.awaiting_ids(), ["PR_1"], "{name}: before");
         change(&mut h);
-        assert_eq!(h.badge(), 0, "{name}");
-        assert_eq!(h.owner(ORG).review_count, 0, "{name}: owner");
-        assert!(h.awaiting_ids().is_empty(), "{name}: card");
+        assert!(h.awaiting_ids().is_empty(), "{name}");
     }
 }
 
 #[test]
-fn the_account_number_is_the_sum_of_its_owners() {
+fn the_filter_is_github_s_request_and_the_mark_is_this_app_s() {
+    // DESIGN.md, "What the filters mean": the Review requested filter is
+    // GitHub's request; the mark is the review still owed.
     let mut h = H::new();
-    asked(&mut h, "PR_1");
-    let e = h.ev("RR_2", "PR_2", IngestKind::ReviewRequested);
+    let e = h.ev_at("RR_1", "PR_1", IngestKind::ReviewRequested, T0);
+    h.set_time(T0 + 10);
     h.push(
         vec![IngestPr {
-            owner: "stranger".into(),
             requested_me: true,
-            ..other("PR_2")
+            my_review_at: Some(T0 + 5),
+            ..other("PR_1")
         }],
         vec![e],
         vec![],
     );
-    assert_eq!(h.owner(ORG).review_count, 1);
-    assert_eq!(h.owner("public").review_count, 1);
-    assert_eq!(h.badge(), 2);
-}
-
-#[test]
-fn the_filter_is_github_s_request_and_the_mark_is_this_app_s() {
-    // DESIGN.md, "What the filters mean": the Review requested filter does
-    // not look at the Exclusions; the mark does.
-    let mut h = H::new();
-    h.exclude(ExclusionKind::User, ASKER, ExclusionState::ListOnly);
-    asked(&mut h, "PR_1");
     let card = h.card(&key("PR_1")).unwrap();
     assert!(card.review_requested);
     assert!(!card.awaiting_review);
@@ -312,74 +261,94 @@ fn the_filter_is_github_s_request_and_the_mark_is_this_app_s() {
     assert_eq!(filtered, ["PR_1"]);
 }
 
+/// DESIGN.md, "Awaiting review": the time of the newest request is kept
+/// apart from the rows, so a request that made no row still dates it.
 #[test]
-fn the_newest_request_row_decides_even_when_pruned() {
-    // The asker of the newest request row decides, after it was pruned; an
-    // older row of another user does not.
+fn the_newest_request_time_moves_without_a_row() {
+    type Setup = fn(&mut H);
+    let cases: [(&str, Setup); 4] = [
+        ("List off", |h| {
+            h.table(EventKind::ReviewRequested, EventColumn::List, false)
+        }),
+        ("dismissed", |h| {
+            h.dismiss(&key("PR_1")).unwrap();
+        }),
+        ("team List off, a team request", |h| {
+            h.table(EventKind::TeamReviewRequested, EventColumn::List, false)
+        }),
+        ("the row was deleted", |_| {}),
+    ];
+    for (name, setup) in cases {
+        let mut h = H::new();
+        // Requested at T0+2, reviewed at T0+5: not awaiting.
+        let first = h.ev_at("RR_1", "PR_1", IngestKind::ReviewRequested, T0 + 2);
+        h.set_time(T0 + 10);
+        let asked = IngestPr {
+            requested_me: true,
+            my_review_at: Some(T0 + 5),
+            ..other("PR_1")
+        };
+        h.push(vec![asked.clone()], vec![first], vec![]);
+        assert!(
+            !h.engine
+                .pr_record(&full("PR_1"))
+                .unwrap()
+                .dismissed_at
+                .is_some()
+        );
+        setup(&mut h);
+        if name == "the row was deleted" {
+            // 20 newer rows push the request row out.
+            let newer: Vec<IngestEvent> = (0..20)
+                .map(|n| h.ev_at(&format!("E_{n}"), "PR_1", IngestKind::Comment, T0 + 20 + n))
+                .collect();
+            h.events(newer);
+            assert!(!h.has_row("RR_1"), "{name}: deleted");
+        }
+        // Asked again at T0+8, after the review.
+        let kind = if name.starts_with("team") {
+            IngestKind::TeamReviewRequested
+        } else {
+            IngestKind::ReviewRequested
+        };
+        let again = h.ev_at("RR_2", "PR_1", kind, T0 + 8);
+        let pr = IngestPr {
+            requested_team: name.starts_with("team"),
+            ..asked
+        };
+        h.push(vec![pr], vec![again], vec![]);
+        assert_eq!(
+            h.engine.pr_record(&full("PR_1")).unwrap().last_request_at,
+            Some(T0 + 8),
+            "{name}"
+        );
+        let shown = h
+            .engine
+            .pr_record(&full("PR_1"))
+            .and_then(|pr| {
+                let owner = h.engine.owner_record(&h.owner_id(ORG))?;
+                Some(h.engine.awaiting_review(pr, owner))
+            })
+            .unwrap();
+        assert!(shown, "{name}: awaiting again");
+    }
+}
+
+#[test]
+fn a_request_older_than_the_watch_still_dates_the_request() {
+    // DESIGN.md, "Awaiting review": every fetched request event updates it.
     let mut h = H::new();
-    h.exclude(ExclusionKind::User, "renovate", ExclusionState::ListOnly);
-    let old = h.ev_at("RR_1", "PR_1", IngestKind::ReviewRequested, T0);
-    let mut new = h.ev_at("RR_2", "PR_1", IngestKind::ReviewRequested, T0 + 5);
-    new.actor = Some("renovate".into());
-    let later: Vec<IngestEvent> = (6..9)
-        .map(|n| h.ev_at(&format!("E_{n}"), "PR_1", IngestKind::Comment, T0 + n))
-        .collect();
-    h.set_time(T0 + 10);
-    let mut events = vec![old, new];
-    events.extend(later);
+    let old = h.ev_at("RR_1", "PR_1", IngestKind::ReviewRequested, T0 - DAY);
     h.push(
         vec![IngestPr {
             requested_me: true,
             ..other("PR_1")
         }],
-        events,
+        vec![old],
         vec![],
     );
-    h.read(&["RR_1", "RR_2", "E_6", "E_7", "E_8"]);
-    h.close();
-    assert!(h.row("RR_2").pruned, "the newest request row is pruned");
-    assert_eq!(h.badge(), 0, "renovate asked last");
-    h.include(ExclusionKind::User, "renovate");
-    assert_eq!(h.badge(), 1, "the pruned row still decides");
-}
-
-/// A request to the account is judged by the account's request rows, a
-/// request to a team by the team's rows; they never stand in for each
-/// other.
-#[test]
-fn requests_to_me_and_to_my_team_are_judged_apart() {
-    // (requested_me, requested_team, the asker of my row, the asker of the
-    // team row, want)
-    let cases = [
-        (true, false, "renovate", "alice", false),
-        (false, true, "renovate", "alice", true),
-        (false, true, "alice", "renovate", false),
-        (true, false, "alice", "renovate", true),
-        (true, true, "renovate", "alice", true),
-        (true, true, "alice", "renovate", true),
-        (true, true, "renovate", "renovate", false),
-    ];
-    for (me, team, my_asker, team_asker, want) in cases {
-        let mut h = H::new();
-        h.exclude(ExclusionKind::User, "renovate", ExclusionState::ListOnly);
-        let mut mine = h.ev_at("RR_ME", "PR_1", IngestKind::ReviewRequested, T0);
-        mine.actor = Some(my_asker.into());
-        let mut ours = h.ev_at("RR_TEAM", "PR_1", IngestKind::TeamReviewRequested, T0 + 1);
-        ours.actor = Some(team_asker.into());
-        h.set_time(T0 + 10);
-        h.push(
-            vec![IngestPr {
-                requested_me: me,
-                requested_team: team,
-                ..other("PR_1")
-            }],
-            vec![mine, ours],
-            vec![],
-        );
-        assert_eq!(
-            h.badge(),
-            u32::from(want),
-            "me {me}, team {team}, {my_asker}/{team_asker}"
-        );
-    }
+    assert_eq!(
+        h.engine.pr_record(&full("PR_1")).unwrap().last_request_at,
+        Some(T0 - DAY)
+    );
 }

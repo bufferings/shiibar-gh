@@ -1,6 +1,6 @@
-//! Rule tables: accounts and owners, the event table, Exclusions and
-//! notification titles. DESIGN.md, "Row kinds and states", "Applying the
-//! table", "Exclusions", "Review requested rows" and "macOS notifications".
+//! Rule tables: accounts and owners, the event table and notification
+//! titles. DESIGN.md, "Row kinds and states", "Applying the table", "Review
+//! requested rows" and "macOS notifications".
 
 mod support;
 
@@ -167,7 +167,7 @@ fn the_table_has_two_columns_with_the_design_defaults() {
     // Added to merge queue and Merged / Closed only.
     let h = H::new();
     let events = h.engine.owner_events(&h.owner_id(ORG));
-    assert_eq!(events.len(), 16);
+    assert_eq!(events.len(), 19);
     for (name, cell) in &events {
         let quiet = name == "merge_queue_added" || name == "merged_closed";
         assert!(cell.list, "{name}");
@@ -175,92 +175,6 @@ fn the_table_has_two_columns_with_the_design_defaults() {
     }
     let wire = serde_json::to_value(events["comment"]).unwrap();
     assert_eq!(wire, serde_json::json!({"list": true, "notify": true}));
-}
-
-#[test]
-fn exclusions_hidden_and_list_only() {
-    // name, kind, name, state, shown, unread, notified
-    let cases: &[(&str, ExclusionKind, &str, ExclusionState, bool, bool, bool)] = &[
-        (
-            "user list only",
-            ExclusionKind::User,
-            "alice",
-            ExclusionState::ListOnly,
-            true,
-            true,
-            false,
-        ),
-        (
-            "user hidden",
-            ExclusionKind::User,
-            "ALICE",
-            ExclusionState::Hidden,
-            false,
-            false,
-            false,
-        ),
-        (
-            "a REST bot login does not name the GraphQL login",
-            ExclusionKind::User,
-            "alice[bot]",
-            ExclusionState::Hidden,
-            true,
-            true,
-            true,
-        ),
-        (
-            "repo list only",
-            ExclusionKind::Repo,
-            "org/app",
-            ExclusionState::ListOnly,
-            true,
-            true,
-            false,
-        ),
-        (
-            "repo hidden",
-            ExclusionKind::Repo,
-            "Org/App",
-            ExclusionState::Hidden,
-            false,
-            false,
-            false,
-        ),
-        (
-            "another user",
-            ExclusionKind::User,
-            "bob",
-            ExclusionState::Hidden,
-            true,
-            true,
-            true,
-        ),
-    ];
-    for (name, kind, who, state, shown, unread, notified) in cases {
-        let mut h = H::new();
-        h.exclude(*kind, who, *state);
-        let ev = h.ev("E_1", "PR_1", IngestKind::Comment);
-        h.push(vec![pr("PR_1")], vec![ev], vec![]);
-        let row = h.wire_row("E_1");
-        assert_eq!(row.is_some(), *shown, "{name}: shown");
-        assert_eq!(row.is_some_and(|r| r.unread), *unread, "{name}: unread");
-        assert_eq!(!h.delivered().is_empty(), *notified, "{name}: notified");
-    }
-}
-
-#[test]
-fn a_hidden_repository_has_no_card_and_comes_back_read() {
-    let mut h = H::new();
-    h.exclude(ExclusionKind::Repo, "org/app", ExclusionState::Hidden);
-    let ev = h.ev("E_1", "PR_1", IngestKind::Comment);
-    h.push(vec![pr("PR_1")], vec![ev], vec![]);
-    assert!(h.card(&key("PR_1")).is_none());
-    assert_eq!(h.owner(ORG).pr_count, 0);
-    assert!(!h.dot());
-    h.include(ExclusionKind::Repo, "org/app");
-    let row = h.wire_row("E_1").unwrap();
-    assert!(!row.unread, "recorded while hidden: read");
-    assert_eq!(h.owner(ORG).pr_count, 1);
 }
 
 #[test]
@@ -272,19 +186,19 @@ fn a_team_review_request_counts_only_while_its_list_is_on() {
         ..other("PR_1")
     };
     h.push(vec![p], vec![ev], vec![]);
-    assert_eq!(h.badge(), 1);
+    assert_eq!(h.awaiting_ids().len(), 1);
     // List off: no row shown, no count, and the Review requested filter
     // leaves it.
     h.table(EventKind::TeamReviewRequested, EventColumn::List, false);
     assert!(h.wire_row("E_1").is_none());
-    assert_eq!(h.badge(), 0);
+    assert_eq!(h.awaiting_ids().len(), 0);
     let filtered = h.card_ids(ListArgs {
         filter: PrFilter::ReviewRequested,
         ..ListArgs::default()
     });
     assert!(filtered.is_empty(), "{filtered:?}");
     h.table(EventKind::TeamReviewRequested, EventColumn::List, true);
-    assert_eq!(h.badge(), 1);
+    assert_eq!(h.awaiting_ids().len(), 1);
 }
 
 #[test]
@@ -299,9 +213,9 @@ fn a_direct_review_request_counts_whatever_its_list() {
         vec![ev],
         vec![],
     );
-    assert_eq!(h.badge(), 1);
+    assert_eq!(h.awaiting_ids().len(), 1);
     h.table(EventKind::ReviewRequested, EventColumn::List, false);
-    assert_eq!(h.badge(), 1, "DESIGN.md, Awaiting review");
+    assert_eq!(h.awaiting_ids().len(), 1, "DESIGN.md, Awaiting review");
     assert!(h.wire_row("E_1").is_none());
 }
 
@@ -339,7 +253,8 @@ fn notifications_are_titled_by_account_and_summed_up_per_owner() {
     assert_eq!(summary[0].subtitle.as_deref(), Some("org · in 2 PRs"));
     assert_eq!(summary[0].body, None);
     let c = h.ev("E_4", "PR_1", IngestKind::Merged);
-    let d = h.ev("E_5", "PR_1", IngestKind::Closed);
+    // A CLOSED_EVENT after a MERGED_EVENT is its pair: another PR closes.
+    let d = h.ev("E_5", "PR_2", IngestKind::Closed);
     h.table(EventKind::MergedClosed, EventColumn::Notify, true);
     h.events(vec![c]);
     let merged = h.delivered();
@@ -461,63 +376,6 @@ fn a_color_freed_by_a_change_is_taken_next_and_the_first_account_again_has_none(
     }
     h.engine.account_create("1004", "fourth").unwrap();
     assert!(h.account_of("1004").color.is(AccountColor::None));
-}
-
-#[test]
-fn user_exclusions_cover_approved_rows_but_not_state_changes_or_reactions() {
-    let mut h = H::new();
-    h.exclude(ExclusionKind::User, "alice", ExclusionState::Hidden);
-    let approved = h.ev("R_1", "PR_1", IngestKind::Approved);
-    h.push(vec![pr("PR_1")], vec![approved], vec![]);
-    assert!(h.has_row("R_1:approved"));
-    assert!(
-        h.wire_row("R_1:approved").is_none(),
-        "the approver is hidden"
-    );
-    // A state change row has no actor; a reaction row names nobody.
-    h.prs(vec![IngestPr {
-        checks: Checks::Failed,
-        ..pr("PR_1")
-    }]);
-    let reaction = h.reaction("C_1", "PR_1", &[("THUMBS_UP", 1)]);
-    h.push(vec![], vec![], vec![reaction]);
-    let kinds: Vec<String> = h
-        .card(&key("PR_1"))
-        .unwrap()
-        .rows
-        .iter()
-        .map(|r| r.kind.as_text())
-        .collect();
-    assert!(kinds.contains(&"checks_failed".to_string()), "{kinds:?}");
-    assert!(kinds.contains(&"reaction".to_string()), "{kinds:?}");
-}
-
-#[test]
-fn rows_from_before_hidden_keep_their_state_and_a_request_recorded_while_hidden_comes_back_read() {
-    // DESIGN.md, "Exclusions" (3-2 (a) and (b)).
-    let mut h = H::new();
-    let before = h.ev("E_1", "PR_1", IngestKind::Comment);
-    h.push(vec![pr("PR_1")], vec![before], vec![]);
-    h.exclude(ExclusionKind::User, "alice", ExclusionState::Hidden);
-    let request = h.ev("E_2", "PR_2", IngestKind::ReviewRequested);
-    h.push(
-        vec![IngestPr {
-            requested_me: true,
-            ..other("PR_2")
-        }],
-        vec![request],
-        vec![],
-    );
-    assert!(h.wire_row("E_1").is_none() && h.wire_row("E_2").is_none());
-    h.include(ExclusionKind::User, "alice");
-    let old = h.wire_row("E_1").unwrap();
-    assert!(old.unread, "(a) as it was before Hidden");
-    let back = h.wire_row("E_2").unwrap();
-    assert!(!back.unread, "(b) recorded while hidden: read");
-    assert!(
-        h.card(&key("PR_2")).unwrap().awaiting_review,
-        "(b) the request goes on: it awaits review"
-    );
 }
 
 #[test]

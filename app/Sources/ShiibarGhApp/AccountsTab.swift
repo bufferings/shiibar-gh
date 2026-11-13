@@ -1,5 +1,5 @@
-// Settings › Accounts: the sidebar of accounts and owners, the account pane,
-// the owner pane with its three tabs, and the sheets (Settings.html,
+// Settings › Accounts: the sidebar of accounts and owners, the account pane
+// with its Muted lists, the owner pane with its two tabs, and the sheets (Settings.html,
 // SettingsOwner.html, Sheets.html, Keychain.html; DESIGN.md, "Settings ›
 // Accounts" and "Settings rules").
 
@@ -45,7 +45,14 @@ struct AccountsTab: View {
                         } else if let account = model.selectedAccount {
                             AccountPane(model: model, app: app, account: account) { sheet = $0 }
                         } else {
-                            Text(EmptyState.noAccountsTitle).foregroundColor(Palette.secondary.color)
+                            // No account: the message and Add account… on
+                            // the right (DESIGN.md, "Settings › Accounts").
+                            VStack(spacing: 10) {
+                                Text(EmptyState.noAccountsTitle).font(.system(size: 13, weight: .semibold))
+                                SettingsButton(title: "Add account…", enabled: model.canAddAccount) { sheet = .addAccount }
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 60)
                         }
                     }
                     .padding(EdgeInsets(top: 14, leading: 16, bottom: 16, trailing: 16))
@@ -66,6 +73,11 @@ struct AccountsTab: View {
             }
         }
         .onReceive(app.$accounts) { _ in model.ensureSelection() }
+        .onReceive(model.$requestedSheet) { request in
+            guard request == .addAccount else { return }
+            model.requestedSheet = nil
+            if model.canAddAccount { sheet = .addAccount }
+        }
     }
 }
 
@@ -182,6 +194,11 @@ struct AccountPane: View {
                 if !account.owners.isEmpty { Rectangle().fill(Palette.itemDivider.color).frame(height: 1) }
             }
         }
+        Section2(title: "Muted") {
+            MutedRow(model: model, account: account, kind: .repo, title: "Repositories", detail: SettingsText.mutedReposDetail, first: true)
+            MutedRow(model: model, account: account, kind: .user, title: "Users", detail: SettingsText.mutedUsersDetail)
+            MutedRow(model: model, account: account, kind: .pr, title: "Pull requests", detail: SettingsText.mutedPullRequestsDetail)
+        }
         Section2(title: "Remove") {
             SettingRow(title: "Remove this account", sub: SettingsText.removeAccountDetail, error: model.errors["account:" + account.id], first: true) {
                 SettingsButton(title: "Remove…", enabled: model.canRemoveAccount) { confirmRemove = true }
@@ -276,13 +293,6 @@ struct OwnerPane: View {
                     SettingsButton(title: "Copy…", enabled: !model.otherOwners(of: owner.id, in: account).isEmpty, action: copy)
                 }
             }
-        case .exclusions:
-            Section2(title: "Repositories") {
-                ExclusionList(model: model, account: account, owner: owner, kind: .repo, detail: SettingsText.reposDetail)
-            }
-            Section2(title: "Users") {
-                ExclusionList(model: model, account: account, owner: owner, kind: .user, detail: SettingsText.usersDetail)
-            }
         }
     }
 }
@@ -345,93 +355,71 @@ struct EventTable: View {
     }
 }
 
-/// A box of names with Hidden | List only, and + − (rule 4).
-struct ExclusionList: View {
+/// A Muted list (Settings.html, rule 4): the label and its description on
+/// the left; on the right a framed list, below it a field with `Add`
+/// (Enter adds too) and − for the selected row.
+struct MutedRow: View {
     @ObservedObject var model: SettingsModel
     var account: Account
-    var owner: Owner
-    var kind: ExclusionKind
+    var kind: MuteKind
+    var title: String
     var detail: String
+    var first = false
     @State private var selected: String?
-    @State private var adding = false
     @State private var name = ""
-    @FocusState private var focused: Bool
 
     var body: some View {
-        let entries = model.exclusions[owner.id]?.list(kind) ?? []
-        VStack(alignment: .leading, spacing: 6) {
-            Text(detail).font(.system(size: 11)).foregroundColor(Palette.secondary.color)
-            VStack(spacing: 0) {
-                ForEach(entries, id: \.name) { entry in
-                    HStack {
-                        Text(entry.name).font(.system(size: 12)).frame(maxWidth: .infinity, alignment: .leading)
-                        Picker("", selection: Binding(
-                            get: { entry.state.value ?? .listOnly },
-                            set: { model.setExclusion(owner, of: account, kind, entry.name, $0) }
-                        )) {
-                            Text("Hidden").tag(ExclusionState.hidden)
-                            Text("List only").tag(ExclusionState.listOnly)
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .controlSize(.small)
-                        .fixedSize()
+        let entries = model.mutes(kind, of: account.id)
+        let canAdd = model.canAddMute(kind, name, of: account.id)
+        Item(first: first) {
+            Label2(title: title, sub: detail, error: model.errors[SettingsModel.muteErrorKey(kind, account.id)])
+                .frame(maxHeight: .infinity, alignment: .top)
+            VStack(alignment: .leading, spacing: 6) {
+                VStack(spacing: 0) {
+                    ForEach(entries, id: \.self) { entry in
+                        Text(entry)
+                            .font(.system(size: 12))
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10))
+                            .background(selected == entry ? Palette.settingsTabSelectedBackground.color : Color.clear)
+                            .contentShape(Rectangle())
+                            .onTapGesture { selected = entry }
+                            .overlay(alignment: .top) {
+                                if entry != entries.first { Rectangle().fill(Palette.rowDivider.color).frame(height: 1) }
+                            }
                     }
-                    .padding(EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 6))
-                    .background(selected == entry.name ? Palette.settingsTabSelectedBackground.color : Color.clear)
-                    .contentShape(Rectangle())
-                    .onTapGesture { selected = entry.name }
-                    .overlay(alignment: .top) { Rectangle().fill(Palette.rowDivider.color).frame(height: 1) }
                 }
-                if adding {
-                    TextField(kind == .repo ? "owner/repo" : "login", text: $name)
+                .frame(minHeight: 22, alignment: .top)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Palette.surface.color))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.groupBorder.color, lineWidth: 1))
+                HStack(spacing: 4) {
+                    TextField("", text: $name)
                         .textFieldStyle(.roundedBorder)
-                        .focused($focused)
-                        .onSubmit(commit)
-                        .onExitCommand { adding = false; name = "" }
-                        .padding(EdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6))
-                        .onAppear { focused = true }
-                }
-                HStack(spacing: 2) {
-                    squareButton("+") { adding = true }
-                    squareButton("\u{2212}") {
+                        .font(.system(size: 12))
+                        .onSubmit(add)
+                        .accessibilityLabel("Add to " + title)
+                    SettingsButton(title: "Add", enabled: canAdd, action: add)
+                    SettingsButton(title: "\u{2212}", enabled: selected.map(entries.contains) ?? false) {
                         if let selected {
-                            model.removeExclusion(owner, of: account, kind, selected)
+                            model.removeMute(kind, selected, of: account)
                             self.selected = nil
                         }
                     }
-                    .disabled(selected == nil)
-                    Spacer()
+                    .accessibilityLabel("Remove")
                 }
-                .padding(EdgeInsets(top: 3, leading: 6, bottom: 3, trailing: 6))
-                .background(Palette.settingsBackground.color.opacity(0.5))
-                .overlay(alignment: .top) { Rectangle().fill(Palette.itemDivider.color).frame(height: 1) }
             }
-            .background(RoundedRectangle(cornerRadius: 6).fill(Palette.surface.color))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.groupBorder.color, lineWidth: 1))
-            ErrorText(text: model.errors["exclusions:\(kind.rawValue):" + owner.id])
+            .frame(width: 240)
         }
-        .padding(EdgeInsets(top: 8, leading: 12, bottom: 10, trailing: 12))
     }
 
-    /// New names start as List only (DESIGN.md, "Exclusions").
-    func commit() {
-        let value = name.trimmingCharacters(in: .whitespaces)
-        if !value.isEmpty {
-            model.setExclusion(owner, of: account, kind, value, .listOnly)
+    /// The field keeps the text until the daemon takes it.
+    func add() {
+        let sent = name
+        model.addMute(kind, name, of: account) {
+            if name == sent { name = "" }
         }
-        name = ""
-        adding = false
-    }
-
-    func squareButton(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title).font(.system(size: 13)).frame(width: 22, height: 20)
-                .background(RoundedRectangle(cornerRadius: 4).fill(Palette.surface.color))
-                .overlay(RoundedRectangle(cornerRadius: 4).stroke(Palette.controlBorder.color, lineWidth: 1))
-        }
-        .buttonStyle(.plain)
     }
 }
 
@@ -563,7 +551,7 @@ struct AddOwnerSheet: View {
                     .onSubmit { model.add(done: close) }
                 ErrorText(text: model.error)
             }
-            Text("Pull requests in \(typed.isEmpty ? "this owner" : typed)'s repositories get their own section. The account's token reads them.")
+            Text(SettingsText.addOwnerNote(typed))
                 .font(.system(size: 11)).foregroundColor(Palette.secondary.color).fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
                 SettingsButton(title: "Add Public instead", enabled: model.canAddPublic) { model.addPublic(done: close) }

@@ -240,15 +240,15 @@ fn an_account_value_has_the_shape_of_the_wire_format() {
         snapshot["accounts"],
         json!([{"id":"1001","login":"me","color":"none",
             "token":{"registered":false,"expires_at":null,"last_test":null},
-            "updated_at":null,"review_count":0,"unread":false,
+            "updated_at":null,"unread":false,
             "warnings":[{"kind":"no_token","account":"1001","owner":null,
                 "message":"No token","until":null,"url":null}],
             "rate_limit":null,
             "owners":[
                 {"id":org,"name":"org","kind":"org","github_id":100,"enabled":true,
-                 "notify":true,"skip_drafts":true,"review_count":0,"pr_count":0},
+                 "notify":true,"skip_drafts":true,"pr_count":0},
                 {"id":public,"name":"Public","kind":"public","github_id":null,"enabled":true,
-                 "notify":true,"skip_drafts":true,"review_count":0,"pr_count":0}]}])
+                 "notify":true,"skip_drafts":true,"pr_count":0}]}])
     );
     assert_ne!(org, public);
     daemon.stop();
@@ -358,12 +358,16 @@ fn a_damaged_file_starts_the_waiting_state_without_touching_it() {
         json!({"cmd":"read_all","account":"me"}),
         json!({"cmd":"popover_opened","account":"me"}),
         json!({"cmd":"popover_closed","account":"me"}),
-        json!({"cmd":"snooze","account":"me","pr":"a/b#1"}),
-        json!({"cmd":"unsnooze","account":"me","pr":"a/b#1"}),
+        json!({"cmd":"place","account":"me","pr":"a/b#1","tab":"mine"}),
+        json!({"cmd":"dismiss","account":"me","pr":"a/b#1"}),
+        json!({"cmd":"restore","account":"me","pr":"a/b#1"}),
+        json!({"cmd":"mute","account":"me","kind":"user","name":"x"}),
+        json!({"cmd":"unmute","account":"me","kind":"user","name":"x"}),
+        json!({"cmd":"mutes_get","account":"me"}),
         json!({"cmd":"refresh"}),
         json!({"cmd":"open","row":"x"}),
-        json!({"cmd":"config_get","key":"drop_after_days"}),
-        json!({"cmd":"config_set","key":"drop_after_days","value":3}),
+        json!({"cmd":"config_get","key":"dismissed_keep_days"}),
+        json!({"cmd":"config_set","key":"dismissed_keep_days","value":3}),
         json!({"cmd":"account_list"}),
         json!({"cmd":"account_add","token":"t"}),
         json!({"cmd":"account_remove","account":"me"}),
@@ -374,7 +378,6 @@ fn a_damaged_file_starts_the_waiting_state_without_touching_it() {
         json!({"cmd":"owner_remove","account":"me","owner":"org"}),
         json!({"cmd":"owner_enable","account":"me","owner":"org"}),
         json!({"cmd":"owner_events_get","account":"me","owner":"org"}),
-        json!({"cmd":"owner_exclusions_get","account":"me","owner":"org"}),
         json!({"cmd":"token_set","account":"me","token":"t"}),
         json!({"cmd":"token_test","token":"t"}),
         json!({"cmd":"token_reset"}),
@@ -422,7 +425,7 @@ fn a_damaged_file_starts_the_waiting_state_without_touching_it() {
 
     let snapshot = daemon.subscribe("cli").snapshot();
     assert_eq!(snapshot["db_unreadable"], false);
-    daemon.ok(json!({"cmd":"config_set","key":"drop_after_days","value":3}));
+    daemon.ok(json!({"cmd":"config_set","key":"dismissed_keep_days","value":3}));
     daemon.stop();
 }
 
@@ -430,7 +433,7 @@ fn a_damaged_file_starts_the_waiting_state_without_touching_it() {
 fn reset_on_a_readable_database_is_invalid_and_changes_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = start(dir.path());
-    daemon.ok(json!({"cmd":"config_set","key":"drop_after_days","value":3}));
+    daemon.ok(json!({"cmd":"config_set","key":"dismissed_keep_days","value":3}));
     let response = daemon.request(json!({"cmd":"reset"}));
     assert_eq!(response["code"], "invalid");
     assert_eq!(
@@ -438,7 +441,7 @@ fn reset_on_a_readable_database_is_invalid_and_changes_nothing() {
         "saved state is readable; nothing to reset"
     );
     assert_eq!(
-        daemon.ok(json!({"cmd":"config_get","key":"drop_after_days"}))["value"],
+        daemon.ok(json!({"cmd":"config_get","key":"dismissed_keep_days"}))["value"],
         3
     );
     daemon.stop();
@@ -451,8 +454,8 @@ fn settings_survive_a_restart() {
     for (key, value) in [
         ("launch_at_login", json!(false)),
         ("status_interval_minutes", json!(9)),
-        ("snooze_return_time", json!("07:45")),
-        ("drop_after_days", json!(2)),
+        ("auto_dismiss_after_days", json!(0)),
+        ("dismissed_keep_days", json!(2)),
         ("appearance", json!("dark")),
     ] {
         daemon.ok(json!({"cmd":"config_set","key":key,"value":value}));
@@ -468,11 +471,11 @@ fn settings_survive_a_restart() {
         9
     );
     assert_eq!(
-        daemon.ok(json!({"cmd":"config_get","key":"snooze_return_time"}))["value"],
-        "07:45"
+        daemon.ok(json!({"cmd":"config_get","key":"auto_dismiss_after_days"}))["value"],
+        0
     );
     assert_eq!(
-        daemon.ok(json!({"cmd":"config_get","key":"drop_after_days"}))["value"],
+        daemon.ok(json!({"cmd":"config_get","key":"dismissed_keep_days"}))["value"],
         2
     );
     assert_eq!(
@@ -626,12 +629,12 @@ mod side_files {
 
     fn saved_database(dir: &Path) {
         let daemon = start(dir);
-        daemon.ok(json!({"cmd":"config_set","key":"drop_after_days","value":5}));
+        daemon.ok(json!({"cmd":"config_set","key":"dismissed_keep_days","value":5}));
         daemon.stop();
     }
 
-    fn drop_after_days(daemon: &TestDaemon) -> serde_json::Value {
-        daemon.ok(json!({"cmd":"config_get","key":"drop_after_days"}))["value"].clone()
+    fn dismissed_keep_days(daemon: &TestDaemon) -> serde_json::Value {
+        daemon.ok(json!({"cmd":"config_get","key":"dismissed_keep_days"}))["value"].clone()
     }
 
     #[test]
@@ -641,7 +644,7 @@ mod side_files {
         remove_side_files(dir.path());
         let daemon = start(dir.path());
         assert_eq!(daemon.subscribe("cli").snapshot()["db_unreadable"], false);
-        assert_eq!(drop_after_days(&daemon), 5);
+        assert_eq!(dismissed_keep_days(&daemon), 5);
         daemon.stop();
     }
 
@@ -650,7 +653,7 @@ mod side_files {
         let dir = tempfile::tempdir().unwrap();
         saved_database(dir.path());
         let daemon = start(dir.path());
-        assert_eq!(drop_after_days(&daemon), 5);
+        assert_eq!(dismissed_keep_days(&daemon), 5);
         daemon.stop();
     }
 
@@ -661,7 +664,7 @@ mod side_files {
         remove_side_files(dir.path());
         std::fs::write(dir.path().join("state.db-wal"), b"").unwrap();
         let daemon = start(dir.path());
-        assert_eq!(drop_after_days(&daemon), 5);
+        assert_eq!(dismissed_keep_days(&daemon), 5);
         daemon.stop();
     }
 
@@ -672,7 +675,7 @@ mod side_files {
         remove_side_files(dir.path());
         std::fs::write(dir.path().join("state.db-wal"), b"old wal").unwrap();
         let daemon = start(dir.path());
-        assert_eq!(drop_after_days(&daemon), 5);
+        assert_eq!(dismissed_keep_days(&daemon), 5);
         daemon.stop();
     }
 
@@ -680,10 +683,10 @@ mod side_files {
     fn saved_state_survives_a_kill_with_side_files_in_place() {
         let dir = tempfile::tempdir().unwrap();
         let daemon = start(dir.path());
-        daemon.ok(json!({"cmd":"config_set","key":"drop_after_days","value":5}));
+        daemon.ok(json!({"cmd":"config_set","key":"dismissed_keep_days","value":5}));
         daemon.kill();
         let daemon = start(dir.path());
-        assert_eq!(drop_after_days(&daemon), 5);
+        assert_eq!(dismissed_keep_days(&daemon), 5);
         daemon.stop();
     }
 
@@ -700,7 +703,7 @@ mod side_files {
         assert_eq!(std::fs::read(dir.path().join("state.db")).unwrap(), damaged);
         daemon.ok(json!({"cmd":"reset"}));
         assert_eq!(daemon.subscribe("cli").snapshot()["db_unreadable"], false);
-        assert_eq!(drop_after_days(&daemon), 14, "an empty state");
+        assert_eq!(dismissed_keep_days(&daemon), 7, "an empty state");
         daemon.stop();
     }
 
@@ -724,7 +727,7 @@ mod side_files {
         conn.query_row("PRAGMA wal_autocheckpoint=0", [], |_| Ok(()))
             .unwrap();
         conn.execute(
-            "UPDATE config SET value = '6' WHERE key = 'drop_after_days'",
+            "UPDATE config SET value = '6' WHERE key = 'dismissed_keep_days'",
             [],
         )
         .unwrap();
@@ -744,7 +747,7 @@ mod side_files {
         let target = tempfile::tempdir().unwrap();
         crash_image(source.path(), target.path());
         let daemon = start(target.path());
-        assert_eq!(drop_after_days(&daemon), 6, "the WAL content counts");
+        assert_eq!(dismissed_keep_days(&daemon), 6, "the WAL content counts");
         daemon.stop();
     }
 
@@ -771,7 +774,7 @@ mod side_files {
         std::fs::write(&path, &main).unwrap();
         let daemon = start(target.path());
         assert_eq!(daemon.subscribe("cli").snapshot()["db_unreadable"], false);
-        assert_eq!(drop_after_days(&daemon), 6);
+        assert_eq!(dismissed_keep_days(&daemon), 6);
         daemon.stop();
     }
 
@@ -798,7 +801,7 @@ mod side_files {
         saved_database(&state);
         remove_side_files(&state);
         let daemon = start(&state);
-        assert_eq!(drop_after_days(&daemon), 5);
+        assert_eq!(dismissed_keep_days(&daemon), 5);
         daemon.stop();
         let damaged = damage_pages(&state);
         remove_side_files(&state);
@@ -816,11 +819,11 @@ mod side_files {
         let mut cli = daemon.subscribe("cli");
         assert_eq!(cli.snapshot()["db_unreadable"], false);
         daemon.ok(json!({"cmd":"list"}));
-        daemon.ok(json!({"cmd":"config_set","key":"drop_after_days","value":5}));
+        daemon.ok(json!({"cmd":"config_set","key":"dismissed_keep_days","value":5}));
         daemon.stop();
         let daemon = start(dir.path());
         assert_eq!(
-            drop_after_days(&daemon),
+            dismissed_keep_days(&daemon),
             5,
             "the change reached the main file"
         );
@@ -832,7 +835,7 @@ mod side_files {
     fn a_running_daemon_notices_damage_when_side_files_disappear() {
         let dir = tempfile::tempdir().unwrap();
         let daemon = start(dir.path());
-        daemon.ok(json!({"cmd":"config_set","key":"drop_after_days","value":5}));
+        daemon.ok(json!({"cmd":"config_set","key":"dismissed_keep_days","value":5}));
         remove_side_files(dir.path());
         let damaged = damage_pages(dir.path());
         assert_eq!(daemon.code(json!({"cmd":"list"})), "internal");
@@ -845,7 +848,7 @@ mod side_files {
     fn a_running_daemon_notices_damage_with_side_files_present() {
         let dir = tempfile::tempdir().unwrap();
         let daemon = start(dir.path());
-        daemon.ok(json!({"cmd":"config_set","key":"drop_after_days","value":5}));
+        daemon.ok(json!({"cmd":"config_set","key":"dismissed_keep_days","value":5}));
         let damaged = damage_pages(dir.path());
         assert_eq!(daemon.code(json!({"cmd":"list"})), "internal");
         assert_eq!(std::fs::read(dir.path().join("state.db")).unwrap(), damaged);

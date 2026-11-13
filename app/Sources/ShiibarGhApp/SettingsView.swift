@@ -1,4 +1,4 @@
-// The Settings window: General, Accounts and Watching (docs/design/
+// The Settings window: General, Accounts and Dismissed (docs/design/
 // Settings.html, SettingsOwner.html, Sheets.html, Keychain.html; DESIGN.md,
 // "Settings" and "Settings rules"). Every value goes straight to the daemon.
 
@@ -41,8 +41,8 @@ struct SettingsView: View {
                     ScrollView { VStack(alignment: .leading, spacing: 14) { GeneralTab(model: model) }.padding(pane) }
                 case .accounts:
                     AccountsTab(model: model, app: app)
-                case .watching:
-                    ScrollView { VStack(alignment: .leading, spacing: 14) { WatchingTab(model: model) }.padding(pane) }
+                case .dismissed:
+                    ScrollView { VStack(alignment: .leading, spacing: 14) { DismissedTab(model: model) }.padding(pane) }
                 }
             }
         }
@@ -64,7 +64,7 @@ struct TabButton: View {
         switch tab {
         case .general: return BoardIcons.tabGeneral
         case .accounts: return BoardIcons.tabAccounts
-        case .watching: return BoardIcons.tabWatching
+        case .dismissed: return BoardIcons.dismissedBox
         }
     }
 
@@ -202,15 +202,17 @@ struct SettingsButton: View {
     var title: String
     var primary = false
     var enabled = true
+    /// The board's `.btn.sm` (Restore in the Dismissed list).
+    var small = false
     var action: () -> Void
 
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 12))
+                .font(.system(size: small ? 11 : 12))
                 .lineLimit(1)
                 .foregroundColor(primary ? Palette.onColor.color : Palette.text.color)
-                .padding(EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10))
+                .padding(small ? EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8) : EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10))
                 .background(RoundedRectangle(cornerRadius: 6).fill(primary ? Palette.blueDot.color : Palette.surface.color))
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(primary ? Palette.blueDot.color : Palette.controlBorder.color, lineWidth: 1))
                 .contentShape(Rectangle())
@@ -333,33 +335,24 @@ struct GeneralTab: View {
                 NumberField(key: "reactions_interval_minutes", unit: "min", model: model)
             }
         }
-        Section2(title: "Snooze") {
-            SettingRow(title: "Return time", sub: "All snoozed PRs come back every day at this time", error: model.errors["snooze_return_time"], first: true) {
-                DatePicker("", selection: Binding(
-                    get: { ReturnTime.date(model.config["snooze_return_time"]?.stringValue, calendar: ReturnTime.calendar) },
-                    set: { model.set("snooze_return_time", .string(ReturnTime.text($0, calendar: ReturnTime.calendar))) }
-                ), displayedComponents: .hourAndMinute)
-                .labelsHidden()
-                // The picker reads and writes the time in the same fixed
-                // calendar as the conversion.
-                .environment(\.calendar, ReturnTime.calendar)
-                .environment(\.timeZone, ReturnTime.calendar.timeZone)
-                .fixedSize()
-            }
-        }
     }
 }
 
-struct WatchingTab: View {
+/// Settings › Dismissed (Settings.html): the n and m of DESIGN.md,
+/// "Dismiss", in days.
+struct DismissedTab: View {
     @ObservedObject var model: SettingsModel
 
     var body: some View {
-        Section2(title: "Watching") {
-            SettingRow(title: "Days to keep watching after close", sub: "Reactions are watched this long after a card leaves the list", error: model.errors["keep_watching_days"], first: true) {
-                NumberField(key: "keep_watching_days", unit: "days", model: model)
+        Section2(title: "Dismissed") {
+            SettingRow(
+                title: "Days before closed PRs are dismissed", sub: SettingsText.autoDismissDetail,
+                error: model.errors[DismissedText.autoDismissKey], first: true
+            ) {
+                NumberField(key: DismissedText.autoDismissKey, unit: "days", model: model)
             }
-            SettingRow(title: "Days without updates before a PR is dropped", sub: "Other people's open PRs leave the list after this many quiet days", error: model.errors["drop_after_days"]) {
-                NumberField(key: "drop_after_days", unit: "days", model: model)
+            SettingRow(title: "Days to keep dismissed PRs", sub: SettingsText.keepDismissedDetail, error: model.errors[DismissedText.keepDaysKey]) {
+                NumberField(key: DismissedText.keepDaysKey, unit: "days", model: model)
             }
         }
     }

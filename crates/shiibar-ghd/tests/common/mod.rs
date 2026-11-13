@@ -216,19 +216,12 @@ impl TestDaemon {
             .unwrap_or_else(|| panic!("no owner {name}"))
     }
 
-    /// Every card: the owner sections, then the Snoozed section.
+    /// Every card, the dismissed ones last.
     pub fn cards(&self) -> Vec<Value> {
-        let mut cards = self.ok(json!({"cmd":"list"}))["cards"]
+        self.ok(json!({"cmd":"list","dismissed":"include"}))["cards"]
             .as_array()
             .unwrap()
-            .clone();
-        cards.extend(
-            self.ok(json!({"cmd":"list","snoozed":true}))["cards"]
-                .as_array()
-                .unwrap()
-                .clone(),
-        );
-        cards
+            .clone()
     }
 
     /// A card by the short PR id of `me`.
