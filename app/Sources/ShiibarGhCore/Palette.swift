@@ -82,7 +82,26 @@ public enum Palette {
     public static let strongText = Shade(0x3A3A3F, 0xD0D0D5)
     public static let draftText = Shade(0x4A4A50, 0xC4C4CA)
     public static let rowDivider = Shade(0xF0F0F2, 0x38383D)
-    public static let snoozeIcon = Shade(0xB0B0B6, 0x7C7C82)
+    /// The band heading of a section or a first-level group (Main.html
+    /// `.band`).
+    public static let band = Shade(0xE4E5EA, 0x2E2F35)
+    /// The placement tag in All (Main.html `.tag`).
+    public static let tagBorder = Shade(0x9DB9E4, 0x3A5A86)
+    public static let tagBackground = Shade(0xEEF3FB, 0x1C2B40)
+    public static let tagText = Shade(0x0A4FA6, 0x8CBBFF)
+    /// The outlined `Assigned` and `Muted` marks (Main.html `.mk`).
+    public static let markBorder = Shade(0xB8B8BE, 0x5A5A60)
+    /// A muted card (Main.html `.card.muted`): the title, the other text,
+    /// the kind icons, and the ring of a muted unread row.
+    public static let mutedTitle = Shade(0x8A8A90, 0x7E7E84)
+    public static let mutedText = Shade(0x9A9AA0, 0x74747A)
+    public static let mutedIcon = Shade(0xAEAEB4, 0x626268)
+    /// The grip ⋮⋮ (Main.html `.grip`).
+    public static let grip = Shade(0xA6A6AC, 0x6E6E74)
+    /// The usage bar (Main.html `.apibar`).
+    public static let usageTrack = Shade(0xDCDCE0, 0x3E3F44)
+    public static let usageFill = Shade(0x8A8A90, 0x9A9AA0)
+    public static let usageWarnFill = Shade(0xC98A00, 0xE6B04D)
     public static let avatarFill = Shade(0xEBEBEB, 0x3A3A3F)
     public static let avatarBorder = Shade(0xD9D9D9, 0x4A4A50)
     public static let onColor = Shade(0xFFFFFF, 0xFFFFFF)

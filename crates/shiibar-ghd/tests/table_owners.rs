@@ -109,10 +109,17 @@ fn removing_public_deletes_its_prs_and_adding_it_back_starts_empty() {
     let e1 = h.ev("E_1", "PR_1", IngestKind::Comment);
     h.push(vec![stranger.clone()], vec![e1], vec![]);
     h.read(&["E_1"]);
-    h.snooze("stranger/app#1");
+    h.place(
+        "stranger/app#1",
+        PlaceTab::Review,
+        Some(Section::Waiting),
+        None,
+        None,
+    )
+    .unwrap();
     let public = h.owner_id("public");
     h.engine.owner_remove(&public);
-    // DESIGN.md, "Owners": PRs, rows and Snooze go, and do not come back
+    // DESIGN.md, "Owners": PRs, rows and places go, and do not come back
     // with a new Public.
     assert!(h.all_cards().is_empty());
     assert!(!h.has_row("E_1"));
@@ -124,7 +131,7 @@ fn removing_public_deletes_its_prs_and_adding_it_back_starts_empty() {
     assert!(h.all_cards().is_empty());
     h.prs(vec![stranger]);
     let card = h.card("stranger/app#1").unwrap();
-    assert!(!card.snoozed);
+    assert!(card.placement.is_none());
     assert!(card.rows.is_empty());
 }
 
@@ -136,23 +143,20 @@ fn owner_fields() {
     assert_eq!(org.kind, Lenient::Known(shiibar_gh_proto::OwnerKind::Org));
     assert_eq!(org.github_id, Some(100));
     assert!(org.enabled && org.notify && org.skip_drafts);
-    assert_eq!((org.review_count, org.pr_count), (0, 0));
+    assert_eq!(org.pr_count, 0);
     let ids: Vec<String> = h.account().owners.iter().map(|o| o.id.clone()).collect();
     assert!(ids.iter().all(|id| id.starts_with('o')), "{ids:?}");
 }
 
 #[test]
-fn owner_counts_leave_out_snoozed_prs() {
+fn owner_counts_leave_out_dismissed_prs() {
+    // DESIGN.md, "Wire format": `pr_count` is the owner's cards that are
+    // not dismissed.
     let mut h = H::new();
-    let asked = |id| IngestPr {
-        requested_me: true,
-        ..other(id)
-    };
-    h.prs(vec![asked("PR_1"), asked("PR_2"), pr("PR_3")]);
-    assert_eq!((h.owner(ORG).review_count, h.owner(ORG).pr_count), (2, 3));
-    h.snooze(&key("PR_1"));
-    assert_eq!((h.owner(ORG).review_count, h.owner(ORG).pr_count), (1, 2));
-    assert_eq!(h.badge(), 1);
+    h.prs(vec![other("PR_1"), other("PR_2"), pr("PR_3")]);
+    assert_eq!(h.owner(ORG).pr_count, 3);
+    h.dismiss(&key("PR_1")).unwrap();
+    assert_eq!(h.owner(ORG).pr_count, 2);
 }
 
 #[test]
@@ -225,13 +229,22 @@ fn a_disabled_owner_ignores_ingests_and_leaves_lists() {
 fn commands_on_prs_of_a_disabled_owner_are_not_found() {
     let mut h = H::new();
     let e = h.ev("E_1", "PR_1", IngestKind::Comment);
-    h.push(vec![pr("PR_1")], vec![e], vec![]);
-    h.snooze(&key("PR_1"));
+    h.push(vec![pr("PR_1"), other("PR_2")], vec![e], vec![]);
+    h.dismiss(&key("PR_2")).unwrap();
     let org = h.owner_id(ORG);
     h.engine.owner_enable(&org, false, &h.now.clone());
     let now = h.now.clone();
-    assert!(not_found(h.engine.snooze(ME, &key("PR_1"), &now)));
-    assert!(not_found(h.engine.unsnooze(ME, &key("PR_1"), &now)));
+    // DESIGN.md, "Wire format": `place`, `dismiss` and `restore` of a PR of
+    // a disabled owner are `not_found`.
+    assert!(not_found(h.dismiss(&key("PR_1"))));
+    assert!(not_found(h.restore(&key("PR_2"))));
+    assert!(not_found(h.place(
+        &key("PR_1"),
+        PlaceTab::Mine,
+        None,
+        None,
+        None
+    )));
     assert!(not_found(h.engine.status(ME, &key("PR_1"), &now)));
     assert!(not_found(h.engine.open_pr(ME, &key("PR_1"))));
     assert!(not_found(h.engine.open_row(None, &full("E_1"))));
@@ -244,8 +257,15 @@ fn commands_on_unreadable_prs_are_not_found() {
     h.push(vec![pr("PR_1")], vec![e], vec![]);
     h.missing("PR_1");
     let now = h.now.clone();
-    assert!(not_found(h.engine.snooze(ME, &key("PR_1"), &now)));
-    assert!(not_found(h.engine.unsnooze(ME, &key("PR_1"), &now)));
+    assert!(not_found(h.dismiss(&key("PR_1"))));
+    assert!(not_found(h.restore(&key("PR_1"))));
+    assert!(not_found(h.place(
+        &key("PR_1"),
+        PlaceTab::Mine,
+        None,
+        None,
+        None
+    )));
     assert!(not_found(h.engine.status(ME, &key("PR_1"), &now)));
     assert!(not_found(h.engine.open_pr(ME, &key("PR_1"))));
     assert!(not_found(h.engine.open_row(None, &full("E_1"))));
@@ -263,12 +283,10 @@ fn a_row_of_another_account_is_not_found_under_this_one() {
 }
 
 #[test]
-fn status_and_open_work_for_a_known_pr_without_a_card() {
+fn status_and_open_work_for_a_dismissed_pr() {
     let mut h = H::new();
-    h.prs(vec![IngestPr {
-        is_draft: true,
-        ..other("PR_1")
-    }]);
+    h.prs(vec![other("PR_1")]);
+    h.dismiss(&key("PR_1")).unwrap();
     assert!(!h.visible("PR_1"));
     assert_eq!(
         h.engine.status(ME, &key("PR_1"), &h.now).unwrap().id,
@@ -300,7 +318,14 @@ fn removing_an_owner_deletes_its_prs_even_public_ones() {
     let e = h.ev("E_1", "PR_1", IngestKind::Comment);
     h.push(vec![pr("PR_1"), other("PR_2")], vec![e], vec![]);
     h.read(&["E_1"]);
-    h.snooze(&key("PR_2"));
+    h.place(
+        &key("PR_2"),
+        PlaceTab::Review,
+        Some(Section::Doing),
+        None,
+        None,
+    )
+    .unwrap();
     let org = h.owner_id(ORG);
     h.engine.owner_remove(&org);
     assert!(h.all_cards().is_empty());
@@ -309,7 +334,7 @@ fn removing_an_owner_deletes_its_prs_even_public_ones() {
     h.prs(vec![other("PR_2")]);
     let card = h.card(&key("PR_2")).unwrap();
     assert_eq!(card.owner, h.owner_id("public"));
-    assert!(!card.snoozed);
+    assert!(card.placement.is_none());
 }
 
 #[test]
@@ -397,14 +422,8 @@ fn config_table() {
         ("launch_at_login", json!(true), json!(false), json!(1)),
         ("status_interval_minutes", json!(1), json!(2), json!(0)),
         ("reactions_interval_minutes", json!(3), json!(1), json!(0)),
-        (
-            "snooze_return_time",
-            json!("09:00"),
-            json!("23:59"),
-            json!("24:00"),
-        ),
-        ("keep_watching_days", json!(3), json!(0), json!(-1)),
-        ("drop_after_days", json!(14), json!(1), json!(0)),
+        ("auto_dismiss_after_days", json!(3), json!(0), json!(-1)),
+        ("dismissed_keep_days", json!(7), json!(1), json!(0)),
         ("appearance", json!("system"), json!("dark"), json!("blue")),
     ];
     for (key, default, good, bad) in cases {
@@ -433,6 +452,9 @@ fn config_table() {
         "notify_reactions",
         "bot_comments",
         "include_team_requests",
+        "snooze_return_time",
+        "keep_watching_days",
+        "drop_after_days",
     ] {
         let h = H::new();
         assert!(invalid(h.engine.config_get(gone)), "{gone}");
@@ -444,29 +466,13 @@ fn the_command_line_sends_settings_as_text() {
     let cases = [
         ("launch_at_login", json!("false"), json!(false)),
         ("status_interval_minutes", json!("7"), json!(7)),
-        ("snooze_return_time", json!("07:30"), json!("07:30")),
+        ("dismissed_keep_days", json!("10"), json!(10)),
     ];
     for (key, text, want) in cases {
         let mut h = H::new();
         assert_eq!(
             h.engine.config_set(key, &text, &h.now.clone()).unwrap(),
             want
-        );
-    }
-}
-
-#[test]
-fn return_time_format_table() {
-    for bad in [
-        "9:00", "09:0", "09-00", "0900", "09:60", "24:00", "", "ab:cd", "09:00:00", "+9:00",
-    ] {
-        let mut h = H::new();
-        assert!(
-            invalid(
-                h.engine
-                    .config_set("snooze_return_time", &json!(bad), &h.now.clone())
-            ),
-            "{bad}"
         );
     }
 }
@@ -521,12 +527,12 @@ fn a_disabled_owner_reports_no_count_and_the_dot_returns_on_enable() {
         vec![e],
         vec![],
     );
-    assert_eq!((h.badge(), h.dot()), (1, true));
+    assert_eq!((h.owner(ORG).pr_count, h.dot()), (1, true));
     let org = h.owner_id(ORG);
     h.engine.owner_enable(&org, false, &h.now.clone());
-    assert_eq!(h.badge(), 0);
+    assert_eq!(h.owner(ORG).pr_count, 0);
     h.engine.owner_enable(&org, true, &h.now.clone());
-    assert_eq!((h.badge(), h.dot()), (1, true));
+    assert_eq!((h.owner(ORG).pr_count, h.dot()), (1, true));
 }
 
 #[test]
@@ -561,13 +567,13 @@ fn a_pr_owner_finds_its_owner_in_any_case() {
     let card = h.engine.status(ME, "org/app#1", &h.now).unwrap();
     assert_eq!(card.owner, h.owner_id(ORG));
     assert_eq!(card.pr, "ORG/app#1", "the PR keeps GitHub's spelling");
-    assert_eq!(h.badge(), 1);
+    assert_eq!(h.awaiting_ids(), ["PR_1"]);
     assert_eq!(
         h.engine.open_pr("ME", "Org/app#1").unwrap(),
         "https://github.example/PR_1"
     );
-    h.snooze("ORG/app#1");
-    h.unsnooze("oRg/app#1");
+    h.dismiss("ORG/app#1").unwrap();
+    h.restore("oRg/app#1").unwrap();
     // DESIGN.md, "CLI": the repository name ignores case too.
     assert_eq!(
         h.engine.status(ME, "org/APP#1", &h.now).unwrap().id,
@@ -610,22 +616,22 @@ fn owner_filters_and_popovers_find_their_target_in_any_case() {
 
 #[test]
 fn a_readable_again_pr_raises_the_dot_for_unread_rows() {
-    // (name, unread row, snoozed, popover open, dot afterwards)
+    // (name, unread row, dismissed, popover open, dot afterwards)
     let cases = [
         ("unread row", true, false, false, true),
         ("nothing unread", false, false, false, false),
         ("popover open", true, false, true, false),
-        ("still snoozed", true, true, false, false),
+        ("still dismissed", true, true, false, false),
     ];
-    for (name, unread, snoozed, open, want) in cases {
+    for (name, unread, dismissed, open, want) in cases {
         let mut h = H::new();
         let e = h.ev("E_1", "PR_1", IngestKind::Comment);
         h.push(vec![pr("PR_1")], vec![e], vec![]);
         if !unread {
             h.read(&["E_1"]);
         }
-        if snoozed {
-            h.snooze(&key("PR_1"));
+        if dismissed {
+            h.dismiss(&key("PR_1")).unwrap();
         }
         h.open();
         h.close();
@@ -701,71 +707,7 @@ fn copying_a_table_copies_only_the_table() {
         )
         .unwrap_or_else(|_| panic!("set"));
     h.engine.owner_notify(&public, false);
-    h.engine
-        .owner_exclusions_set(
-            &public,
-            ExclusionKind::User,
-            "bot",
-            ExclusionState::Hidden,
-            &now,
-        )
-        .unwrap();
     h.engine.owner_events_copy(&public, &org, &now).unwrap();
     assert!(h.engine.owner_events(&org)["merged_closed"].notify);
     assert!(h.owner(ORG).notify, "the switches stay");
-    assert!(
-        h.engine.owner_exclusions(&org).users.is_empty(),
-        "Exclusions stay"
-    );
-}
-
-#[test]
-fn exclusion_names_are_checked_and_compared_without_case() {
-    let mut h = H::new();
-    let org = h.owner_id(ORG);
-    let now = h.now.clone();
-    for bad in ["app", "a/b/c", "/app", "org/", "org/a pp"] {
-        assert!(
-            invalid(h.engine.owner_exclusions_set(
-                &org,
-                ExclusionKind::Repo,
-                bad,
-                ExclusionState::Hidden,
-                &now
-            )),
-            "{bad}"
-        );
-    }
-    h.engine
-        .owner_exclusions_set(
-            &org,
-            ExclusionKind::Repo,
-            "Org/App",
-            ExclusionState::Hidden,
-            &now,
-        )
-        .unwrap();
-    h.engine
-        .owner_exclusions_set(
-            &org,
-            ExclusionKind::Repo,
-            "org/app",
-            ExclusionState::ListOnly,
-            &now,
-        )
-        .unwrap();
-    let list = h.engine.owner_exclusions(&org).repos;
-    assert_eq!(list.len(), 1, "set changes the state of the same name");
-    assert_eq!(list[0].name, "Org/App");
-    assert_eq!(list[0].state, Lenient::Known(ExclusionState::ListOnly));
-    assert!(not_found(h.engine.owner_exclusions_remove(
-        &org,
-        ExclusionKind::User,
-        "nobody",
-        &now
-    )));
-    h.engine
-        .owner_exclusions_remove(&org, ExclusionKind::Repo, "ORG/APP", &now)
-        .unwrap();
-    assert!(h.engine.owner_exclusions(&org).repos.is_empty());
 }

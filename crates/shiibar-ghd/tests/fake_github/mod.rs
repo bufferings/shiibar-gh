@@ -312,9 +312,17 @@ fn pr_by_id<'a>(world: &'a World, id: &str) -> Option<&'a Value> {
     world.prs.iter().find(|p| p["id"] == id)
 }
 
+/// A search: `is:open` finds the open PRs, `is:closed` the others whose
+/// `updatedAt` is at or after its `updated:>=` time.
 fn search(world: &World, token: &str, query: &str) -> Value {
     let words: Vec<&str> = query.split_whitespace().collect();
     let public = words.contains(&"is:public");
+    let closed = words.contains(&"is:closed");
+    let after = words
+        .iter()
+        .find_map(|w| w.strip_prefix("updated:>="))
+        .and_then(|t| t.parse::<jiff::Timestamp>().ok())
+        .map(|t| t.as_second());
     let owner = words
         .iter()
         .find_map(|w| w.strip_prefix("org:").or_else(|| w.strip_prefix("user:")))
@@ -322,20 +330,35 @@ fn search(world: &World, token: &str, query: &str) -> Value {
     let nodes: Vec<Value> = world
         .prs
         .iter()
-        .filter(|p| p["state"] == "OPEN")
+        .filter(|p| (p["state"] == "OPEN") != closed)
         .filter(|p| {
-            world.visible.get(token).is_none_or(|ids| {
-                ids.contains(p["id"].as_str().unwrap_or_default())
-            })
+            !closed
+                || after.is_none_or(|after| {
+                    p["updatedAt"]
+                        .as_str()
+                        .and_then(|t| t.parse::<jiff::Timestamp>().ok())
+                        .is_some_and(|t| t.as_second() >= after)
+                })
         })
         .filter(|p| {
-            let login = p["repository"]["owner"]["login"].as_str().unwrap_or_default();
+            world
+                .visible
+                .get(token)
+                .is_none_or(|ids| ids.contains(p["id"].as_str().unwrap_or_default()))
+        })
+        .filter(|p| {
+            let login = p["repository"]["owner"]["login"]
+                .as_str()
+                .unwrap_or_default();
             match &owner {
                 Some(owner) => login.to_lowercase() == *owner,
                 None => !public || p["repository"]["isPrivate"] == false,
             }
         })
-        .map(|p| json!({"id":p["id"],"repository":{"owner":{"login":p["repository"]["owner"]["login"]}}}))
+        .map(|p| {
+            json!({"id":p["id"],"updatedAt":p["updatedAt"],"state":p["state"],
+                        "repository":{"owner":{"login":p["repository"]["owner"]["login"]}}})
+        })
         .collect();
     json!({"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":nodes})
 }
@@ -359,8 +382,8 @@ fn event_node(world: &World, id: &str) -> Value {
         return Value::Null;
     };
     json!({
-        "id":id,"url":pr["url"],"createdAt":pr["createdAt"],"bodyHTML":pr["bodyHTML"],
-        "bodyText":pr["bodyText"],"author":pr["author"],
+        "id":id,"number":pr["number"],"url":pr["url"],"createdAt":pr["createdAt"],
+        "bodyHTML":pr["bodyHTML"],"bodyText":pr["bodyText"],"author":pr["author"],
         "timelineItems":{"pageInfo":{"hasNextPage":false,"endCursor":null},
                          "nodes":world.timeline.get(id).cloned().unwrap_or_default()},
         "reviewThreads":threads(world, id)
@@ -435,11 +458,15 @@ fn answer(world: &World, req: &Req) -> Resp {
                     .collect();
                 gql(json!({"node":{"timelineItems":{"nodes":queue}}}))
             }
+            // Only the `involves:@me` searches find anything, so a PR is
+            // found once per state.
             "Search" => {
                 let mut data = json!({});
-                for i in 0..4 {
-                    let query = vars[format!("q{i}")].as_str().unwrap_or_default();
-                    data[format!("s{i}")] = if i == 0 {
+                for i in 0..6 {
+                    let Some(query) = vars[format!("q{i}")].as_str() else {
+                        continue;
+                    };
+                    data[format!("s{i}")] = if query.contains("involves:@me") {
                         search(world, &req.token, query)
                     } else {
                         json!({"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]})

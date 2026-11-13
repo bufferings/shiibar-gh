@@ -3,7 +3,7 @@
 //! only works on these copies. PR, thread and comment ids are node ids.
 
 use crate::model::{
-    BaseStatus, Checks, LimitRec, OwnComment, OwnerKind, PrState, TeamRec, ThreadRec,
+    BaseStatus, Checks, FailedRequest, LimitRec, OwnComment, OwnerKind, PrState, TeamRec, ThreadRec,
 };
 use shiibar_gh_proto::Ingest;
 use std::collections::{BTreeMap, BTreeSet};
@@ -45,10 +45,36 @@ pub struct Plan {
     pub own: BTreeMap<String, OwnComment>,
     /// PR id to the `since` its events are fetched again from.
     pub retries: BTreeMap<String, i64>,
+    /// The owner id of each retry of a PR the core does not know.
+    pub retry_owners: BTreeMap<String, String>,
     pub pending_signals: BTreeSet<String>,
     pub teams: Vec<TeamRec>,
     pub status_interval_minutes: i64,
-    pub drop_after_days: i64,
+    /// DESIGN.md, "Constants": the D of the open PR searches, in days.
+    pub discovery_days: i64,
+    /// The account's Dismiss records by PR node id: an open PR that left
+    /// the Dismissed list. Its events are fetched only when a search finds
+    /// it with a newer `updatedAt`, and it is taken (as an `IngestPr` with
+    /// its events) only when they make a return trigger row; the core
+    /// decides that.
+    pub records: BTreeMap<String, RecordInfo>,
+    /// PR node ids whose status request failed even alone: fetched again
+    /// every run (`status_fetch_failed`).
+    pub status_retries: BTreeSet<String>,
+    /// The requests the last run could not make.
+    pub failed_requests: Vec<FailedRequest>,
+    /// The start of the last full run.
+    pub full_run_started_at: Option<i64>,
+}
+
+/// A Dismiss record as a run needs it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordInfo {
+    /// The owner id the PR belonged to.
+    pub owner_id: String,
+    /// The `updatedAt` a search hit has to pass before its events are
+    /// fetched.
+    pub updated_at: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -102,9 +128,19 @@ pub struct PrInfo {
     pub checks: Checks,
     pub base_status: BaseStatus,
     pub mergeable: bool,
+    /// Not dismissed, in an enabled owner and readable: status, events and
+    /// reactions are fetched.
     pub watched: bool,
+    /// Dismissed: only its events are fetched, for a return trigger
+    /// (DESIGN.md, "Dismiss"), never its status or reactions.
+    pub dismissed: bool,
     pub collected: bool,
     pub unreadable: bool,
+    /// The head commit of the last status, and the one of the last settled
+    /// Checks result: a new head is a new result, whose failed check names
+    /// are wanted again.
+    pub head_oid: Option<String>,
+    pub settled_head: Option<String>,
 }
 
 /// The lowercase `owner/repo#number` the id map is keyed by.
@@ -152,11 +188,27 @@ pub struct Outcome {
     pub collected: Vec<String>,
     pub retries_ok: Vec<String>,
     pub retries_failed: Vec<(String, i64)>,
+    /// The owner id of each PR of `retries_failed` the core does not know.
+    pub retry_owners: BTreeMap<String, String>,
     pub pending_signals: Option<BTreeSet<String>>,
     pub notif_last_modified: Option<String>,
     pub notif_since: Option<String>,
     pub poll_interval: Option<i64>,
     pub notifications_checked: bool,
+    /// PR node ids whose `Status`, `Compare` or `Contexts` request failed
+    /// even alone this run (`status_fetch_failed`), and those whose status
+    /// came back this run.
+    pub status_failed: Vec<String>,
+    pub status_ok: Vec<String>,
+    /// The requests still failed after this run; `None` keeps the list.
+    pub failed_requests: Option<Vec<FailedRequest>>,
+    /// Set when this run made every request.
+    pub full_run_started_at: Option<i64>,
+    /// This run made only the requests the last one could not, and the
+    /// owners (ids) whose requests it made: what it says about SSO holds
+    /// only for those owners.
+    pub retry_only: bool,
+    pub owners_fetched: BTreeSet<String>,
     pub rest: Option<LimitRec>,
     pub graphql: Option<LimitRec>,
     pub stop: Option<i64>,

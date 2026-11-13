@@ -1,6 +1,6 @@
 # shiibar-gh
 
-macOS menu bar app that shows the GitHub pull requests you are involved in, which ones wait for your review, and what happened, per account and per owner (organizations, personal accounts and Public). Read-only against GitHub.
+macOS menu bar app for the GitHub pull requests you are involved in, per account and per owner (organizations, personal accounts and Public). It tells you what happened on them; you order the PRs you review and your own PRs in the tabs Review (Doing, Todo, Waiting, Done) and Mine next to All, Dismiss the ones you are done with, and Mute repositories, users or single PRs. Read-only against GitHub.
 
 ## Source of truth
 
@@ -23,9 +23,10 @@ macOS menu bar app that shows the GitHub pull requests you are involved in, whic
 `shiibar-gh` exposes every popover and settings operation (see the CLI part of the implementation section of DESIGN.md). Use it from Bash; `--help` and `--json` are enough. Examples:
 
 ```sh
-shiibar-gh list --review-requested --json
+shiibar-gh list --tab review --json
 shiibar-gh read <row>
-shiibar-gh snooze owner/repo#123 --account <login>
+shiibar-gh place owner/repo#123 review doing --account <login>
+shiibar-gh dismiss owner/repo#123 --account <login>
 shiibar-gh owner events <owner> --account <login>
 shiibar-gh config get <key>
 ```

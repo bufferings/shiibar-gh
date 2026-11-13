@@ -1,7 +1,7 @@
 //! Wire format shared by the daemon and its clients: NDJSON over a Unix socket.
 //!
 //! Spec: docs/DESIGN.md, section "Daemon specification / Wire format", and
-//! docs/tasks/M5.md, "Wire format and CLI".
+//! docs/tasks/M6.md, "Wire format and CLI".
 //!
 //! Enums a client receives go through [`Lenient`] so a newer daemon's values do
 //! not break an older client. `Request` and everything inside it stays strict.
@@ -113,37 +113,43 @@ pub enum EventKind {
     Mentioned,
     TeamMentioned,
     Comment,
+    CommentOther,
     Reply,
     ReplyMentioned,
     Reaction,
     Approved,
     ChangesRequested,
     ChecksFailed,
+    ChecksPassed,
     Conflicts,
     Mergeable,
     MergeQueueAdded,
     MergeQueueRemoved,
     MergedClosed,
+    Reopened,
 }
 
 impl EventKind {
-    pub const ALL: [EventKind; 16] = [
+    pub const ALL: [EventKind; 19] = [
         EventKind::ReviewRequested,
         EventKind::TeamReviewRequested,
         EventKind::Mentioned,
         EventKind::TeamMentioned,
         EventKind::Comment,
+        EventKind::CommentOther,
         EventKind::Reply,
         EventKind::ReplyMentioned,
         EventKind::Reaction,
         EventKind::Approved,
         EventKind::ChangesRequested,
         EventKind::ChecksFailed,
+        EventKind::ChecksPassed,
         EventKind::Conflicts,
         EventKind::Mergeable,
         EventKind::MergeQueueAdded,
         EventKind::MergeQueueRemoved,
         EventKind::MergedClosed,
+        EventKind::Reopened,
     ];
 }
 
@@ -158,6 +164,7 @@ pub enum IngestKind {
     Mentioned,
     TeamMentioned,
     Comment,
+    CommentOther,
     Reply,
     ReplyMentioned,
     Approved,
@@ -165,6 +172,7 @@ pub enum IngestKind {
     MergeQueueRemoved,
     Merged,
     Closed,
+    Reopened,
 }
 
 /// `row.kind`: the event kinds, with `merged_closed` split in two.
@@ -176,18 +184,21 @@ pub enum RowKind {
     Mentioned,
     TeamMentioned,
     Comment,
+    CommentOther,
     Reply,
     ReplyMentioned,
     Reaction,
     Approved,
     ChangesRequested,
     ChecksFailed,
+    ChecksPassed,
     Conflicts,
     Mergeable,
     MergeQueueAdded,
     MergeQueueRemoved,
     Merged,
     Closed,
+    Reopened,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -237,6 +248,7 @@ pub enum WarningKind {
     ScopeMissing,
     SsoRequired,
     EventsFetchFailed,
+    StatusFetchFailed,
 }
 
 /// What the daemon could make of the Keychain item.
@@ -248,18 +260,79 @@ pub enum KeychainState {
     Unreadable,
 }
 
+/// The tab of `list`. DESIGN.md, "Tabs".
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Tab {
+    #[default]
+    All,
+    Review,
+    Mine,
+}
+
+/// Which cards of the Dismissed list `list` gives.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DismissedFilter {
+    #[default]
+    Exclude,
+    Only,
+    Include,
+}
+
+/// The `tab` of `place`: `none` takes the card out of Review or Mine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ExclusionKind {
+pub enum PlaceTab {
+    Review,
+    Mine,
+    None,
+}
+
+/// The tab of a card's `placement`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlacedTab {
+    Review,
+    Mine,
+}
+
+/// A section of Review (`doing`, `todo`, `waiting`, `done`) or of Mine
+/// (`main`, `done`). DESIGN.md, "Review" and "Mine".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Section {
+    Doing,
+    Todo,
+    Waiting,
+    Main,
+    Done,
+}
+
+/// The `at` of `place`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum At {
+    Top,
+    Bottom,
+}
+
+/// What `mute` and `unmute` name. DESIGN.md, "Mute".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MuteKind {
+    Pr,
     Repo,
     User,
 }
 
+/// Why a card is muted: the PR, its repository, or its author.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ExclusionState {
-    Hidden,
-    ListOnly,
+pub enum MuteReason {
+    Pr,
+    Repo,
+    Author,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -349,6 +422,30 @@ pub struct Ingest {
     /// Without it, no owner's window moves on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub succeeded_owners: Option<Vec<String>>,
+    /// For an owner of `succeeded_owners` whose success came from running
+    /// failed requests again: the start of the first run, which becomes its
+    /// success time instead of now (DESIGN.md, "Fetch success and failure").
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub owner_run_started: BTreeMap<String, i64>,
+    /// What the owners' searches found, with each PR's `updatedAt` and
+    /// state. DESIGN.md, "API usage", the items below the table.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub search: Vec<SearchHit>,
+}
+
+/// One PR of a search answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchHit {
+    pub id: String,
+    /// GraphQL `updatedAt`.
+    pub updated_at: i64,
+    /// The PR is open (`state` OPEN).
+    pub open: bool,
+    /// The run fetched the events this PR needed (none when its `updatedAt`
+    /// did not move) without an error. Only then does the core move the
+    /// `updatedAt` it keeps for a dismissed PR or a Dismiss record on.
+    #[serde(default)]
+    pub events_fetched: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -365,6 +462,9 @@ pub struct IngestPr {
     pub author_avatar_url: Option<String>,
     pub base: String,
     pub head: String,
+    /// GraphQL `headRefOid`: the head commit the Checks result is about.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_oid: Option<String>,
     pub state: PrState,
     pub is_draft: bool,
     pub review: Review,
@@ -399,7 +499,7 @@ pub struct IngestEvent {
     pub kind: IngestKind,
     pub occurred_at: i64,
     pub url: String,
-    /// Who caused the event; the Users of the Exclusions compare with it.
+    /// Who caused the event; a muted user is compared with it.
     pub actor: Option<String>,
     pub text: Option<String>,
     pub comment_id: Option<String>,
@@ -425,6 +525,8 @@ pub enum Request {
     List {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         account: Option<String>,
+        #[serde(default)]
+        tab: Tab,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         owner: Option<String>,
         #[serde(default)]
@@ -433,7 +535,7 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         search: Option<String>,
         #[serde(default)]
-        snoozed: bool,
+        dismissed: DismissedFilter,
     },
     Activity {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -461,13 +563,37 @@ pub enum Request {
     PopoverClosed {
         account: String,
     },
-    Snooze {
+    Place {
+        account: String,
+        pr: String,
+        tab: PlaceTab,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        section: Option<Section>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        before: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<At>,
+    },
+    Dismiss {
         account: String,
         pr: String,
     },
-    Unsnooze {
+    Restore {
         account: String,
         pr: String,
+    },
+    Mute {
+        account: String,
+        kind: MuteKind,
+        name: String,
+    },
+    Unmute {
+        account: String,
+        kind: MuteKind,
+        name: String,
+    },
+    MutesGet {
+        account: String,
     },
     Refresh {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -546,23 +672,6 @@ pub enum Request {
         from_owner: String,
         to_owner: String,
     },
-    OwnerExclusionsGet {
-        account: String,
-        owner: String,
-    },
-    OwnerExclusionsSet {
-        account: String,
-        owner: String,
-        kind: ExclusionKind,
-        name: String,
-        state: ExclusionState,
-    },
-    OwnerExclusionsRemove {
-        account: String,
-        owner: String,
-        kind: ExclusionKind,
-        name: String,
-    },
     /// Never logged: it carries a token.
     TokenSet {
         account: String,
@@ -619,7 +728,8 @@ pub struct Warning {
     pub kind: Lenient<WarningKind>,
     /// The account id; `null` for the Keychain warnings.
     pub account: Option<String>,
-    /// The owner id of `sso_required` and `events_fetch_failed`.
+    /// The owner id of `sso_required`, `events_fetch_failed` and
+    /// `status_fetch_failed`.
     pub owner: Option<String>,
     pub message: String,
     pub until: Option<i64>,
@@ -678,8 +788,7 @@ pub struct Owner {
     pub enabled: bool,
     pub notify: bool,
     pub skip_drafts: bool,
-    /// PRs awaiting the account's review. DESIGN.md, "Awaiting review".
-    pub review_count: u32,
+    /// The owner's cards that are not dismissed.
     pub pr_count: u32,
 }
 
@@ -690,7 +799,6 @@ pub struct Account {
     pub color: Lenient<AccountColor>,
     pub token: TokenInfo,
     pub updated_at: Option<i64>,
-    pub review_count: u32,
     /// The blue dot of the menu bar icon.
     pub unread: bool,
     pub warnings: Vec<Warning>,
@@ -722,16 +830,45 @@ pub struct Card {
     pub base_status: Lenient<BaseStatus>,
     pub base: String,
     pub head: String,
-    pub snoozed: bool,
-    pub snoozed_until: Option<i64>,
     pub added_at: Option<i64>,
-    /// GraphQL `createdAt`; `null` until the first fetch after the move
-    /// from 0.2.
+    /// GraphQL `createdAt`.
     pub created_at: Option<i64>,
     /// GraphQL `updatedAt`.
     pub updated_at: i64,
+    /// Review or Mine, with the section and the position the daemon works
+    /// out; `null` when the PR is in neither.
+    pub placement: Option<Placement>,
+    /// Why the card is muted; empty when it is not.
+    pub muted: Vec<Lenient<MuteReason>>,
+    pub dismissed_at: Option<i64>,
+    /// When the card leaves the Dismissed list.
+    pub dismiss_expires_at: Option<i64>,
+    /// When the automatic Dismiss of the card is due; `null` when none is
+    /// scheduled (DESIGN.md, "Dismiss").
+    #[serde(default)]
+    pub auto_dismiss_at: Option<i64>,
+    /// Rows of the PR were deleted (DESIGN.md, "Rows in a card").
+    pub older_rows: bool,
     pub links: Links,
+    /// Every row kept, newest first, at most 20.
     pub rows: Vec<Row>,
+}
+
+/// DESIGN.md, "Wire format": `position` counts from 0 in the section's
+/// order, muted cards last.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Placement {
+    pub tab: Lenient<PlacedTab>,
+    pub section: Lenient<Section>,
+    pub position: u32,
+}
+
+/// `{"repos":[...],"users":[...],"prs":[...]}`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Mutes {
+    pub repos: Vec<String>,
+    pub users: Vec<String>,
+    pub prs: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -749,6 +886,8 @@ pub struct Row {
     pub url: String,
     pub occurred_at: i64,
     pub unread: bool,
+    /// The row is muted: its unread mark is a gray ring.
+    pub muted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -770,18 +909,6 @@ pub struct Notification {
 pub struct EventCell {
     pub list: bool,
     pub notify: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Exclusion {
-    pub name: String,
-    pub state: Lenient<ExclusionState>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Exclusions {
-    pub repos: Vec<Exclusion>,
-    pub users: Vec<Exclusion>,
 }
 
 /// An event on a `subscribe` connection.
@@ -890,9 +1017,9 @@ pub struct EventsResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ExclusionsResponse {
+pub struct MutesResponse {
     pub ok: bool,
-    pub exclusions: Exclusions,
+    pub mutes: Mutes,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -968,6 +1095,13 @@ mod tests {
             r#"{"cmd":"done","row":"r","on":true}"#,
             r#"{"cmd":"todo","row":"r","on":true}"#,
             r#"{"cmd":"owner_events_set","account":"a","owner":"o","event":"mentioned","column":"todo","on":true}"#,
+            r#"{"cmd":"snooze","account":"a","pr":"o/r#1"}"#,
+            r#"{"cmd":"unsnooze","account":"a","pr":"o/r#1"}"#,
+            r#"{"cmd":"owner_exclusions_get","account":"a","owner":"o"}"#,
+            r#"{"cmd":"place","account":"a","pr":"o/r#1","tab":"review","section":"side"}"#,
+            r#"{"cmd":"place","account":"a","pr":"o/r#1","tab":"done"}"#,
+            r#"{"cmd":"list","dismissed":"some"}"#,
+            r#"{"cmd":"mute","account":"a","kind":"team","name":"x"}"#,
         ] {
             assert!(
                 serde_json::from_str::<Request>(removed).is_err(),
@@ -986,12 +1120,42 @@ mod tests {
             request,
             Request::List {
                 account: Some("me".into()),
+                tab: Tab::All,
                 owner: Some("public".into()),
                 filter: PrFilter::ReviewRequested,
                 search: Some("api #407".into()),
-                snoozed: false,
+                dismissed: DismissedFilter::Exclude,
             }
         );
+    }
+
+    #[test]
+    fn place_takes_a_section_and_a_position() {
+        let request: Request = serde_json::from_str(
+            r#"{"cmd":"place","account":"me","pr":"o/r#1","tab":"review","section":"todo","before":"o/r#2"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            request,
+            Request::Place {
+                account: "me".into(),
+                pr: "o/r#1".into(),
+                tab: PlaceTab::Review,
+                section: Some(Section::Todo),
+                before: Some("o/r#2".into()),
+                at: None,
+            }
+        );
+        let request: Request =
+            serde_json::from_str(r#"{"cmd":"list","tab":"mine","dismissed":"include"}"#).unwrap();
+        assert!(matches!(
+            request,
+            Request::List {
+                tab: Tab::Mine,
+                dismissed: DismissedFilter::Include,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -1008,17 +1172,20 @@ mod tests {
                 "mentioned",
                 "team_mentioned",
                 "comment",
+                "comment_other",
                 "reply",
                 "reply_mentioned",
                 "reaction",
                 "approved",
                 "changes_requested",
                 "checks_failed",
+                "checks_passed",
                 "conflicts",
                 "mergeable",
                 "merge_queue_added",
                 "merge_queue_removed",
-                "merged_closed"
+                "merged_closed",
+                "reopened"
             ]
         );
     }

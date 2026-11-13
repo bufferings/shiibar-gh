@@ -70,7 +70,7 @@ fn every_event_kind_makes_an_unread_row() {
 }
 
 #[test]
-fn read_all_reads_every_row_of_the_account_but_those_of_snoozed_prs() {
+fn read_all_reads_every_row_of_the_account_but_those_of_dismissed_prs() {
     // DESIGN.md, "Wire format": `read_all`, rows the list does not show
     // included.
     let mut h = H::new();
@@ -90,7 +90,7 @@ fn read_all_reads_every_row_of_the_account_but_those_of_snoozed_prs() {
         vec![],
     )
     .unwrap();
-    h.snooze(&key("PR_2"));
+    h.dismiss(&key("PR_2")).unwrap();
     // A row made while its kind's List is on, then hidden by the List.
     h.events(vec![hidden]);
     h.table(EventKind::Mentioned, EventColumn::List, false);
@@ -98,7 +98,7 @@ fn read_all_reads_every_row_of_the_account_but_those_of_snoozed_prs() {
     h.read_all();
     assert!(!h.row("E_1").unread);
     assert!(!h.row("E_3").unread, "a row the list does not show");
-    assert!(h.row("E_2").unread, "a snoozed PR keeps its unread rows");
+    assert!(h.row("E_2").unread, "a dismissed PR keeps its unread rows");
     assert!(
         h.engine.row_record("1002:E_1").unwrap().unread,
         "another account"
@@ -117,15 +117,19 @@ fn a_review_request_row_is_a_record_and_the_pr_state_awaits() {
     };
     h.push(vec![open.clone()], vec![e], vec![]);
     h.read(&["E_1"]);
-    assert_eq!(h.badge(), 1, "reading the row keeps the request");
+    assert_eq!(
+        h.awaiting_ids().len(),
+        1,
+        "reading the row keeps the request"
+    );
     h.prs(vec![IngestPr {
         requested_me: false,
         ..other("PR_1")
     }]);
-    assert_eq!(h.badge(), 0, "withdrawn");
+    assert_eq!(h.awaiting_ids().len(), 0, "withdrawn");
     assert!(!h.row("E_1").unread);
     h.prs(vec![open]);
-    assert_eq!(h.badge(), 1);
+    assert_eq!(h.awaiting_ids().len(), 1);
 }
 
 #[test]
@@ -347,6 +351,11 @@ fn state_changes_that_make_no_row() {
     for (name, before, after, ingest_before) in cases {
         let mut h = H::new();
         if *ingest_before {
+            if before().state != PrState::Open {
+                // DESIGN.md, "API usage": a closed PR is taken only when
+                // known; this one was open first.
+                h.prs(vec![pr("PR_1")]);
+            }
             h.prs(vec![before()]);
         }
         h.prs(vec![after()]);
@@ -371,8 +380,10 @@ fn failing_again_after_recovery_makes_a_new_row() {
     h.prs(vec![passed]);
     h.prs(vec![failed]);
     let rows = h.activity(ActivityArgs::default());
-    assert_eq!(rows.len(), 2);
-    assert_ne!(rows[0].id, rows[1].id);
+    let kinds: Vec<String> = rows.iter().map(|r| r.kind.as_text()).collect();
+    // DESIGN.md, "State change rows": Checks passed after a failure too.
+    assert_eq!(kinds, ["checks_failed", "checks_passed", "checks_failed"]);
+    assert_ne!(rows[0].id, rows[2].id);
     let card = h.card(&key("PR_1")).unwrap();
     assert_eq!(card.checks, Lenient::Known(Checks::Failed));
 }

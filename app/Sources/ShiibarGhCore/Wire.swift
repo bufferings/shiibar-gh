@@ -64,6 +64,7 @@ public enum WarningKind: String, Equatable, CaseIterable {
     case scopeMissing = "scope_missing"
     case ssoRequired = "sso_required"
     case eventsFetchFailed = "events_fetch_failed"
+    case statusFetchFailed = "status_fetch_failed"
 }
 
 public enum KeychainState: String, Equatable { case ok, unavailable, unreadable }
@@ -89,50 +90,71 @@ public enum RowKind: String, Equatable {
     case mentioned
     case teamMentioned = "team_mentioned"
     case comment
+    case commentOther = "comment_other"
     case reply
     case replyMentioned = "reply_mentioned"
     case reaction
     case approved
     case changesRequested = "changes_requested"
     case checksFailed = "checks_failed"
+    case checksPassed = "checks_passed"
     case conflicts
     case mergeable
     case mergeQueueAdded = "merge_queue_added"
     case mergeQueueRemoved = "merge_queue_removed"
     case merged
     case closed
+    case reopened
 }
 
-/// A kind of an owner's event table (`owner_events_*`), in table order.
+/// A kind of an owner's event table (`owner_events_*`), in table order
+/// (DESIGN.md, "Row kinds and states").
 public enum EventKind: String, Equatable, CaseIterable {
     case reviewRequested = "review_requested"
     case teamReviewRequested = "team_review_requested"
     case mentioned
     case teamMentioned = "team_mentioned"
     case comment
+    case commentOther = "comment_other"
     case reply
     case replyMentioned = "reply_mentioned"
     case reaction
     case approved
     case changesRequested = "changes_requested"
     case checksFailed = "checks_failed"
+    case checksPassed = "checks_passed"
     case conflicts
     case mergeable
     case mergeQueueAdded = "merge_queue_added"
     case mergeQueueRemoved = "merge_queue_removed"
     case mergedClosed = "merged_closed"
+    case reopened
 }
 
 public enum EventColumn: String, Equatable, CaseIterable { case list, notify }
 
-/// The segment of the filter row (DESIGN.md, "What the filters mean").
+/// `list`'s `filter`, kept for the CLI (DESIGN.md, "What the filters
+/// mean"); the app sends none.
 public enum PrFilter: String, Equatable, Codable, CaseIterable {
     case all, authored, assigned, reviewRequested = "review_requested"
 }
 
-public enum ExclusionKind: String, Equatable { case repo, user }
+/// `placement.tab` and the `tab` of `place` (`none` only in `place`).
+public enum PlacementTab: String, Equatable, Codable, CaseIterable { case review, mine }
 
-public enum ExclusionState: String, Equatable, CaseIterable { case hidden, listOnly = "list_only" }
+/// `placement.section`: Review's four, Mine's `main` and `done`.
+public enum PlacementSection: String, Equatable, Codable, CaseIterable {
+    case doing, todo, waiting, done, main
+}
+
+/// What a card is muted for (`card.muted`).
+public enum MuteReason: String, Equatable { case pr, repo, author }
+
+/// The `kind` of `mute` and `unmute`.
+public enum MuteKind: String, Equatable, CaseIterable { case pr, repo, user }
+
+/// `list`'s `dismissed`.
+public enum DismissedFilter: String, Equatable { case exclude, only, include }
 
 public enum NotificationType: String, Equatable { case single, summary }
 
@@ -173,21 +195,19 @@ public struct Owner: Equatable, Decodable, Identifiable {
     public var enabled: Bool
     public var notify: Bool
     public var skipDrafts: Bool
-    /// The PRs waiting for your review (DESIGN.md, "Awaiting review").
-    public var reviewCount: Int
+    /// The owner's cards that are not dismissed.
     public var prCount: Int
 
     enum CodingKeys: String, CodingKey {
         case id, name, kind, enabled, notify
         case githubId = "github_id"
         case skipDrafts = "skip_drafts"
-        case reviewCount = "review_count"
         case prCount = "pr_count"
     }
 
     public init(
         id: String, name: String, kind: OwnerKind = .org, githubId: Int64? = nil, enabled: Bool = true,
-        notify: Bool = true, skipDrafts: Bool = true, reviewCount: Int = 0, prCount: Int = 0
+        notify: Bool = true, skipDrafts: Bool = true, prCount: Int = 0
     ) {
         self.id = id
         self.name = name
@@ -196,7 +216,6 @@ public struct Owner: Equatable, Decodable, Identifiable {
         self.enabled = enabled
         self.notify = notify
         self.skipDrafts = skipDrafts
-        self.reviewCount = reviewCount
         self.prCount = prCount
     }
 
@@ -299,7 +318,6 @@ public struct Account: Equatable, Decodable, Identifiable {
     public var color: Lenient<AccountColor>
     public var token: TokenInfo
     public var updatedAt: Int64?
-    public var reviewCount: Int
     public var unread: Bool
     public var warnings: [Warning]
     public var rateLimit: RateLimit?
@@ -308,13 +326,12 @@ public struct Account: Equatable, Decodable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case id, login, color, token, unread, warnings, owners
         case updatedAt = "updated_at"
-        case reviewCount = "review_count"
         case rateLimit = "rate_limit"
     }
 
     public init(
         id: String, login: String? = nil, color: AccountColor = .none, token: TokenInfo = TokenInfo(),
-        updatedAt: Int64? = nil, reviewCount: Int = 0, unread: Bool = false, warnings: [Warning] = [],
+        updatedAt: Int64? = nil, unread: Bool = false, warnings: [Warning] = [],
         rateLimit: RateLimit? = nil, owners: [Owner] = []
     ) {
         self.id = id
@@ -322,7 +339,6 @@ public struct Account: Equatable, Decodable, Identifiable {
         self.color = .known(color)
         self.token = token
         self.updatedAt = updatedAt
-        self.reviewCount = reviewCount
         self.unread = unread
         self.warnings = warnings
         self.rateLimit = rateLimit
@@ -359,9 +375,12 @@ public struct Row: Equatable, Decodable, Identifiable {
     public var url: String
     public var occurredAt: Int64
     public var unread: Bool
+    /// The row is muted now: a gray ring instead of the blue dot, and no
+    /// notification (DESIGN.md, "Mute").
+    public var muted: Bool
 
     enum CodingKeys: String, CodingKey {
-        case id, pr, account, owner, kind, text, counts, actor, url, unread
+        case id, pr, account, owner, kind, text, counts, actor, url, unread, muted
         case prTitle = "pr_title"
         case occurredAt = "occurred_at"
     }
@@ -370,7 +389,7 @@ public struct Row: Equatable, Decodable, Identifiable {
         id: String, pr: String = "o/r#1", prTitle: String = "Title", account: String = "3407303",
         owner: String = "o1", kind: RowKind,
         text: String? = nil, counts: [String: Int]? = nil, actor: String? = nil,
-        url: String = "https://github.com/o/r/pull/1", occurredAt: Int64 = 0, unread: Bool = true
+        url: String = "https://github.com/o/r/pull/1", occurredAt: Int64 = 0, unread: Bool = true, muted: Bool = false
     ) {
         self.id = id
         self.pr = pr
@@ -384,7 +403,50 @@ public struct Row: Equatable, Decodable, Identifiable {
         self.url = url
         self.occurredAt = occurredAt
         self.unread = unread
+        self.muted = muted
     }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        pr = try c.decode(String.self, forKey: .pr)
+        prTitle = try c.decode(String.self, forKey: .prTitle)
+        account = try c.decode(String.self, forKey: .account)
+        owner = try c.decode(String.self, forKey: .owner)
+        kind = try c.decode(Lenient<RowKind>.self, forKey: .kind)
+        text = try c.decodeIfPresent(String.self, forKey: .text)
+        counts = try c.decodeIfPresent([String: Int].self, forKey: .counts)
+        actor = try c.decodeIfPresent(String.self, forKey: .actor)
+        url = try c.decode(String.self, forKey: .url)
+        occurredAt = try c.decode(Int64.self, forKey: .occurredAt)
+        unread = try c.decode(Bool.self, forKey: .unread)
+        muted = try c.decodeIfPresent(Bool.self, forKey: .muted) ?? false
+    }
+
+    /// An unread row that counts: blue, not gray (DESIGN.md, "How unread
+    /// clears": muted rows count only when they are mentions).
+    public var isBlueUnread: Bool {
+        unread && (!muted || kind.value == .mentioned)
+    }
+
+    /// An unread row shown with the gray ring.
+    public var isGrayUnread: Bool { unread && !isBlueUnread }
+}
+
+/// Where a card is placed: a Review section or Mine, with its rank in the
+/// section, muted cards last (DESIGN.md, "Wire format", `placement`).
+public struct Placement: Equatable, Decodable {
+    public var tab: Lenient<PlacementTab>
+    public var section: Lenient<PlacementSection>
+    public var position: Int
+
+    public init(tab: PlacementTab, section: PlacementSection, position: Int = 0) {
+        self.tab = .known(tab)
+        self.section = .known(section)
+        self.position = position
+    }
+
+    public var isDone: Bool { section.value == .done }
 }
 
 public struct Card: Equatable, Decodable, Identifiable {
@@ -398,10 +460,10 @@ public struct Card: Equatable, Decodable, Identifiable {
     public var authorAvatarUrl: String?
     public var authoredByMe: Bool
     public var assignedToMe: Bool
-    /// GitHub's fact: you or your team is asked for a review now. The chip
-    /// and the Involvement group use it (DESIGN.md, "What the filters mean").
+    /// GitHub's fact: you or your team is asked for a review now. The
+    /// Involvement group uses it (DESIGN.md, "What the filters mean").
     public var reviewRequested: Bool
-    /// The app's "waiting for your review": the mark and the red counts.
+    /// The app's "waiting for your review": the `Review requested` mark.
     public var awaitingReview: Bool
     public var stateLabel: Lenient<StateLabel>
     public var review: Lenient<ReviewStatus>
@@ -409,30 +471,44 @@ public struct Card: Equatable, Decodable, Identifiable {
     public var baseStatus: Lenient<BaseStatus>
     public var base: String
     public var head: String
-    public var snoozed: Bool
-    public var snoozedUntil: Int64?
     public var addedAt: Int64?
-    /// GraphQL `createdAt`; nil right after the move from 0.2.
+    /// GraphQL `createdAt`.
     public var createdAt: Int64?
     /// GraphQL `updatedAt`.
     public var updatedAt: Int64
     public var links: Links
+    /// Up to 20 rows, newest first.
     public var rows: [Row]
+    /// nil while the card has no placement.
+    public var placement: Placement?
+    /// Why the card is muted; empty when it is not.
+    public var muted: [Lenient<MuteReason>]
+    public var dismissedAt: Int64?
+    public var dismissExpiresAt: Int64?
+    /// When the automatic Dismiss is due; nil when none is scheduled
+    /// (DESIGN.md, "Dismiss").
+    public var autoDismissAt: Int64?
+    /// Rows of this PR were deleted past the 20 kept (DESIGN.md, "Rows in a
+    /// card").
+    public var olderRows: Bool
 
     enum CodingKeys: String, CodingKey {
-        case id, pr, account, owner, title, url, author, review, checks, base, head, snoozed
-        case links, rows
+        case id, pr, account, owner, title, url, author, review, checks, base, head
+        case links, rows, placement, muted
         case authorAvatarUrl = "author_avatar_url"
         case authoredByMe = "authored_by_me"
         case assignedToMe = "assigned_to_me"
         case reviewRequested = "review_requested"
         case stateLabel = "state_label"
         case baseStatus = "base_status"
-        case snoozedUntil = "snoozed_until"
         case addedAt = "added_at"
         case awaitingReview = "awaiting_review"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+        case dismissedAt = "dismissed_at"
+        case dismissExpiresAt = "dismiss_expires_at"
+        case autoDismissAt = "auto_dismiss_at"
+        case olderRows = "older_rows"
     }
 
     public init(
@@ -441,8 +517,10 @@ public struct Card: Equatable, Decodable, Identifiable {
         authorAvatarUrl: String? = nil, authoredByMe: Bool = true, assignedToMe: Bool = false,
         reviewRequested: Bool = false, awaitingReview: Bool = false, stateLabel: StateLabel = .open, review: ReviewStatus = .none,
         checks: ChecksStatus = .none, baseStatus: BaseStatus = .none, base: String = "main",
-        head: String = "topic", snoozed: Bool = false, snoozedUntil: Int64? = nil, addedAt: Int64? = nil,
-        createdAt: Int64? = nil, updatedAt: Int64 = 0, links: Links = Links(review: "r", checks: "c", base: "b"), rows: [Row] = []
+        head: String = "topic", addedAt: Int64? = nil,
+        createdAt: Int64? = nil, updatedAt: Int64 = 0, links: Links = Links(review: "r", checks: "c", base: "b"), rows: [Row] = [],
+        placement: Placement? = nil, muted: [MuteReason] = [], dismissedAt: Int64? = nil, dismissExpiresAt: Int64? = nil,
+        autoDismissAt: Int64? = nil, olderRows: Bool = false
     ) {
         self.id = id
         self.pr = pr
@@ -462,19 +540,69 @@ public struct Card: Equatable, Decodable, Identifiable {
         self.baseStatus = .known(baseStatus)
         self.base = base
         self.head = head
-        self.snoozed = snoozed
-        self.snoozedUntil = snoozedUntil
         self.addedAt = addedAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.links = links
         self.rows = rows
+        self.placement = placement
+        self.muted = muted.map(Lenient.known)
+        self.dismissedAt = dismissedAt
+        self.dismissExpiresAt = dismissExpiresAt
+        self.autoDismissAt = autoDismissAt
+        self.olderRows = olderRows
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        pr = try c.decode(String.self, forKey: .pr)
+        account = try c.decode(String.self, forKey: .account)
+        owner = try c.decode(String.self, forKey: .owner)
+        title = try c.decode(String.self, forKey: .title)
+        url = try c.decode(String.self, forKey: .url)
+        author = try c.decode(String.self, forKey: .author)
+        authorAvatarUrl = try c.decodeIfPresent(String.self, forKey: .authorAvatarUrl)
+        authoredByMe = try c.decode(Bool.self, forKey: .authoredByMe)
+        assignedToMe = try c.decodeIfPresent(Bool.self, forKey: .assignedToMe) ?? false
+        reviewRequested = try c.decodeIfPresent(Bool.self, forKey: .reviewRequested) ?? false
+        awaitingReview = try c.decodeIfPresent(Bool.self, forKey: .awaitingReview) ?? false
+        stateLabel = try c.decode(Lenient<StateLabel>.self, forKey: .stateLabel)
+        review = try c.decode(Lenient<ReviewStatus>.self, forKey: .review)
+        checks = try c.decode(Lenient<ChecksStatus>.self, forKey: .checks)
+        baseStatus = try c.decode(Lenient<BaseStatus>.self, forKey: .baseStatus)
+        base = try c.decode(String.self, forKey: .base)
+        head = try c.decode(String.self, forKey: .head)
+        addedAt = try c.decodeIfPresent(Int64.self, forKey: .addedAt)
+        createdAt = try c.decodeIfPresent(Int64.self, forKey: .createdAt)
+        updatedAt = try c.decode(Int64.self, forKey: .updatedAt)
+        links = try c.decode(Links.self, forKey: .links)
+        rows = try c.decode([Row].self, forKey: .rows)
+        placement = try c.decodeIfPresent(Placement.self, forKey: .placement)
+        muted = try c.decodeIfPresent([Lenient<MuteReason>].self, forKey: .muted) ?? []
+        dismissedAt = try c.decodeIfPresent(Int64.self, forKey: .dismissedAt)
+        dismissExpiresAt = try c.decodeIfPresent(Int64.self, forKey: .dismissExpiresAt)
+        autoDismissAt = try c.decodeIfPresent(Int64.self, forKey: .autoDismissAt)
+        olderRows = try c.decodeIfPresent(Bool.self, forKey: .olderRows) ?? false
     }
 
     /// Merged and Closed come after the open PRs (Draft included).
     public var isFinished: Bool {
         stateLabel.value == .merged || stateLabel.value == .closed
     }
+
+    public var isMuted: Bool { !muted.isEmpty }
+
+    public var isDismissed: Bool { dismissedAt != nil }
+
+    public func isMuted(for reason: MuteReason) -> Bool {
+        muted.contains { $0.value == reason }
+    }
+
+    /// A row of the card is blue unread.
+    public var hasBlueUnread: Bool { rows.contains(where: \.isBlueUnread) }
+
+    public var hasGrayUnread: Bool { rows.contains(where: \.isGrayUnread) }
 
     public var hasUnread: Bool { rows.contains(where: \.unread) }
 }
@@ -525,30 +653,29 @@ public struct EventCell: Equatable, Decodable {
     }
 }
 
-public struct Exclusion: Equatable, Decodable, Hashable {
-    public var name: String
-    public var state: Lenient<ExclusionState>
+/// `mutes`: what the account has muted, names as they were given.
+public struct Mutes: Equatable, Decodable {
+    public var repos: [String]
+    public var users: [String]
+    public var prs: [String]
 
-    public init(name: String, state: ExclusionState) {
-        self.name = name
-        self.state = .known(state)
-    }
-
-    public static func == (a: Exclusion, b: Exclusion) -> Bool { a.name == b.name && a.state.rawText == b.state.rawText }
-    public func hash(into hasher: inout Hasher) { hasher.combine(name) }
-}
-
-public struct Exclusions: Equatable, Decodable {
-    public var repos: [Exclusion]
-    public var users: [Exclusion]
-
-    public init(repos: [Exclusion] = [], users: [Exclusion] = []) {
+    public init(repos: [String] = [], users: [String] = [], prs: [String] = []) {
         self.repos = repos
         self.users = users
+        self.prs = prs
     }
 
-    public func list(_ kind: ExclusionKind) -> [Exclusion] {
-        kind == .repo ? repos : users
+    public func list(_ kind: MuteKind) -> [String] {
+        switch kind {
+        case .repo: return repos
+        case .user: return users
+        case .pr: return prs
+        }
+    }
+
+    /// Names compare without case (DESIGN.md, "Mute").
+    public func contains(_ kind: MuteKind, _ name: String) -> Bool {
+        list(kind).contains { $0.lowercased() == name.lowercased() }
     }
 }
 
@@ -611,13 +738,12 @@ struct ErrorResponse: Decodable {
 }
 
 struct ListResponse: Decodable { var cards: [Card] }
-struct ActivityResponse: Decodable { var rows: [Row] }
 struct AccountsResponse: Decodable { var accounts: [Account] }
 struct AccountResponse: Decodable { var account: Account }
 struct RefreshResponse: Decodable { var warnings: [Warning] }
 struct TokenTestResponse: Decodable { var results: [TestResult] }
 struct EventsResponse: Decodable { var events: [String: EventCell] }
-struct ExclusionsResponse: Decodable { var exclusions: Exclusions }
+struct MutesResponse: Decodable { var mutes: Mutes }
 
 public struct InfoResponse: Equatable, Decodable {
     public var version: String

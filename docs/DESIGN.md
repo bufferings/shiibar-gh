@@ -59,7 +59,7 @@ shiibar-gh は、自分が関わっている GitHub の PR について「起き
 
 ### All
 
-関係する PR をすべて表示する。Review または Mine に配置している PR のカードには、配置先のタグ（`Review · Waiting`、`Mine`）を表示する。タグを押すと、そのタブを開き、そのカードを選択する。
+関係する PR をすべて表示する。Review または Mine に配置している PR のカードには、配置先のタグ（`Review · Waiting`、`Review · Done`、`Mine`、`Mine · Done`）を表示する。タグを押すと、そのタブを開き、そのカードを選択する。
 
 **Group by**。2 段で、`Group by` と `Then by` のポップアップボタンで選択する。値はどちらも次の 5 つで、2 段に同じ値は指定できない（`Group by` で `Then by` と同じ値を選択すると、`Then by` は `None` になる）。`Group by` が `None` のときは `Then by` を選択できず、`None` とする。3 段以上はない。初期値は `Group by` が `Repository`、`Then by` が `None` である。1 段目のグループは帯の見出し、2 段目のグループは字下げした小さい見出しで表示する。
 
@@ -81,20 +81,24 @@ shiibar-gh は、自分が関わっている GitHub の PR について「起き
 
 ### Review
 
-区画は上から `Doing`、`Todo`、`Waiting`、`Done` である。順番は注目する順で、作業の流れの順にはしない。空の区画は表示しない。
+区画は上から `Doing`、`Todo`、`Waiting`、`Done` である。順番は注目する順で、作業の流れの順にはしない。4 つの区画は、カードがなくても見出しと破線の枠（`No pull requests`）を表示し、ドラッグしたカードをそこに移動できる。ただし、検索中と、Review に 1 枚もカードがないときは、空の区画を表示しない。
 
 | 区画 | 内容 | 追加される条件 |
 | --- | --- | --- |
 | `Doing` | 今レビューしている PR | 利用者が移動する |
 | `Todo` | これからレビューする PR | レビューの依頼で自動で末尾に追加する。All から利用者が追加した PR も末尾。Doing と Waiting から移動した PR は先頭 |
 | `Waiting` | 相手の作業を待っている PR | 利用者が移動する |
-| `Done` | マージまたはクローズされた PR | どの区画からでも自動で移動する。マージまたはクローズされた配置なしの PR を `Add to Review` で追加すると、直接 `Done` に配置する。開いている PR を利用者が Done に移動する操作はない |
+| `Done` | 対応を終えた PR（マージまたはクローズされた PR と、利用者が移動した PR） | マージまたはクローズを検知した時点で、どの区画からでも自動で移動する。利用者も、開いている PR とマージまたはクローズされた PR を移動できる。マージまたはクローズされた配置なしの PR を `Add to Review` で追加するか、その PR のレビューの依頼の行を生成すると、直接 `Done` に配置する |
 
-- レビューを依頼された PR は、自分宛てでもチーム宛てでも、Mute の対象でも、自動で `Todo` の末尾に追加する。契機は、Review requested または Review requested to my team の行を生成したとき（List がオンのとき。「表の適用」）である。そのため、チーム宛ての依頼を対象にするかどうかは、owner の `Review requested to my team` の List に従う。すでに Review または Mine に配置している PR、Dismiss している PR は、この規則では移動しない（Dismiss している PR の復帰は「Dismiss」）。
+- レビューを依頼された PR は、自分宛てでもチーム宛てでも、Mute の対象でも、自動で `Todo` の末尾に追加する。契機は、Review requested または Review requested to my team の行を生成したとき（List がオンのとき。「表の適用」）である。そのため、チーム宛ての依頼を対象にするかどうかは、owner の `Review requested to my team` の List に従う。すでに Review または Mine に配置している PR、Dismiss している PR は、この規則では移動しない（Dismiss している PR の復帰は「Dismiss」）。マージまたはクローズされた PR は、`Add to Review` と同じく `Todo` ではなく Review の `Done` に配置する。`Done` の中の位置と n 日の起点は、配置なしの間の起点（「Dismiss」）のままで、新しく発見した閉じた PR では検知の時刻である。新しく発見した閉じた PR では、生成する行は復帰の契機の 4 つの行（「Dismiss」）だけなので、Review の `Done` に配置する契機は自分宛ての Review requested の行だけである。チーム宛ての依頼は行を生成せず、Review に配置しない。
 - 一度 Review に追加した PR は、依頼が取り消されても、レビューを提出しても、そのまま残す。Review から取り除くのは利用者の操作（`Remove from Review`）だけで、取り除いた PR は配置なし（All だけ）になる。
-- `Doing`、`Todo`、`Waiting` の中の順位と、区画の間の移動は、ドラッグ＆ドロップ、右クリックのメニュー、キーで行う（「キーボード」）。メニューとキーで移動したカードは、`Todo` へは `Doing` と `Waiting` からの移動なら先頭に、それ以外は末尾に配置する（ワイヤの `place` の既定と同じ）。
-- `Done` の中は、マージまたはクローズを検知した時刻が新しい順に並べる。順位は変更できず、`Done` から他の区画へも移動できない。`Done` のカードは `Remove from Review`／`Remove from Mine` で取り除けない。
-- `Done` への移動と、再オープンによる `Done` からの復帰は、状況の取得で検知した PR の状態に従う（Reopened の行は出来事から生成し、配置とは独立である）。再オープンのあと再びマージまたはクローズされて `Done` に戻ったカードは、最初に検知した時刻による元の位置に戻り、n 日はその時点から改めて数える。
+- `Doing`、`Todo`、`Waiting` の中の順位と、区画の間の移動（`Done` への移動と `Done` からの移動を含む）は、ドラッグ＆ドロップ、右クリックのメニュー、キーで行う（「キーボード」）。`Done` へ移動するキーはない（D／T／W だけである）。メニューとキーで移動したカードは、`Todo` へは `Doing` と `Waiting` からの移動なら先頭に、それ以外（`Done` からの移動を含む）は末尾に配置する（ワイヤの `place` の既定と同じ）。
+- `Done` の中は、カードが `Done` に入った時刻が新しい順に並べる。入った時刻は、自動の移動ではマージまたはクローズを検知した時刻、利用者の移動ではその操作の時刻である。順位は変更できない（⌥↑／⌥↓ と、`Done` の中のドラッグによる並べ替えはない）。`Done` へのドロップは、ドロップした位置に関係なく、この並びの規則で配置する。
+- `Done` のカードは、並びの規則のほかは、ほかの区画のカードと同じく扱う。開いているか、マージまたはクローズされたかを問わず、ドラッグ（つまみ）、`Move to …`、D／T／W で `Doing`、`Todo`、`Waiting` へ（Mine では、ドラッグと `Move to Mine` で 1 本目の一覧へ）移動でき、`Remove from Review`／`Remove from Mine` で取り除ける（自分が作成した PR は Mine から取り除けない）。
+- `Done` に移動したカードは、移動する前の区画と順位を記録し、再オープンによる復帰に使用する。配置なしから、または別のタブから `Done` に移動したカードは、`Todo` の末尾（Mine では 1 本目の一覧の末尾）を記録する。
+- マージまたはクローズによる `Done` への移動は、状況の取得でマージまたはクローズを検知した時点の 1 回だけ行う（Reopened の行は出来事から生成し、配置とは独立である）。すでに `Done` にあるカードは `Done` に残り、入った時刻をその検知の時刻にする。利用者がマージまたはクローズされたカードを `Done` から他の区画へ移動したあとは、以降の取得で `Done` に戻さない。
+- 再オープンを状況の取得で検知すると、`Done` にあるカードは記録した区画と順位に戻る。`Done` の外にあるカードは移動しない。再オープンのあと再びマージまたはクローズされたカードは、その検知の時刻に `Done` に入ったものとして並べ、n 日もその時点から改めて数える。自動の Dismiss の例外（Restore したこと、マージまたはクローズのあとの Mentioned と Reply in a thread I commented in の行。「Dismiss」）は、再オープンで終わる。
+- `Done` のカードに新しい出来事があると、ほかの区画と同じく行を未読にして通知する。カードは `Done` に残り、配置は利用者が決める。レビューの依頼でも移動しない（上の規則）。
 - 各区画で、Mute の対象のカードは区画の末尾に、利用者が付けた順位のまま並べる。Mute を解除すると、元の順位の位置に戻る。区画の中の表示の順（ワイヤの `placement.position`）は、Mute の対象でないカードを先にした、この並びである。
 - ⌥↑／⌥↓ による順位の変更は、表示の順で Mute の対象でないカードの間だけで行い、Mute の対象のカードでは行えない。D／T／W と `Move to …` は Mute の対象のカードにも行え、移動先の区画の末尾の Mute の対象のカードの間に配置する（`Todo` の先頭への移動でも、Mute の対象のカードの先頭に配置する）。
 - 自動の追加（レビューの依頼、自分が作成した PR）は、Mute の対象でないカードの末尾に配置する。Mute の対象の PR は、Mute の対象のカードの末尾に配置する。
@@ -102,8 +106,9 @@ shiibar-gh は、自分が関わっている GitHub の PR について「起き
 ### Mine
 
 - 自分が作成した PR を、自動で末尾に追加する。順位を付けた 1 本の一覧で、末尾に `Done` の区画がある。1 本目の一覧は見出しを持たない。
-- アサインされた PR などは、All から利用者が追加できる（`Add to Mine`。末尾に追加する。マージまたはクローズされた PR は直接 `Done` に配置する）。利用者が追加した PR は `Remove from Mine` で取り除ける（`Done` のカードを除く）。自分が作成した PR は取り除けず、Review にも配置できない。
-- マージまたはクローズされた PR は、自動で `Done` に移動する。新しく発見した閉じた PR（記録のない PR。「Dismiss の記録」）のうち自分が作成した PR は、Mine の `Done` に配置する。自分が作成していない閉じた PR は配置なしにする。どちらも `Done` の中の位置と n 日の起点は、その検知の時刻である。`Done` の並びと、Mute の対象の位置と順位の規則は Review と同じである。
+- アサインされた PR などは、All から利用者が追加できる（`Add to Mine`。末尾に追加する。マージまたはクローズされた PR は直接 `Done` に配置する）。利用者が追加した PR は `Remove from Mine` で取り除ける。自分が作成した PR は取り除けず、Review にも配置できない。
+- マージまたはクローズされた PR は、検知した時点で自動で `Done` に移動する。新しく発見した閉じた PR（記録のない PR。「Dismiss の記録」）のうち自分が作成した PR は、Mine の `Done` に配置する。自分が作成していない閉じた PR は配置なしにする（自分宛ての Review requested の行を生成した PR は Review の `Done`。「Review」）。どちらも `Done` の中の位置と n 日の起点は、その検知の時刻である。`Done` の並び、`Done` への移動と `Done` からの移動、Mute の対象の位置と順位の規則は Review と同じである。Mine の `Done` へは、ドラッグ＆ドロップとメニューの `Move to Done` で移動し、Mine の `Done` から 1 本目の一覧へは、ドラッグとメニューの `Move to Mine` で移動する（末尾に配置する）。
+- Mine の 1 本目の一覧と `Done` は、カードがなくても破線の枠（`No pull requests`）を表示し、ドラッグしたカードをそこに移動できる。ただし、検索中と、Mine に 1 枚もカードがないときは、空の区画を表示しない。
 - 同時に複数の PR を末尾に追加するとき（owner を追加した直後など）は、作成の古い順に追加する。Review の `Todo` への自動の追加も、依頼の古い順に追加する。
 
 ### 区画の表示数
@@ -125,13 +130,15 @@ Review と Mine のすべての区画、および All のいちばん内側の�
 
 | 行 | 左から |
 | --- | --- |
-| 1 | ドラッグのつまみ ⋮⋮（Review と Mine の `Done` 以外の区画だけ）、PR の状態ラベル（Mergeable 緑／Draft 灰／Merged 紫／Closed 赤。Open は無印）、owner/repo #番号、`Review requested` の印（レビュー待ちの間だけ）、`Assigned` の印（自分がアサインされている間だけ）、`Muted` の印（Mute の対象の間だけ）、右端に状況アイコン 3 つと開くアイコン |
+| 1 | ドラッグのつまみ ⋮⋮（Review と Mine の、`Done` を含むすべての区画。Mute の対象のカードを除く）、PR の状態ラベル（Mergeable 緑／Draft 灰／Merged 紫／Closed 赤。Open は無印）、owner/repo #番号、`Review requested` の印（レビュー待ちの間だけ）、`Assigned` の印（自分がアサインされている間だけ）、`Muted` の印（Mute の対象の間だけ）、右端に状況アイコン 3 つと開くアイコン |
 | 2 | 作者のアバター、タイトル |
-| 3 | 左に配置先のタグ（All だけ）と base ← head、右に `opened 3 days ago by alice · updated 2 hr ago`（薄い文字。ボードは `3d ago` と略記する）、右端に Dismiss の × |
+| 3 | 左に配置先のタグ（All だけ）と base ← head、右に `Dismissed in 2 days`（自動の Dismiss の予定があるカードだけ）と `opened 3 days ago by alice · updated 2 hr ago`（薄い文字。ボードは `3d ago` と略記する）、右端に Dismiss の × |
 
 `Review requested` の印は、薄いオレンジの地に濃いオレンジの文字の小さなラベルで、PR がレビュー待ち（「レビュー待ちの定義」）の間だけ表示する。行の既読とは独立で、行を既読にしても残る。`Assigned` と `Muted` の印は、枠線だけの小さなラベルである。
 
 3 行目の右の部分は、PR の作成時刻（GraphQL の `createdAt`）、作者、更新時刻（`updatedAt`）である。相対時刻の書式は行の meta と同じ（`5 min ago`、`2 hr ago`、`3 days ago`）で、マウスを乗せると正確な日時を表示する。作者を特定できない PR は `by …` を省く。幅が足りなければ、右の部分を省略せずに 4 行目に折り返す。× は、この部分の右に付く。
+
+`Dismissed in 2 days` は、自動の Dismiss（「Dismiss」）の予定があるカード（ワイヤの `auto_dismiss_at` が `null` でないカード）にだけ、時刻の直前に、時刻と同じ 11pt（文字の大きさに合わせて拡大縮小する）の薄い文字で表示する。日数は `auto_dismiss_at` までの日数を切り上げた値で、1 日未満と期限を過ぎた場合は 1 日とする（`Dismissed in 1 day`）。文字は選択できない。マウスを乗せると、Review または Mine の `Done` に配置したカードでは `Automatically dismissed 3 days after it is merged or closed. Move it out of Done to keep it.` を、配置なしのカードでは 1 文目の `Automatically dismissed 3 days after it is merged or closed.` だけを表示する（3 は設定の n で、1 なら `1 day`。配置なしのカードには出る先の `Done` がないため）。予定のないカードには何も表示しない。
 
 状態ラベルと同じ色の縦線をカードの左端にも引く（色だけにしない）。アバターは作者の GitHub のアイコンの画像（GraphQL の `author.avatarUrl`）で、マウスを乗せると作者の login をツールチップで表示する。
 
@@ -162,9 +169,9 @@ Mergeable は mergeStateStatus が CLEAN のときだけで、自前で計算し
 
 - カードの見出しと行は、クリックで選び（行は既読になる。「未読の消え方」）、右クリックでその項目を選んでから（行なら既読にしてから）メニューを表示する（「キーボード」）。
 - カードの見出しと行は、右端に開くアイコンを常に表示する。押すと、カードの見出しは PR のページを、行はその出来事の場所を開く（⏎ と同じ。行は既読になる）。ダブルクリックで開く操作はない。
-- カードのタイトル、owner/repo #番号、行の本文は、macOS の標準の操作で文字を選択できる。クリックはカードまたは行の選択、ダブルクリックは単語の選択、ドラッグは範囲の選択である。選択した文字は ⌘C と右クリックのメニューの `Copy` でコピーする。文字の選択は、別の項目を選んだとき、またはポップオーバーを閉じたときに解除する。
-- カードの移動のドラッグは、つまみ ⋮⋮ から始める。Review では区画の間にも移動できる。All、`Done`、Dismissed の一覧ではドラッグで移動しない。Mute の対象のカードはドラッグできない（つまみを表示しない）。
-- ドロップで挿入できるのは、区画の中の Mute の対象でないカードの間（先頭と末尾を含む）だけで、Mute の対象のカードは常にその後ろに並ぶ。Mute の対象のカードの上、区画の見出しの上、折りたたんだ区画の上、`+ N more PRs` の行の上にドロップすると、その区画の Mute の対象でないカードの末尾に配置する。`Done` と Dismissed の一覧にはドロップできない。
+- カードのタイトル、owner/repo #番号、ブランチ（`base ← head`）、時刻、行のラベル、行の補足（actor、時刻、`for … team` など）、行の本文は、macOS の標準の操作で文字を選択できる。選択の範囲は、これらの 1 つの中に限る。クリックはカードまたは行の選択、ダブルクリックは単語の選択、ドラッグは範囲の選択である。選択した文字は ⌘C と右クリックのメニューの `Copy` でコピーする。文字の選択は、別の項目を選んだとき、またはポップオーバーを閉じたときに解除する。
+- カードの移動のドラッグは、つまみ ⋮⋮ から始める。つまみの上では、ポインタを開いた手の形にする。ドラッグ中は、カードの見出し（状態ラベル、owner/repo #番号、タイトル、ブランチ）をカードと同じ幅でポインタに追従させ、元の位置のカードは薄く表示する。Review では区画の間に、Review と Mine では `Done` との間にも移動できる。All と Dismissed の一覧ではドラッグで移動しない。`Done` の中では並べ替えない。Mute の対象のカードはドラッグできない（つまみを表示しない）。
+- ドロップで挿入できるのは、区画の中の Mute の対象でないカードの間（先頭と末尾を含む）だけで、Mute の対象のカードは常にその後ろに並ぶ。Mute の対象のカードの上、区画の見出しの上、折りたたんだ区画の上、`+ N more PRs` の行の上にドロップすると、その区画の Mute の対象でないカードの末尾に配置する。`Done` には、見出し、カード、`+ N more PRs` の行、空の区画の枠のどこにドロップしても、`Done` の並びの規則（「Review」）に従って配置する（挿入の線は先頭のカードの上に表示する）。`Done` のカードを同じ `Done` にドロップしても移動しない。Dismissed の一覧にはドロップできない。
 - 状況アイコンは押すと Web のその場所へ、開くアイコンは押すと PR のページへ、× は押すとその PR を Dismiss、配置先のタグは押すとそのタブのカードへ移動する。区画の見出しはクリックで折りたたみ、`+ N more PRs` と `Show less` はクリックで展開と復帰を行う。ホバーでしか表示されない操作は設けない。
 
 **操作の反映**。操作は 2 種類に区別する。
@@ -184,7 +191,7 @@ Mergeable は mergeStateStatus が CLEAN のときだけで、自前で計算し
 
 - GitHub との通信が必要な操作（Refresh、アカウントの追加、トークンのテスト、owner の追加）は、押した直後に処理中の表示（Refresh のボタンは進行中のインジケーター、設定画面は「設定画面の規則」の 8）にし、応答を受信した時点で結果を反映する。
 
-アプリは `account_changed` を受信するたびに、待ち時間を設けずに一覧を再取得する（再取得の間に受信した分は、再取得のあとに 1 回だけ再取得する）。
+アプリは `account_changed` を受信するたびに、待ち時間を設けずに一覧を再取得する（再取得の間に受信した分は、再取得のあとに 1 回だけ再取得する）。Mute の一覧を読み込み済みのアカウントでは、Mute の一覧も再取得する（設定画面と CLI で変更した Mute を、メニューと手元の Mute の反映に使用するため）。手元の Mute と解除の反映は、対象のカード（その PR、そのリポジトリの PR、その利用者が作成した PR）と、利用者の Mute ではその利用者の行だけを変更し、ほかのカードと行はデーモンから受信した状態のままにする。
 
 **Open in window**。見出しのボタンで、同じ内容を小さなウインドウ（NSPanel）に表示する。アカウントごとに 1 つ、位置と大きさを記憶する。ウインドウの見出しの右側（Refresh、Settings、⌄ の並びの先頭）にピンのボタン（ツールチップ `Keep on top`）を表示する。オンは塗りつぶし（青）、オフは線だけで、オンの間ウインドウを常に手前に表示する。押すとそのウインドウがすぐ切り替わる。値はウインドウの位置と一緒にアカウントごとに記憶し、既定はオンである。ピンのボタンはポップオーバーには表示しない。同じアカウントのポップオーバーとウインドウは、表示中のタブ、Dismissed の一覧を開いているか、検索の文字、選択、文字の選択を別に持つ。Group by、Then by、並び、グループの順番、折りたたみ、`+ N more PRs` の展開はアカウントごとの状態で、両方に共通である。
 
@@ -222,7 +229,7 @@ Mergeable は mergeStateStatus が CLEAN のときだけで、自前で計算し
 
 表の見出しは Reviews and mentions（上 4 行）、Comments（次の 5 行）、My pull requests（次の 6 行）、Any pull request（残り）である。
 
-**表の適用**。List は一覧に表示するか、Notify は macOS の通知をするかを決める。List をオフにすると Notify もオフになる。List がオフの種類の Notify をオンにする要求は `invalid` で拒否する。List を再びオンにしても、Notify はオフのままである。Notify は行を生成する時点の表の値で決め、行に保存する。あとから表を変更しても既存の行は変更しない。List は表示の絞り込みなので、変更はすぐ反映する。List がオフの間も行は記録し（未読なし、通知なしで保存する）、未読と通知の対象にしない。List をオンに戻すと、オフの間に記録した行を既読の行として表示し、さかのぼって通知しない。List がオフの間に記録した行は、Review への自動の追加（「Review」）、Dismiss からの復帰と自動の Dismiss の例外（「Dismiss」）の契機にせず、20 件の上限、`+ N more`、`older_rows`（「カードの中の行」）にも数えない。Review requested to my team の List は、チーム宛ての依頼をレビュー待ちに数えるかも決める（「レビュー待ちの定義」）。
+**表の適用**。List は一覧に表示するか、Notify は macOS の通知をするかを決める。List をオフにすると Notify もオフになる。List がオフの種類の Notify をオンにする要求は `invalid` で拒否する。List を再びオンにしても、Notify はオフのままである。Notify は行を生成する時点の表の値で決め、行に保存する。あとから表を変更しても既存の行は変更しない。List は表示の絞り込みなので、変更はすぐ反映する。List がオフの間も行は記録し（未読なし、通知なしで保存する）、未読と通知の対象にしない。List をオンに戻すと、オフの間に記録した行を既読の行として表示し、さかのぼって通知しない。List がオフの間に記録した行は、Review への自動の追加（「Review」）、Dismiss からの復帰と自動の Dismiss の例外（「Dismiss」）の契機にしない。この 3 つは行を生成した時点の List で決め、あとから List をオンに戻しても契機にしない。20 件の上限と `+ N more`（「カードの中の行」）は今の List に従い、今 List がオフの種類の行を数えない。List をオンに戻すと、オフの間に記録した行も数える。今 List がオフの種類の行は、それらの行の中で同じく PR ごとに新しい 20 件までを保持する（「カードの中の行」）。`older_rows` は今の List に従わず、その PR の行を削除したことがあるかを示す。Review requested to my team の List は、チーム宛ての依頼をレビュー待ちに数えるかも決める（「レビュー待ちの定義」）。
 
 **行の見た目**。行は先頭に未読の点（未読のときだけ）と種類のアイコン、右端に開くアイコンを持つ。点は青い塗りで、Mute の対象の行（「Mute」）では灰色の輪にする。既読になると点を除くだけで、行を薄く表示しない。
 
@@ -245,7 +252,7 @@ Mergeable は mergeStateStatus が CLEAN のときだけで、自前で計算し
 
 **チーム宛ての依頼とメンション**。チームの所属はアカウントのトークンで取得する（「API の使い分け」）。Review requested to my team の List がオフの owner では、チーム宛ての依頼を行にせず（記録はする）、その owner の検索に `user-review-requested:@me` を使用する。ほかの検索で発見した PR のチーム宛ての依頼は、記録だけにする。
 
-**カードの中の行**。この節の行は List がオンの種類の行で、List がオフの間に記録した行は数えない。行は PR ごとに新しい 20 件まで保持し、それより古い行は既読かどうかに関係なく削除する。削除した行は鍵（「行の状態遷移」）だけを記録し、同じ出来事を再取得しても行を再生成しない。カードには新しい 3 件の行を表示し、4 件以上あれば残りを `+ N more`（1 件なら `+ 1 more`）の 1 行にまとめ、押すと展開する。既読かどうかは、表示する行の数に関係しない。まとめた中に青い未読の行があれば `+ N more` の行に青い点を、灰色の未読の行だけなら灰色の輪を表示する。展開の状態は記憶せず、ポップオーバーを閉じると（常時表示ウインドウは閉じるかフォーカスを失うと）3 件の表示に戻る。削除した行があった PR（21 件以上の行があった PR）では、展開した一覧の末尾に `Older activity on GitHub` の行を表示し、押すと PR のページを開く。
+**カードの中の行**。この節の行は今 List がオンの種類の行で、今 List がオフの種類の行は表示せず、数えない（List をオンに戻すと、オフの間に記録した行も表示し、数える。「表の適用」）。行は PR ごとに新しい 20 件まで保持し、それより古い行は既読かどうかに関係なく削除する。今 List がオフの種類の行も、記録の量を抑えるため、それらの行の中で PR ごとに新しい 20 件までを保持し、古い行を同じく削除する（List がオンの種類の 20 件とは別に数える）。削除した行は鍵（「行の状態遷移」）だけを記録し、同じ出来事を再取得しても行を再生成しない。カードには新しい 3 件の行を表示し、4 件以上あれば残りを `+ N more`（1 件なら `+ 1 more`）の 1 行にまとめ、押すと展開する。既読かどうかは、表示する行の数に関係しない。まとめた中に青い未読の行があれば `+ N more` の行に青い点を、灰色の未読の行だけなら灰色の輪を表示する。展開の状態は記憶せず、ポップオーバーを閉じると（常時表示ウインドウは閉じるかフォーカスを失うと）3 件の表示に戻る。行を削除したことがある PR（ワイヤの `older_rows`。削除した行の種類と今の List は問わない）では、展開した一覧の末尾に `Older activity on GitHub` の行を表示し、押すと PR のページを開く。
 
 **Reaction の行**。自分のコメント（会話のコメント、レビューの本文、レビューコメント、PR の本文）の Reaction を種類ごとの件数で検知し、増えた種類ごとに 1 行を生成する。1 回の取得で同じ種類が複数増えた場合は 1 行で件数を表示する（`👍3`）。行の時刻は検知した時刻とする。件数が減っただけのときは行を生成しない。Reaction を削除して再度付けると新しい出来事として扱う。自分が付けた Reaction は件数から除く。監視の外で増えた分は行にせず、監視が戻った時点の件数を基準にする（「監視」）。監視中の PR の自分のコメントは、初めて集めたときの件数を基準にする。ただし、その owner の前回の取得より後に投稿されたコメントは 0 を基準にする。
 
@@ -257,7 +264,7 @@ Checks の行は、確定した結果どうしを比較する。確定した結�
 
 行の時刻は検知した時刻とする。本文は、Checks failed が最初に失敗したチェックの名前とほかに失敗したチェックの数（`+N`）、Changes requested が最初のレビュアーのログイン名とほかに変更を求めたレビュアーの数（`+N`）で、Conflicts と Mergeable は本文を持たない。Checks passed は本文を持たない。押すと開く場所は、Checks failed と Checks passed が Checks、Conflicts が Base、Changes requested が Review、Mergeable が PR のページである。失敗したチェックは、完了した GitHub Actions の job のうち結果が success、neutral、skipped 以外のものと、状態が FAILURE または ERROR の Commit status である。完了していない job と、PENDING または EXPECTED の Commit status は失敗に含めない。名前を取得できなければ本文を持たない。
 
-**Merged、Closed、Reopened の行**。マージされた PR では、GitHub がタイムラインに MERGED_EVENT と CLOSED_EVENT の両方を生成する（0.3.0 の実データで、同じ時刻の 2 行として確認）。MERGED_EVENT と対になる CLOSED_EVENT（同じ PR の、MERGED_EVENT の時刻以降の CLOSED_EVENT）は、行にも通知にもしない。マージされた PR は再オープンできないので、MERGED_EVENT より前の CLOSED_EVENT（クローズ、再オープンのあとのマージ）は Closed の行にする。Reopened の行は REOPENED_EVENT から生成し、自分の操作かは問わない。自分が再オープンした場合は、行を既読で生成し、通知しない。
+**Merged、Closed、Reopened の行**。マージされた PR では、GitHub がタイムラインに MERGED_EVENT と CLOSED_EVENT の両方を生成する（0.3.0 の実データで、同じ時刻の 2 行として確認）。MERGED_EVENT と対になる CLOSED_EVENT（同じ PR の、MERGED_EVENT の時刻以降の CLOSED_EVENT）は、行にも通知にもしない。マージされた PR は再オープンできないので、MERGED_EVENT より前の CLOSED_EVENT（クローズ、再オープンのあとのマージ）は Closed の行にする。Reopened の行は REOPENED_EVENT から生成し、自分の操作かは問わない。自分が再オープンした場合は、行を既読で生成し、通知しない。この行も復帰の契機で、Dismiss しているカードは元の場所に復帰する（「Dismiss」）。
 
 **監視開始より前の出来事**。owner の監視開始時刻は、owner を追加した時点、enabled にした時点、DB を空の状態で起動した時点である。この時刻より前の出来事は行にしない。監視開始時刻を設定するときは、その owner の PR の前回の値と Reaction の基準値を破棄する。出来事は、その owner で最後に取得に成功した時刻から 5 分さかのぼった時刻（監視開始時刻より前にはしない）以降のものを取得して行にする。PR を初めて検出した場合と、Dismiss の記録だけが残る PR を再発見した場合も同じで、それより前の出来事は行にしない。アプリの停止中に起きた出来事は、この時刻より後なので行になる。例外として、知らない開いている PR を初めて検出したときと、監視開始時刻を設定したときは、今も続いているレビュー依頼を、時刻に関係なく未読の行にする（取得の範囲が制限するのは、ほかの出来事の取得だけである）。この行は、依頼が監視開始時刻以降なら通知し、監視開始時刻より前なら通知しない。Dismiss の記録だけが残る PR、Dismiss しているカード、閉じた PR には、この例外を適用しない。これらでは、取得の範囲の中の依頼の出来事だけが行と復帰の契機になる。
 
@@ -267,12 +274,13 @@ Dismiss は、対応を終えたカードを一覧から除く操作である。
 
 - カードの ×、右クリックのメニューの `Dismiss`、⌫ で Dismiss する。Dismiss したカードは、All、Review、Mine から除き、`Dismissed` の一覧（「Dismissed の一覧」）に移る。
 - `Dismissed` の一覧のカードは、Dismiss してから m 日（設定、初期値 7 日）が経過すると、一覧からも除く。それまでは `Restore`（ボタン、右クリックのメニュー、⌫）で元の場所に復帰できる。
-- マージまたはクローズされた PR は、その検知から n 日（設定、初期値 3 日）が経過すると、アプリが自動で Dismiss する。配置先（Review の `Done`、Mine の `Done`、配置なし）に関係なく、未読の行があっても Dismiss する。次のどれかに該当する PR は自動では Dismiss しない：マージまたはクローズのあとに Mentioned の行が生成された、マージまたはクローズのあとに Reply in a thread I commented in の行が生成された、利用者が `Restore` した。
+- マージまたはクローズされた PR のうち、Review または Mine の `Done` にあるカードは、`Done` に入った時刻とマージまたはクローズを検知した時刻の遅いほうから n 日（設定、初期値 3 日）が経過すると、アプリが自動で Dismiss する。配置なしのカードは、検知の時刻から n 日で Dismiss する（`Remove from …` で取り除いたカードは、`Done` に入った時刻、`Done` の外から取り除いた場合は取り除いた時刻と、検知の時刻の遅いほうから数える）。利用者が `Done` から他の区画へ移動したカードは、`Done` の外にある間は自動では Dismiss せず、`Done` に戻すとその時点から n 日を数える。開いている PR は、`Done` にあっても自動では Dismiss しない。未読の行があっても Dismiss する。次のどれかに該当する PR は自動では Dismiss しない：マージまたはクローズのあとに Mentioned の行が生成された、マージまたはクローズのあとに Reply in a thread I commented in の行が生成された、利用者が `Restore` した。これらの例外は、PR が再オープンされるまで続く。再オープンのあと再びマージまたはクローズされると、その検知から n 日を数える。
+- 自動の Dismiss の予定は、カードに `Dismissed in N days` として表示する（「カード」）。
 - 開いている PR は自動では Dismiss しない。0.3 の「更新がないまま 14 日たつと表示しない」規則と、ほかの人の Draft を表示しない規則はない。ほかの人の Draft も、ほかの PR と同じく表示し、不要なら利用者が Dismiss する。
 - 自動の Dismiss と、m 日の経過による一覧からの除去は、ポップオーバーを開いている間（常時表示ウインドウにフォーカスがある間を含む）は行わず、閉じたときに行う。
 - 元の場所とは、Dismiss する前の配置先、区画、順位である。順位は Dismiss しても保ち、復帰したカードは、その区画の今のカードとの前後関係に従う位置に戻る。
 
-**復帰の契機**。Dismiss しているカード（`Dismissed` の一覧にあるカードと、m 日が経過して一覧から除いたカード）は、次の 4 つの行のどれかを生成すると元の場所に復帰し、その行を未読にして通知する（通知の要否は「通知の判定」に従う）。誰が Dismiss したか（利用者か、アプリか）で規則を変更しない。
+**復帰の契機**。Dismiss しているカード（`Dismissed` の一覧にあるカードと、m 日が経過して一覧から除いたカード）は、次の 4 つの行のどれかを生成すると元の場所に復帰し、その行を未読にして通知する（通知の要否は「通知の判定」に従う）。自分が再オープンした場合もカードは復帰するが、Reopened の行は既読で生成し、通知しない（「Merged、Closed、Reopened の行」）。誰が Dismiss したか（利用者か、アプリか）で規則を変更しない。
 
 | 契機 | 行 |
 | --- | --- |
@@ -281,11 +289,11 @@ Dismiss は、対応を終えたカードを一覧から除く操作である。
 | 自分へのレビューの依頼 | Review requested（チーム宛ては含まない） |
 | 再オープン | Reopened |
 
-- マージ済みの PR が復帰する場所は `Done` である。Review と Mine の `Done` にあった PR が再オープンされた場合は、クローズされる前の区画と順位に復帰する。
+- マージ済みの PR が復帰する場所は、Dismiss する前の場所（`Done`、または利用者が移動した `Done` の外の区画）である。Review と Mine の `Done` にあった PR が再オープンされた場合は、`Done` に入る前の区画と順位に復帰する。
 - 元の場所の記録がない場合（一覧から除いたあとの PR。「Dismiss の記録」）は、新しく発見した PR と同じ扱いにし、配置の規則（「Review」「Mine」）に従って配置する。
-- Dismiss している間は、上の 4 つ以外の行を生成しない（メンションのないコメント、Reaction、状態変化、マージとクローズなど）。復帰したあとも、Dismiss していた間の出来事は行にしない。
+- Dismiss している間は、上の 4 つ以外の行を生成しない（メンションのないコメント、Reaction、状態変化、マージとクローズなど）。復帰したあとも、Dismiss していた間の出来事は行にしない。Dismiss の記録だけが残る PR が復帰した場合と、新しく発見した閉じた PR を取り込んだ場合も同じく、取り込んだ時点より前の出来事は、あとの取得で再び受け取っても（取得の範囲の 5 分の重なりなど）行にしない。
 - Dismiss しているカードは、出来事の検知だけを続ける。状況（チェックの結果など）と Reaction は取得せず、状況アイコンも表示しない。復帰した時点から取得を再開し、Reaction はその時点の件数を基準にする。
-- Dismiss している間は状況を取得しないので、その間のマージとクローズは、カードが復帰したとき、または Restore したときに再開する状況の取得で検知する。ただし Dismiss しているカードを出来事の取得または検索の結果で調べたときに閉じていると分かった場合は、m 日の経過のときに Dismiss の記録を残さない。`Done` の中の位置と n 日の起点は、その検知の時刻である。Dismiss する前にマージまたはクローズされていた PR が復帰した場合も、その時点から改めて n 日の経過を数える。ただし Restore した PR は自動では Dismiss しない（上の例外）。
+- Dismiss している間は状況を取得しないので、その間のマージとクローズは、カードが復帰したとき、または Restore したときに再開する状況の取得で検知する。ただし Dismiss しているカードを出来事の取得または検索の結果で調べたときに閉じていると分かった場合は、m 日の経過のときに Dismiss の記録を残さない。`Done` の中の位置と n 日の起点は、その検知の時刻である。Dismiss する前にマージまたはクローズされていた PR が復帰した場合も、その時点から改めて n 日の経過を数える。ただし Restore した PR は自動では Dismiss しない（上の例外）。閉じた PR が復帰の契機の行で復帰した場合と、新しく発見した閉じた PR では、n 日を数えるのは契機が Review requested または Reopened の行のときだけである。契機が Mentioned または Reply in a thread I commented in の行なら、その行はマージまたはクローズのあとの行なので、上の例外により自動では Dismiss しない。
 
 **Dismiss の記録**。`Dismissed` の一覧から除いた PR は、カード、行、配置を削除する。開いている PR の場合だけ、Dismiss したことを示す記録（PR の id と、記録した時点の `updatedAt`）を残す。記録がないと、通常のコメントで更新された PR を、初めて発見した PR として All に表示してしまうためである。記録のある PR を検索で発見しても、上の 4 つの行を生成しない限り表示しない。閉じた PR は記録を残さず、閉じた PR の検索（「API の使い分け」）で再発見したときに、上の 4 つの行を生成した場合だけ表示する。記録は、その PR を次に調べたとき（検索の結果または出来事の取得）に閉じていると分かれば削除し、それ以外は、その owner またはアカウントを削除するまで残す。
 
@@ -318,9 +326,9 @@ Mute と Dismiss の違い：
 ## カードの表示と監視
 
 - カードが一覧から除かれるのは、利用者が Dismiss したときと、マージまたはクローズされた PR を日数の経過でアプリが Dismiss したときだけである（「Dismiss」）。これとは別に、disabled の owner の PR と、読めなくなった PR のカードは表示しない。既読と未読、更新からの日数、Draft かどうかは表示に関係しない。
-- Merged／Closed：左の縦線とラベルが Merged／Closed になり、状況アイコンは表示しない。Review と Mine では `Done` に移動する。n 日後に自動で Dismiss する（「Dismiss」）。
-- disabled の owner の PR と読めなくなった PR（id で取得して見つからないと返された PR）は、配置、Mute、Dismiss の状態を保ち、n 日と m 日の経過もそのまま数える。Dismiss していても `Dismissed` の一覧とその数に含めない。`place`、`dismiss`、`restore` は `not_found` である。owner を再び enabled にすると、配置と Dismiss の状態はそのまま有効になる。
-- 読めなくなった PR は、未読の行があってもカードを表示せず、青い点を付けず、通知もしない。状態は保存し、再び読めるようになると元に戻る。戻ったときに青い未読の行があれば、Restore と同じ規則で青い点を付ける。検索結果に出なくなっただけではカードを変更しない。
+- Merged／Closed：左の縦線とラベルが Merged／Closed になり、状況アイコンは表示しない。Review と Mine では、検知した時点で `Done` に移動する（利用者は `Done` の外へ移動できる）。`Done` にある間と配置なしの間は、n 日後に自動で Dismiss する（「Dismiss」）。
+- disabled の owner の PR と読めなくなった PR（id で取得して、GitHub が NOT_FOUND のエラーを付けて `null` を返した PR）は、配置、Mute、Dismiss の状態を保ち、n 日と m 日の経過もそのまま数える。Dismiss していても `Dismissed` の一覧とその数に含めない。`place`、`dismiss`、`restore` は `not_found` である。owner を再び enabled にすると、配置と Dismiss の状態はそのまま有効になる。
+- 読めなくなった PR は、未読の行があってもカードを表示せず、青い点を付けず、通知もしない。状態は保存し、再び読めるようになると元に戻る。戻ったときに青い未読の行があれば、Restore と同じ規則で青い点を付ける。検索結果に出なくなっただけではカードを変更しない。NOT_FOUND 以外のエラー（FORBIDDEN など）を付けて、またはエラーを付けずに `null` が返った PR は、読めなくなった PR にせず、1 件まで分割しても失敗した状況の取得と同じく扱う（カードを保ち、`status_fetch_failed` を付けて毎回再試行する。「取得の成功と失敗」）。
 - カードの追加時刻（`Recently added` の並びの基準）は、カードが初めて表示された時刻で、Restore や復帰でも変更しない。
 
 **監視**。Dismiss していないカードの PR は、マージやクローズのあとも、状況と出来事と Reaction を取得する。Dismiss している PR は、出来事の検知だけを行う（「Dismiss」）。Dismiss の記録だけが残る PR と、記録のない閉じた PR は、検索で再発見したときにだけ出来事を取得する。通知 API の通知は、reason に関係なく、取得している PR についてだけ再取得の合図になる（「API の使い分け」）。
@@ -348,12 +356,12 @@ Mute と Dismiss の違い：
 | ⌘C | 文字を選択していればその文字を、選択していなければ選択中のカードまたは行のリンク（`Copy link` と同じ）をコピーする |
 | ⌫ | 選択中のカードを Dismiss する。Dismissed の一覧では Restore する |
 | ⌥↑／⌥↓ | 選択中のカードを、区画の中で Mute の対象でないカードの間で 1 つ上／下に移動する（Review と Mine の `Done` 以外の区画。Mute の対象のカードでは何もしない） |
-| D／T／W | 選択中のカードを Review の `Doing`／`Todo`／`Waiting` に移動する（Review タブだけ。位置は「Review」の規則） |
+| D／T／W | 選択中のカードを Review の `Doing`／`Todo`／`Waiting` に移動する（Review タブだけ。`Done` のカードにも行える。位置は「Review」の規則） |
 | ⌘1／⌘2／⌘3 | All／Review／Mine のタブを開く |
 | Esc | Dismissed の一覧からタブに戻る |
 | ⌘=、⌘−、⌘0 | 文字の大きさを変更する（「文字の大きさ」） |
 
-カードの見出しと行のどちらを選んでいても、⌫、⌥↑／⌥↓、D／T／W はそのカードを対象にする。配置できない移動（`Done` のカード、Mine のカードへの D／T／W、All での ⌥↑／⌥↓、Mute の対象のカードでの ⌥↑／⌥↓）は何もしない。Mute の対象のカードのヒントには `⌥↑↓ Reorder` を表示しない。
+カードの見出しと行のどちらを選んでいても、⌫、⌥↑／⌥↓、D／T／W はそのカードを対象にする。配置できない移動（`Done` のカードでの ⌥↑／⌥↓、Mine のカードへの D／T／W、All での ⌥↑／⌥↓、Mute の対象のカードでの ⌥↑／⌥↓）は何もしない。Mute の対象のカードのヒントには `⌥↑↓ Reorder` を表示しない。
 
 **検索欄**。ポップオーバーを開いたときに検索欄にフォーカスは移らない。⌘F で検索欄に移る。検索欄で Esc を押すと、文字があれば文字を消して一覧に戻り、空なら一覧に戻るだけである（ポップオーバーは閉じない）。検索欄で ↓ を押しても一覧に戻る。検索欄にいる間、⇧R、D、T、W、⌫ は文字の入力と編集に使用する。検索の文字はタブごとに別に持ち、ポップオーバーを閉じたとき（常時表示ウインドウは閉じたとき）に消す。Dismissed の一覧は、タブとは別の検索の文字を持ち、一覧を閉じたときに消す（「Dismissed の一覧」）。
 
@@ -362,8 +370,9 @@ Mute と Dismiss の違い：
 | 選択 | ヒント |
 | --- | --- |
 | カードの見出し（Review の `Done` 以外の区画） | `↑↓ Move  ⏎ Open  ⌥↑↓ Reorder  D T W Move to  ⌫ Dismiss  ⇧R Mark all read  ⌘F Search` |
+| カードの見出し（Review の `Done`） | `↑↓ Move  ⏎ Open  D T W Move to  ⌫ Dismiss  ⇧R Mark all read  ⌘F Search` |
 | カードの見出し（Mine の `Done` 以外） | `↑↓ Move  ⏎ Open  ⌥↑↓ Reorder  ⌫ Dismiss  ⇧R Mark all read  ⌘F Search` |
-| カードの見出し（All、`Done`） | `↑↓ Move  ⏎ Open  ⌫ Dismiss  ⇧R Mark all read  ⌘F Search` |
+| カードの見出し（All、Mine の `Done`） | `↑↓ Move  ⏎ Open  ⌫ Dismiss  ⇧R Mark all read  ⌘F Search` |
 | カードの見出し（Dismissed の一覧） | `↑↓ Move  ⏎ Open  ⌫ Restore  esc Back  ⌘F Search` |
 | 行 | `↑↓ Move  ⏎ Open  ⇧R Mark all read  ⌘F Search` |
 | 何も選択していない | `↑↓ Move  ⇧R Mark all read  ⌘F Search` |
@@ -380,14 +389,15 @@ Mute と Dismiss の違い：
 | `Open on GitHub` | ⏎ と同じ |
 | `Copy` | 選択している文字をコピーする（文字を選択しているときだけ） |
 | `Copy link` | PR の URL をコピーする |
-| `Move to Doing`、`Move to Todo`、`Move to Waiting` | Review のカードを移動する（今の区画と `Done` を除く） |
-| `Remove from Review`、`Remove from Mine` | 配置なしにする（自分が作成した PR の Mine と、`Done` のカードを除く） |
+| `Move to Doing`、`Move to Todo`、`Move to Waiting`、`Move to Done` | Review のカードを移動する（今の区画を除く。`Done` のカードにも表示する） |
+| `Move to Done`、`Move to Mine` | Mine の 1 本目の一覧のカードを Mine の `Done` へ、Mine の `Done` のカードを 1 本目の一覧の末尾へ移動する |
+| `Remove from Review`、`Remove from Mine` | 配置なしにする（自分が作成した PR の Mine を除く。`Done` のカードにも表示する） |
 | `Add to Review`、`Add to Mine` | 配置なしのカードを `Todo` の末尾、Mine の末尾に追加する。マージまたはクローズされた PR はそのタブの `Done` に配置する |
-| `Mute this pull request`、`Mute owner/repo`、`Mute @alice` | Mute する（alice は作者。対象がすでに Mute なら `Unmute …`） |
+| `Mute this pull request`、`Mute owner/repo`、`Mute @alice` | Mute する（alice は作者。対象がすでに Mute なら `Unmute …`）。自分が作成した PR では `Mute @<自分の login>` を表示しない（自分を Mute している場合だけ `Unmute @<自分の login>` を表示する） |
 | `Dismiss` | ⌫ と同じ |
 | `Mark all as read` | ⇧R と同じ |
 
-行の右クリックのメニューは `Open on GitHub`（その出来事の場所）、`Copy`、`Copy link`（その出来事の URL。出来事の URL がない行は PR の URL）、`Mute @alice`（alice は行の actor。actor がない行と自分の行では表示しない）、`Mark all as read` である。Dismissed の一覧のカードのメニューは `Open on GitHub`、`Copy`、`Copy link`、`Restore` である。
+行の右クリックのメニューは `Open on GitHub`（その出来事の場所）、`Copy`、`Copy link`（その出来事の URL。出来事の URL がない行は PR の URL）、`Mute @alice`（alice は行の actor。alice をすでに Mute していれば `Unmute @alice`。actor がない行と自分の行では表示しない）、`Mark all as read` である。Dismissed の一覧のカードのメニューは `Open on GitHub`、`Copy`、`Copy link`、`Restore` である。
 
 ## 設定項目
 
@@ -423,7 +433,7 @@ General と Dismissed の各行の 1 行の説明は次のとおりである。L
 | Muted | `Pull requests`。説明 "Single pull requests you muted." | 同じ形の一覧（`owner/repo#number`） |
 | Remove | `Remove this account`。説明は "Deletes this account and its owners from shiibar-gh: token, PRs, mutes and settings. Nothing changes on GitHub." | `Remove…`（確認のダイアログのあと削除する） |
 
-Muted の一覧の入力欄は、`Add` を押すか Enter で確定する。空の値と、すでにある名前は追加しない（`Add` は押せない）。リポジトリの欄は `owner/repo` の形、Pull requests の欄は `owner/repo#number` の形でなければ追加しない。Pull requests の欄は、そのアカウントの知っている PR だけを追加できる（ワイヤの `mute`）。
+Muted の一覧の入力欄は、`Add` を押すか Enter で確定する。空の値と、すでにある名前は追加しない（`Add` は押せない）。入力した文字は、デーモンが受け付けるまで欄に残し、受け付けたら消す。デーモンが拒否したときは文字を残し、その行の説明の下に、ほかの項目の失敗と同じ表示で `Couldn't mute: <理由>` を表示する（`−` による解除の失敗は `Couldn't unmute: <理由>`）。理由は「操作の反映」と同じくデーモンの `error`（接続できなければ `daemon not running`）で、`not_found` だけは読める文言にする：`pull request not found`（Pull requests の欄）、`repository not found`、`user not found`、解除では `not muted`。リポジトリの欄は `owner/repo` の形、Pull requests の欄は `owner/repo#number` の形でなければ追加しない。Pull requests の欄は、そのアカウントの知っている PR だけを追加できる（ワイヤの `mute`）。
 
 owner を選んだとき：Owner／Notifications の 2 つのタブ（セグメント）。開いたときは Owner。
 
@@ -475,7 +485,7 @@ Copy… のシート（題は `Copy table to example-org`）は、`Copy from` �
 - トークンの期限の 7 日前からそのアカウントに警告を付ける。期限のないトークンは警告しない。期限を過ぎたトークンは、無効なトークン（401）として扱う。
 - トークンが 401 を返すか期限を過ぎると、そのアカウントのすべての取得を止めて警告する。トークンを差し替えると、次の定期取得で自動で再開する。
 - トークンのないアカウント（`token reset` のあと）は取得せず、`no_token` の警告を付ける。トークンを登録すると、次の定期取得で再開する。このアカウントでの `public` 以外の `owner_add` と `owner_lookup` は `invalid`（`Account has no token`）で拒否する。認証なしで GitHub に問い合わせることはない。
-- 応答に `X-GitHub-SSO` が付いたら、SSO の承認が必要という警告を付けるかを判定する。ヘッダーは organization の数値の id を返す（`X-GitHub-SSO: partial-results; organizations=21955855,20582480`。docs.github.com/en/rest/authentication/authenticating-to-the-rest-api で確認、2026-11-05）ので、そのアカウントの登録済み owner の数値の id（`owner lookup` で保存した `github_id`）と比較し、一致した owner ごとに `SSO authorization required for example-org` の警告を付ける。一致しない organization は無視し、警告を付けない。1 つの organization への 403 では、ヘッダーは承認の URL だけを返し、organization の id を返さない（同じページで確認、2026-11-10）。この形は、organization または user の owner の検索で受けたときはその owner の `sso_required` とし、Public の検索と状況の取得（どの organization の承認かが分からない）と、複数の owner にまたがる要求（通知、チームの所属）で受けたときはその要求の失敗として扱う。organization または user の owner の状況の取得（owner ごとの要求）で受けたときは、検索と同じくその owner の `sso_required` とする（警告は付けず、再試行と 5 分の帯の対象にする）。URL だけの形は 403 の応答でだけ評価し、200 の応答では `organizations=` の形だけを評価する。チームの所属の取得（`/user/teams`）の 403 に SSO のヘッダーが付いたときも、複数の owner にまたがる要求として失敗にする（`scope_missing` にはしない）。owner を示さない `sso_required` の警告は付けない。`organizations=` の形で付けた警告の `url` は `null` で、ほかの organization の URL を付けない。帯の `Authorize…` はヘッダーの URL（なければ GitHub のトークンの設定ページ）を開く。ほかの owner の取得は続くので三角は付けない。承認後は次の取得でヘッダーが消え、警告も消える。
+- 応答に `X-GitHub-SSO` が付いたら、SSO の承認が必要という警告を付けるかを判定する。ヘッダーは organization の数値の id を返す（`X-GitHub-SSO: partial-results; organizations=21955855,20582480`。docs.github.com/en/rest/authentication/authenticating-to-the-rest-api で確認、2026-11-05）ので、そのアカウントの登録済み owner の数値の id（`owner lookup` で保存した `github_id`）と比較し、一致した owner ごとに `SSO authorization required for example-org` の警告を付ける。一致しない organization は無視し、警告を付けない。1 つの organization への 403 では、ヘッダーは承認の URL だけを返し、organization の id を返さない（同じページで確認、2026-11-10）。この形は、organization または user の owner の要求（検索と、owner ごとの状況の取得の `Status`、`Compare`、`Contexts`）で受けたときはその owner の `sso_required` の警告とし、警告の `url` はヘッダーの URL にする。このときは失敗に数えず（「取得の成功と失敗」）、その owner のその回の残りの取得は行わない。Public の要求（検索と状況の取得。どの organization の承認かが分からない）と、複数の owner にまたがる要求（通知、チームの所属）で受けたときは、その要求の失敗として扱い、再試行と 5 分の帯の対象にする。502 または 504 で分割した Public の検索の一部だけがこの形で拒否されたときは、拒否された部分だけを失敗にし、応答した部分の結果は使用する。URL だけの形は 403 の応答でだけ評価し、200 の応答では `organizations=` の形だけを評価する。チームの所属の取得（`/user/teams`）の 403 に SSO のヘッダーが付いたときも、複数の owner にまたがる要求として失敗にする（`scope_missing` にはしない）。owner を示さない `sso_required` の警告は付けない。`organizations=` の形で付けた警告の `url` は `null` で、ほかの organization の URL を付けない。帯の `Authorize…` はヘッダーの URL（なければ GitHub のトークンの設定ページ）を開く。ほかの owner の取得は続くので三角は付けない。承認後は次の取得でヘッダーが消え、警告も消える。失敗した要求だけを再実行する取得（「取得の成功と失敗」）は、要求を再実行した owner の警告だけを更新し、再実行しなかった owner の警告と、ほかの応答で受けた `organizations=` の形の警告を消さない（消すのは、すべての要求を行う取得である）。
 - Create token… は `https://github.com/settings/tokens/new?scopes=repo,notifications,read:org&description=shiibar-gh` をブラウザで開く。期限は指定せず、GitHub の既定に従う。
 
 **トークンの状態**。設定画面の Token の行の右には、次のうち最も上のものを 1 つ表示する：`Checking…`（進行中）、`Keychain unavailable`（「Keychain を読めないとき」。Edit… を表示しない）、`No token`（灰、`no_token`。Edit… は空の欄で開く）、`Invalid`（赤、`token_invalid`）、`Expires in N days`（黄、`token_expiring`。1 日未満は切り上げて `Expires in 1 day`）、`Missing scope`（黄、`scope_missing`）、`SSO authorization required`（黄、`sso_required`）。正常なときは何も表示しない。
@@ -492,8 +502,9 @@ Copy… のシート（題は `Copy table to example-org`）は、`Copy from` �
 
 | 必要なもの | 取り方 |
 | --- | --- |
+| 取得の開始（login の追従） | アカウントの取得（Reaction だけの取得を除く）は、最初に GraphQL の `viewer { databaseId login }`（ログの名前は `Viewer`）を要求し、その login に表示を追従させる（「トークン」）。この要求が失敗すると、その回の取得をそこで終え、アカウントの取得の失敗として扱う（通常の待ち時間で再試行し、5 分の帯の対象。401 と上限は「取得の成功と失敗」の各規則）。失敗した要求だけを再実行する取得でも最初に要求する |
 | どの PR が更新されたか | アカウントごとに REST Notifications API（all=true。If-Modified-Since と X-Poll-Interval に従う）。通知は、取得している PR（Dismiss しているカードを含む）の再取得の合図としてだけ使用し、知らない PR と、Dismiss の記録だけが残る PR を取り込まない。reason で行の種類を決めない |
-| Review requested、Mentioned、Comment、Merged／Closed、Reopened、Added to／Removed from merge queue | 更新された PR の GraphQL timelineItems(since:)（ログの名前は `Events`）。nodes(ids:) でまとめて取る。行の種類は下の判定の表に従う。`RemovedFromMergeQueueEvent` は `actor`、`enqueuer`、`reason`、`createdAt`、`beforeCommit` を取得し、`beforeCommit` の `statusCheckRollup.contexts` から、CheckRun の `name`、`conclusion`、`detailsUrl`、`isRequired(pullRequestNumber:)` と、StatusContext の `context`、`state`、`targetUrl`、`isRequired(pullRequestNumber:)` を取得する（公開スキーマの照会と bevyengine/bevy の実データで確認、2026-11-13） |
+| Review requested、Mentioned、Comment、Merged／Closed、Reopened、Added to／Removed from merge queue | 更新された PR の GraphQL timelineItems(since:)（ログの名前は `Events`）。nodes(ids:) でまとめて取る。行の種類は下の判定の表に従う。`RemovedFromMergeQueueEvent` は `actor`、`enqueuer`、`reason`、`createdAt` を取得する。理由が `merged` 以外の取り除きがあれば、その PR だけの要求（ログの名前は `MergeQueue`。`isRequired` に PR の番号を変数で渡すので、複数の PR をまとめる `Events` では取得できない）で、マージキューの追加と取り除きの出来事と `beforeCommit` を取得し、`beforeCommit` の `statusCheckRollup.contexts` から、CheckRun の `name`、`conclusion`、`detailsUrl`、`isRequired(pullRequestNumber:)` と、StatusContext の `context`、`state`、`targetUrl`、`isRequired(pullRequestNumber:)` を取得する（公開スキーマの照会と bevyengine/bevy の実データで確認、2026-11-13） |
 | Reply | Reply の対象のスレッドの id を記録し、id でスレッドのコメントを取得する |
 | 状況アイコン、状態ラベル、assignees、作成時刻、更新時刻 | GraphQL：reviewDecision、statusCheckRollup、mergeable、mergeStateStatus、isDraft、compare.behindBy、headRefOid、assignees、createdAt（`PullRequest.createdAt: DateTime!`。公開スキーマで確認、2026-11-10）、updatedAt。nodes(ids:) で 50 件ずつ。Dismiss していないカードの PR だけが対象で、`updatedAt` が進んだ PR の出来事を取得する |
 | 失敗したチェックの名前 | REST の GitHub Actions（head_sha で絞った workflow run と、その job）の job 名、次に Commit status の名前。statusCheckRollup に含まれない run（Copilot のレビューなど、event が dynamic の run）は除く |
@@ -510,29 +521,29 @@ Copy… のシート（題は `Copy table to example-org`）は、`Copy from` �
 - Dismiss の記録だけが残る PR は、記録した `updatedAt` より進んでいれば出来事を取得し、復帰の契機の行を生成した場合だけ、新しく発見した PR として表示する。
 - Dismiss しているカードと、Dismiss の記録だけが残る PR で、出来事を取得して復帰の契機がなかったときは、保存している `updatedAt` を検索の結果の値に進める。そのため、次に更新されるまで同じ PR の出来事を再取得しない。閉じていると分かった記録だけの PR は、記録を削除する（「Dismiss の記録」）。
 - 知らない開いている PR は、新しく発見した PR として取り込み、表示する。
-- 知らない閉じた PR は、出来事を取得し、復帰の契機の行を生成した場合だけ、新しく発見した PR として表示する。生成しなければ取り込まない。
+- 知らない閉じた PR は、出来事を取得し、復帰の契機の行を生成した場合だけ、新しく発見した PR として表示する。生成しなければ取り込まない。取り込んだときに生成する行は、復帰の契機の 4 つの行（Mentioned、Reply in a thread I commented in、Review requested、Reopened）だけである。出来事の取得に失敗したときは、その PR と owner を取り直しの対象として記録し、以降の取得でその owner の取得のたびに、状況と、失敗した時点の取得の範囲からの出来事を取り直す（owner の取得の範囲が進んで検索に出なくなっても出来事を失わない）。GitHub が見つからないと返した場合と、owner を削除した場合は、記録を消す。
 - PR の更新時刻（`updated_at`）は、閉じた PR でも会話欄のコメントとレビューで進む（rust-lang/rust の閉じた PR で、最後のコメントまたはレビューの時刻と `updated_at` の一致を `gh api search/issues` で確認、2026-11-12。#165844、#165805、#165820、#163225）。アサインでも進む（rust-lang/rust の #165870 と #165869 で、`assigned` の出来事の時刻と `updated_at` の一致を `gh api` で確認、2026-11-13）。そのため、発見の範囲より古い PR に新しくアサインされた場合も、`involves:@me updated:>=D` の検索で発見する。ブランチの削除とラベルの変更でも進むので、カードを表示または復帰させる契機は、更新時刻ではなく行の生成にする。
 
 **レート制限**。上限は GitHub のもの（アカウントごと。REST API は 1 時間に 5,000 リクエスト、GraphQL API は 1 時間にポイントで数える別の上限。docs.github.com の「Rate limits for the REST API」で確認、2026-11-09）をそのまま使用し、アプリ側の上限は設けない。GraphQL の応答の `rateLimit`（`limit`、`remaining`、`resetAt`）と REST の応答ヘッダー（`x-ratelimit-limit`、`x-ratelimit-remaining`、`x-ratelimit-reset`）を毎回記録する。使用率がどちらかの API で 80% 以上になると警告する（`graphql_near_limit`、`rest_near_limit`）。取得の間隔は設定の値のまま変更しない。残量が尽きたときは、そのアカウントの通知を含むすべての取得を止め、再開の時刻を付けたエラーを表示する。再開後は通知 API の since で停止中の通知を取得するので、失うのは停止中に起きて元に戻った状態の変化と、出来事の検知時刻だけである。停止中は `refresh` も取得しない。二次レート制限も同じ扱いで、指定の時間（retry-after、x-ratelimit-reset、指定がなければ 1 分）だけそのアカウントのすべての取得を止め、再開の時刻を表示し、自動で再開する。
 
 使用量はポップオーバーの見出しの 2 行目に、`Updated … ago` に続けて、細いバーとポイント（`1,240 / 5,000`）で表示する。値は GraphQL と REST のうち使用率（使用量＝`limit` − `remaining` を上限で割った値）の高い方で、バーの長さは使用率、数字は使用量と上限である。マウスを乗せると `GraphQL API 1,240 / 5,000 · REST API 100 / 5,000` の形で両方の使用量と上限を表示する（GraphQL はポイント、REST はリクエストで、単位の表記はしない）。80% 以上はバーと数字を警告の色にする。値がまだないときはバーを表示せず `API –` とする。表示の詳細は設計図に従う。設定画面には使用量を表示しない。
 
-**取得の成功と失敗**。取得は、要求（GitHub への 1 回の HTTP の問い合わせ）を単位に成否を扱う。要求の種類は、owner の検索、状況、出来事、通知、チームの所属、失敗したチェックの名前、Reaction である。
+**取得の成功と失敗**。取得は、要求（GitHub への 1 回の HTTP の問い合わせ）を単位に成否を扱う。要求の種類は、取得の開始（`Viewer`）、owner の検索、状況、出来事、通知、チームの所属、失敗したチェックの名前、Reaction である。
 
 - id で複数の項目をまとめる GraphQL の要求は、ログの名前で `Status`（状況）、`Compare`（base との差）、`Contexts`（チェックの名前）、`Reactions`（Reaction）が 1 つの要求で 50 件まで、`Events`（出来事）が 5 件までである。owner の検索（`Search`）は 1 つの要求に複数の検索を並べる。502 と 504 の応答を受けた要求は、その要求だけを、件数（id の数、並べた検索の数）を半分にした 2 つの要求に分割してすぐ再試行する。分割した要求がまた 502 または 504 なら、1 件になるまで同じく分割する。1 件の要求の失敗は、その要求の失敗である。
 - 成功した要求の結果は、ほかの要求の成否を待たずに反映する。
 - 失敗した要求は記録し、次の取得（下の待ち時間のあと）では、失敗した要求だけを再実行する。前回の通常の取得の開始から設定の間隔がたった時点では、通常の取得（すべての要求）を行う。
 
-owner の取得の成功は、その owner の `Search`、`Status`、`Compare`、`Contexts` の要求がすべてエラーなく終わったことを指す。状況の取得は owner ごとの要求である。1 件まで分割しても 502 または 504 で失敗した `Status`、`Compare`、`Contexts` の要求は、owner の失敗にせず、その PR に警告（`status_fetch_failed`）を付けて、次の取得から毎回再試行する。`Events`、`Reactions`、失敗したチェックの名前（REST）の要求は PR ごとの扱いで、owner の失敗にしない（出来事の失敗は下の取り直しの時刻と `events_fetch_failed`）。成功した時刻（再実行で成功した場合は、最初の取得を開始した時刻）は出来事を取得する範囲（「監視開始より前の出来事」）の始まりに使用する。アカウントの取得の成功は、そのアカウントのすべての owner の取得と通知の確認がエラーなく終わったことを指す。1 つでも失敗した要求が残っている間は、アカウントの取得は失敗である。Updated … ago は、そのアカウントの取得が最後に成功して終わった時刻である（成功したことがなければ `Not updated yet`）。失敗が続く間は時刻が進まないので、帯が出る前でも古いデータだと分かる。PR も出来事もなかった場合も、成功なら更新する。上限、401、トークンなし、Keychain を読めない状態で取得を止めている間は進まない。
+owner の取得の成功は、その owner の `Search`、`Status`、`Compare`、`Contexts` の要求がすべてエラーなく終わったことを指す。状況の取得は owner ごとの要求である。1 件まで分割しても 502 または 504 で失敗した `Status`、`Compare`、`Contexts` の要求は、owner の失敗にせず、その PR に警告（`status_fetch_failed`）を付けて、次の取得から毎回再試行する。まだ知らない PR（検索で初めて検出し、状況を一度も取得できていない PR）では、カードも警告も表示せず、次の取得から毎回再試行するだけである（警告の文に必要な owner/repo #番号を、検索の結果から取得できないため）。`Events`、`Reactions`、失敗したチェックの名前（REST）の要求は PR ごとの扱いで、owner の失敗にしない（出来事の失敗は下の取り直しの時刻と `events_fetch_failed`）。owner の成功の時刻は、その取得を開始した時刻である（結果を反映した時刻ではない。再実行で成功した場合は、最初の取得を開始した時刻）。この時刻を、出来事を取得する範囲（「監視開始より前の出来事」）の始まりに使用する。アカウントの取得の成功は、そのアカウントのすべての owner の取得と通知の確認がエラーなく終わったことを指す。1 つでも失敗した要求が残っている間は、アカウントの取得は失敗である。ここでの失敗した要求は、取得の開始（`Viewer`）、owner の成功を決める要求（`Search`、`Status`、`Compare`、`Contexts`。1 件まで分割しても 502 または 504 で失敗した `Status`、`Compare`、`Contexts` を除く）、通知、チームの所属の要求だけである。PR ごとの要求（1 件まで分割しても失敗した `Status`、`Compare`、`Contexts`、`Events` とそれに続く要求（`MergeQueue` など）、`Reactions`、失敗したチェックの名前の REST）の失敗は、アカウントの取得を失敗にしない。Updated … ago は、そのアカウントの取得が最後に成功して終わった時刻である（成功したことがなければ `Not updated yet`）。失敗が続く間は時刻が進まないので、帯が出る前でも古いデータだと分かる。PR も出来事もなかった場合も、成功なら更新する。上限、401、トークンなし、Keychain を読めない状態で取得を止めている間は進まない。
 
 アカウントの定期取得（全 owner の検索と状況の取得、および通知の確認）は 1 回の取得として扱い、その終了時刻から次の取得の時刻を 1 つ決める。成功なら設定の間隔のあととする。失敗なら 5、10、20、40 秒と延ばし、40 秒のあとは 40 秒を繰り返す。どの待ち時間も設定の間隔を超えない。通知の確認は、前回の確認から X-Poll-Interval の秒数がたっていなければその回は省き、省いた回も成功として扱う（「通知 API の取り方」）。Reaction の取得は別の時刻（Reactions interval）で行い、アカウントの取得の成功と失敗の判定にも Updated にも関係しない。
 
 `refresh` はいつでもすぐに取得し、通常の 1 回の取得（すべての要求）として扱う。成功すれば失敗の回数を 0 に戻し、Updated を進め、次の定期取得をその終了時刻から設定の間隔のあとにする。失敗すれば失敗の回数を 1 つ進め、最初の失敗なら 5 分の起点になる。
 
-- 出来事の取得に失敗した PR は、失敗した時点の取得の範囲の始まりを、その PR の取り直しの時刻として記録する。次の取得ではその時刻から取り直し、成功すれば記録を消す。そのため、owner の成功の時刻が進んでも出来事を失わない。
+- 出来事の取得に失敗した PR は、失敗した時点の取得の範囲の始まりを、その PR の取り直しの時刻として記録する。次の取得ではその時刻から取り直し、成功すれば記録を消す。そのため、owner の成功の時刻が進んでも出来事を失わない。検索で発見した知らない閉じた PR（「API の使い分け」）も同じく、owner とともに記録して取り直す。
 - 通知 API の since と Last-Modified は常に進める。通知を合図にした取得に失敗した PR も、同じく取り直しの対象にする。知らない PR（repo#number → id の対応がない PR）の通知と、取得できる owner に属さない PR（disabled の owner、どの owner にも属さない PR）の通知は無視し、ほかの取得を妨げない。
 - 出来事の取得に続けて失敗する PR には、その PR を示す警告を付け、取得のたびに取り直す。
-- スコープ不足で取得できなかった部分は失敗に数えず、取得できる部分の取得を続けて警告する（`scope_missing`）。owner に結び付けられる SSO の未承認（`sso_required`）も同じく失敗に数えず、警告にする。その取得は成功として扱い、Updated は進む。
+- スコープ不足で取得できなかった部分は失敗に数えず、取得できる部分の取得を続けて警告する（`scope_missing`）。owner に結び付けられる SSO の未承認（`sso_required`）も同じく失敗に数えず、警告にする。その取得は成功として扱い、Updated は進む。ただし `sso_required` で止めた owner は、その owner の取得の成功ではないので、その owner の成功の時刻は進まない。承認のあとの取得では、前回の成功の時刻を基に出来事を取得する。
 - ネットワークの失敗、5xx、タイムアウト、本文が空の 200 の応答（GraphQL の応答を解釈できないもの）は失敗で、上の待ち時間で再試行する。
 - 取得の失敗の帯と三角（`fetch_failed`）は、最初の失敗から 5 分たっても成功していないときに表示し、成功で消す。それまでの失敗は、`Updated … ago` の時刻が進まないことだけで示す。最初の失敗の時刻は保存せず、デーモンの再起動で消える。上限による停止、401、トークンなし、Keychain を読めない状態の間は取得していないので、`fetch_failed` を付けない（それぞれの警告を表示する）。これらの停止を始めた時点で失敗の回数と最初の失敗の時刻は消え、再開後の最初の失敗から再び数える。
 - 401 は失敗で、トークンを差し替えるまでそのアカウントの取得を止める。
@@ -540,7 +551,7 @@ owner の取得の成功は、その owner の `Search`、`Status`、`Compare`�
 - 失敗はアカウントごとに扱い、ほかのアカウントの取得を止めない。1 つの owner の失敗は、同じアカウントのほかの owner の取得を止めない。
 - `refresh` は再試行の時刻を待たずにすぐに取得する。401 で止めたアカウントも 1 回だけ取得し、401 が続けば止めたままにする。Keychain を読めない状態では、まず Keychain を再読み込みする。
 
-**ログ**。デーモンのログのすべての行は、先頭に時差付きのローカル時刻（`2027-01-15 08:00:00+09:00`）を付ける。失敗した要求ごとに、`request of <login> failed after <ms> ms: <要求> (<件数>): <エラー>` の 1 行を info で記録する。`<要求>` は GraphQL ではクエリの名前（`GraphQL Status`）、REST では `GET <path>` である。`<件数>` は GraphQL では `ids: 50`（id を渡す要求）または `variables: 4`（それ以外）で、REST では省く。`<エラー>` は、GitHub が返した状態コードと、あれば `x-github-request-id`（`network: GitHub answered 502 (request id …)`）を含む。502 と 504 で分割して再試行した要求も、失敗のたびに記録する。REST の 404 は debug で記録する。アカウントの取得の失敗は、従来どおり `fetch of <login> failed: <エラー>` の 1 行も記録する。
+**ログ**。デーモンのログのすべての行は、先頭に時差付きのローカル時刻（`2027-01-15 08:00:00+09:00`）を付ける。失敗した要求ごとに、`request of <login> failed after <ms> ms: <要求> (<件数>): <エラー>` の 1 行を info で記録する。`<要求>` は GraphQL ではクエリの名前（`GraphQL Status`）、REST では `GET <path>` である。`<件数>` は GraphQL では、変数 `ids` に id の配列を渡す要求（`Status`、`Contexts`、`Reactions`、`Events`）では id の数（`ids: 50`）、それ以外の要求では変数の数（`variables: 6`）で、REST では省く。変数の数は項目の数と一致しないことがある。`Search` は検索 1 つにつき 1 つ、`Compare` は PR 1 件につき 2 つ（PR の id と head のコミット）の変数を使用するので、50 件の `Compare` は `variables: 100` になる。`<エラー>` は、GitHub が返した状態コードと、あれば `x-github-request-id` を含む（5xx は `network: GitHub answered 502 (request id …)`、4xx は `forbidden: … (GitHub answered 403, request id …)` の形）。502 と 504 で分割して再試行した要求も、失敗のたびに記録する。REST の 404 は debug で記録する。アカウントの取得が失敗した回は、その回の終わりに `fetch of <login> failed: <エラー>`（`<エラー>` はその回の最初の失敗）の 1 行も記録する。失敗した要求の数に関係なく、1 回の取得につき 1 行である。
 
 **状態の保存**。行の未読、配置（タブ、区画、順位、クローズ前の区画）、Dismiss（時刻と、自動の Dismiss をしない印）、Dismiss の記録、Mute（PR、リポジトリ、利用者）、カードの追加時刻、監視開始時刻、owner ごとの最後に取得に成功した時刻、アカウントごとの最後に取得に成功して終わった時刻、失敗した要求の記録、PR の前回の値（Checks の前回の確定した結果と、そのときの head のコミットを含む）、PR の作成時刻と自分の最新のレビューの時刻と自分または自分のチームへの最新の依頼の時刻、Reaction の基準値、設定（`text_size` を含む）、アカウント、owner、出来事の表はデーモンが SQLite に保存する（SQLite はデーモンに組み込み、macOS の libsqlite3 は利用しない）。最後に表示したタブ（ポップオーバーとウインドウで別々）、Group by、Then by、並び、グループの順番、折りたたみ、`+ N more PRs` の展開、ウインドウの位置と大きさ、`Keep on top` は画面の状態なので、アプリがアカウントごとに UserDefaults に保存する。検索の文字、文字の選択、Dismissed の一覧を開いているかは保存しない。GitHub 側には何も書き込まない。トークンは DB に保存せず Keychain に保存する。すべてのアカウントのトークンは Keychain の 1 つの項目にまとめて保存し、項目にはアカウントの id と login も記録する。開発版は再インストールのたびに Keychain の許可のダイアログを表示するので（ローカルの署名の ID には Team ID がなく、項目の許可がビルドごとの cdhash に結び付くため）、項目を 1 つにしてダイアログを 1 回に抑える。トークンの追加、置き換え、削除は、この項目を読み、変更して保存する。
 
@@ -588,7 +599,7 @@ owner の取得の成功は、その owner の `Search`、`Status`、`Compare`�
 
 **行のラベル**。行の種類のラベルは表の名前である。ただし長い名前は短くする：Comment on my PR と Comment on other PRs は `Comment`、Reply in a thread I commented in と Reply in a thread I was mentioned in は `Reply`、Review requested to my team は `Review requested`（本文の `for <チームの slug> team` で区別する）、Reaction to my comment は `Reaction`。Merged / Closed は `Merged` と `Closed` に区別する。
 
-**行の本文と移動先**。Review requested の本文は `for you`、Review requested to my team の本文は `for <チームの slug> team` である。Merged、Closed、Reopened の行と Approved の行は、出来事を起こした人を `by <ログイン名>` の形で本文に表示する。Added to merge queue の行も同じである。Removed from merge queue の行は、取り除いた人（チェックの失敗では github-merge-queue、手動では操作した人）を表示し、本文は理由と PR をキューに追加した人である（`Checks failed · added by alice`）。理由は `failed_checks` を `Checks failed`、`manual` を `Removed manually`、`merge_conflict` を `Merge conflict` と表示し、それ以外の値はそのまま表示する。キューに追加した人は、同じ PR の Added to merge queue の出来事のうち、まだ対応させていない最も古いものの actor とする。理由が `merged` の取り除きは、Merged の行で足りるので行にしない。GitHub が出来事の URL を返さない Review requested、Reopened（`ReopenedEvent` の項目は `actor`、`closable`、`createdAt`、`id`、`stateReason` で URL を持たない。スキーマの照会で確認、2026-11-13）、マージキューの行は、PR のページを開く。ただし理由が `failed_checks` の Removed from merge queue の行は、`beforeCommit`（マージキューが作成したコミット）のチェックから、失敗した必須の CheckRun の `detailsUrl`、なければ失敗した必須の StatusContext の `targetUrl`、なければ最初の失敗したチェックの URL、どれもなければ PR の Checks のページ（`/checks`）を開く。失敗は、CheckRun では `conclusion` が SUCCESS、NEUTRAL、SKIPPED 以外の完了したもの、StatusContext では `state` が FAILURE または ERROR のものである。`merge_conflict` では `beforeCommit` が `null` なので PR のページを開く。キューに追加した人の対応（Added to merge queue の actor）は変更しない（`enqueuer` は取り除いた人を返すため）。
+**行の本文と移動先**。Review requested の本文は `for you`、Review requested to my team の本文は `for <チームの slug> team` である。Merged、Closed、Reopened の行と Approved の行は、出来事を起こした人を `by <ログイン名>` の形で本文に表示する。Added to merge queue の行も同じである。Removed from merge queue の行は、取り除いた人（チェックの失敗では github-merge-queue、手動では操作した人）を表示し、本文は理由と PR をキューに追加した人である（`Checks failed · added by alice`）。理由は `failed_checks` を `Checks failed`、`manual` を `Removed manually`、`merge_conflict` を `Merge conflict` と表示し、それ以外の値はそのまま表示する。キューに追加した人は、同じ PR の Added to merge queue の出来事のうち、まだ対応させていない最も古いものの actor とする。理由が `merged` の取り除きは、Merged の行で足りるので行にしない。GitHub が出来事の URL を返さない Review requested、Reopened（`ReopenedEvent` の項目は `actor`、`closable`、`createdAt`、`id`、`stateReason` で URL を持たない。スキーマの照会で確認、2026-11-13）、マージキューの行は、PR のページを開く。ただし理由が `failed_checks` の Removed from merge queue の行は、`beforeCommit`（マージキューが作成したコミット）のチェックから、失敗した必須の CheckRun の `detailsUrl`、なければ失敗した必須の StatusContext の `targetUrl`、なければ最初の失敗したチェックの URL、どれもなければ PR の Checks のページ（`/checks`）を開く。失敗は、CheckRun では `conclusion` が SUCCESS、NEUTRAL、SKIPPED 以外の完了したもの、StatusContext では `state` が FAILURE または ERROR のものである。`merge_conflict` では `beforeCommit` が `null` なので PR のページを開く。キューに追加した人の対応（Added to merge queue の actor）は変更しない（`enqueuer` は取り除いた人を返すため）。`MergeQueue` の要求が権限の不足で拒否されたとき（403、または GraphQL の FORBIDDEN と INSUFFICIENT_SCOPES のエラー）も、Removed from merge queue の行はタイムラインの項目から生成する。本文は理由だけで、キューに追加した人を付けない。移動先は、理由が `failed_checks` なら上の順の最後の PR の Checks のページ（`/checks`。`beforeCommit` のチェックを読めないため）、それ以外の理由では PR のページである。ほかの失敗（5xx など）では、その PR の出来事の取得の失敗として取り直す。
 
 **選択とキー**。選択は、タブでは「区画（グループ）の見出し」「カードの見出し」「行」「カードの中の + N more」「Older activity on GitHub」「+ N more PRs（Show less）」を上から順に、Dismissed の一覧ではカードの見出しだけを移る。クリックでも選ぶ。行を選ぶと、その行を既読にする。キーの動作は「キーボード」の表に従う。
 
@@ -657,7 +668,7 @@ owner や PR を指す命令は `--account <account>` を必須にする。省�
 | status \<pr\> --account \<a\> | 状態ラベルと Review／Checks／Base |
 | activity [--account \<a\>] [--owner \<o\>]… [--authored｜--assigned｜--review-requested] [--search \<text\>] [--json] | Dismiss していないカードの行を新しい順に出力する（「CLI の activity」）。`--owner` は複数指定できる。`--search` は `list` と同じ規則で絞る |
 | read \<row\>… / read --all --account \<a\> | 行を既読にする（行を選ぶか開いたときと同じ）／Dismiss している PR の行を除くアカウントのすべての行を既読にする（ワイヤの `read_all`。⇧R より範囲が広い） |
-| place \<pr\> review doing｜todo｜waiting [--top｜--bottom｜--before \<pr\>] --account \<a\> / place \<pr\> mine [--top｜--bottom｜--before \<pr\>] --account \<a\> / place \<pr\> none --account \<a\> | Review の区画への追加と移動、Mine への追加と移動、配置なしへの変更（`Remove from …`）。位置を省略すると、`todo` へは `doing` と `waiting` からの移動なら先頭、それ以外は末尾に配置する（ワイヤの `place` と同じ） |
+| place \<pr\> review doing｜todo｜waiting [--top｜--bottom｜--before \<pr\>] --account \<a\> / place \<pr\> review done --account \<a\> / place \<pr\> mine [--top｜--bottom｜--before \<pr\>] --account \<a\> / place \<pr\> mine done --account \<a\> / place \<pr\> none --account \<a\> | Review の区画への追加と移動、Mine への追加と移動、Review と Mine の `Done` への移動、配置なしへの変更（`Remove from …`）。位置を省略すると、`todo` へは `doing` と `waiting` からの移動なら先頭、それ以外は末尾に配置する（ワイヤの `place` と同じ）。`done` は位置を取らない（`Done` の並びの規則で配置する） |
 | dismiss \<pr\> --account \<a\> / restore \<pr\> --account \<a\> | Dismiss と Restore |
 | mute pr｜repo｜user \<name\> --account \<a\> / unmute pr｜repo｜user \<name\> --account \<a\> / mutes --account \<a\> [--json] | Mute と解除、Mute の一覧の表示。`<name>` は `pr` では `<pr>`、`repo` では `owner/repo`、`user` ではログイン名 |
 | refresh [--account \<a\>] | 今すぐ取得する。定期取得と同じ内容（検索、状況、出来事、通知、Reaction）を取得し、反映が終わってから戻る。Keychain を読めない状態では再読み込みから始める |
@@ -731,23 +742,23 @@ Unix ソケットの NDJSON。1 接続 1 要求 1 応答。`subscribe` だけは
 
 アカウントの値は `{"id","login","color","token":{"registered","expires_at","last_test"},"updated_at","unread","warnings":[...],"rate_limit":{"graphql":{"used","limit","reset_at"},"rest":{...}},"owners":[...]}` である。`owners` は登録の順で、Public は常に最後である。`id` は GitHub のユーザーの数値の id を 10 進の文字列にしたもの（`"3407303"`）、`color` は `none`、`red`、`orange`、`yellow`、`green`、`blue`、`purple` のいずれかで、`account_color` の不正な値は `invalid` になる。`last_test` は保存済みのトークンの最後のテストの `{"at","results"}`（なければ `null`）。`rate_limit` の値がまだなければ `null`。`updated_at` はそのアカウントの取得が最後に成功して終わった時刻（なければ `null`）、`unread` はメニューバーの青い点の有無（「未読の消え方」）である。owner の値は `{"id","name","kind","github_id","enabled","notify","skip_drafts","pr_count"}` で、`pr_count` はその owner の Dismiss していないカードの数である。`kind` は `org`、`user`、`public` のいずれかである。`id` はデーモンが割り当てる識別子で、ログイン名として解釈しない。`github_id` は `GET /users/{owner}` の数値の `id`（Public は `null`）である。
 
-カードと行の値は 0.1（docs/tasks/M1.md の「応答の項目」）の項目を保ち、`scope` を `owner`（owner の id）に、カードの `mine` を `authored_by_me` に置き換え、カードの `snoozed` と `snoozed_until`、行の `class` と `done` を削除する。カードはさらに `author_avatar_url`（GraphQL の `author.avatarUrl(size: 32)`。`author` が `null` なら `null`）、`assigned_to_me`、`review_requested`（「CLI の絞り込みの意味」の Review requested）、`awaiting_review`（レビュー待ちか。「レビュー待ちの定義」）、`created_at`（GraphQL の `createdAt`）、`updated_at`（GraphQL の `updatedAt`）、`placement`、`muted`、`dismissed_at`、`dismiss_expires_at`、`older_rows`（その PR の行を削除したことがあるか。「カードの中の行」）を持ち、行は `owner`、`kind`、`muted` を持つ。カードの `rows` は保持しているすべての行（20 件まで）で、3 件の表示と `+ N more` はアプリが求める。
+カードと行の値は 0.1（docs/tasks/M1.md の「応答の項目」）の項目を保ち、`scope` を `owner`（owner の id）に、カードの `mine` を `authored_by_me` に置き換え、カードの `snoozed` と `snoozed_until`、行の `class` と `done` を削除する。カードはさらに `author_avatar_url`（GraphQL の `author.avatarUrl(size: 32)`。`author` が `null` なら `null`）、`assigned_to_me`、`review_requested`（「CLI の絞り込みの意味」の Review requested）、`awaiting_review`（レビュー待ちか。「レビュー待ちの定義」）、`created_at`（GraphQL の `createdAt`）、`updated_at`（GraphQL の `updatedAt`）、`placement`、`muted`、`dismissed_at`、`dismiss_expires_at`、`auto_dismiss_at`、`older_rows`（その PR の行を削除したことがあるか。「カードの中の行」）を持ち、行は `owner`、`kind`、`muted` を持つ。カードの `rows` は保持しているすべての行（20 件まで）で、3 件の表示と `+ N more` はアプリが求める。
 
 - `placement` は配置なしなら `null`、配置していれば `{"tab","section","position"}` である（`position` は Mute の対象を末尾にした表示の順）。`tab` は `review` または `mine`、`section` は Review では `doing`、`todo`、`waiting`、`done`、Mine では `main` または `done`、`position` はその区画の中の順番（0 から）で、デーモンが求める。Dismiss しているカードの `placement` は、復帰したときの配置である。
 - `muted` は、カードが Mute の対象になっている理由の配列（`pr`、`repo`、`author`。対象でなければ空）である。行の `muted` は、その行が Mute の対象か（灰色の点）の真偽値である。
-- `dismissed_at` は Dismiss した時刻（していなければ `null`）、`dismiss_expires_at` は `Dismissed` の一覧から除く時刻（`dismissed_at` に m 日を加えた時刻。していなければ `null`）である。
+- `dismissed_at` は Dismiss した時刻（していなければ `null`）、`dismiss_expires_at` は `Dismissed` の一覧から除く時刻（`dismissed_at` に m 日を加えた時刻。していなければ `null`）である。`auto_dismiss_at` は自動の Dismiss を行う時刻（「Dismiss」の規則で求める）で、予定がなければ `null` である（開いている PR、Review または Mine の `Done` の外の区画に配置したカード（配置なしのカードには予定がある）、Restore したカード、例外の行があるカード、Dismiss しているカード）。
 
 `notify` の `notification` も 0.1 の形を保ち、`scope` を `account`（アカウントの id）と `owner`（owner の id）に置き換える。まとめ通知は `title` と `subtitle` を持ち、`body` は `null` である。カードと行も `account` を持つ。
 
 出来事の種類の値（`event`、行の `kind`）は `review_requested`、`team_review_requested`、`mentioned`、`team_mentioned`、`comment`、`comment_other`、`reply`、`reply_mentioned`、`reaction`、`approved`、`changes_requested`、`checks_failed`、`checks_passed`、`conflicts`、`mergeable`、`merge_queue_added`、`merge_queue_removed`、`merged_closed`、`reopened` である。行の `kind` では `merged_closed` の代わりに `merged` と `closed` を使用する。`events` は種類ごとの `{"list","notify"}`、`mutes` は `{"repos":[name],"users":[name],"prs":[<pr>]}` である。
 
-`place` は、Review と Mine の配置と順位を変更する。`before` を指定するとその PR の直前に、`at` を指定すると区画の先頭または末尾に配置する。どちらも省略すると、`todo` へは `doing` と `waiting` からの移動なら先頭、それ以外は末尾に配置する。`before` の PR が同じ区画にない、`before` の PR が Mute の対象、`done` への配置、`Done` のカードの配置の変更（`none` を含む）、自分が作成した PR の `review` と `none`、Dismiss しているカードへの `place` は `invalid` である。マージまたはクローズされた配置なしの PR への `review` と `mine` は、`section` と位置を無視して、そのタブの `done` に配置する。Mute の対象のカードの移動は「Review」の規則に従い、`before` と `at` は Mute の対象のカードの間で解釈する。disabled の owner の PR と読めなくなった PR への `place`、`dismiss`、`restore` は `not_found` である。`dismiss` は Dismiss していないカードに、`restore` は Dismiss しているカード（`Dismissed` の一覧にあるもの）だけを受け付け、それ以外は `invalid` である。知らない PR は `not_found` である。`mute` の `name` は、`pr` では `owner/repo#number`、`repo` では `owner/repo`、`user` ではログイン名で、形が不正なら `invalid`、すでにあれば変化なしで `ok` である。`unmute` の対象がなければ `not_found` である。`mute` の `pr` は、そのアカウントの知っている PR だけを受け付ける。
+`place` は、Review と Mine の配置と順位を変更する。`before` を指定するとその PR の直前に、`at` を指定すると区画の先頭または末尾に配置する。どちらも省略すると、`todo` へは `doing` と `waiting` からの移動なら先頭、それ以外は末尾に配置する。`section` の `done` は、`review` と `mine` の `Done` への移動である（`mine` の `section` は省略、`main`、`done` のどれか）。`done` へはカードが `Done` に入った時刻で並べるので、すでにそのタブの `Done` にあるカードは移動せず `ok` である。`Done` のカードは、開いているかどうかに関係なく、ほかの区画へ移動でき、`none` にもできる。`before` の PR が同じ区画にない、`before` の PR が Mute の対象（移動するカードが Mute の対象かどうかに関係しない）、`done` への配置での `before` と `at`、自分が作成した PR の `review` と `none`、Dismiss しているカードへの `place` は `invalid` である。マージまたはクローズされた配置なしの PR への `review` と `mine` は、`section` と位置を無視して、そのタブの `done` に配置する。Mute の対象のカードの移動は「Review」の規則に従い、`at` と位置の既定は Mute の対象のカードの間で解釈する。Mute の対象のカードに `at` の `top` を指定すると、区画の先頭の順位を付ける。Mute の間は Mute の対象のカードの先頭に表示し、Mute を解除すると区画の先頭に表示する。Mute の対象のカードを `before` で移動すると、`before` の PR（Mute の対象でないカード）の直前の順位を付ける。この順位は Mute を解除したあとに適用し、Mute の間は、Mute の対象のカードの中でこの順位に従って並べる（`before` に Mute の対象のカードを指定するのは、引き続き `invalid` である）。disabled の owner の PR と読めなくなった PR への `place`、`dismiss`、`restore` は `not_found` である。`dismiss` は Dismiss していないカードに、`restore` は Dismiss しているカード（`Dismissed` の一覧にあるもの）だけを受け付け、それ以外は `invalid` である。知らない PR は `not_found` である。`mute` の `name` は、`pr` では `owner/repo#number`、`repo` では `owner/repo`、`user` ではログイン名で、形が不正なら `invalid`、すでにあれば変化なしで `ok` である。`unmute` の対象がなければ `not_found` である。`mute` の `pr` は、そのアカウントの知っている PR だけを受け付ける。
 
 `owner_lookup` は `GET /users/{owner}` で owner の種類と id を求め、owner を登録しない。GitHub のログイン名として不正な owner（英数字とハイフン以外を含む、ハイフンで始まるか終わる、40 文字以上）は問い合わせずに `invalid`、見つからなければ `not_found`、接続できなければ `unreachable`、ほかの失敗は理由を付けた `internal` にする。`owner_add` は同じ問い合わせを行い、成功したときだけ登録する。`account_add` と `token_set` の持ち主の確認が失敗したときの `code` は、持ち主が異なれば `invalid`（`error` は `Belongs to octocat`）、接続できなければ `unreachable` である。
 
 `subscribe` は最初に `{"event":"snapshot","accounts":[...],"keychain":"ok"|"unavailable"|"unreadable","db_unreadable":false}` を送る。DB を読めない間も `subscribe` と `info` は使用でき、`db_unreadable` が真になる。以降は `{"event":"account_changed","account":{...}}`、`{"event":"account_removed","id":"..."}`、`{"event":"keychain_changed","keychain":"..."}`、`{"event":"notify","notification":{...}}`、`{"event":"config_changed","key":"...","value":...}` を送る。`account_changed` は、アカウントの値が変化したとき、またはそのアカウントのカード、行、Mute が変化したときに送り、クライアントは `list` で一覧を再取得する。`keychain` は最初の読み込みまでは `ok` である。`config_changed` は、`config_set` で設定の値が変化したときに、保存してからすべての購読者に送る。`value` は `config_get` が返す値である。同じ値の `config_set` と、拒否した値では送らない。アプリはこれで `launch_at_login` の変更を知り、ログイン項目を登録または解除する（「Launch at login の同期」）。また `appearance`（`system`、`light`、`dark`）の変更を、ポップオーバー、常時表示ウインドウ、設定画面、メニューバーのアイコンにすぐ反映し、`text_size` の変更を、ポップオーバーと常時表示ウインドウにすぐ反映する。
 
-設定のキーは `launch_at_login`、`appearance`、`text_size`（整数、9〜18。範囲外は `invalid`）、`status_interval_minutes`、`reactions_interval_minutes`、`auto_dismiss_after_days`（n。0 以上の整数）、`dismissed_keep_days`（m。1 以上の整数）である（範囲は「設定項目」）。0.1 の `graphql_cost_cap`、`notify_*`、`bot_comments`、`include_team_requests`、0.3 の `snooze_return_time`、`keep_watching_days`、`drop_after_days` はない。`dismissed_keep_days` を変更すると、Dismiss しているすべてのカードの `dismiss_expires_at` に反映する。`auto_dismiss_after_days` の変更も、まだ Dismiss していない閉じた PR に反映する。
+設定のキーは `launch_at_login`、`appearance`、`text_size`（整数、9〜18。範囲外は `invalid`）、`status_interval_minutes`、`reactions_interval_minutes`、`auto_dismiss_after_days`（n。0 以上の整数）、`dismissed_keep_days`（m。1 以上の整数）である（範囲は「設定項目」）。0.1 の `graphql_cost_cap`、`notify_*`、`bot_comments`、`include_team_requests`、0.3 の `snooze_return_time`、`keep_watching_days`、`drop_after_days` はない。`dismissed_keep_days` を変更すると、Dismiss しているすべてのカードの `dismiss_expires_at` に反映する。`auto_dismiss_after_days` の変更も、まだ Dismiss していない閉じた PR（`auto_dismiss_at`）に反映する。
 
 DB を読めない状態に移行したとき、およびその状態から `reset` で戻ったとき、デーモンは `subscribe` の接続をすべて切断する。クライアントは再接続し、`snapshot` で新しい状態を受け取る。DB を読めない間の `accounts` は空の配列とする。`reset` のあとの最初の取得で Keychain を読み込み、アカウントを復元する。
 
@@ -785,20 +796,22 @@ PR ごとの状態は、配置（なし、Review の区画と順位、Mine の�
 | 契機 | 配置 | Dismiss |
 | --- | --- | --- |
 | 開いている PR を新しく発見した | 自分が作成した PR は Mine の末尾。そうでなければなし（レビューの依頼の行を生成すれば次の行） | していない |
-| 閉じた PR を新しく発見した（復帰の契機の行を生成した記録のない PR） | 自分が作成した PR は Mine の `Done`、そうでなければなし。位置と n 日の起点は検知の時刻 | していない |
+| 閉じた PR を新しく発見した（復帰の契機の行を生成した記録のない PR） | 自分が作成した PR は Mine の `Done`、そうでなければなし（Review requested の行を生成すれば次の行で Review の `Done`。生成する行は復帰の契機の 4 つの行だけで、チーム宛ての依頼の行は生成しない）。位置と n 日の起点は検知の時刻（n 日を数えるのは契機が Review requested または Reopened の行のとき。「Dismiss」） | していない |
 | マージまたはクローズされた配置なしの PR に `Add to Review`／`Add to Mine` | そのタブの `Done` | 変更しない |
-| Review requested または Review requested to my team の行を生成した（List がオン） | 配置なしなら Review の `Todo` の末尾。配置済みなら変更しない | 変更しない（Dismiss している PR はこの行で復帰しない。自分宛ての Review requested は次の「復帰の契機」） |
+| Review requested または Review requested to my team の行を生成した（List がオン） | 配置なしなら Review の `Todo` の末尾（マージまたはクローズされた PR は Review の `Done`）。配置済みなら変更しない | 変更しない（Dismiss している PR はこの行で復帰しない。自分宛ての Review requested は次の「復帰の契機」） |
 | 復帰の契機の行を生成した（「Dismiss」） | 変更しない（記録がなければ新しく発見した PR と同じ） | していない |
-| マージまたはクローズを検知した（状況の取得） | `Done` に移動する（クローズ前の区画を記録する）。配置なしは変更しない。以前に `Done` にあったカードは最初の検知の時刻の位置に戻る | 変更しない。n 日後に自動の Dismiss（n 日はこの検知から数える） |
-| 再オープンを検知した（状況の取得） | クローズ前の区画と順位に戻す | していない |
-| `place` | 指定どおり | 変更しない |
+| マージまたはクローズを検知した（状況の取得） | `Done` に移動する（`Done` に入る前の区画と順位を記録する。すでに `Done` にあるカードは残る）。`Done` に入った時刻はこの検知の時刻。配置なしは変更しない。移動はこの検知の時点の 1 回だけで、以降の取得では移動しない | 変更しない。`Done` にある間と配置なしの間は n 日後に自動の Dismiss（n 日はこの検知から数える） |
+| 再オープンを検知した（状況の取得） | `Done` にあるカードは記録した区画と順位に戻す。`Done` の外のカードは変更しない | していない。自動の Dismiss の例外（Restore したこと、マージまたはクローズのあとの Mentioned と Reply の行）を解除する |
+| `place` で `Done` へ移動した | そのタブの `Done`。入った時刻は操作の時刻（すでにその `Done` にあれば変更しない） | 変更しない。マージまたはクローズされた PR は n 日後に自動の Dismiss（n 日はこの時刻と検知の時刻の遅いほうから数える） |
+| `place` で `Done` から他の区画へ移動した | 指定どおり。マージまたはクローズされた PR も、以降の取得で `Done` に戻さない | 変更しない。`Done` の外にある間は自動では Dismiss しない |
+| `place`（上記以外） | 指定どおり | 変更しない |
 | `dismiss`、自動の Dismiss | 変更しない | `Dismissed` の一覧に移る |
-| `restore` | 変更しない | していない。自動では Dismiss しない |
+| `restore` | 変更しない | していない。再オープンを検知するまで、自動では Dismiss しない |
 | Dismiss から m 日が経過した | 削除する | 開いている PR は Dismiss の記録だけを残し、閉じた PR は何も残さない |
 
 - 自動の Dismiss と m 日の経過による削除は、ポップオーバーを開いている間は行わず、`popover_closed` を受信したとき（開いていないときは期限を過ぎた時点）に行う。
 - disabled の owner の PR と読めなくなった PR も、この表のとおり状態を保ち、n 日と m 日を数える（「カードの表示と監視」）。
-- 並びは、Review と Mine の `Done` 以外の区画では利用者の順位（Mute の対象を末尾）、`Done` ではマージまたはクローズを検知した時刻の降順（Mute の対象を末尾）、All ではアプリが「All」の規則で求める。All の並びの `Recently added` の基準はカードの追加時刻で、カードが初めて表示された時刻のまま更新しない。
+- 並びは、Review と Mine の `Done` 以外の区画では利用者の順位（Mute の対象を末尾）、`Done` ではカードが `Done` に入った時刻の降順（Mute の対象を末尾）、All ではアプリが「All」の規則で求める。All の並びの `Recently added` の基準はカードの追加時刻で、カードが初めて表示された時刻のまま更新しない。
 - レビュー待ち（`awaiting_review`）は、表示のたびに（`list` の応答と `account_changed` を生成するたびに）PR の今の状態、保存した最新の依頼の時刻、チームの List から求める。
 
 ### 通知の判定
@@ -834,5 +847,6 @@ PR ごとの状態は、配置（なし、Review の区画と順位、Mine の�
 - [ ] `GET /notifications` の応答に、SSO を承認していない organization の分が含まれず `X-GitHub-SSO` が付くか（ドキュメントは REST の応答一般について記載している。所有者は SSO の organization に属していないので確認できない）
 - [ ] SSO の承認が必要という警告の動作全体（SSO を有効にした organization で確認できていない）
 - [ ] Public の要求と、複数の owner にまたがる要求（通知、チームの所属）で、1 つの organization への 403（`X-GitHub-SSO` が承認の URL だけの形）を受けたとき、その 403 を owner に結び付けられない。今はその要求の失敗として扱い、`sso_required` の警告は付けない（「トークン」）
+- [ ] `nodes(ids:)` で、トークンに権限のない PR（アクセスを失った非公開リポジトリなど）が、`null` と FORBIDDEN のエラーで返るか、`null` と NOT_FOUND のエラーで返るか（実際の応答で確認していない。実装は、NOT_FOUND のエラーを付けた `null` だけを読めなくなった PR とし、ほかの `null` は状況の取得の失敗として扱う。「カードの表示と監視」）
 - [ ] `x-oauth-scopes` の `write:org` と `admin:org` が `read:org` を含むとみなしてよいか（docs.github.com の「Scopes for OAuth apps」は `user` の入れ子だけを明記している。2026-11-09 に確認。実装はこの 2 つを `read:org` とみなす）
 - [ ] 通知の書き込みと配信の記録の間にデーモンが強制終了すると、次の再接続のまとめ通知で 1 件多く数える場合がある（M1 から引き継いだ既知の動作で、変更しない）

@@ -9,7 +9,7 @@
 use serde_json::Value;
 use shiibar_gh_proto::*;
 use shiibar_ghd::clock::Now;
-use shiibar_ghd::engine::{ActivityArgs, CmdError, Engine, ListArgs};
+use shiibar_ghd::engine::{ActivityArgs, CmdError, Engine, ListArgs, PlaceArgs};
 use shiibar_ghd::model::{OwnerKind as Kind, RowRec};
 use std::collections::BTreeMap;
 
@@ -58,6 +58,7 @@ pub fn pr(id: &str) -> IngestPr {
         author_avatar_url: None,
         base: "main".into(),
         head: "topic".into(),
+        head_oid: None,
         state: PrState::Open,
         is_draft: false,
         review: Review::None,
@@ -205,11 +206,10 @@ impl H {
         reactions: Vec<IngestReaction>,
     ) -> Result<(), CmdError> {
         let ingest = Ingest {
-            missing_pr_ids: vec![],
             prs,
             events,
             reactions,
-            succeeded_owners: None,
+            ..Ingest::default()
         };
         let result = self.engine.ingest(account, ingest, &self.now);
         self.advance(1);
@@ -238,18 +238,18 @@ impl H {
             .unwrap_or_else(|| panic!("no row {id}"))
     }
 
-    /// Whether a PR of the default account is snoozed.
-    pub fn snoozed(&self, id: &str) -> bool {
+    /// Whether a PR of the default account is dismissed.
+    pub fn dismissed(&self, id: &str) -> bool {
         self.engine
             .pr_record(&full(id))
-            .is_some_and(|pr| pr.snoozed)
+            .is_some_and(|pr| pr.dismissed_at.is_some())
     }
 
     pub fn has_row(&self, id: &str) -> bool {
         self.engine.row_record(&full(id)).is_some()
     }
 
-    /// Every row the lists show, snoozed PRs included.
+    /// Every row the lists show, dismissed PRs included.
     pub fn all_rows(&self) -> Vec<Row> {
         self.all_cards().into_iter().flat_map(|c| c.rows).collect()
     }
@@ -259,44 +259,68 @@ impl H {
         self.all_rows().into_iter().find(|r| r.id == id)
     }
 
-    /// The card of a PR, snoozed or not.
+    /// The card of a PR, dismissed or not.
     pub fn card(&self, pr_key: &str) -> Option<Card> {
         self.all_cards().into_iter().find(|c| c.pr == pr_key)
     }
 
-    /// What `list` answers, without holding the cards of an open popover.
+    /// What `list` answers.
     pub fn list(&self, args: ListArgs) -> Vec<Card> {
-        self.engine.list_view(&args, &self.now).unwrap()
+        self.engine.list(&args, &self.now).unwrap()
     }
 
-    /// `list` as the app sends it: while the popover is open, the cards of
-    /// the answer stay until it closes.
-    pub fn app_list(&mut self) -> Vec<String> {
-        self.engine
-            .list(&ListArgs::default(), &self.now)
-            .unwrap()
-            .into_iter()
-            .map(|c| short(&c.id))
-            .collect()
-    }
-
-    /// The PRs tab: the owner sections.
+    /// The All tab.
     pub fn cards(&self) -> Vec<Card> {
         self.list(ListArgs::default())
     }
 
-    /// The Snoozed section.
-    pub fn snoozed_cards(&self) -> Vec<Card> {
+    /// The Dismissed list.
+    pub fn dismissed_cards(&self) -> Vec<Card> {
         self.list(ListArgs {
-            snoozed: true,
+            dismissed: DismissedFilter::Only,
             ..ListArgs::default()
         })
     }
 
+    /// Short ids of a tab's cards, in order.
+    pub fn tab(&self, tab: Tab) -> Vec<String> {
+        self.card_ids(ListArgs {
+            tab,
+            ..ListArgs::default()
+        })
+    }
+
+    /// Short ids of the cards of one section, in order.
+    pub fn section(&self, tab: Tab, section: Section) -> Vec<String> {
+        self.list(ListArgs {
+            tab,
+            ..ListArgs::default()
+        })
+        .into_iter()
+        .filter(|c| c.placement.as_ref().is_some_and(|p| p.section.is(section)))
+        .map(|c| short(&c.id))
+        .collect()
+    }
+
+    /// The placement of a PR's card: tab, section and position.
+    pub fn placement(&self, id: &str) -> Option<(String, String, u32)> {
+        let card = self.card_by_id(id)?;
+        card.placement
+            .map(|p| (p.tab.as_text(), p.section.as_text(), p.position))
+    }
+
+    /// Every card, the dismissed ones included.
     pub fn all_cards(&self) -> Vec<Card> {
-        let mut cards = self.cards();
-        cards.extend(self.snoozed_cards());
-        cards
+        self.list(ListArgs {
+            dismissed: DismissedFilter::Include,
+            ..ListArgs::default()
+        })
+    }
+
+    /// The card of a short PR id, dismissed or not.
+    pub fn card_by_id(&self, id: &str) -> Option<Card> {
+        let id = full(id);
+        self.all_cards().into_iter().find(|c| c.id == id)
     }
 
     /// Short ids of the cards a list gives.
@@ -344,11 +368,6 @@ impl H {
         self.engine.owner_id(ACCOUNT, name).unwrap()
     }
 
-    /// The PRs awaiting review of the account: the menu bar number.
-    pub fn badge(&self) -> u32 {
-        self.account().review_count
-    }
-
     /// The blue dot of the account.
     pub fn dot(&self) -> bool {
         self.account().unread
@@ -366,27 +385,45 @@ impl H {
             .unwrap();
     }
 
-    /// Set an Exclusion of `org`.
-    pub fn exclude(&mut self, kind: ExclusionKind, name: &str, state: ExclusionState) {
-        let owner = self.owner_id(ORG);
-        self.engine
-            .owner_exclusions_set(&owner, kind, name, state, &self.now)
-            .unwrap();
+    pub fn mute(&mut self, kind: MuteKind, name: &str) {
+        self.engine.mute(ME, kind, name).unwrap();
     }
 
-    pub fn include(&mut self, kind: ExclusionKind, name: &str) {
-        let owner = self.owner_id(ORG);
-        self.engine
-            .owner_exclusions_remove(&owner, kind, name, &self.now)
-            .unwrap();
+    pub fn unmute(&mut self, kind: MuteKind, name: &str) {
+        self.engine.unmute(ME, kind, name).unwrap();
     }
 
-    pub fn snooze(&mut self, key: &str) {
-        self.engine.snooze(ME, key, &self.now).unwrap();
+    /// `dismiss` of a PR by its `<pr>` key.
+    pub fn dismiss(&mut self, key: &str) -> Result<Card, CmdError> {
+        let now = self.now.clone();
+        self.engine.dismiss(ME, key, &now)
     }
 
-    pub fn unsnooze(&mut self, key: &str) {
-        self.engine.unsnooze(ME, key, &self.now).unwrap();
+    pub fn restore(&mut self, key: &str) -> Result<Card, CmdError> {
+        self.engine.set_clock(&self.now.clone());
+        self.engine.restore_pr(ME, key)
+    }
+
+    /// `place` of a PR by its `<pr>` key.
+    pub fn place(
+        &mut self,
+        key: &str,
+        tab: PlaceTab,
+        section: Option<Section>,
+        before: Option<&str>,
+        at: Option<At>,
+    ) -> Result<Card, CmdError> {
+        self.engine.set_clock(&self.now.clone());
+        self.engine.place(
+            ME,
+            key,
+            &PlaceArgs {
+                tab,
+                section,
+                before: before.map(str::to_string),
+                at,
+            },
+        )
     }
 
     /// `read`: the rows were selected or opened.
@@ -400,6 +437,7 @@ impl H {
     }
 
     pub fn close(&mut self) {
+        self.engine.set_clock(&self.now.clone());
         self.engine.popover_closed(ME).unwrap();
     }
 

@@ -19,6 +19,12 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
     private var order: [String] = []
     private var fallback: NSStatusItem?
     private var appearanceWatch: [ObjectIdentifier: NSKeyValueObservation] = [:]
+    /// What each status button shows now: an image, a label or a tooltip is
+    /// set again only when it changes (`StatusItemUpdate`). Setting the
+    /// image on every update redrew the button, which changed its
+    /// effective appearance, which called `update()` again: 0.3.0 spent
+    /// about 90% CPU in that loop (docs/tasks/M6.md, "CPU").
+    private var looks: [ObjectIdentifier: StatusItemLook] = [:]
     private let popover = NSPopover()
     private var popoverAccount: String?
     private var panels: [String: NSPanel] = [:]
@@ -96,21 +102,24 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         // The rightmost icon is created first.
         for account in accounts.reversed() {
             let item = items[account.id] ?? makeItem(account.id)
-            draw(item, color: account.accountColor, marks: MenuBarMarks(account))
-            item.button?.setAccessibilityLabel(MenuBarMarks.accessibilityLabel(account))
-            item.button?.toolTip = account.login
+            show(
+                item, color: account.accountColor, marks: MenuBarMarks(account),
+                label: MenuBarMarks.accessibilityLabel(account), toolTip: account.login
+            )
         }
         if SurfaceRules.showsAppIcon(accounts) {
             if fallback == nil {
                 let item = NSStatusBar.system.statusItem(withLength: MenuBarImage.width)
                 item.button?.target = self
                 item.button?.action = #selector(clickedFallback(_:))
-                item.button?.toolTip = "shiibar-gh"
                 watchAppearance(item)
                 fallback = item
             }
             if let fallback {
-                draw(fallback, color: .none, marks: MenuBarMarks(count: 0, dot: false, triangle: app.dbUnreadable || app.keychain != .ok))
+                show(
+                    fallback, color: .none, marks: MenuBarMarks(dot: false, triangle: app.dbUnreadable || app.keychain != .ok),
+                    label: MenuBarMarks.noAccountsLabel, toolTip: "shiibar-gh"
+                )
             }
         } else if let fallback {
             remove(fallback)
@@ -119,17 +128,28 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         }
     }
 
-    private func draw(_ item: NSStatusItem, color: AccountColor, marks: MenuBarMarks) {
+    /// Sets on the button only what changed since the last time.
+    private func show(_ item: NSStatusItem, color: AccountColor, marks: MenuBarMarks, label: String, toolTip: String) {
         guard let button = item.button else { return }
-        button.image = MenuBarImage.make(color: color, marks: marks, appearance: button.effectiveAppearance)
+        let id = ObjectIdentifier(item)
+        let appearance = button.effectiveAppearance
+        let look = StatusItemLook(dark: appearance.isDark, color: color, marks: marks, accessibilityLabel: label, toolTip: toolTip)
+        let change = StatusItemUpdate(from: looks[id], to: look)
+        guard !change.isEmpty else { return }
+        looks[id] = look
+        if change.image { button.image = MenuBarImage.make(color: color, marks: marks, appearance: appearance) }
+        if change.accessibilityLabel { button.setAccessibilityLabel(label) }
+        if change.toolTip { button.toolTip = toolTip }
     }
 
     private func remove(_ item: NSStatusItem) {
         appearanceWatch[ObjectIdentifier(item)] = nil
+        looks[ObjectIdentifier(item)] = nil
         NSStatusBar.system.removeStatusItem(item)
     }
 
-    /// A new image whenever the menu bar turns light or dark.
+    /// A new image when the menu bar turns light or dark: `show` sets it
+    /// only if the button's appearance is now the other one.
     private func watchAppearance(_ item: NSStatusItem) {
         guard let button = item.button else { return }
         appearanceWatch[ObjectIdentifier(item)] = button.observe(\.effectiveAppearance) { [weak self] _, _ in
@@ -180,7 +200,7 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             var none = actions(nil)
             none.openWindow = nil
             content = AnyView(NoAccountsView(app: app, actions: none))
-            popover.contentSize = NSSize(width: 300, height: 200)
+            popover.contentSize = NSSize(width: popoverWidth, height: NoAccountsView.height)
         }
         popover.contentViewController = NSHostingController(rootView: content)
         popover.appearance = surfaceAppearance
@@ -309,6 +329,13 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
 
     // MARK: - Keys
 
+    /// Whether keys go to a text field: the search field's editor, not the
+    /// selectable text of cards and rows (which takes the focus when pressed
+    /// but types nothing).
+    static func isTyping(_ responder: NSResponder?) -> Bool {
+        responder is NSText && !(responder is SelectableTextView)
+    }
+
     /// The keys while the popover or a window has the focus: what each does
     /// is `KeyRules.decide` (ShiibarGhCore); this reads the NSEvent and
     /// carries the answer out.
@@ -333,8 +360,11 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         if flags.contains(.control) { modifiers.insert(.control) }
         let press = KeyPress(keyCode: event.keyCode, characters: event.charactersIgnoringModifiers ?? "", modifiers: modifiers)
         let model = account.map { app.viewModel($0).list(surface) }
-        let inSearch = (model?.searchFocused ?? false) || key?.firstResponder is NSText
-        switch KeyRules.decide(press, inSearch: inSearch, hasSearchText: !(model?.search.isEmpty ?? true)) {
+        let inSearch = (model?.searchFocused ?? false) || Self.isTyping(key?.firstResponder)
+        let decided = KeyRules.decide(
+            press, inSearch: inSearch, hasSearchText: !(model?.search.isEmpty ?? true), inDismissed: model?.showingDismissed ?? false
+        )
+        switch decided {
         case .quit:
             onQuit?()
         case .pass:
@@ -350,6 +380,25 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             model.leaveSearch(clearing: clearing)
             key?.makeFirstResponder(nil)
         }
+        return true
+    }
+
+    /// Edit › Copy chosen with the mouse while a popover or window has the
+    /// focus: the same as ⌘C there (the selected text, else the link of
+    /// the selected card or row). False when another window has the focus,
+    /// or the search field does: the menu's own `copy:` goes on.
+    func copyFromMenu() -> Bool {
+        let key = NSApp.keyWindow
+        let model: SurfaceListModel
+        if popover.isShown, key === popover.contentViewController?.view.window, let account = popoverAccount {
+            model = app.viewModel(account).list(.popover)
+        } else if let window = key, let id = window.identifier?.rawValue, panels[id] === window {
+            model = app.viewModel(id).list(.window)
+        } else {
+            return false
+        }
+        if model.searchFocused || Self.isTyping(key?.firstResponder) { return false }
+        model.press(.copy)
         return true
     }
 }

@@ -125,7 +125,7 @@ public enum Warnings {
         case .tokensUnreadable: return .resetTokens
         case .noToken, .tokenInvalid, .tokenExpiring, .scopeMissing: return .settings
         case .ssoRequired: return .authorize(warning.url ?? CreateTokenURL.tokenSettings)
-        case .fetchFailed, .rateLimited, .graphqlNearLimit, .restNearLimit, .eventsFetchFailed: return nil
+        case .fetchFailed, .rateLimited, .graphqlNearLimit, .restNearLimit, .eventsFetchFailed, .statusFetchFailed: return nil
         }
     }
 
@@ -185,7 +185,7 @@ public struct KeychainDialog: Equatable {
     )
     public static let unreadable = KeychainDialog(
         state: .unreadable, title: "Saved tokens are unreadable",
-        message: "Reset deletes the Keychain item. You enter every token again. PRs, snoozes and settings stay.",
+        message: "Reset deletes the Keychain item. You enter every token again. PRs and settings stay.",
         action: "Reset tokens"
     )
 
@@ -268,9 +268,10 @@ public enum RowText {
         return parts.joined(separator: " ")
     }
 
-    /// The label of a row. Main.html shows a team's review request as
-    /// "Review requested" with "for frontend team" under it; the other kinds
-    /// use the names of the event table, Merged / Closed split in two.
+    /// The label of a row (DESIGN.md, "Row labels"): a team's review request
+    /// reads "Review requested" with "for frontend team" as its text; both
+    /// comment kinds read "Comment", both reply kinds "Reply"; the other
+    /// kinds use the names of the event table, Merged / Closed split in two.
     public static func label(_ kind: Lenient<RowKind>) -> String {
         guard let kind = kind.value else {
             return kind.rawText.replacingOccurrences(of: "_", with: " ").capitalizedFirst
@@ -279,18 +280,20 @@ public enum RowText {
         case .reviewRequested, .teamReviewRequested: return "Review requested"
         case .mentioned: return "Mentioned"
         case .teamMentioned: return "My team mentioned"
-        case .comment: return "Comment"
+        case .comment, .commentOther: return "Comment"
         case .reply, .replyMentioned: return "Reply"
         case .reaction: return "Reaction"
         case .approved: return "Approved"
         case .changesRequested: return "Changes requested"
         case .checksFailed: return "Checks failed"
+        case .checksPassed: return "Checks passed"
         case .conflicts: return "Conflicts"
         case .mergeable: return "Mergeable"
         case .mergeQueueAdded: return "Added to merge queue"
         case .mergeQueueRemoved: return "Removed from merge queue"
         case .merged: return "Merged"
         case .closed: return "Closed"
+        case .reopened: return "Reopened"
         }
     }
 }
@@ -299,6 +302,24 @@ extension String {
     var capitalizedFirst: String {
         guard let first else { return self }
         return first.uppercased() + dropFirst()
+    }
+}
+
+/// The mark at the start of a row, of "+ N more" and of "+ N more PRs"
+/// (DESIGN.md, "How rows look"): a blue dot, a gray ring for muted unread
+/// ones, or nothing.
+public enum UnreadMark: Equatable {
+    case none, blue, ring
+
+    /// Blue if any is blue unread, the ring if only gray ones are unread.
+    public static func of(_ rows: [Row]) -> UnreadMark {
+        if rows.contains(where: \.isBlueUnread) { return .blue }
+        if rows.contains(where: \.isGrayUnread) { return .ring }
+        return .none
+    }
+
+    public static func of(cards: [Card]) -> UnreadMark {
+        of(cards.flatMap(\.rows))
     }
 }
 
@@ -311,21 +332,26 @@ public struct RowPresentation: Equatable {
     /// The body under the label line, already normalized.
     public var body: String?
     public var bodyLines: Int
-    /// Read rows show faded (DESIGN.md, "Row kinds and states").
-    public var dimmed: Bool
-    public var unreadDot: Bool
+    /// Read rows are not dimmed: only the mark goes (DESIGN.md, "How rows
+    /// look"). Gray is for muted rows only.
+    public var mark: UnreadMark
+    /// The text of a muted row is gray.
+    public var gray: Bool
 
-    public init(_ row: Row, now: Int64) {
+    /// `cardMuted`: the row's card is muted. Its rows are gray except a
+    /// mention, which keeps the normal color and the blue dot (DESIGN.md,
+    /// "Card").
+    public init(_ row: Row, now: Int64, cardMuted: Bool = false) {
         let kind = row.kind.value
         label = RowText.label(row.kind)
         let time = RelativeTime.ago(now - row.occurredAt)
         let actor = row.actor.flatMap { $0.isEmpty ? nil : $0 }
         let text = row.text.map(RowText.normalize).flatMap { $0.isEmpty ? nil : $0 }
         switch kind {
-        case .merged, .closed, .mergeQueueAdded, .approved:
+        case .merged, .closed, .reopened, .mergeQueueAdded, .approved:
             meta = time
             body = text ?? actor.map { "by \($0)" }
-        case .reviewRequested, .teamReviewRequested, .checksFailed, .changesRequested, .conflicts, .mergeable:
+        case .reviewRequested, .teamReviewRequested, .checksFailed, .checksPassed, .changesRequested, .conflicts, .mergeable:
             meta = time
             body = text
         case .reaction:
@@ -336,8 +362,9 @@ public struct RowPresentation: Equatable {
             body = text
         }
         counts = kind == .reaction ? row.counts.map(RowText.counts).flatMap { $0.isEmpty ? nil : $0 } : nil
-        unreadDot = row.unread
-        dimmed = !row.unread
+        mark = row.isBlueUnread ? .blue : (row.isGrayUnread ? .ring : .none)
+        let mention = kind == .mentioned
+        gray = !mention && (row.muted || cardMuted)
         bodyLines = ((kind == .mentioned || kind == .teamMentioned) && row.unread) ? 3 : 1
     }
 }
@@ -369,32 +396,31 @@ public enum CardText {
 
 // MARK: - API usage
 
-/// `API 25%` in the header (DESIGN.md, "Rate limits"): the higher of the
-/// GraphQL and REST usage as a whole percentage (rounded, as Main.html shows
-/// 1,240 / 5,000 as 25%), the warning color from 80.0% of the unrounded
-/// usage, both counts on hover, `API –` before any value.
+/// The usage in the header (DESIGN.md, "Rate limits"): `API`, a thin bar and
+/// `1,240 / 5,000` for the API (GraphQL or REST) with the higher rate of
+/// use; the warning color from 80%; both on hover; `API –` with no bar
+/// before any value.
 public struct ApiUsage: Equatable {
-    public var text: String
-    public var percent: Int?
+    /// `1,240 / 5,000`; nil before any value.
+    public var numbers: String?
+    /// The bar's length, 0 to 1.
+    public var fraction: Double?
     public var warn: Bool
     public var tooltip: String?
 
     public init(_ rateLimit: RateLimit?) {
         let limits = [rateLimit?.graphql, rateLimit?.rest].compactMap { $0 }.filter { $0.limit > 0 }
-        guard !limits.isEmpty else {
-            text = "API \u{2013}"
-            percent = nil
+        guard let top = limits.max(by: { Self.rate($0) < Self.rate($1) }) else {
+            numbers = nil
+            fraction = nil
             warn = false
             tooltip = nil
             return
         }
-        let exact = limits.map { Double($0.used) / Double($0.limit) * 100 }.max() ?? 0
-        let whole = Int(min(max(exact.rounded(), 0), 999))
-        percent = whole
-        text = "API \(whole)%"
-        // The color follows the usage itself, as the daemon's 80% warnings
-        // do: 79.5% shows as 80% without it.
-        warn = exact >= 80
+        let rate = Self.rate(top)
+        numbers = Self.number(top.used) + " / " + Self.number(top.limit)
+        fraction = min(max(rate, 0), 1)
+        warn = rate >= 0.8
         func pair(_ limit: Limit?) -> String {
             guard let limit, limit.limit > 0 else { return "\u{2013} / \u{2013}" }
             return Self.number(limit.used) + " / " + Self.number(limit.limit)
@@ -402,16 +428,20 @@ public struct ApiUsage: Equatable {
         tooltip = "GraphQL API " + pair(rateLimit?.graphql) + " · REST API " + pair(rateLimit?.rest)
     }
 
+    static func rate(_ limit: Limit) -> Double {
+        Double(limit.used) / Double(limit.limit)
+    }
+
+    /// `API 1,240 / 5,000` or `API –`, for the accessibility text.
+    public var text: String {
+        "API " + (numbers ?? "\u{2013}")
+    }
+
     static func number(_ value: Int64) -> String {
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
         formatter.locale = Locale(identifier: "en_US")
         return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
-    }
-
-    /// "Updated 1 min ago · API 25%".
-    public static func headerLine(updated: String, usage: ApiUsage) -> String {
-        updated + " · " + usage.text
     }
 }
 
@@ -466,31 +496,6 @@ public enum TextSize {
 
 public struct TextSizeError: Error, Equatable {
     public var message: String
-}
-
-// MARK: - Snooze
-
-public enum SnoozeTime {
-    public static let configKey = "snooze_return_time"
-
-    /// The next Return time after `now` in the time zone of the Mac: today's
-    /// if it is still ahead, else tomorrow's (the daemon's
-    /// `next_return_at`). A time skipped by a daylight saving change comes
-    /// after the gap.
-    public static func next(_ returnTime: String?, now: Int64, timeZone: TimeZone = .current) -> Int64 {
-        let (hour, minute) = ReturnTime.parse(returnTime) ?? (9, 0)
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = timeZone
-        let date = Date(timeIntervalSince1970: TimeInterval(now))
-        for offset in 0...2 {
-            guard let day = calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: date)),
-                  let at = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day, matchingPolicy: .nextTime, repeatedTimePolicy: .first, direction: .forward)
-            else { continue }
-            let seconds = Int64(at.timeIntervalSince1970)
-            if seconds > now { return seconds }
-        }
-        return now + 86_400
-    }
 }
 
 // MARK: - Settings: tokens
@@ -597,15 +602,18 @@ public enum CreateTokenURL {
 public enum SettingsText {
     public static let colorDetail = "Tints this account's icon and the dot next to its name."
     public static let removeAccountDetail =
-        "Deletes this account and its owners from shiibar-gh: token, PRs, snoozes and settings. Nothing changes on GitHub."
+        "Deletes this account and its owners from shiibar-gh: token, PRs, mutes and settings. Nothing changes on GitHub."
     public static let removeOwnerDetail =
-        "Deletes this owner from shiibar-gh: its PRs, snoozes and settings. Nothing changes on GitHub."
-    public static let enabledDetail = "Off hides this owner's section and stops fetching."
+        "Deletes this owner from shiibar-gh: its PRs and settings. Nothing changes on GitHub."
+    public static let enabledDetail = "Off hides this owner's PRs and stops fetching."
     public static let notifyDetail = "Off keeps the table below but sends no notifications for this owner."
     public static let skipDraftsDetail = "Events on draft PRs stay in the list but never notify."
     public static let copyDetail = "Replaces the table above with that owner's."
-    public static let reposDetail = "Hidden: not in the list. List only: in the list, but no notifications."
-    public static let usersDetail = "Same for a user. Bots are users too."
+    public static let mutedReposDetail = "Muted PRs stay in the list in gray. Only mentions notify."
+    public static let mutedUsersDetail = "Their PRs and their events. Bots are users too."
+    public static let mutedPullRequestsDetail = "Single pull requests you muted."
+    public static let autoDismissDetail = "Merged and closed PRs move to Dismissed after this many days"
+    public static let keepDismissedDetail = "Dismissed PRs can be restored for this many days"
     public static let ssoNote =
         "If an organization enforces SAML SSO, authorize the token for it after creating it (Configure SSO on the token page)."
     public static let textSizeDetail = "Text in the popover and its window"
@@ -620,15 +628,20 @@ public enum SettingsText {
     public static func addOwnerTitle(_ login: String) -> String { "Add owner to \(login)" }
     public static func copyTitle(_ owner: String) -> String { "Copy table to \(owner)" }
     public static func copyNote(_ owner: String) -> String {
-        "Replaces \(owner)'s table. The switches and Exclusions stay as they are."
+        "Replaces \(owner)'s table. The switches stay as they are."
+    }
+
+    /// The note of the Add owner sheet (Sheets.html).
+    public static func addOwnerNote(_ owner: String) -> String {
+        "The account's token reads pull requests in \(owner.isEmpty ? "this owner" : owner)'s repositories."
     }
 
     /// The event table's rows, grouped as DESIGN.md, "Row kinds and states".
     public static let eventGroups: [(String, [EventKind])] = [
         ("Reviews and mentions", [.reviewRequested, .teamReviewRequested, .mentioned, .teamMentioned]),
-        ("Comments", [.comment, .reply, .replyMentioned, .reaction]),
-        ("My pull requests", [.approved, .changesRequested, .checksFailed, .conflicts, .mergeable]),
-        ("Any pull request", [.mergeQueueAdded, .mergeQueueRemoved, .mergedClosed]),
+        ("Comments", [.comment, .commentOther, .reply, .replyMentioned, .reaction]),
+        ("My pull requests", [.approved, .changesRequested, .checksFailed, .checksPassed, .conflicts, .mergeable]),
+        ("Any pull request", [.mergeQueueAdded, .mergeQueueRemoved, .mergedClosed, .reopened]),
     ]
 
     public static func eventTitle(_ kind: EventKind) -> String {
@@ -638,17 +651,20 @@ public enum SettingsText {
         case .mentioned: return "Mentioned"
         case .teamMentioned: return "My team mentioned"
         case .comment: return "Comment on my PR"
+        case .commentOther: return "Comment on other PRs"
         case .reply: return "Reply in a thread I commented in"
         case .replyMentioned: return "Reply in a thread I was mentioned in"
         case .reaction: return "Reaction to my comment"
         case .approved: return "Approved"
         case .changesRequested: return "Changes requested"
         case .checksFailed: return "Checks failed"
+        case .checksPassed: return "Checks passed"
         case .conflicts: return "Conflicts"
         case .mergeable: return "Mergeable"
         case .mergeQueueAdded: return "Added to merge queue"
         case .mergeQueueRemoved: return "Removed from merge queue"
         case .mergedClosed: return "Merged / Closed"
+        case .reopened: return "Reopened"
         }
     }
 
@@ -663,53 +679,89 @@ public enum SettingsText {
     }
 }
 
-/// Return time: the daemon's `HH:MM` and the hour and minute a time picker
-/// edits.
-public enum ReturnTime {
-    public static func parse(_ text: String?) -> (hour: Int, minute: Int)? {
-        guard let text else { return nil }
-        let parts = text.split(separator: ":", omittingEmptySubsequences: false)
-        guard parts.count == 2, parts.allSatisfy({ $0.count == 2 }),
-              let hour = Int(parts[0]), let minute = Int(parts[1]),
-              (0..<24).contains(hour), (0..<60).contains(minute)
-        else { return nil }
-        return (hour, minute)
-    }
-
-    public static func format(hour: Int, minute: Int) -> String {
-        String(format: "%02d:%02d", hour, minute)
-    }
-
-    public static func date(_ text: String?, calendar: Calendar) -> Date {
-        let (hour, minute) = parse(text) ?? (9, 0)
-        let components = DateComponents(year: 2001, month: 1, day: 1, hour: hour, minute: minute)
-        return calendar.date(from: components) ?? Date(timeIntervalSinceReferenceDate: 0)
-    }
-
-    public static func text(_ date: Date, calendar: Calendar) -> String {
-        let components = calendar.dateComponents([.hour, .minute], from: date)
-        return format(hour: components.hour ?? 0, minute: components.minute ?? 0)
-    }
-
-    /// The calendar both sides use: Gregorian in UTC.
-    public static var calendar: Calendar {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "UTC")!
-        return calendar
-    }
-}
-
 // MARK: - Empty states
 
 public enum EmptyState {
-    public static func cards(filtered: Bool) -> String {
-        filtered ? "Nothing matches" : "Nothing needs you"
-    }
-
-    public static let activity = "No activity"
+    public static let all = "No pull requests"
+    public static let review = "No pull requests to review"
+    public static let mine = "No pull requests of yours"
+    public static let dismissed = "No dismissed pull requests"
+    public static let nothingMatches = "Nothing matches"
     public static let unreadable = "Couldn't read saved state"
     public static let noAccountsTitle = "No accounts yet"
     public static let noAccountsDetail = "Add an account in Settings"
     public static let noOwnersTitle = "No owners yet"
     public static let noOwnersDetail = "Add an owner in Settings"
+}
+
+// MARK: - Dismissed
+
+public enum DismissedText {
+    /// `6 days left`: whole days to the end, rounded up; `1 day left`;
+    /// `0 days left` once the end has passed while the popover holds the
+    /// card (DESIGN.md, "Dismissed list").
+    public static func daysLeft(_ expiresAt: Int64?, now: Int64) -> String {
+        guard let expiresAt else { return "" }
+        let days = expiresAt <= now ? 0 : (expiresAt - now + 86_399) / 86_400
+        return days == 1 ? "1 day left" : "\(days) days left"
+    }
+
+    /// The note under the heading; `days` is `dismissed_keep_days`.
+    public static func note(keepDays: Int64) -> String {
+        "Dismissed pull requests are removed after " + RelativeTime.days(keepDays) + "."
+    }
+
+    /// `Dismissed in 2 days` on a card whose automatic Dismiss is due
+    /// (`auto_dismiss_at`): whole days to it, rounded up as `daysLeft`, at
+    /// least 1 day (DESIGN.md, "Card header"). Nil when none is scheduled.
+    public static func dismissedIn(_ autoDismissAt: Int64?, now: Int64) -> String? {
+        guard let autoDismissAt else { return nil }
+        return "Dismissed in " + RelativeTime.days(RelativeTime.daysUntil(autoDismissAt, now: now))
+    }
+
+    /// The tooltip of `Dismissed in N days`; `days` is
+    /// `auto_dismiss_after_days`. Only a card in Done is told how to keep
+    /// it: an unplaced card has no Done to leave (DESIGN.md, "Card header").
+    public static func dismissedInHelp(autoDismissDays: Int64, inDone: Bool) -> String {
+        let first = "Automatically dismissed " + RelativeTime.days(autoDismissDays) + " after it is merged or closed."
+        return inDone ? first + " Move it out of Done to keep it." : first
+    }
+
+    public static let keepDaysKey = "dismissed_keep_days"
+    public static let autoDismissKey = "auto_dismiss_after_days"
+    public static let defaultKeepDays: Int64 = 7
+    public static let defaultAutoDismissDays: Int64 = 3
+}
+
+// MARK: - Operation failures
+
+/// The verbs of the failure band (DESIGN.md, "Showing what an operation
+/// did").
+public enum OperationVerb: String, Equatable {
+    case dismiss
+    case restore
+    case mute
+    case unmute
+    case move
+    case add
+    case remove
+    case markAsRead = "mark as read"
+}
+
+public enum OperationFailure {
+    /// `Couldn't dismiss: daemon not running`: the daemon's `error`, or
+    /// `daemon not running` when it did not answer.
+    public static func text(_ verb: OperationVerb, _ error: Error) -> String {
+        "Couldn't \(verb.rawValue): " + reason(error)
+    }
+
+    public static func reason(_ error: Error) -> String {
+        if let error = error as? DaemonError {
+            return error.isUnreachable ? "daemon not running" : error.message
+        }
+        return "\(error)"
+    }
+
+    /// How long the band stays without another operation.
+    public static let duration: TimeInterval = 10
 }

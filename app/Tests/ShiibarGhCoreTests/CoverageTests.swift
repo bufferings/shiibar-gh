@@ -4,17 +4,6 @@ import Foundation
 import XCTest
 
 final class StoreTests: XCTestCase {
-    func testReturnTimeRoundTripsThroughThePicker() {
-        let calendar = ReturnTime.calendar
-        for text in ["00:00", "09:00", "23:59", "07:05"] {
-            XCTAssertEqual(ReturnTime.text(ReturnTime.date(text, calendar: calendar), calendar: calendar), text)
-        }
-        XCTAssertNil(ReturnTime.parse("9:00"))
-        XCTAssertNil(ReturnTime.parse("24:00"))
-        XCTAssertNil(ReturnTime.parse("ab:cd"))
-        XCTAssertEqual(ReturnTime.text(ReturnTime.date(nil, calendar: calendar), calendar: calendar), "09:00", "the default")
-    }
-
     func testTheUIStateIsKeptPerAccount() {
         let (defaults, suite) = testDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -22,22 +11,33 @@ final class StoreTests: XCTestCase {
         XCTAssertNil(store.windowFrame(account: "1001"))
         XCTAssertEqual(store.options(account: "1001"), ListOptions())
         XCTAssertTrue(store.keepOnTop(account: "1001"), "Keep on top is on by default")
-        XCTAssertEqual(store.collapsed(account: "1001"), [:])
-        XCTAssertEqual(store.activityOwners(account: "1001"), [])
+        XCTAssertEqual(store.collapsed(account: "1001"), [])
+        XCTAssertEqual(store.expanded(account: "1001"), [])
+        XCTAssertEqual(store.groupOrders(account: "1001"), [:])
+        XCTAssertEqual(store.lastTab(account: "1001", surface: .popover), .all)
         store.setWindowFrame("{{10, 20}, {460, 620}}", account: "1001")
-        store.setOptions(ListOptions(segment: .authored, groupBy: .status, sort: .recentlyAdded), account: "1001")
+        store.setOptions(ListOptions(groupBy: .status, thenBy: .owner, sort: .recentlyAdded), account: "1001")
         store.setKeepOnTop(false, account: "1001")
-        store.setCollapsed(["owner:o2": true], account: "1001")
-        store.setActivityOwners(["o2", "o4"], account: "1001")
+        store.setCollapsed(["review|todo"], account: "1001")
+        store.setExpanded(["mine|main"], account: "1001")
+        store.setGroupOrders([.status: ["closed", "open"]], account: "1001")
+        store.setRepositories(["o/b", "o/a"], account: "1001")
+        store.setLastTab(.review, account: "1001", surface: .popover)
+        store.setLastTab(.mine, account: "1001", surface: .window)
         let again = UIStateStore(defaults: defaults)
         XCTAssertEqual(again.windowFrame(account: "1001"), "{{10, 20}, {460, 620}}")
-        XCTAssertEqual(again.options(account: "1001"), ListOptions(segment: .authored, groupBy: .status, sort: .recentlyAdded))
+        XCTAssertEqual(again.options(account: "1001"), ListOptions(groupBy: .status, thenBy: .owner, sort: .recentlyAdded))
         XCTAssertFalse(again.keepOnTop(account: "1001"))
         XCTAssertTrue(again.keepOnTop(account: "583231"))
-        XCTAssertEqual(again.collapsed(account: "1001"), ["owner:o2": true])
-        XCTAssertEqual(again.activityOwners(account: "1001"), ["o2", "o4"])
+        XCTAssertEqual(again.collapsed(account: "1001"), ["review|todo"])
+        XCTAssertEqual(again.expanded(account: "1001"), ["mine|main"])
+        XCTAssertEqual(again.groupOrders(account: "1001"), [.status: ["closed", "open"]])
+        XCTAssertEqual(again.repositories(account: "1001"), ["o/b", "o/a"])
+        XCTAssertEqual(again.lastTab(account: "1001", surface: .popover), .review)
+        XCTAssertEqual(again.lastTab(account: "1001", surface: .window), .mine)
         XCTAssertNil(again.windowFrame(account: "583231"), "another account has its own")
         XCTAssertEqual(again.options(account: "583231"), ListOptions())
+        XCTAssertTrue(defaults.dictionaryRepresentation().keys.filter { $0.contains("1001") }.allSatisfy { $0.hasPrefix("v4.") })
     }
 
     func testPaletteHasDarkVariants() {
@@ -88,15 +88,16 @@ final class SettingsModelTests: XCTestCase {
         settings.show(.general)
         XCTAssertEqual(settings.tab, .general)
         settings.select(.owner(account: "3407303", owner: "o2"))
-        settings.ownerTab = .exclusions
+        settings.ownerTab = .notifications
         settings.select(.owner(account: "3407303", owner: "o2"))
-        XCTAssertEqual(settings.ownerTab, .exclusions, "the same owner keeps its tab")
+        XCTAssertEqual(settings.ownerTab, .notifications, "the same owner keeps its tab")
+        XCTAssertEqual(OwnerTab.allCases.map(\.rawValue), ["Owner", "Notifications"])
+        XCTAssertEqual(SettingsTab.allCases.map(\.rawValue), ["General", "Accounts", "Dismissed"])
         settings.select(.owner(account: "3407303", owner: "o3"))
         XCTAssertEqual(settings.ownerTab, .owner, "another owner opens on Owner")
         XCTAssertEqual(settings.selectedOwner?.name, "acme-corp")
         await settle()
         XCTAssertTrue(api.calls.contains("owner_events_get bufferings-work acme-corp"))
-        XCTAssertTrue(api.calls.contains("owner_exclusions_get bufferings-work acme-corp"))
         app.handle(.accountRemoved("3407303"))
         settings.ensureSelection()
         XCTAssertEqual(settings.selection, .account("583231"), "a removed account moves the selection")
@@ -115,9 +116,9 @@ final class SettingsModelTests: XCTestCase {
         settings.setOwnerNotify(org, of: account, false)
         settings.setSkipDrafts(org, of: account, true)
         settings.setEvent(org, of: account, .teamReviewRequested, .list, false)
-        settings.setExclusion(org, of: account, .repo, " example-org/legacy ", .hidden)
-        settings.setExclusion(org, of: account, .user, "  ", .hidden)
-        settings.removeExclusion(org, of: account, .user, "renovate")
+        XCTAssertTrue(settings.addMute(.repo, " example-org/legacy ", of: account))
+        XCTAssertFalse(settings.addMute(.user, "  ", of: account), "an empty name is not taken")
+        settings.removeMute(.user, "renovate", of: account)
         settings.removeOwner(pub, of: account)
         settings.removeAccount(account)
         await settle()
@@ -125,13 +126,14 @@ final class SettingsModelTests: XCTestCase {
             "account_color bufferings-work blue", "owner_enabled bufferings-work public false",
             "owner_notify bufferings-work example-org false", "owner_skip_drafts bufferings-work example-org true",
             "owner_events_set bufferings-work example-org team_review_requested list false",
-            "owner_exclusions_set bufferings-work example-org repo example-org/legacy hidden",
-            "owner_exclusions_remove bufferings-work example-org user renovate",
+            "mute bufferings-work repo example-org/legacy",
+            "unmute bufferings-work user renovate",
             "owner_remove bufferings-work public", "account_remove bufferings-work",
         ] {
             XCTAssertTrue(api.calls.contains(call), call)
         }
         XCTAssertFalse(api.calls.contains { $0.contains("user  ") }, "an empty name is not sent")
+        _ = org
         XCTAssertEqual(settings.selection, .account("3407303"), "removing an owner selects its account")
     }
 
@@ -175,11 +177,60 @@ final class SettingsModelTests: XCTestCase {
         XCTAssertEqual(settings.errors["events:o2"], "invalid: refused")
         XCTAssertEqual(settings.cell("o2", .mentioned), saved["mentioned"], "the daemon's table is read again")
         XCTAssertEqual(api.calls.filter { $0.hasPrefix("owner_events_get") }.count, 2)
-        api.clearCalls()
-        api.failNext = DaemonError(code: .invalid, message: "invalid: owner/repo")
-        settings.setExclusion(org, of: account, .repo, "bad", .hidden)
+    }
+
+    /// Settings › Accounts, Muted (DESIGN.md): read with the account, Add
+    /// takes valid new names only, a refusal reads the lists again, and a
+    /// mute made elsewhere comes with `account_changed`.
+    func testTheMutedLists() async {
+        let settings = SettingsModel(app: app, launch: nil)
+        let account = sampleAccount()
+        api.mutes = Mutes(repos: ["example-org/legacy"], users: ["renovate"], prs: [])
+        settings.windowOpened()
+        settings.show(.account("3407303"))
         await settle()
-        XCTAssertTrue(api.calls.contains("owner_exclusions_get bufferings-work example-org"), "Exclusions are read again too")
+        XCTAssertEqual(settings.mutes(.repo, of: "3407303"), ["example-org/legacy"])
+        XCTAssertFalse(settings.canAddMute(.repo, "Example-Org/Legacy", of: "3407303"))
+        XCTAssertFalse(settings.canAddMute(.repo, "sandbox", of: "3407303"))
+        XCTAssertTrue(settings.canAddMute(.repo, "example-org/sandbox", of: "3407303"))
+        XCTAssertFalse(settings.canAddMute(.pr, "example-org/api", of: "3407303"))
+        XCTAssertTrue(settings.canAddMute(.pr, "example-org/api#402", of: "3407303"))
+        api.mutes.prs = ["example-org/api#402"]
+        XCTAssertTrue(settings.addMute(.pr, "example-org/api#402", of: account))
+        await settle()
+        XCTAssertEqual(settings.mutes(.pr, of: "3407303"), ["example-org/api#402"])
+        var cleared = 0
+        api.refuse["mute"] = DaemonError(code: .notFound, message: "not found: PR example-org/api#999")
+        XCTAssertTrue(settings.addMute(.pr, "example-org/api#999", of: account) { cleared += 1 })
+        await settle()
+        XCTAssertEqual(
+            settings.errors[SettingsModel.muteErrorKey(.pr, "3407303")], "Couldn't mute: pull request not found"
+        )
+        XCTAssertEqual(cleared, 0, "the field keeps the text after a refusal")
+        api.refuse["mute"] = DaemonError(code: .invalid, message: "invalid: bad name")
+        XCTAssertTrue(settings.addMute(.repo, "example-org/x", of: account))
+        await settle()
+        XCTAssertEqual(settings.errors[SettingsModel.muteErrorKey(.repo, "3407303")], "Couldn't mute: invalid: bad name")
+        api.refuse = [:]
+        XCTAssertTrue(settings.addMute(.repo, "example-org/y", of: account) { cleared += 1 })
+        await settle()
+        XCTAssertEqual(cleared, 1, "cleared once the daemon took it")
+        XCTAssertNil(settings.errors[SettingsModel.muteErrorKey(.repo, "3407303")])
+        api.refuse = [:]
+        api.clearCalls()
+        api.mutes.users = []
+        app.handle(.accountChanged(sampleAccount()))
+        await settle()
+        XCTAssertEqual(api.calls.filter { $0.hasPrefix("mutes_get") }, ["mutes_get bufferings-work"])
+        XCTAssertEqual(settings.mutes(.user, of: "3407303"), [])
+    }
+
+    func testAddAccountFromNoAccountsYetShowsTheSheet() {
+        let settings = SettingsModel(app: app, launch: nil)
+        settings.show(.addAccount)
+        XCTAssertEqual(settings.tab, .accounts)
+        XCTAssertEqual(settings.requestedSheet, .addAccount)
+        XCTAssertEqual(SettingsModel.keys.suffix(2), ["auto_dismiss_after_days", "dismissed_keep_days"])
     }
 
     func testAddAccountAndRemoveNeedTheKeychain() {
@@ -513,8 +564,8 @@ final class LaunchSyncTests: XCTestCase {
     func testSettingsFollowConfigChanged() async {
         let app = AppModel(api: api, store: UIStateStore(defaults: defaults), opener: FakeOpener(), notifier: FakeNotifier(), clock: { T0 })
         let settings = SettingsModel(app: app, launch: nil)
-        app.handle(.configChanged(key: "drop_after_days", value: .int(20)))
-        XCTAssertEqual(settings.config["drop_after_days"], .int(20))
+        app.handle(.configChanged(key: "future_setting", value: .int(20)))
+        XCTAssertEqual(settings.config["future_setting"], .int(20))
     }
 }
 
@@ -593,7 +644,7 @@ final class AppearanceTests: XCTestCase {
         await follower.load()
         XCTAssertEqual(applied, [.dark])
         app.handle(.configChanged(key: "appearance", value: .string("light")))
-        app.handle(.configChanged(key: "drop_after_days", value: .int(3)))
+        app.handle(.configChanged(key: "future_setting", value: .int(3)))
         app.handle(.configChanged(key: "appearance", value: .string("sepia")))
         XCTAssertEqual(applied, [.dark, .light, .system], "an unknown value follows the Mac")
         XCTAssertEqual(follower.current, .system)

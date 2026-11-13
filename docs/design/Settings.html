@@ -211,7 +211,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
 <div class="ab">
 <section class="scene">
     <div class="cap">Settings › General</div>
-    <div class="desc" style="width: 600px">Text size is the body text size in points: a whole number from 9 to 18, default 12. The standard macOS stepper changes it by 1. Other text, row heights, avatars and the popover width follow it in proportion; the window keeps its saved size. It applies to every account. In the popover and the window, ⌘= (or ⌘+) makes it 1 pt larger, ⌘− 1 pt smaller, and ⌘0 sets it back to 12.</div>
+    <div class="desc" style="width: 600px">Text size is the body text size in points: a whole number from 9 to 18, default 12. The standard macOS stepper changes it by 1. Every box has a heading; Appearance has three choices, so it is a segmented control. Other text, row heights, avatars and the popover width follow it in proportion; the window keeps its saved size. It applies to every account. In the popover and the window, ⌘= (or ⌘+) makes it 1 pt larger, ⌘− 1 pt smaller, and ⌘0 sets it back to 12.</div>
     <div class="win" style="width: 600px">
       <div class="titlebar">
         <div class="tl"><div class="dots" aria-hidden="true"><span style="background: #EC6A5E"></span><span style="background: #F4BF4F"></span><span style="background: #61C554"></span></div><div class="wt">General</div><div style="width: 50px"></div></div>
@@ -222,13 +222,17 @@ body{margin:0;padding:24px;background:#e9e9ee}
         </div>
       </div>
       <div class="body">
-        <div class="group">
+        <div><div class="gh">Startup</div><div class="group">
             <div class="item"><div class="lbl"><span style="font-weight: 600">Launch at login</span><span class="sub">Runs in the menu bar after you log in to your Mac</span></div><div class="ctl"><span class="tgl on"><span></span></span></div></div>
-            <div class="item"><div class="lbl"><span style="font-weight: 600">Appearance</span><span class="sub">System follows the appearance setting of your Mac</span></div><div class="ctl"><span class="sel">System &#8964;</span></div></div>
+        </div></div>
+        <div><div class="gh">Appearance</div><div class="group">
+            <div class="item"><div class="lbl"><span style="font-weight: 600">Appearance</span><span class="sub">System follows the appearance setting of your Mac</span></div><div class="ctl"><div class="seg" role="radiogroup" aria-label="Appearance"><span class="on">System</span><span>Light</span><span>Dark</span></div></div></div>
             <div class="item"><div class="lbl"><span style="font-weight: 600">Text size</span><span class="sub">Text in the popover and its window</span></div><div class="ctl"><span class="nf">12</span><span style="display: inline-flex; flex-direction: column; border: 1px solid #C9C9CE; border-radius: 4px; background: #FFFFFF; overflow: hidden"><button class="sq" aria-label="Increment" style="width: 16px; height: 10px; border: 0; border-radius: 0; font-size: 8px">&#9650;</button><button class="sq" aria-label="Decrement" style="width: 16px; height: 10px; border: 0; border-top: 1px solid #C9C9CE; border-radius: 0; font-size: 8px">&#9660;</button></span></div></div>
+        </div></div>
+        <div><div class="gh">Polling</div><div class="group">
             <div class="item"><div class="lbl"><span style="font-weight: 600">PR status interval</span><span class="sub">Shorter means you notice sooner, but uses more API quota</span></div><div class="ctl"><span class="nf">1</span><span class="sub">min</span></div></div>
             <div class="item"><div class="lbl"><span style="font-weight: 600">Reactions interval</span><span class="sub">Shorter means you notice sooner, but uses more API quota</span></div><div class="ctl"><span class="nf">3</span><span class="sub">min</span></div></div>
-        </div>
+        </div></div>
       </div>
     </div>
   </section>
@@ -245,10 +249,10 @@ body{margin:0;padding:24px;background:#e9e9ee}
         </div>
       </div>
       <div class="body">
-        <div class="group">
+        <div><div class="gh">Dismissed</div><div class="group">
             <div class="item"><div class="lbl"><span style="font-weight: 600">Days before closed PRs are dismissed</span><span class="sub">Merged and closed PRs move to Dismissed after this many days</span></div><div class="ctl"><span class="nf">3</span><span class="sub">days</span></div></div>
             <div class="item"><div class="lbl"><span style="font-weight: 600">Days to keep dismissed PRs</span><span class="sub">Dismissed PRs can be restored for this many days</span><span class="errt">Enter a whole number</span></div><div class="ctl"><span class="nf" style="border-color: #E3A98F">7.5</span><span class="sub">days</span></div></div>
-        </div>
+        </div></div>
       </div>
     </div>
   </section>

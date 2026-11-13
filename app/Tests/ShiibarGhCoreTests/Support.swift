@@ -224,8 +224,6 @@ final class FakeAPI: DaemonAPI, @unchecked Sendable {
     private let lock = NSLock()
     private var log: [String] = []
     var cards: [Card] = []
-    var snoozedCards: [Card] = []
-    var rows: [Row] = []
     var config: [String: ConfigValue] = ["launch_at_login": .bool(true)]
     var failNext: DaemonError?
     var refreshWarnings: [Warning] = []
@@ -234,7 +232,12 @@ final class FakeAPI: DaemonAPI, @unchecked Sendable {
     var events: [String: EventCell] = [:]
     /// How long `owner_events_get` takes, in nanoseconds.
     var eventsDelay: UInt64 = 0
-    var exclusions = Exclusions()
+    var mutes = Mutes()
+    /// Commands that fail, by name (`place`, `dismiss`, ...), every time.
+    var refuse: [String: DaemonError] = [:]
+    /// How long the operations of DESIGN.md, "Showing what an operation
+    /// did" take to answer, in nanoseconds.
+    var operationDelay: UInt64 = 0
     /// Owners `owner_add` refuses, with the error.
     var ownerErrors: [String: DaemonError] = [:]
 
@@ -261,14 +264,16 @@ final class FakeAPI: DaemonAPI, @unchecked Sendable {
 
     func info() async throws -> InfoResponse { try record("info"); return InfoResponse(version: "0.1.0", startedAt: 0) }
     func list(_ query: ListQuery) async throws -> [Card] {
-        try record("list \(query.account ?? "") snoozed=\(query.snoozed)")
-        return query.snoozed ? snoozedCards : cards
+        try record("list \(query.account ?? "") dismissed=\(query.dismissed?.rawValue ?? "-")")
+        return cards
     }
-    func activity(_ query: ActivityQuery) async throws -> [Row] {
-        try record("activity \(query.account ?? "")")
-        return rows
+
+    private func operation(_ call: String, _ name: String) async throws {
+        try record(call)
+        if operationDelay > 0 { try? await Task.sleep(nanoseconds: operationDelay) }
+        if let error = refuse[name] { throw error }
     }
-    func read(_ rowIds: [String]) async throws { try record("read \(rowIds.joined(separator: ","))") }
+    func read(_ rowIds: [String]) async throws { try await operation("read \(rowIds.joined(separator: ","))", "read") }
     func readAll(account: String) async throws { try record("read_all \(account)") }
     /// How long `popover_opened` takes to answer, in nanoseconds.
     var popoverOpenedDelay: UInt64 = 0
@@ -278,8 +283,37 @@ final class FakeAPI: DaemonAPI, @unchecked Sendable {
         try record("answered popover_opened")
     }
     func popoverClosed(_ account: String) async throws { try record("popover_closed \(account)") }
-    func snooze(account: String, pr: String) async throws { try record("snooze \(account) \(pr)") }
-    func unsnooze(account: String, pr: String) async throws { try record("unsnooze \(account) \(pr)") }
+    func place(account: String, pr: String, target: PlaceTarget, position: PlacePosition) async throws {
+        let to: String
+        switch target {
+        case .review(let section): to = "review " + section.rawValue
+        case .mine: to = "mine"
+        case .mineDone: to = "mine done"
+        case .none: to = "none"
+        }
+        let at: String
+        switch position {
+        case .before(let other): at = " before " + other
+        case .top: at = " top"
+        case .bottom: at = " bottom"
+        case .byDefault: at = ""
+        }
+        try await operation("place \(account) \(pr) \(to)\(at)", "place")
+    }
+    func dismiss(account: String, pr: String) async throws { try await operation("dismiss \(account) \(pr)", "dismiss") }
+    func restore(account: String, pr: String) async throws { try await operation("restore \(account) \(pr)", "restore") }
+    func mute(account: String, kind: MuteKind, name: String) async throws -> Mutes {
+        try await operation("mute \(account) \(kind.rawValue) \(name)", "mute")
+        return mutes
+    }
+    func unmute(account: String, kind: MuteKind, name: String) async throws -> Mutes {
+        try await operation("unmute \(account) \(kind.rawValue) \(name)", "unmute")
+        return mutes
+    }
+    func mutes(account: String) async throws -> Mutes {
+        try record("mutes_get \(account)")
+        return mutes
+    }
     func refresh(_ account: String?) async throws -> [Warning] { try record("refresh \(account ?? "")"); return refreshWarnings }
     func configGet(_ key: String) async throws -> ConfigValue {
         try record("config_get \(key)")
@@ -321,18 +355,6 @@ final class FakeAPI: DaemonAPI, @unchecked Sendable {
     func ownerEventsCopy(account: String, from: String, to: String) async throws -> [String: EventCell] {
         try record("owner_events_copy \(account) \(from) \(to)")
         return events
-    }
-    func ownerExclusions(account: String, owner: String) async throws -> Exclusions {
-        try record("owner_exclusions_get \(account) \(owner)")
-        return exclusions
-    }
-    func ownerExclusionsSet(account: String, owner: String, kind: ExclusionKind, name: String, state: ExclusionState) async throws -> Exclusions {
-        try record("owner_exclusions_set \(account) \(owner) \(kind.rawValue) \(name) \(state.rawValue)")
-        return exclusions
-    }
-    func ownerExclusionsRemove(account: String, owner: String, kind: ExclusionKind, name: String) async throws -> Exclusions {
-        try record("owner_exclusions_remove \(account) \(owner) \(kind.rawValue) \(name)")
-        return exclusions
     }
     func tokenSet(account: String, token: String) async throws { try record("token_set \(account)") }
     func tokenTest(account: String?, token: String?) async throws -> [TestResult] {

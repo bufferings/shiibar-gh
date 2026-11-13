@@ -70,8 +70,9 @@ final class URLSessionImageLoader: ImageLoading {
 /// subtitle and body are the daemon's; a notification has no buttons
 /// (DESIGN.md, "macOS notifications"). A click goes to `onClick`.
 final class UserNotificationPresenter: NSObject, NotificationPresenting, UNUserNotificationCenterDelegate {
-    /// The type, the account id and the URL of a clicked notification.
-    var onClick: ((NotificationType?, String, String?) -> Void)?
+    /// The type, the account id, the URL and the PR (`owner/repo#number`)
+    /// of a clicked notification.
+    var onClick: ((NotificationType?, String, String?, String?) -> Void)?
     private var center: UNUserNotificationCenter { UNUserNotificationCenter.current() }
 
     func start() {
@@ -96,6 +97,7 @@ final class UserNotificationPresenter: NSObject, NotificationPresenting, UNUserN
             "type": notification.type.rawText,
             "account": notification.account,
             "url": notification.url ?? "",
+            "pr": notification.pr ?? "",
         ]
         // No trigger: shown right away.
         center.add(UNNotificationRequest(identifier: notification.id, content: content, trigger: nil))
@@ -116,8 +118,9 @@ final class UserNotificationPresenter: NSObject, NotificationPresenting, UNUserN
         let type = (info["type"] as? String).flatMap(NotificationType.init(rawValue:))
         let account = info["account"] as? String ?? ""
         let url = (info["url"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let pr = (info["pr"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         DispatchQueue.main.async { [weak self] in
-            self?.onClick?(type, account, url)
+            self?.onClick?(type, account, url, pr)
         }
         completionHandler()
     }

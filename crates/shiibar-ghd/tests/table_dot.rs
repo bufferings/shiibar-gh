@@ -1,5 +1,5 @@
-//! Rule table: the blue dot in the menu bar. DESIGN.md, section "How unread
-//! disappears".
+//! Rule table: the blue dot in the menu bar. DESIGN.md, sections "How
+//! unread rows go away" and "Mute".
 
 mod support;
 
@@ -48,76 +48,98 @@ fn dot_table() {
             true,
         ),
         (
-            "no dot on a snoozed PR",
-            &[|h| h.snooze(&key("PR_1")), comment],
+            "no dot on a dismissed PR",
+            &[|h| drop(h.dismiss(&key("PR_1"))), comment],
             false,
         ),
         (
-            "manual unsnooze with unread sets it",
+            "Restore with unread sets it",
             &[
-                |h| h.snooze(&key("PR_1")),
                 comment,
-                |h| h.unsnooze(&key("PR_1")),
+                H::open,
+                H::close,
+                |h| drop(h.dismiss(&key("PR_1"))),
+                |h| drop(h.restore(&key("PR_1"))),
             ],
             true,
         ),
         (
-            "manual unsnooze without unread does not",
-            &[|h| h.snooze(&key("PR_1")), |h| h.unsnooze(&key("PR_1"))],
-            false,
-        ),
-        (
-            "manual unsnooze while open does not",
+            "Restore without unread does not",
             &[
-                |h| h.snooze(&key("PR_1")),
-                comment,
-                H::open,
-                |h| h.unsnooze(&key("PR_1")),
+                |h| drop(h.dismiss(&key("PR_1"))),
+                |h| drop(h.restore(&key("PR_1"))),
             ],
             false,
         ),
         (
-            "the morning release with unread sets it",
+            "Restore while open does not",
             &[
-                |h| h.snooze(&key("PR_1")),
                 comment,
+                |h| drop(h.dismiss(&key("PR_1"))),
+                H::open,
+                |h| drop(h.restore(&key("PR_1"))),
+            ],
+            false,
+        ),
+        (
+            "a mention brings a dismissed card back with the dot",
+            &[
+                |h| drop(h.dismiss(&key("PR_1"))),
                 |h| {
-                    h.advance(DAY);
-                    h.tick();
+                    let e = h.ev("E_9", "PR_1", IngestKind::Mentioned);
+                    h.events(vec![e]);
                 },
             ],
             true,
         ),
         (
-            "the morning release while open does not",
+            // DESIGN.md, "Mute": a muted row does not raise the dot.
+            "a muted user does not",
+            &[|h| h.mute(MuteKind::User, "alice"), comment],
+            false,
+        ),
+        (
+            "a muted repository does not",
+            &[|h| h.mute(MuteKind::Repo, "Org/App"), comment],
+            false,
+        ),
+        (
+            "a mention on a muted PR does",
             &[
-                |h| h.snooze(&key("PR_1")),
+                |h| h.mute(MuteKind::Pr, &key("PR_1")),
+                |h| {
+                    let e = h.ev("E_9", "PR_1", IngestKind::Mentioned);
+                    h.events(vec![e]);
+                },
+            ],
+            true,
+        ),
+        (
+            "unmuting with unread muted rows sets it",
+            &[
+                |h| h.mute(MuteKind::User, "alice"),
+                comment,
+                |h| h.unmute(MuteKind::User, "ALICE"),
+            ],
+            true,
+        ),
+        (
+            "unmuting while open does not",
+            &[
+                |h| h.mute(MuteKind::User, "alice"),
                 comment,
                 H::open,
-                |h| {
-                    h.advance(DAY);
-                    h.tick();
-                },
+                |h| h.unmute(MuteKind::User, "alice"),
             ],
             false,
         ),
         (
-            "the morning release without unread does not",
+            "unmuting without unread does not",
             &[
-                |h| h.snooze(&key("PR_1")),
-                |h| {
-                    h.advance(DAY);
-                    h.tick();
-                },
-            ],
-            false,
-        ),
-        (
-            // DESIGN.md, "How unread disappears": no dot for a Hidden row.
-            "a Hidden user does not",
-            &[
-                |h| h.exclude(ExclusionKind::User, "alice", ExclusionState::Hidden),
+                |h| h.mute(MuteKind::User, "alice"),
                 comment,
+                |h| h.read(&["E_1"]),
+                |h| h.unmute(MuteKind::User, "alice"),
             ],
             false,
         ),

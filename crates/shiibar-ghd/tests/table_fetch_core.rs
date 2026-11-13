@@ -70,52 +70,28 @@ fn failed_run() -> Outcome {
 // ---------------------------------------------------------------- watching
 
 #[test]
-fn a_pr_is_watched_while_shown_and_for_the_keep_days_after() {
+fn a_card_is_watched_until_it_is_dismissed() {
+    // DESIGN.md, "When cards show, and watching": a card that is not
+    // dismissed is watched in full, however old; a dismissed one only for
+    // its events.
     let mut h = H::new();
-    h.set("keep_watching_days", json!(3));
     h.prs(vec![other("PR_1")]);
-    let watched = |h: &H| plan(h, true).prs["PR_1"].watched;
-    assert!(watched(&h), "the card shows");
-    h.set_time(T0 + 15 * DAY);
+    let watched = |h: &H| {
+        let p = plan(h, true);
+        (p.prs["PR_1"].watched, p.prs["PR_1"].dismissed)
+    };
+    h.set_time(T0 + 60 * DAY);
     h.tick();
-    assert!(!h.visible("PR_1"));
-    assert!(watched(&h), "gone just now");
-    h.set_time(T0 + 18 * DAY);
-    h.tick();
-    assert!(watched(&h), "three days after");
-    h.set_time(T0 + 18 * DAY + 1);
-    h.tick();
-    assert!(!watched(&h), "past the keep days");
-}
-
-#[test]
-fn zero_keep_days_watch_only_while_shown() {
-    let mut h = H::new();
-    h.set("keep_watching_days", json!(0));
-    h.prs(vec![other("PR_1")]);
-    h.set_time(T0 + 15 * DAY);
-    h.tick();
-    assert!(plan(&h, true).prs["PR_1"].watched, "the moment it went");
-    h.advance(1);
-    h.tick();
-    assert!(!plan(&h, true).prs["PR_1"].watched);
-}
-
-#[test]
-fn a_snoozed_card_counts_as_shown() {
-    let mut h = H::new();
-    h.set("keep_watching_days", json!(0));
-    h.prs(vec![pr("PR_1")]);
-    h.snooze(&key("PR_1"));
-    h.advance(DAY / 2);
-    h.tick();
-    assert!(plan(&h, true).prs["PR_1"].watched);
+    assert_eq!(watched(&h), (true, false), "old and read");
+    h.dismiss(&key("PR_1")).unwrap();
+    assert_eq!(watched(&h), (false, true));
+    h.restore(&key("PR_1")).unwrap();
+    assert_eq!(watched(&h), (true, false));
 }
 
 #[test]
 fn leaving_the_watch_forgets_what_was_collected() {
     let mut h = H::new();
-    h.set("keep_watching_days", json!(0));
     h.prs(vec![other("PR_1")]);
     apply(
         &mut h,
@@ -125,9 +101,7 @@ fn leaving_the_watch_forgets_what_was_collected() {
         },
     );
     assert!(plan(&h, true).prs["PR_1"].collected);
-    h.set_time(T0 + 15 * DAY);
-    h.tick();
-    h.advance(1);
+    h.dismiss(&key("PR_1")).unwrap();
     h.tick();
     let p = plan(&h, true);
     assert!(!p.prs["PR_1"].watched);
@@ -829,7 +803,7 @@ fn sso_names_the_owner_whose_id_github_gives() {
     let w = h.account().warnings;
     assert_eq!(w.len(), 1, "{w:?}");
     assert_eq!(w[0].message, "SSO authorization required for org");
-    assert_eq!(w[0].owner, Some(org));
+    assert_eq!(w[0].owner, Some(org.clone()));
     assert_eq!(w[0].url.as_deref(), Some("https://github.com/orgs/org/sso"));
 
     // A reaction fetch searches no owner: the warning stays.
@@ -846,6 +820,47 @@ fn sso_names_the_owner_whose_id_github_gives() {
         answered(Due {
             reactions: true,
             ..Due::default()
+        }),
+    );
+    assert_eq!(kinds(&h), ["sso_required"]);
+    // A run that makes only the failed requests of another owner says
+    // nothing about this one: the warning stays.
+    let public = h.owner_id("public");
+    apply(
+        &mut h,
+        Outcome {
+            retry_only: true,
+            owners_fetched: [public].into(),
+            ..answered(Due {
+                status: true,
+                ..Due::default()
+            })
+        },
+    );
+    assert_eq!(kinds(&h), ["sso_required"], "retry of another owner");
+    // A retry of this owner without the header clears it.
+    apply(
+        &mut h,
+        Outcome {
+            retry_only: true,
+            owners_fetched: [org.clone()].into(),
+            ..answered(Due {
+                status: true,
+                ..Due::default()
+            })
+        },
+    );
+    assert!(kinds(&h).is_empty(), "retry of this owner");
+    apply(
+        &mut h,
+        ran(Outcome {
+            token: TokenObs {
+                invalid: Some(false),
+                sso: true,
+                sso_owners: [(org.clone(), None)].into(),
+                ..TokenObs::default()
+            },
+            ..Outcome::default()
         }),
     );
     assert_eq!(kinds(&h), ["sso_required"]);
@@ -889,7 +904,7 @@ fn the_keychain_warnings_go_on_every_account_without_one() {
 // --------------------------------------------------------------- rate limits
 
 #[test]
-fn usage_under_a_fifth_of_the_limit_warns_per_api() {
+fn usage_of_80_percent_or_more_warns_per_api() {
     let limit = |remaining| {
         Some(LimitRec {
             limit: 5000,
@@ -898,10 +913,12 @@ fn usage_under_a_fifth_of_the_limit_warns_per_api() {
         })
     };
     // (graphql remaining, rest remaining, warnings)
-    let cases: [(i64, i64, &[&str]); 4] = [
-        (1000, 1000, &[]),
-        (999, 1000, &["graphql_near_limit"]),
-        (1000, 999, &["rest_near_limit"]),
+    // DESIGN.md, "Rate limits": 80% used or more.
+    let cases: [(i64, i64, &[&str]); 5] = [
+        (1001, 1001, &[]),
+        (1000, 1001, &["graphql_near_limit"]),
+        (1001, 1000, &["rest_near_limit"]),
+        (999, 1001, &["graphql_near_limit"]),
         (1, 1, &["graphql_near_limit", "rest_near_limit"]),
     ];
     for (graphql, rest, expect) in cases {
@@ -1099,7 +1116,6 @@ fn own_comment() -> OwnComment {
 fn a_pr_leaving_the_watch_sets_its_reaction_baseline_again() {
     for collected in [true, false] {
         let mut h = H::new();
-        h.set("keep_watching_days", json!(0));
         h.prs(vec![other("PR_1")]);
         apply(
             &mut h,
@@ -1114,9 +1130,7 @@ fn a_pr_leaving_the_watch_sets_its_reaction_baseline_again() {
             },
         );
         assert!(plan(&h, true).own["C_1"].baseline_done);
-        h.set_time(T0 + 15 * DAY);
-        h.tick();
-        h.advance(1);
+        h.dismiss(&key("PR_1")).unwrap();
         h.tick();
         assert!(!plan(&h, true).own["C_1"].baseline_done, "{collected}");
     }
@@ -1344,131 +1358,110 @@ fn a_failed_notifications_check_starts_no_poll_interval_wait() {
     );
 }
 
-/// DESIGN.md, "Watching": a card on screen is watched. A card the open
-/// popover holds is on screen, so its comments and baselines stay.
+// ------------------------------------------------------------------ 0.4
+
+/// DESIGN.md, "Fetch success and failure": a PR whose status request failed
+/// even alone carries `status_fetch_failed` until its status comes back,
+/// and every run asks for it again.
 #[test]
-fn a_held_card_stays_watched() {
+fn a_status_that_failed_alone_warns_and_is_fetched_again() {
     let mut h = H::new();
-    h.set("keep_watching_days", json!(0));
-    let e = h.ev("E_1", "PR_1", IngestKind::Merged);
-    h.push(
-        vec![IngestPr {
-            state: PrState::Merged,
-            ..other("PR_1")
-        }],
-        vec![e],
-        vec![],
-    );
+    h.prs(vec![other("PR_1")]);
     apply(
         &mut h,
-        Outcome {
-            collected: vec!["PR_1".into()],
-            own: vec![own_comment()],
+        ran(Outcome {
+            status_failed: vec!["PR_1".into()],
             ..Outcome::default()
-        },
+        }),
     );
-    h.open();
-    assert_eq!(h.app_list(), ["PR_1"]);
-    h.read(&["E_1"]);
-    h.advance(DAY);
+    let w = warning(&h, WarningKind::StatusFetchFailed).expect("the warning");
+    assert_eq!(w.message, "Couldn't fetch status for org/app #1 · retrying");
+    assert_eq!(w.owner, Some(h.owner_id(ORG)));
+    assert!(plan(&h, false).status_retries.contains("PR_1"));
+    // A run with only that warning is a success.
+    assert_eq!(h.account().updated_at, Some(h.at()));
+    apply(
+        &mut h,
+        ran(Outcome {
+            status_ok: vec!["PR_1".into()],
+            ..Outcome::default()
+        }),
+    );
+    assert!(warning(&h, WarningKind::StatusFetchFailed).is_none());
+    assert!(plan(&h, false).status_retries.is_empty());
+}
+
+#[test]
+fn an_owner_that_succeeded_by_running_again_dates_from_the_first_run() {
+    let mut h = H::new();
+    let started = h.at() - 40;
+    apply(
+        &mut h,
+        ran(Outcome {
+            ingest: Some(Ingest {
+                succeeded_owners: Some(vec!["org".into(), "public".into()]),
+                owner_run_started: [("org".to_string(), started)].into(),
+                ..Ingest::default()
+            }),
+            ..Outcome::default()
+        }),
+    );
+    let p = plan(&h, true);
+    let fetched = |id: &str| p.owners.iter().find(|o| o.id == id).unwrap().fetched_at;
+    assert_eq!(fetched(&h.owner_id(ORG)), Some(started));
+    assert_eq!(fetched(&h.owner_id("public")), Some(h.at()));
+}
+
+#[test]
+fn the_plan_names_dismissed_cards_records_and_the_discovery_range() {
+    let mut h = H::new();
+    h.prs(vec![other("PR_1"), other("PR_2")]);
+    h.dismiss(&key("PR_1")).unwrap();
+    h.dismiss(&key("PR_2")).unwrap();
+    h.set_time(T0 + 8 * DAY);
     h.tick();
-    let p = plan(&h, false);
-    assert!(p.prs["PR_1"].watched, "held, on screen");
-    assert!(p.prs["PR_1"].collected);
-    assert!(p.own["C_1"].baseline_done, "the baseline stays");
-    // A reaction in that window becomes a row.
-    let r = h.reaction("C_1", "PR_1", &[("THUMBS_UP", 1)]);
-    h.push(vec![], vec![], vec![r]);
-    let rows = h.card(&key("PR_1")).unwrap().rows;
+    h.prs(vec![other("PR_3")]);
+    h.dismiss(&key("PR_3")).unwrap();
+    let p = plan(&h, true);
+    assert_eq!(p.discovery_days, 14);
+    assert!(p.prs["PR_3"].dismissed && !p.prs["PR_3"].watched);
+    assert_eq!(
+        p.records.keys().cloned().collect::<Vec<_>>(),
+        ["PR_1", "PR_2"]
+    );
+    assert_eq!(p.records["PR_1"].updated_at, T0);
+    assert_eq!(p.records["PR_1"].owner_id, h.owner_id(ORG));
     assert!(
-        rows.iter().any(|r| r.kind.is(RowKind::Reaction)),
-        "{rows:?}"
+        !p.pr_ids.values().any(|id| id == "PR_1"),
+        "a record maps no notification"
     );
-    h.read_all();
-    h.close();
-    h.tick();
-    h.advance(1);
-    h.tick();
-    assert!(!plan(&h, false).prs["PR_1"].watched, "gone once closed");
 }
 
-/// A snoozed PR that would await review shows in the Snoozed section: it
-/// stays watched while snoozed.
 #[test]
-fn a_snoozed_pr_that_would_await_review_stays_watched() {
+fn failed_requests_are_kept_for_the_next_run() {
     let mut h = H::new();
-    h.set("keep_watching_days", json!(0));
-    let asked = IngestPr {
-        requested_me: true,
-        is_draft: true,
-        ..other("PR_1")
+    let failed = shiibar_ghd::model::FailedRequest {
+        name: "Status".into(),
+        owner: Some(h.owner_id(ORG)),
+        items: vec!["PR_1".into()],
+        since: None,
     };
-    h.prs(vec![asked]);
+    let at = h.at();
     apply(
         &mut h,
-        Outcome {
-            collected: vec!["PR_1".into()],
-            own: vec![own_comment()],
+        ran(Outcome {
+            failed_requests: Some(vec![failed.clone()]),
+            full_run_started_at: Some(at),
             ..Outcome::default()
-        },
+        }),
     );
-    h.snooze(&key("PR_1"));
-    h.advance(DAY / 2);
-    h.tick();
-    h.advance(1);
-    h.tick();
     let p = plan(&h, false);
-    assert!(p.prs["PR_1"].watched, "in the Snoozed section");
-    assert!(p.prs["PR_1"].collected);
-    assert!(p.own["C_1"].baseline_done);
-    let r = h.reaction("C_1", "PR_1", &[("THUMBS_UP", 2)]);
-    h.push(vec![], vec![], vec![r]);
-    let row = h
-        .engine
-        .data()
-        .rows
-        .values()
-        .find(|r| r.kind == shiibar_ghd::model::RowKind::Reaction);
-    assert!(row.is_some(), "a reaction while snoozed becomes a row");
-}
-
-/// Every snoozed PR shows in the Snoozed section, so it stays watched,
-/// even a merged one with nothing unread and no days to keep watching.
-#[test]
-fn every_snoozed_pr_stays_watched() {
-    let mut h = H::new();
-    h.set("keep_watching_days", json!(0));
-    let e = h.ev("E_1", "PR_1", IngestKind::Merged);
-    h.push(
-        vec![IngestPr {
-            state: PrState::Merged,
-            ..other("PR_1")
-        }],
-        vec![e],
-        vec![],
+    assert_eq!(p.failed_requests, [failed]);
+    assert_eq!(p.full_run_started_at, Some(at));
+    apply(&mut h, ran(Outcome::default()));
+    assert_eq!(
+        plan(&h, false).failed_requests.len(),
+        1,
+        "None keeps the list"
     );
-    apply(
-        &mut h,
-        Outcome {
-            collected: vec!["PR_1".into()],
-            own: vec![own_comment()],
-            ..Outcome::default()
-        },
-    );
-    h.snooze(&key("PR_1"));
-    h.read(&["E_1"]);
-    // Two hours: before the next Return time releases it.
-    h.advance(2 * HOUR);
-    h.tick();
-    h.advance(1);
-    h.tick();
-    let p = plan(&h, false);
-    assert!(p.prs["PR_1"].watched, "in the Snoozed section");
-    assert!(p.prs["PR_1"].collected);
-    assert!(p.own["C_1"].baseline_done);
-    h.unsnooze(&key("PR_1"));
-    h.tick();
-    h.advance(1);
-    h.tick();
-    assert!(!plan(&h, false).prs["PR_1"].watched, "gone once unsnoozed");
 }

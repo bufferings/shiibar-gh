@@ -13,7 +13,7 @@ use std::collections::BTreeSet;
 
 /// `token_expiring` starts this long before the expiry.
 const EXPIRY_WARNING: i64 = 7 * DAY_SECS;
-/// Near the limit below this share of it remaining, in percent.
+/// Near the limit at or below this share of it remaining, in percent.
 const NEAR_LIMIT_PERCENT: i64 = 20;
 /// Failed event fetches in a row before `events_fetch_failed`.
 const EVENTS_FAILURES_WARNED: u32 = 3;
@@ -84,48 +84,27 @@ impl Engine {
         self.timers.get(account).cloned().unwrap_or_default()
     }
 
-    /// The card shows, Snooze counted as showing, or disappeared less than
-    /// Days to keep watching after close ago.
-    pub fn is_watched(&self, pr: &PrRec, now: i64) -> bool {
-        if pr.unreadable {
-            return false;
-        }
-        let Some(owner) = self.enabled_owner_of(pr) else {
-            return false;
-        };
-        if self.on_screen(pr, owner, now) {
-            return true;
-        }
-        let keep = self.data.config.keep_watching_days.saturating_mul(DAY_SECS);
-        pr.gone_at
-            .is_some_and(|gone| now.saturating_sub(gone) <= keep)
+    /// DESIGN.md, "When cards show, and watching": a card that is not
+    /// dismissed, of an enabled owner and readable, is watched in full
+    /// (status, events, reactions). A dismissed card only has its events
+    /// watched.
+    pub fn is_watched(&self, pr: &PrRec, _now: i64) -> bool {
+        pr.dismissed_at.is_none() && self.shown_owner(pr).is_some()
     }
 
-    /// A held card still shows: it leaves when the popover closes.
-    fn shows_now(&self, pr: &PrRec, now: i64) -> bool {
-        self.owner_of(pr)
-            .is_some_and(|owner| self.on_screen(pr, owner, now))
-    }
-
-    /// The periodic pass records when cards disappear, and forgets what was
-    /// collected for PRs that left the watch.
+    /// The periodic pass forgets what was collected for PRs that left the
+    /// watch.
     pub(super) fn track_watching(&mut self, now: &Now) {
         let mut changes = Vec::new();
         for pr in self.data.prs.values() {
-            let gone_at = match (self.shows_now(pr, now.at), pr.gone_at) {
-                (true, _) => None,
-                (false, Some(at)) => Some(at),
-                (false, None) => Some(now.at),
-            };
             let collected = pr.collected && self.is_watched(pr, now.at);
-            if gone_at != pr.gone_at || collected != pr.collected {
-                changes.push((pr.key.clone(), gone_at, collected));
+            if collected != pr.collected {
+                changes.push(pr.key.clone());
             }
         }
-        for (key, gone_at, collected) in changes {
+        for key in changes {
             if let Some(pr) = self.pr_mut(&key) {
-                pr.gone_at = gone_at;
-                pr.collected = collected;
+                pr.collected = false;
             }
         }
         // DESIGN.md, "Reaction rows": what changed outside the watch makes no
@@ -238,8 +217,11 @@ impl Engine {
                         base_status: pr.base_status,
                         mergeable: pr.mergeable,
                         watched: self.is_watched(pr, now.at),
+                        dismissed: pr.dismissed_at.is_some(),
                         collected: pr.collected,
                         unreadable: pr.unreadable,
+                        head_oid: pr.head_oid.clone(),
+                        settled_head: pr.settled_head.clone(),
                     },
                 )
             })
@@ -278,10 +260,36 @@ impl Engine {
                 .values()
                 .map(|r| (r.pr_id.clone(), r.since))
                 .collect(),
+            retry_owners: fetch
+                .retries
+                .values()
+                .filter_map(|r| Some((r.pr_id.clone(), r.owner.clone()?)))
+                .collect(),
             pending_signals: fetch.pending_signals.clone(),
             teams: record.teams.clone(),
             status_interval_minutes: self.data.config.status_interval_minutes,
-            drop_after_days: self.data.config.drop_after_days,
+            discovery_days: DISCOVERY_DAYS,
+            // DESIGN.md, "Dismiss record": PRs that show only through a
+            // return trigger, with the `updatedAt` an event fetch needs to
+            // pass.
+            records: self
+                .data
+                .records
+                .values()
+                .filter(|r| r.account == account)
+                .map(|r| {
+                    (
+                        r.pr_id.clone(),
+                        RecordInfo {
+                            owner_id: r.owner.clone(),
+                            updated_at: r.updated_at,
+                        },
+                    )
+                })
+                .collect(),
+            status_retries: fetch.status_failures.clone(),
+            failed_requests: fetch.failed_requests.clone(),
+            full_run_started_at: fetch.full_run_started_at,
         })
     }
 
@@ -359,8 +367,27 @@ impl Engine {
         if let Some(invalid) = obs.invalid {
             record.token.invalid = invalid;
             // Only an account run searches every owner, so only it can
-            // tell that the SSO warnings went away.
-            if outcome.due.status {
+            // tell that the SSO warnings went away. A run that makes only
+            // the failed requests tells it only for the owners it fetched,
+            // and adds to what the others had.
+            if outcome.due.status && outcome.retry_only {
+                let token = &mut record.token;
+                token.sso |= obs.sso;
+                for org in obs.sso_orgs {
+                    if !token.sso_orgs.contains(&org) {
+                        token.sso_orgs.push(org);
+                    }
+                }
+                for url in obs.sso_urls {
+                    if !token.sso_urls.contains(&url) {
+                        token.sso_urls.push(url);
+                    }
+                }
+                token
+                    .sso_owners
+                    .retain(|owner, _| !outcome.owners_fetched.contains(owner));
+                token.sso_owners.extend(obs.sso_owners);
+            } else if outcome.due.status {
                 record.token.sso = obs.sso;
                 record.token.sso_orgs = obs.sso_orgs;
                 record.token.sso_urls = obs.sso_urls;
@@ -416,13 +443,18 @@ impl Engine {
             fetch.retries.remove(&id);
         }
         for (id, since) in outcome.retries_failed {
+            let owner = outcome.retry_owners.get(&id).cloned();
             let entry = fetch.retries.entry(id.clone()).or_insert(RetryRec {
                 pr_id: id,
                 since,
                 failures: 0,
+                owner: None,
             });
             entry.since = entry.since.min(since);
             entry.failures += 1;
+            if owner.is_some() {
+                entry.owner = owner;
+            }
         }
         if let Some(pending) = outcome.pending_signals {
             fetch.pending_signals = pending;
@@ -435,6 +467,38 @@ impl Engine {
         }
         if outcome.poll_interval.is_some() {
             fetch.poll_interval = outcome.poll_interval;
+        }
+        for id in &outcome.status_ok {
+            fetch.status_failures.remove(id);
+        }
+        fetch
+            .status_failures
+            .extend(outcome.status_failed.iter().cloned());
+        if let Some(failed) = outcome.failed_requests {
+            fetch.failed_requests = failed;
+        }
+        if outcome.full_run_started_at.is_some() {
+            fetch.full_run_started_at = outcome.full_run_started_at;
+        }
+        // A retry of a PR the core does not know lasts while its owner does.
+        let known: BTreeSet<String> = self
+            .data
+            .prs
+            .values()
+            .filter(|pr| pr.account == account)
+            .map(|pr| pr.id.clone())
+            .collect();
+        let owners: BTreeSet<String> = self
+            .data
+            .owners
+            .values()
+            .filter(|o| o.account == account)
+            .map(|o| o.id.clone())
+            .collect();
+        if let Some(record) = self.data.accounts.get_mut(account) {
+            record.fetch.retries.retain(|id, retry| {
+                known.contains(id) || retry.owner.as_ref().is_some_and(|o| owners.contains(o))
+            });
         }
         let collected: Vec<String> = outcome
             .collected
@@ -649,8 +713,9 @@ impl Engine {
                 None,
             ));
         }
+        // DESIGN.md, "Rate limits": 80% used or more.
         let near = |limit: &Option<LimitRec>| {
-            limit.is_some_and(|l| l.limit > 0 && l.remaining * 100 < l.limit * NEAR_LIMIT_PERCENT)
+            limit.is_some_and(|l| l.limit > 0 && l.remaining * 100 <= l.limit * NEAR_LIMIT_PERCENT)
         };
         if near(&account.graphql) {
             out.push(warning(
@@ -743,6 +808,33 @@ impl Engine {
                 id,
                 Some(&owner),
                 format!("Couldn't fetch events for {pr} · retrying"),
+                None,
+                None,
+            ));
+        }
+        // DESIGN.md, "Fetch success and failure": a PR whose status request
+        // failed even alone.
+        let mut status: Vec<(String, String)> = account
+            .fetch
+            .status_failures
+            .iter()
+            .filter_map(|pr_id| self.data.prs.get(&join_key(&account.id, pr_id)))
+            .filter_map(|pr| {
+                let owner = self.owner_of(pr)?;
+                Some((
+                    owner.id.clone(),
+                    format!("{}/{} #{}", pr.owner, pr.repo, pr.number),
+                ))
+            })
+            .collect();
+        status.sort();
+        status.dedup();
+        for (owner, pr) in status {
+            out.push(warning(
+                WarningKind::StatusFetchFailed,
+                id,
+                Some(&owner),
+                format!("Couldn't fetch status for {pr} · retrying"),
                 None,
                 None,
             ));

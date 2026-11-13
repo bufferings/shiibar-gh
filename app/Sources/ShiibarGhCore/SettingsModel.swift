@@ -8,7 +8,7 @@
 import Foundation
 
 public enum SettingsTab: String, CaseIterable {
-    case general = "General", accounts = "Accounts", watching = "Watching"
+    case general = "General", accounts = "Accounts", dismissed = "Dismissed"
 }
 
 /// What the Accounts sidebar has selected.
@@ -23,9 +23,50 @@ public enum AccountsSelection: Equatable, Hashable {
     }
 }
 
-/// The three tabs of an owner (a segment), Owner first.
+/// The two tabs of an owner (a segment), Owner first.
 public enum OwnerTab: String, CaseIterable {
-    case owner = "Owner", notifications = "Notifications", exclusions = "Exclusions"
+    case owner = "Owner", notifications = "Notifications"
+}
+
+/// A sheet Settings › Accounts shows by itself: Add account from `No
+/// accounts yet` of the popover (DESIGN.md, "Screens").
+public enum SettingsSheetRequest: Equatable {
+    case addAccount
+}
+
+/// The field under a Muted list (DESIGN.md, "Settings › Accounts"): `Add`
+/// takes a value that is not empty, not in the list (names compare without
+/// case), `owner/repo` for Repositories and `owner/repo#number` for Pull
+/// requests.
+public enum MuteInput {
+    public static func value(_ text: String) -> String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    public static func canAdd(_ kind: MuteKind, _ text: String, existing: [String]) -> Bool {
+        let value = value(text)
+        guard !value.isEmpty, !existing.contains(where: { $0.lowercased() == value.lowercased() }) else { return false }
+        switch kind {
+        case .user: return !value.contains(where: \.isWhitespace) && !value.contains("/")
+        case .repo: return isRepository(value)
+        case .pr: return isPullRequest(value)
+        }
+    }
+
+    static func isName(_ part: Substring) -> Bool {
+        !part.isEmpty && !part.contains(where: { $0.isWhitespace || $0 == "/" || $0 == "#" })
+    }
+
+    public static func isRepository(_ value: String) -> Bool {
+        let parts = value.split(separator: "/", omittingEmptySubsequences: false)
+        return parts.count == 2 && parts.allSatisfy(isName)
+    }
+
+    public static func isPullRequest(_ value: String) -> Bool {
+        guard let hash = value.lastIndex(of: "#") else { return false }
+        let number = value[value.index(after: hash)...]
+        return isRepository(String(value[..<hash])) && !number.isEmpty && number.allSatisfy(\.isASCII) && Int(number).map { $0 > 0 } == true
+    }
 }
 
 @MainActor
@@ -39,18 +80,21 @@ public final class SettingsModel: ObservableObject {
     @Published public var errors: [String: String] = [:]
     @Published public var launchOn = false
     @Published public var launchStatus: LoginItemStatus = .notRegistered
-    /// Event tables and Exclusions by owner id, read when an owner shows.
+    /// Event tables by owner id, read when an owner shows.
     @Published public private(set) var events: [String: [String: EventCell]] = [:]
-    @Published public private(set) var exclusions: [String: Exclusions] = [:]
+    /// Mutes by account id, read when an account shows.
+    @Published public private(set) var mutes: [String: Mutes] = [:]
+    /// A sheet to show by itself, taken by the Accounts tab.
+    @Published public var requestedSheet: SettingsSheetRequest?
     public private(set) var isOpen = false
-    /// Bumped by every change the user makes to an owner's table or
-    /// Exclusions: a read started before it is dropped, so it cannot undo
-    /// the change.
+    /// Bumped by every change the user makes to an owner's table: a read
+    /// started before it is dropped, so it cannot undo the change.
     private var ownerEdits: [String: Int] = [:]
+    private var muteEdits: [String: Int] = [:]
 
     public static let keys = [
         "launch_at_login", "appearance", "text_size", "status_interval_minutes", "reactions_interval_minutes",
-        "snooze_return_time", "keep_watching_days", "drop_after_days",
+        DismissedText.autoDismissKey, DismissedText.keepDaysKey,
     ]
 
     public init(app: AppModel, launch: LaunchAtLogin?) {
@@ -58,6 +102,12 @@ public final class SettingsModel: ObservableObject {
         self.launch = launch
         app.observeConfig { [weak self] key, value in
             self?.config[key] = value
+        }
+        // Mutes made elsewhere (a card's menu, the CLI) come with an
+        // `account_changed`.
+        app.observeAccounts { [weak self] account in
+            guard let self, self.isOpen, self.selection?.account == account.id else { return }
+            self.loadMutes(account.id)
         }
         launch?.onStatusChange = { [weak self] in self?.refreshLaunch() }
     }
@@ -84,6 +134,10 @@ public final class SettingsModel: ObservableObject {
         case .account(let id):
             tab = .accounts
             select(.account(id))
+        case .addAccount:
+            tab = .accounts
+            ensureSelection()
+            requestedSheet = .addAccount
         }
     }
 
@@ -105,6 +159,7 @@ public final class SettingsModel: ObservableObject {
         if case .owner(let account, let owner) = selection {
             loadOwner(account: account, owner: owner)
         }
+        if case .account(let account) = selection { loadMutes(account) }
     }
 
     // MARK: - Selection
@@ -112,9 +167,12 @@ public final class SettingsModel: ObservableObject {
     public func select(_ selection: AccountsSelection) {
         let changed = self.selection != selection
         self.selection = selection
-        if case .owner(let account, let owner) = selection {
+        switch selection {
+        case .owner(let account, let owner):
             if changed { ownerTab = .owner }
             loadOwner(account: account, owner: owner)
+        case .account(let account):
+            loadMutes(account)
         }
     }
 
@@ -128,6 +186,7 @@ public final class SettingsModel: ObservableObject {
             return
         }
         selection = accounts.first.map { .account($0.id) }
+        if case .account(let id)? = selection, mutes[id] == nil { loadMutes(id) }
     }
 
     public var selectedAccount: Account? {
@@ -149,7 +208,7 @@ public final class SettingsModel: ObservableObject {
         account.owners.filter { $0.id != owner }
     }
 
-    // MARK: - General and Watching
+    // MARK: - General and Dismissed
 
     public func refreshLaunch() {
         guard let launch else { return }
@@ -266,12 +325,10 @@ public final class SettingsModel: ObservableObject {
         Task {
             do {
                 let table = try await api.ownerEvents(account: account.login, owner: owner.argument)
-                let list = try await api.ownerExclusions(account: account.login, owner: owner.argument)
                 // The user changed something meanwhile: the answers to the
                 // changes are newer than this read.
                 guard ownerEdits[owner.id, default: 0] == edits else { return }
                 events[owner.id] = table
-                exclusions[owner.id] = list
                 errors["owner:" + owner.id] = nil
             } catch {
                 errors["owner:" + owner.id] = "\(error)"
@@ -337,34 +394,83 @@ public final class SettingsModel: ObservableObject {
         }
     }
 
-    public func setExclusion(_ owner: Owner, of account: Account, _ kind: ExclusionKind, _ name: String, _ state: ExclusionState) {
-        let trimmed = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
-        edited(owner.id)
+    // MARK: - Muted lists
+
+    public static func muteErrorKey(_ kind: MuteKind, _ account: String) -> String {
+        "mutes:\(kind.rawValue):" + account
+    }
+
+    public func loadMutes(_ id: String) {
+        guard let account = app.account(id) else { return }
         let api = app.api
+        let edits = muteEdits[id, default: 0]
         Task {
-            do {
-                exclusions[owner.id] = try await api.ownerExclusionsSet(
-                    account: account.login, owner: owner.argument, kind: kind, name: trimmed, state: state
-                )
-                errors["exclusions:\(kind.rawValue):" + owner.id] = nil
-            } catch {
-                errors["exclusions:\(kind.rawValue):" + owner.id] = "\(error)"
-                reloadAfterFailedEdit(account, owner.id)
-            }
+            guard let list = try? await api.mutes(account: account.login), muteEdits[id, default: 0] == edits else { return }
+            mutes[id] = list
         }
     }
 
-    public func removeExclusion(_ owner: Owner, of account: Account, _ kind: ExclusionKind, _ name: String) {
-        edited(owner.id)
+    public func mutes(_ kind: MuteKind, of account: String) -> [String] {
+        mutes[account]?.list(kind) ?? []
+    }
+
+    public func canAddMute(_ kind: MuteKind, _ text: String, of account: String) -> Bool {
+        MuteInput.canAdd(kind, text, existing: mutes(kind, of: account))
+    }
+
+    /// `Add` or Enter: `mute` with the trimmed value. False when the value
+    /// is not taken. `accepted` runs once the daemon took it: the field
+    /// keeps the text until then, and after a refusal (DESIGN.md, "Settings
+    /// › Accounts").
+    @discardableResult
+    public func addMute(_ kind: MuteKind, _ text: String, of account: Account, accepted: @escaping () -> Void = {}) -> Bool {
+        guard canAddMute(kind, text, of: account.id) else { return false }
+        let name = MuteInput.value(text)
+        change(kind, on: true, account, accepted: accepted) { try await $0.mute(account: account.login, kind: kind, name: name) }
+        return true
+    }
+
+    /// − of the list: `unmute` of the selected name.
+    public func removeMute(_ kind: MuteKind, _ name: String, of account: Account) {
+        change(kind, on: false, account) { try await $0.unmute(account: account.login, kind: kind, name: name) }
+    }
+
+    /// `Couldn't mute: pull request not found`: the operation failure text
+    /// (DESIGN.md, "Showing what an operation did"), with a readable reason
+    /// for `not_found`.
+    public static func muteFailure(_ kind: MuteKind, on: Bool, _ error: Error) -> String {
+        let verb: OperationVerb = on ? .mute : .unmute
+        if let error = error as? DaemonError, !error.isUnreachable, error.code?.value == .notFound {
+            let reason: String
+            if !on {
+                reason = "not muted"
+            } else {
+                switch kind {
+                case .pr: reason = "pull request not found"
+                case .repo: reason = "repository not found"
+                case .user: reason = "user not found"
+                }
+            }
+            return "Couldn't \(verb.rawValue): \(reason)"
+        }
+        return OperationFailure.text(verb, error)
+    }
+
+    private func change(
+        _ kind: MuteKind, on: Bool, _ account: Account, accepted: @escaping () -> Void = {},
+        _ request: @escaping (DaemonAPI) async throws -> Mutes
+    ) {
+        muteEdits[account.id, default: 0] += 1
         let api = app.api
+        let key = Self.muteErrorKey(kind, account.id)
         Task {
             do {
-                exclusions[owner.id] = try await api.ownerExclusionsRemove(account: account.login, owner: owner.argument, kind: kind, name: name)
-                errors["exclusions:\(kind.rawValue):" + owner.id] = nil
+                mutes[account.id] = try await request(api)
+                errors[key] = nil
+                accepted()
             } catch {
-                errors["exclusions:\(kind.rawValue):" + owner.id] = "\(error)"
-                reloadAfterFailedEdit(account, owner.id)
+                errors[key] = Self.muteFailure(kind, on: on, error)
+                loadMutes(account.id)
             }
         }
     }

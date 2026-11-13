@@ -141,7 +141,7 @@ fn an_old_request_still_open_is_an_unread_row_and_awaits_review() {
         vec![e],
         vec![],
     );
-    assert_eq!(h.badge(), 1);
+    assert_eq!(h.awaiting_ids().len(), 1);
     assert!(h.wire_row("E_1").unwrap().unread);
     assert!(h.card(&key("PR_1")).unwrap().awaiting_review);
 }
@@ -267,7 +267,7 @@ fn the_request_exception_applies_to_a_known_pr_when_the_watch_restarts() {
     h.push(vec![requested], vec![e.clone()], vec![]);
     assert!(h.has_row("E_1"), "the first fetch after the restart");
     assert_eq!(h.row("E_1").notify, NotifyState::None);
-    assert_eq!(h.badge(), 1);
+    assert_eq!(h.awaiting_ids().len(), 1);
 }
 
 #[test]
@@ -347,7 +347,7 @@ fn an_old_team_request_still_open_is_a_silent_unread_row() {
     assert!(h.has_row("E_1"));
     assert_eq!(h.row("E_1").notify, NotifyState::None);
     assert!(h.wire_row("E_1").unwrap().unread);
-    assert_eq!(h.badge(), 1);
+    assert_eq!(h.awaiting_ids().len(), 1);
     let e = h.ev_at("E_2", "PR_2", IngestKind::TeamReviewRequested, BEFORE);
     h.push(vec![other("PR_2")], vec![e], vec![]);
     assert!(!h.has_row("E_2"), "no longer requested");

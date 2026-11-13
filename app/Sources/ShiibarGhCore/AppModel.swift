@@ -61,8 +61,15 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var checks = TokenChecks()
     /// `text_size`: the body text of the popovers and windows.
     @Published public private(set) var textSize = TextSize.base
-    /// `snooze_return_time`, for "Snooze until Mon 09:00".
-    @Published public private(set) var returnTime: String?
+    /// `dismissed_keep_days`: the m of the Dismissed list's note and of a
+    /// Dismiss shown before the daemon answers.
+    @Published public private(set) var keepDays = DismissedText.defaultKeepDays
+    /// `auto_dismiss_after_days`: the n of the tooltip of `Dismissed in N
+    /// days`.
+    @Published public private(set) var autoDismissDays = DismissedText.defaultAutoDismissDays
+    /// Accounts whose Refresh waits for its answer (DESIGN.md, "Showing
+    /// what an operation did": progress until the reply).
+    @Published public private(set) var refreshing: Set<String> = []
     /// The last request that failed, for the surface that made it.
     @Published public var lastError: String?
 
@@ -71,10 +78,8 @@ public final class AppModel: ObservableObject {
     private let opener: URLOpening
     private let notifier: NotificationPresenting
     private let copier: LinkCopying?
-    /// How long `account_changed` waits for more of its kind before the
-    /// lists are read again: one read per burst (docs/tasks/M5.md, the
-    /// request count of review A5).
-    public let reloadDelay: TimeInterval
+    /// How long the failure band of a local operation stays.
+    public let failureDuration: TimeInterval
     private var surfaces = OpenSurfaces()
     private var viewModels: [String: AccountViewModel] = [:]
     /// The accounts some surface shows, open or not: their lists follow
@@ -85,6 +90,9 @@ public final class AppModel: ObservableObject {
 
     /// Asks the app to show an account's popover (a summary notification).
     public var onOpenPopover: ((String) -> Void)?
+    /// Asks the app to show an account on a surface: the window brought to
+    /// the front, or the popover opened (an individual notification).
+    public var onShowAccount: ((String, Surface) -> Void)?
     /// Asks the app to show Settings.
     public var onOpenSettings: ((SettingsDestination) -> Void)?
     /// Asks the app to show a Keychain dialog.
@@ -104,7 +112,7 @@ public final class AppModel: ObservableObject {
 
     public init(
         api: DaemonAPI, store: UIStateStore, opener: URLOpening, notifier: NotificationPresenting,
-        copier: LinkCopying? = nil, reloadDelay: TimeInterval = 0.2,
+        copier: LinkCopying? = nil, failureDuration: TimeInterval = OperationFailure.duration,
         clock: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970) }
     ) {
         self.api = api
@@ -112,7 +120,7 @@ public final class AppModel: ObservableObject {
         self.opener = opener
         self.notifier = notifier
         self.copier = copier
-        self.reloadDelay = reloadDelay
+        self.failureDuration = failureDuration
         self.clock = clock
     }
 
@@ -167,8 +175,16 @@ public final class AppModel: ObservableObject {
             }
             checks.update(account)
             accountObservers.forEach { $0(account) }
+            // No wait: the list is read again at once, and once more after
+            // it for the changes that came meanwhile (DESIGN.md, "Showing
+            // what an operation did").
             if displayed[account.id] != nil {
-                viewModels[account.id]?.scheduleReload()
+                viewModels[account.id]?.reload()
+            }
+            // Mutes made elsewhere (Settings, the CLI) come with it too: the
+            // menus and the local mute changes read them.
+            if let model = viewModels[account.id], model.mutes != nil {
+                model.loadMutes()
             }
         case .accountRemoved(let id):
             accounts.removeAll { $0.id == id }
@@ -192,8 +208,10 @@ public final class AppModel: ObservableObject {
         switch key {
         case TextSize.configKey:
             textSize = TextSize.clamp(value?.intValue ?? value?.stringValue.flatMap { Int64($0) })
-        case SnoozeTime.configKey:
-            returnTime = value?.stringValue
+        case DismissedText.keepDaysKey:
+            if let days = value?.intValue, days >= 1 { keepDays = days }
+        case DismissedText.autoDismissKey:
+            if let days = value?.intValue, days >= 0 { autoDismissDays = days }
         default:
             break
         }
@@ -201,7 +219,7 @@ public final class AppModel: ObservableObject {
 
     /// The settings the popovers use, at connection.
     public func loadConfig() async {
-        for key in [TextSize.configKey, SnoozeTime.configKey] {
+        for key in [TextSize.configKey, DismissedText.keepDaysKey, DismissedText.autoDismissKey] {
             if let value = try? await api.configGet(key) { configChanged(key, value) }
         }
     }
@@ -220,11 +238,6 @@ public final class AppModel: ObservableObject {
                 lastError = "\(error)"
             }
         }
-    }
-
-    /// The next Return time, for "Snooze until Mon 09:00".
-    public func nextReturn(timeZone: TimeZone = .current) -> Int64 {
-        SnoozeTime.next(returnTime, now: now, timeZone: timeZone)
     }
 
     private func keychainChanged(_ state: KeychainState) {
@@ -250,8 +263,8 @@ public final class AppModel: ObservableObject {
     // MARK: - Surfaces
 
     /// A surface shows the account's list, open or not (the window keeps
-    /// showing while another app has the focus). The window's search is
-    /// cleared when it closes.
+    /// showing while another app has the focus). The window's search and
+    /// Dismissed list go when it closes.
     /// `opening`: the surface opens right after (`surfaceOpened`), which
     /// reads the lists once `popover_opened` is answered, so nothing is read
     /// here before it.
@@ -260,22 +273,25 @@ public final class AppModel: ObservableObject {
             let first = displayed[account] == nil
             displayed[account, default: []].insert(surface)
             if first && !opening { viewModel(account).reload() }
-            // A new window decides "+ N more PRs" with the list it reads.
-            if surface == .window { viewModel(account).list(.window).opened() }
         } else if var set = displayed[account] {
-            if surface == .window { viewModels[account]?.list(.window).clearSearch() }
+            if surface == .window { viewModels[account]?.list(.window).windowClosed() }
             set.remove(surface)
             displayed[account] = set.isEmpty ? nil : set
         }
     }
 
-    /// The popover opened, or the window got the focus. The popover decides
-    /// "+ N more PRs" again with the list it reads now.
+    public func isDisplayed(_ surface: Surface, account: String) -> Bool {
+        displayed[account]?.contains(surface) ?? false
+    }
+
+    /// The popover opened, or the window got the focus.
     public func surfaceOpened(_ surface: Surface, account: String) {
         if surfaces.isOpen(surface, account: account) { return }
         let first = surfaces.opened(surface, account: account)
         let model = viewModel(account)
-        if surface == .popover { model.list(.popover).opened() }
+        model.list(surface).opened()
+        // A row's menu reads Mute or Unmute @actor from them.
+        model.loadMutes()
         if first, let login = self.account(account)?.login {
             openThenReload(account, login: login)
         } else {
@@ -283,11 +299,10 @@ public final class AppModel: ObservableObject {
         }
     }
 
-    /// `popover_opened`, and only once it is answered the lists: the daemon
-    /// keeps every card of a `list` answered after `popover_opened` until
-    /// `popover_closed` (DESIGN.md, "When a card shows and leaves"), so the
-    /// cards shown while open never leave under the user. The lists are
-    /// read even when `popover_opened` fails.
+    /// `popover_opened`, then the list: the daemon holds the automatic
+    /// Dismiss and the removal from the Dismissed list while open
+    /// (DESIGN.md, "Dismiss"). The list is read even when
+    /// `popover_opened` fails.
     private func openThenReload(_ account: String, login: String) {
         let api = self.api
         Task {
@@ -300,8 +315,7 @@ public final class AppModel: ObservableObject {
         }
     }
 
-    /// The popover closed, or the window closed or lost the focus: "+ N
-    /// more PRs" is decided again; the popover's search is cleared. Rows
+    /// The popover closed, or the window closed or lost the focus. Rows
     /// stay unread (DESIGN.md, "How unread clears").
     public func surfaceClosed(_ surface: Surface, account: String) {
         guard surfaces.isOpen(surface, account: account) else { return }
@@ -321,45 +335,24 @@ public final class AppModel: ObservableObject {
 
     // MARK: - Actions
 
-    /// The daemon side of a popover action. Section actions, reading and
-    /// Mark all as read stay in the view model.
-    func perform(_ action: PopoverAction, account id: String) {
-        let login = account(id)?.login
-        switch action {
-        case .open(let url, _):
-            open(url)
-        case .copyLink(let url):
-            copier?.copy(url)
-        case .snooze(let pr):
-            guard let login else { return }
-            change(id) { try await $0.snooze(account: login, pr: pr) }
-        case .unsnooze(let pr):
-            guard let login else { return }
-            change(id) { try await $0.unsnooze(account: login, pr: pr) }
-        case .toggleSection, .expand, .markAllRead:
-            break
-        }
+    public func copy(_ text: String) {
+        copier?.copy(text)
     }
 
-    /// `read` for rows the user selected, opened or marked. `failed` runs
-    /// when the daemon refused, so the view can drop its local marks.
-    func read(_ rows: [String], failed: @escaping () -> Void) {
-        guard !rows.isEmpty else { return }
-        let api = self.api
-        Task {
-            do {
-                try await api.read(rows)
-            } catch {
-                lastError = "\(error)"
-                failed()
-            }
-        }
-    }
-
+    /// Refresh asks GitHub: the button shows progress until the answer.
     public func refresh(_ account: String?) {
         let login = account.flatMap { self.account($0)?.login }
         if account != nil && login == nil { return }
-        send { _ = try await $0.refresh(login) }
+        if let account { refreshing.insert(account) }
+        let api = self.api
+        Task {
+            do {
+                _ = try await api.refresh(login)
+            } catch {
+                lastError = "\(error)"
+            }
+            if let account { refreshing.remove(account) }
+        }
     }
 
     public func reset() {
@@ -422,34 +415,26 @@ public final class AppModel: ObservableObject {
         }
     }
 
-    /// A clicked notification: an individual one opens its place on the web
-    /// without the popover and without touching the dots; a summary opens
-    /// the account's popover (DESIGN.md, "macOS notifications").
-    public func notificationClicked(type: NotificationType?, account: String, url: String?) {
+    /// A clicked notification (DESIGN.md, "macOS notifications"): a summary
+    /// opens the account's popover on its last tab; an individual one shows
+    /// the account (the window in front if it is open, else the popover),
+    /// opens the tab of the PR's placement (All without one) and selects the
+    /// card, unfolding it. Rows are not read.
+    public func notificationClicked(type: NotificationType?, account: String, url: String?, pr: String? = nil) {
+        guard self.account(account) != nil else { return }
         if type == .summary {
             onOpenPopover?(account)
-        } else if let url, let parsed = URL(string: url) {
-            opener.open(parsed)
+            return
         }
+        let surface: Surface = displayed[account]?.contains(.window) == true ? .window : .popover
+        onShowAccount?(account, surface)
+        if let pr { viewModel(account).list(surface).reveal(pr: pr) }
     }
 
     /// A Save was answered: Token shows Checking… until the new test.
     public func tokenSaved(_ account: Account, before: Int64?) {
         let current = self.account(account.id) ?? account
         checks.started(current, before: before, now: now)
-    }
-
-    private func change(_ account: String, _ request: @escaping (DaemonAPI) async throws -> Void) {
-        let api = self.api
-        Task {
-            do {
-                try await request(api)
-                lastError = nil
-            } catch {
-                lastError = "\(error)"
-            }
-            viewModels[account]?.reload()
-        }
     }
 
     private func send(_ request: @escaping (DaemonAPI) async throws -> Void) {
@@ -471,52 +456,63 @@ public final class AppModel: ObservableObject {
 }
 
 /// One account's data, shared by its popover and its window: the daemon's
-/// answers kept unfiltered, unread marks sent but not yet in a list, and
-/// what is saved per account (the chip, Group by, the sort order, collapsed
-/// sections, the Activity owner buttons, Keep on top). What each surface
-/// shows is its `SurfaceListModel`.
+/// cards with the local operations still on their way applied over them,
+/// and what is saved per account (Group by, Then by, the sort order, the
+/// group orders, the collapsed and expanded sections, Keep on top). What
+/// each surface shows is its `SurfaceListModel`.
 @MainActor
 public final class AccountViewModel: ObservableObject {
     public let accountId: String
     unowned let app: AppModel
-    /// The unsnoozed cards as the daemon sent them.
+    /// The cards shown: the daemon's, with the local operations applied.
     @Published public private(set) var cards: [Card] = []
-    /// The snoozed cards as the daemon sent them.
-    @Published public private(set) var snoozed: [Card] = []
-    /// The Activity rows as the daemon sent them.
-    @Published public private(set) var allActivity: [Row] = []
     @Published public private(set) var loaded = false
-    @Published public var options: ListOptions {
-        didSet {
-            guard options != oldValue else { return }
-            app.store.setOptions(options, account: accountId)
-            lists.values.forEach { $0.keepSelection() }
-        }
-    }
-    @Published public private(set) var collapsed: [String: Bool]
-    @Published public private(set) var activityOwners: Set<String>
+    @Published public private(set) var options: ListOptions
+    @Published public private(set) var groupOrders: GroupOrders
+    /// The repositories that have had cards (the Repository group order).
+    @Published public private(set) var repositories: [String]
+    @Published public private(set) var collapsed: Set<String>
+    @Published public private(set) var expanded: Set<String>
     /// Keep on top of the window, kept per account.
     @Published public private(set) var keepOnTop: Bool
-    /// Rows sent as `read` that a list may still show unread: they show
-    /// read until a list agrees.
-    private var pendingRead: Set<String> = []
-    private var reloads = 0
-    private var scheduled: Task<Void, Never>?
+    /// The account's mutes, read once a menu or Settings needs them.
+    @Published public private(set) var mutes: Mutes?
+    /// `Couldn't <verb>: <reason>` of the last local operation the daemon
+    /// refused; gone at the next operation or after a while.
+    @Published public private(set) var failure: String?
+    private var failureTimer: Task<Void, Never>?
+
+    /// The cards as the daemon sent them last.
+    private var received: [Card] = []
+    struct Pending {
+        var id: Int
+        var change: LocalChange
+        /// Answered: dropped once a list started after this one arrives.
+        var dropAfter: Int?
+    }
+    private var pending: [Pending] = []
+    private var nextChange = 0
+    /// Lists asked for so far, and whether one is on its way.
+    private var listsStarted = 0
+    private var reading = false
+    private var readAgain = false
     private var lists: [Surface: SurfaceListModel] = [:]
 
     init(account: String, app: AppModel) {
         accountId = account
         self.app = app
         options = app.store.options(account: account)
+        groupOrders = app.store.groupOrders(account: account)
+        repositories = app.store.repositories(account: account)
         collapsed = app.store.collapsed(account: account)
-        activityOwners = app.store.activityOwners(account: account)
+        expanded = app.store.expanded(account: account)
         keepOnTop = app.store.keepOnTop(account: account)
     }
 
     public var account: Account? { app.account(accountId) }
 
-    /// The popover's or the window's own state: tab, search, selection and
-    /// "+ N more PRs".
+    /// The popover's or the window's own state: tab, Dismissed list,
+    /// search, selection and expanded rows.
     public func list(_ surface: Surface) -> SurfaceListModel {
         if let list = lists[surface] { return list }
         let list = SurfaceListModel(data: self, surface: surface)
@@ -526,38 +522,69 @@ public final class AccountViewModel: ObservableObject {
 
     public var usage: ApiUsage { ApiUsage(account?.rateLimit) }
 
-    // MARK: Activity owner buttons
-
-    public var allOwnersOn: Bool {
-        guard let account else { return true }
-        return ActivityOwners.allOwnersOn(activityOwners, account: account)
-    }
-
-    public func isOwnerOn(_ owner: String) -> Bool {
-        !allOwnersOn && activityOwners.contains(owner)
-    }
-
-    public func toggleOwner(_ owner: String) {
-        if let account {
-            // Removed and disabled owners do not count any more.
-            activityOwners = ActivityOwners.effective(activityOwners, account: account)
-        }
-        if activityOwners.contains(owner) { activityOwners.remove(owner) } else { activityOwners.insert(owner) }
-        app.store.setActivityOwners(activityOwners, account: accountId)
+    private func surfacesKeepSelection() {
         lists.values.forEach { $0.keepSelection() }
     }
 
-    /// `All owners` turns every owner button off.
-    public func showAllOwners() {
-        activityOwners = []
-        app.store.setActivityOwners([], account: accountId)
-        lists.values.forEach { $0.keepSelection() }
+    // MARK: Saved choices
+
+    public func setGroupBy(_ value: GroupBy) {
+        var next = options
+        next.setGroupBy(value)
+        setOptions(next)
+    }
+
+    public func setThenBy(_ value: GroupBy) {
+        var next = options
+        next.setThenBy(value)
+        setOptions(next)
+    }
+
+    public func setSort(_ value: SortOrder) {
+        var next = options
+        next.sort = value
+        setOptions(next)
+    }
+
+    private func setOptions(_ next: ListOptions) {
+        guard next != options else { return }
+        options = next
+        app.store.setOptions(next, account: accountId)
+        surfacesKeepSelection()
+    }
+
+    /// The groups of a Group by value in the user's order, for the
+    /// Grouping sheet.
+    public func groups(_ by: GroupBy) -> [GroupItem] {
+        guard let account else { return [] }
+        return Listing.orderedGroups(by, account: account, repositories: repositories, orders: groupOrders)
+    }
+
+    /// The Grouping sheet moved a group.
+    public func moveGroups(_ by: GroupBy, from source: IndexSet, to destination: Int) {
+        var keys = groups(by).map(\.key)
+        let moving = source.sorted().map { keys[$0] }
+        let insertAt = destination - source.filter { $0 < destination }.count
+        keys.removeAll { moving.contains($0) }
+        keys.insert(contentsOf: moving, at: max(0, min(insertAt, keys.count)))
+        groupOrders[by] = keys
+        if by == .repository { repositories = keys; app.store.setRepositories(keys, account: accountId) }
+        app.store.setGroupOrders(groupOrders, account: accountId)
+        surfacesKeepSelection()
     }
 
     func setCollapsed(_ key: String, _ value: Bool) {
-        collapsed[key] = value
+        guard collapsed.contains(key) != value else { return }
+        if value { collapsed.insert(key) } else { collapsed.remove(key) }
         app.store.setCollapsed(collapsed, account: accountId)
-        lists.values.forEach { $0.keepSelection() }
+        surfacesKeepSelection()
+    }
+
+    func setExpanded(_ key: String, _ value: Bool) {
+        guard expanded.contains(key) != value else { return }
+        if value { expanded.insert(key) } else { expanded.remove(key) }
+        app.store.setExpanded(expanded, account: accountId)
+        surfacesKeepSelection()
     }
 
     public func toggleKeepOnTop() {
@@ -567,201 +594,322 @@ public final class AccountViewModel: ObservableObject {
 
     // MARK: Loading
 
-    /// Read the lists again after a short wait, once for a burst of
-    /// `account_changed`.
-    public func scheduleReload() {
-        scheduled?.cancel()
-        let delay = app.reloadDelay
-        scheduled = Task { [weak self] in
-            if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
-            guard !Task.isCancelled else { return }
-            self?.reload()
-        }
-    }
-
+    /// Read the list now; one asked for while another is on its way runs
+    /// once after it.
     public func reload() {
         guard let account else { return }
-        scheduled?.cancel()
-        scheduled = nil
-        reloads += 1
-        let current = reloads
-        let login = account.login
+        if reading {
+            readAgain = true
+            return
+        }
+        reading = true
+        listsStarted += 1
+        let number = listsStarted
         let api = app.api
+        let login = account.login
         Task {
             do {
-                async let cards = api.list(ListQuery(account: login))
-                async let snoozed = api.list(ListQuery(account: login, snoozed: true))
-                async let rows = api.activity(ActivityQuery(account: login))
-                let (newCards, newSnoozed, newRows) = try await (cards, snoozed, rows)
-                guard current == reloads else { return }
-                apply(cards: newCards, snoozed: newSnoozed, rows: newRows)
+                let cards = try await api.list(.app(login))
+                arrived(cards, number: number)
             } catch {
-                guard current == reloads else { return }
                 app.lastError = "\(error)"
+            }
+            reading = false
+            if readAgain {
+                readAgain = false
+                reload()
             }
         }
     }
 
-    func apply(cards newCards: [Card], snoozed newSnoozed: [Card], rows newRows: [Row]) {
-        // A row the daemon shows read, or no longer has, needs no local mark.
-        let unreadNow = Set((newCards + newSnoozed).flatMap(\.rows).filter(\.unread).map(\.id))
-            .union(newRows.filter(\.unread).map(\.id))
-        pendingRead.formIntersection(unreadNow)
-        cards = Self.marked(newCards, read: pendingRead)
-        snoozed = Self.marked(newSnoozed, read: pendingRead)
-        allActivity = newRows.map { pendingRead.contains($0.id) ? Self.read($0) : $0 }
+    func arrived(_ cards: [Card], number: Int) {
+        received = cards
+        pending.removeAll { $0.dropAfter.map { number > $0 } ?? false }
+        let known = Listing.knownRepositories(repositories, cards: cards)
+        if known != repositories {
+            repositories = known
+            app.store.setRepositories(known, account: accountId)
+        }
+        recompute()
         loaded = true
         lists.values.forEach { $0.listArrived() }
     }
 
-    static func read(_ row: Row) -> Row {
-        var row = row
-        row.unread = false
-        return row
+    private func recompute() {
+        let users = mutes?.users ?? []
+        cards = pending.reduce(received) { $1.change.apply($0, mutedUsers: users) }
     }
 
-    static func marked(_ cards: [Card], read ids: Set<String>) -> [Card] {
-        guard !ids.isEmpty else { return cards }
-        return cards.map { card in
-            var card = card
-            card.rows = card.rows.map { ids.contains($0.id) ? read($0) : $0 }
-            return card
+    // MARK: Local operations
+
+    /// Show `change` at once and send `request`; a refusal (or no daemon)
+    /// takes it back and shows the failure band (DESIGN.md, "Showing what
+    /// an operation did").
+    private func run(_ change: LocalChange, _ request: @escaping (DaemonAPI) async throws -> Void) {
+        clearFailure()
+        let id = nextChange
+        nextChange += 1
+        pending.append(Pending(id: id, change: change))
+        recompute()
+        surfacesKeepSelection()
+        let api = app.api
+        Task {
+            do {
+                try await request(api)
+                if let index = pending.firstIndex(where: { $0.id == id }) { pending[index].dropAfter = listsStarted }
+            } catch {
+                pending.removeAll { $0.id == id }
+                recompute()
+                surfacesKeepSelection()
+                showFailure(OperationFailure.text(change.verb, error))
+            }
+            reload()
         }
     }
 
-    // MARK: Reading
-
-    func row(_ id: String) -> Row? {
-        (cards + snoozed).lazy.flatMap(\.rows).first { $0.id == id } ?? allActivity.first { $0.id == id }
+    private func pr(_ card: String) -> String? {
+        cards.first { $0.id == card }?.pr
     }
 
-    /// Show the rows read at once and send `read`; a refusal puts them back
-    /// with the next list.
+    public func place(_ move: PlaceMove) {
+        guard let login = account?.login, let pr = pr(move.card) else { return }
+        var position = move.position
+        if case .before(let other) = move.position {
+            guard let otherPR = self.pr(other) else { return }
+            position = .before(otherPR)
+        }
+        let target = move.target
+        run(.place(move)) { try await $0.place(account: login, pr: pr, target: target, position: position) }
+    }
+
+    public func dismiss(_ card: String) {
+        guard let login = account?.login, let pr = pr(card) else { return }
+        let now = app.now
+        run(.dismiss(card: card, at: now, expiresAt: now + app.keepDays * 86_400)) { try await $0.dismiss(account: login, pr: pr) }
+    }
+
+    public func restore(_ card: String) {
+        guard let login = account?.login, let pr = pr(card) else { return }
+        run(.restore(card: card)) { try await $0.restore(account: login, pr: pr) }
+    }
+
+    public func mute(_ kind: MuteKind, _ name: String, on: Bool) {
+        guard let login = account?.login else { return }
+        run(on ? .mute(kind, name) : .unmute(kind, name)) { [weak self] api in
+            let mutes = on
+                ? try await api.mute(account: login, kind: kind, name: name)
+                : try await api.unmute(account: login, kind: kind, name: name)
+            self?.mutes = mutes
+        }
+    }
+
+    /// Read the account's mutes (menus and Settings).
+    public func loadMutes() {
+        guard let login = account?.login else { return }
+        let api = app.api
+        Task {
+            if let mutes = try? await api.mutes(account: login) {
+                self.mutes = mutes
+                recompute()
+            }
+        }
+    }
+
+    func row(_ id: String) -> Row? {
+        cards.lazy.flatMap(\.rows).first { $0.id == id }
+    }
+
+    /// Show the rows read at once and send `read`.
     func markRead(_ ids: [String]) {
         let fresh = ids.filter { row($0)?.unread ?? false }
         guard !fresh.isEmpty else { return }
-        pendingRead.formUnion(fresh)
-        let set = Set(fresh)
-        cards = Self.marked(cards, read: set)
-        snoozed = Self.marked(snoozed, read: set)
-        allActivity = allActivity.map { set.contains($0.id) ? Self.read($0) : $0 }
-        app.read(fresh) { [weak self] in
-            self?.pendingRead.subtract(fresh)
-            self?.reload()
+        run(.read(Set(fresh))) { try await $0.read(fresh) }
+    }
+
+    // MARK: Failure band
+
+    private func showFailure(_ text: String) {
+        failure = text
+        failureTimer?.cancel()
+        let duration = app.failureDuration
+        failureTimer = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            self?.failure = nil
         }
+    }
+
+    private func clearFailure() {
+        failureTimer?.cancel()
+        failureTimer = nil
+        if failure != nil { failure = nil }
     }
 }
 
 /// What one surface (the popover or the window) of an account shows: its
-/// tab, its search, its selection and its "+ N more PRs" (DESIGN.md: the
-/// popover clears its search when it closes, the window when it closes).
-/// The data and the saved choices come from the shared `AccountViewModel`.
+/// tab, whether the Dismissed list is open, its searches, its selection and
+/// its expanded rows (DESIGN.md, "Open in window": the popover and the
+/// window keep these apart). The data and the saved choices come from the
+/// shared `AccountViewModel`.
 @MainActor
 public final class SurfaceListModel: ObservableObject {
     public let surface: Surface
     public unowned let data: AccountViewModel
-    @Published public var tab: PopoverTab = .prs {
-        didSet { keepSelection() }
-    }
+    /// The last tab, kept per surface (DESIGN.md, "Tabs").
+    @Published public private(set) var tab: ListTab
+    @Published public private(set) var showingDismissed = false
     /// The search of each tab. Not kept.
-    @Published public private(set) var searches: [PopoverTab: String] = [:]
+    @Published public private(set) var searches: [ListTab: String] = [:]
+    /// The Dismissed list's own search, gone when the list closes.
+    @Published public private(set) var dismissedSearch = ""
     /// Whether the search field has the keyboard.
     @Published public var searchFocused = false
-    /// Sections whose "+ N more PRs" was opened. Not kept (DESIGN.md,
-    /// "PRs tab sections").
-    @Published public private(set) var expanded: Set<String> = []
-    @Published public private(set) var fold = FoldState()
     @Published public private(set) var selection: SelectionItem?
+    /// Cards whose rows show past the newest three. Not kept.
+    @Published public private(set) var expandedRows: Set<String> = []
+    /// The Grouping sheet shows.
+    @Published public var showsGrouping = false
+    /// The text selected in this surface's cards and rows, read and cleared
+    /// here (DESIGN.md, "What a press does"). The app sets it.
+    public var textSelection: TextSelecting?
+    /// The card being dragged by its grip, while a drag is on.
+    @Published public private(set) var dragging: String?
+    /// Where the dragged card would land, for the insertion line.
+    @Published public private(set) var dropTarget: DropTarget?
     private var forward: AnyCancellable?
 
     init(data: AccountViewModel, surface: Surface) {
         self.data = data
         self.surface = surface
+        tab = data.app.store.lastTab(account: data.accountId, surface: surface)
         forward = data.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
     }
 
     var app: AppModel { data.app }
 
+    /// `auto_dismiss_after_days`, for the tooltip of `Dismissed in N days`.
+    public var autoDismissDays: Int64 { app.autoDismissDays }
+
     // MARK: Derived lists
 
+    /// The search of what shows: the tab's, or the Dismissed list's.
     public var search: String {
-        get { searches[tab] ?? "" }
-        set { searches[tab] = newValue }
+        showingDismissed ? dismissedSearch : searches[tab] ?? ""
     }
 
     public var sections: [SectionLayout] {
-        guard let account = data.account else { return [] }
+        guard let account = data.account, !showingDismissed else { return [] }
         return Listing.sections(
-            account: account, cards: data.cards, snoozed: data.snoozed, options: data.options, search: searches[.prs] ?? "",
-            collapsed: data.collapsed, expanded: expanded, fold: fold
+            tab: tab, cards: data.cards, account: account, options: data.options, orders: data.groupOrders,
+            repositories: data.repositories,
+            folding: Listing.Folding(collapsed: data.collapsed, expanded: data.expanded, search: search)
         )
     }
 
-    /// "Nothing needs you" or "Nothing matches" in place of the sections
-    /// other than Snoozed.
+    /// The Dismissed list after its search.
+    public var dismissedCards: [Card] {
+        Listing.search(Listing.dismissed(data.cards), dismissedSearch)
+    }
+
+    /// Every dismissed card, whatever the search: the count.
+    public var dismissedCount: Int {
+        Listing.dismissed(data.cards).count
+    }
+
+    public func unreadCount(_ tab: ListTab) -> Int {
+        Listing.unreadCount(data.cards, tab: tab)
+    }
+
+    public var view: ListView {
+        showingDismissed
+            ? ListView(tab: nil, dismissed: dismissedCards, expandedRows: expandedRows, cards: data.cards)
+            : ListView(tab: tab, sections: sections, expandedRows: expandedRows, cards: data.cards)
+    }
+
+    /// The text in place of an empty list.
     public var emptyText: String? {
-        Listing.emptyText(loaded: data.loaded, cards: data.cards, options: data.options, search: searches[.prs] ?? "")
-    }
-
-    /// The Activity rows shown: owner buttons, chip and search applied.
-    public var activity: [Row] {
-        guard let account = data.account else { return [] }
-        return Listing.activity(
-            data.allActivity, cards: data.cards, segment: data.options.segment,
-            owners: ActivityOwners.effective(data.activityOwners, account: account), search: searches[.activity] ?? ""
-        )
-    }
-
-    public var activityEmptyText: String? {
-        Listing.activityEmptyText(loaded: data.loaded, all: data.allActivity, shown: activity)
+        Listing.emptyText(loaded: data.loaded, tab: showingDismissed ? nil : tab, cards: data.cards, search: search)
     }
 
     public var items: [SelectionItem] {
-        PopoverLogic.items(tab: tab, sections: tab == .prs ? sections : [], activity: tab == .activity ? activity : [])
+        PopoverLogic.items(view)
     }
 
     public var hints: [KeyHint] {
-        PopoverLogic.hints(selection: selection, sections: sections, activity: activity)
+        PopoverLogic.hints(selection: selection, view: view)
     }
 
     /// The rows ⇧R and Mark all as read send.
     public var rowsToRead: [String] {
-        Listing.rowsToRead(tab: tab, sections: tab == .prs ? sections : [], activity: tab == .activity ? activity : [])
+        showingDismissed ? [] : Listing.rowsToRead(tab: tab, cards: data.cards, search: search)
     }
 
     func keepSelection() {
-        selection = PopoverLogic.keep(selection, in: items)
+        let kept = PopoverLogic.keep(selection, in: items)
+        if kept != selection { selection = kept }
     }
 
     /// A new list arrived.
     func listArrived() {
-        fold.update(data.cards)
         keepSelection()
+        if let pr = pendingReveal {
+            pendingReveal = nil
+            reveal(pr: pr, waitForList: false)
+        }
+    }
+
+    /// A PR to show once the next list arrives: the notification came
+    /// before the card was read.
+    private var pendingReveal: String?
+
+    // MARK: Tabs and the Dismissed list
+
+    public func openTab(_ next: ListTab) {
+        if showingDismissed { closeDismissedList() }
+        guard next != tab else { return }
+        tab = next
+        app.store.setLastTab(next, account: data.accountId, surface: surface)
+        textSelection?.clearSelection()
+        keepSelection()
+    }
+
+    public func openDismissedList() {
+        guard !showingDismissed else { return }
+        showingDismissed = true
+        searchFocused = false
+        textSelection?.clearSelection()
+        selection = nil
+    }
+
+    /// ← or Esc: back to the tab; the list's search goes.
+    public func closeDismissedList() {
+        guard showingDismissed else { return }
+        showingDismissed = false
+        dismissedSearch = ""
+        searchFocused = false
+        textSelection?.clearSelection()
+        selection = nil
     }
 
     // MARK: Selection, keys and clicks
 
     /// Select an item: by ↑↓, a click or a right click. A row is read.
+    /// Selecting another item clears the selected text (DESIGN.md, "What a
+    /// press does").
     public func select(_ item: SelectionItem?) {
+        if item != selection { textSelection?.clearSelection() }
         selection = item
         if case .row(let id, _)? = item { data.markRead([id]) }
-        // Reading the row may take a PR out of the fold.
-        fold.update(data.cards)
-    }
-
-    /// A double click: select it, then open it.
-    public func doubleClick(_ item: SelectionItem) {
-        select(item)
-        if let action = PopoverLogic.action(for: .open, selection: item, sections: sections, activity: activity) {
-            perform(action)
-        }
     }
 
     /// The right-click menu of an item, after selecting (and reading) it.
+    /// `Copy` shows only while text stays selected.
     public func rightClick(_ item: SelectionItem) -> [MenuEntry?] {
         select(item)
+        if case .row = item, data.mutes == nil { data.loadMutes() }
         return PopoverLogic.menu(
-            for: item, tab: tab, sections: sections, activity: activity, returnAt: app.nextReturn()
+            for: item, view: view, hasTextSelection: textSelection?.selectedText != nil,
+            login: data.account?.login ?? "", mutedUsers: data.mutes?.users ?? []
         )
     }
 
@@ -772,8 +920,18 @@ public final class SurfaceListModel: ObservableObject {
             select(PopoverLogic.move(selection, up: key == .up, in: items))
         case .find:
             searchFocused = true
-        case .open, .snooze, .markAllRead:
-            if let action = PopoverLogic.action(for: key, selection: selection, sections: sections, activity: activity) {
+        case .copy:
+            if let text = textSelection?.selectedText {
+                app.copy(text)
+            } else if let link = PopoverLogic.link(for: selection, view: view) {
+                app.copy(link)
+            }
+        case .tab(let next):
+            openTab(next)
+        case .back:
+            closeDismissedList()
+        case .open, .markAllRead, .delete, .reorder, .moveTo:
+            if let action = PopoverLogic.action(for: key, selection: selection, view: view) {
                 perform(action)
             }
         }
@@ -782,56 +940,167 @@ public final class SurfaceListModel: ObservableObject {
     /// Esc or ↓ in the search field (DESIGN.md, "Search field"): Esc clears
     /// the text, if any, and both go back to the list. The popover stays.
     public func leaveSearch(clearing: Bool) {
-        if clearing { search = "" }
+        if clearing { setSearch("") }
         searchFocused = false
     }
 
     public func setSearch(_ text: String) {
-        search = text
+        if showingDismissed {
+            dismissedSearch = text
+        } else {
+            searches[tab] = text
+        }
         keepSelection()
     }
 
-    func clearSearch() {
+    func clearSearches() {
         searches = [:]
+        dismissedSearch = ""
         searchFocused = false
         keepSelection()
     }
 
     public func perform(_ action: PopoverAction) {
         switch action {
+        case .open(let url, let read):
+            if let read { data.markRead([read]) }
+            app.open(url)
+        case .copyLink(let text), .copyText(let text):
+            app.copy(text)
+        case .copySelectedText:
+            if let text = textSelection?.selectedText { app.copy(text) }
+        case .place(let move):
+            data.place(move)
+        case .dismiss(let card):
+            data.dismiss(card)
+        case .restore(let card):
+            data.restore(card)
+        case .mute(let kind, let name):
+            data.mute(kind, name, on: true)
+        case .unmute(let kind, let name):
+            data.mute(kind, name, on: false)
         case .toggleSection(let key):
             let section = sections.first { $0.key == key }
-            data.setCollapsed(Listing.collapseKey(data.options.groupBy, key), !(section?.collapsed ?? false))
-        case .expand(let key):
-            expanded.insert(key)
-            if selection == .more(key) {
-                selection = sections.first { $0.key == key }?.showsHeader == true ? .section(key) : nil
-            }
+            data.setCollapsed(key, !(section?.collapsed ?? false))
+        case .toggleMore(let key):
+            guard let section = sections.first(where: { $0.key == key }) else { return }
+            data.setExpanded(key, section.more > 0)
+        case .expandRows(let card):
+            expandedRows.insert(card)
+            if selection == .moreRows(card: card) { selection = .header(card: card) }
+        case .showInTab(let card):
+            if let pr = data.cards.first(where: { $0.id == card })?.pr { reveal(pr: pr) }
         case .markAllRead:
             data.markRead(rowsToRead)
-        case .open(_, let row):
-            if let row { data.markRead([row]) }
-            app.perform(action, account: data.accountId)
-        default:
-            app.perform(action, account: data.accountId)
         }
+    }
+
+    /// Show the PR's card: its tab (All without a placement), no search,
+    /// its section and group unfolded, the card selected. A card no longer
+    /// shown (dismissed, gone) only opens the tab (DESIGN.md, "macOS
+    /// notifications").
+    public func reveal(pr: String, waitForList: Bool = true) {
+        closeDismissedList()
+        guard let card = data.cards.first(where: { $0.pr == pr }) else {
+            // Not read yet (the surface just opened): the list on its way
+            // decides.
+            if waitForList { pendingReveal = pr }
+            return
+        }
+        openTab(card.tab)
+        searches[tab] = nil
+        guard !card.isDismissed else {
+            keepSelection()
+            return
+        }
+        for _ in 0..<3 {
+            let sections = self.sections
+            if let leaf = sections.first(where: { $0.isLeaf && $0.matching.contains { $0.id == card.id } }) {
+                if leaf.collapsed {
+                    data.setCollapsed(leaf.key, false)
+                    continue
+                }
+                if !leaf.cards.contains(where: { $0.id == card.id }) {
+                    data.setExpanded(leaf.key, true)
+                    continue
+                }
+                textSelection?.clearSelection()
+                selection = .header(card: card.id)
+                return
+            }
+            guard let parent = sections.first(where: { !$0.isLeaf && $0.matching.contains { $0.id == card.id } }) else { return }
+            data.setCollapsed(parent.key, false)
+        }
+    }
+
+    // MARK: Drag and drop
+
+    /// A drag started at a card's grip.
+    public func beginDrag(_ card: String) {
+        dragging = card
+        dropTarget = nil
+    }
+
+    /// The pointer of a card drag moved over `zone`: where it would land,
+    /// nil when it cannot (the line goes and the drop is refused).
+    @discardableResult
+    public func dragOver(_ zone: DropZone) -> DropTarget? {
+        guard dragging != nil else { return nil }
+        let target = CardDrop.target(zone, sections: sections)
+        if dropTarget != target { dropTarget = target }
+        return target
+    }
+
+    /// The pointer left `zone`.
+    public func dragExited(_ zone: DropZone) {
+        if dropTarget != nil, dropTarget == CardDrop.target(zone, sections: sections) { dropTarget = nil }
+    }
+
+    /// The card dropped over `zone`. True when it was taken (even where it
+    /// changes nothing), false when refused.
+    @discardableResult
+    public func drop(_ zone: DropZone) -> Bool {
+        defer {
+            dragging = nil
+            dropTarget = nil
+        }
+        guard let id = dragging, let card = data.cards.first(where: { $0.id == id }),
+              let target = CardDrop.target(zone, sections: sections) else { return false }
+        if let move = CardDrop.move(card, to: target, cards: data.cards) { data.place(move) }
+        return true
+    }
+
+    /// The drag ended without a drop here (released elsewhere, or Esc).
+    public func endDrag() {
+        dragging = nil
+        dropTarget = nil
     }
 
     // MARK: Open and closed
 
-    /// The surface opened: "+ N more PRs" is decided with the next list,
-    /// and the search field does not take the keyboard (DESIGN.md, "Search
-    /// field"); ⌘F moves there.
+    /// The surface opened: the search field does not take the keyboard
+    /// (DESIGN.md, "Search field"); ⌘F moves there.
     func opened() {
-        fold.decideOnNextList()
         searchFocused = false
     }
 
-    /// The popover closed or the window lost the focus: "+ N more PRs" is
-    /// decided again and folds again; the popover's search is cleared.
+    /// The popover closed, or the window lost the focus: a card's rows show
+    /// the newest three again. The popover also drops its searches, its
+    /// selected text and the Dismissed list.
     func closed(clearsSearch: Bool) {
-        fold.decide(data.cards)
-        expanded = []
-        if clearsSearch { clearSearch() }
+        expandedRows = []
+        if clearsSearch {
+            showingDismissed = false
+            clearSearches()
+            textSelection?.clearSelection()
+        }
+        keepSelection()
+    }
+
+    /// The window closed: its searches and the Dismissed list go.
+    func windowClosed() {
+        showingDismissed = false
+        clearSearches()
+        textSelection?.clearSelection()
     }
 }

@@ -1,5 +1,7 @@
 // The popover of one account, also the content of its window
-// (docs/design/Main.html, Activity.html, Keychain.html, Sheets.html).
+// (docs/design/Main.html, Keychain.html, MenuBarIcon.html): the header,
+// the banners, the tab row, the search row, the list (CardViews.swift), the
+// key hints and the Grouping sheet.
 //
 // Sizes are the boards' points at text size 12, multiplied by
 // `textScale` (DESIGN.md, "Text size"): the fonts are fixed point sizes
@@ -43,7 +45,7 @@ struct SurfaceActions {
 struct PopoverView: View {
     @ObservedObject var app: AppModel
     @ObservedObject var model: AccountViewModel
-    /// This surface's own tab, search, selection and fold.
+    /// This surface's own tab, search, selection and expanded rows.
     @ObservedObject var list: SurfaceListModel
     @ObservedObject var avatars: AvatarStore
     var actions: SurfaceActions
@@ -69,7 +71,7 @@ struct PopoverView: View {
             Header(
                 login: account?.login ?? "", color: account?.accountColor ?? .none,
                 updated: app.dbUnreadable ? nil : RelativeTime.updated(account?.updatedAt, now: now),
-                usage: model.usage, model: model, surface: surface,
+                usage: model.usage, model: model, surface: surface, refreshing: app.refreshing.contains(model.accountId),
                 actions: actions, refresh: { app.refresh(model.accountId) }
             )
             switch SurfaceRules.content(account: account, dbUnreadable: app.dbUnreadable) {
@@ -82,15 +84,21 @@ struct PopoverView: View {
                 }
             case .list:
                 BannerView(lines: Warnings.banner(account?.warnings ?? [], now: now)) { app.bannerButton($0, account: model.accountId) }
-                Tabs(tab: $list.tab)
-                if list.tab == .prs {
-                    ChipRow(model: model)
-                } else if let account {
-                    OwnerButtons(account: account, model: model)
+                if let failure = model.failure {
+                    FailureBand(text: failure)
                 }
-                SearchRow(model: list)
-                ListArea(app: app, model: list, avatars: avatars, now: now)
+                TabRow(list: list)
+                SearchRow(list: list, model: model)
+                if list.showingDismissed {
+                    DismissedHeading(list: list, keepDays: app.keepDays)
+                }
+                ListArea(model: list, avatars: avatars, now: now)
                 KeyHints(hints: list.hints)
+            }
+        }
+        .overlay {
+            if list.showsGrouping {
+                GroupingSheet(model: model) { list.showsGrouping = false }
             }
         }
     }
@@ -115,6 +123,7 @@ struct Header: View {
     var usage: ApiUsage
     @ObservedObject var model: AccountViewModel
     var surface: Surface
+    var refreshing: Bool
     var actions: SurfaceActions
     var refresh: () -> Void
     @Environment(\.textScale) var k
@@ -127,13 +136,11 @@ struct Header: View {
                     Text(login).font(.system(size: 14 * k, weight: .semibold)).lineLimit(1)
                 }
                 if let updated {
-                    // "Updated 1 min ago · API 25%" (DESIGN.md, "Rate limits").
+                    // "Updated 1 min ago · API ▬ 1,240 / 5,000" (DESIGN.md,
+                    // "Rate limits").
                     HStack(spacing: 0) {
                         Text(updated + " · ").foregroundColor(Palette.secondary.color)
-                        Text(usage.text)
-                            .fontWeight(usage.warn ? .semibold : .regular)
-                            .foregroundColor(usage.warn ? Palette.caution.color : Palette.secondary.color)
-                            .help(usage.tooltip ?? "")
+                        UsageView(usage: usage)
                     }
                     .font(.system(size: 11 * k))
                     .lineLimit(1)
@@ -146,11 +153,66 @@ struct Header: View {
             if let openWindow = actions.openWindow {
                 HeaderButton(icon: BoardIcons.window, size: 15, label: "Open in window", action: openWindow)
             }
-            HeaderButton(icon: BoardIcons.refresh, size: 16, label: "Refresh", action: refresh)
+            if refreshing {
+                RefreshProgress()
+            } else {
+                HeaderButton(icon: BoardIcons.refresh, size: 16, label: "Refresh", action: refresh)
+            }
             HeaderButton(icon: BoardIcons.settings, size: 16, label: "Settings") { actions.openSettings(.general) }
             MenuIconButton(icon: BoardIcons.chevron, label: "More", items: actions.menuItems)
         }
         .padding(EdgeInsets(top: 12, leading: 16, bottom: 0, trailing: 10))
+    }
+}
+
+/// `API`, the thin bar and `1,240 / 5,000` (Main.html `.api`); `API –`
+/// before any value. The hover names both APIs.
+struct UsageView: View {
+    var usage: ApiUsage
+    @Environment(\.textScale) var k
+
+    var body: some View {
+        let color = usage.warn ? Palette.caution.color : Palette.secondary.color
+        HStack(spacing: 0) {
+            Text("API")
+            if let fraction = usage.fraction, let numbers = usage.numbers {
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Palette.usageTrack.color)
+                    Capsule()
+                        .fill(usage.warn ? Palette.usageWarnFill.color : Palette.usageFill.color)
+                        .frame(width: 36 * k * CGFloat(fraction))
+                }
+                .frame(width: 36 * k, height: 4 * k)
+                .padding(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 5))
+                Text(numbers)
+            } else {
+                Text(" \u{2013}")
+            }
+        }
+        .fontWeight(usage.warn ? .semibold : .regular)
+        .foregroundColor(color)
+        .help(usage.tooltip ?? "")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(usage.text)
+    }
+}
+
+/// Refresh in progress (Main.html `.iconbtn.busy`): a gray circle with a
+/// turning blue arc, in place of the button until the answer.
+struct RefreshProgress: View {
+    @State private var turning = false
+
+    var body: some View {
+        ZStack {
+            IconView(icon: BoardIcons.progressTrack, size: 16, color: Palette.usageTrack.color)
+            IconView(icon: BoardIcons.progressArc, size: 16, color: Palette.blueDot.color)
+                .rotationEffect(.degrees(turning ? 360 : 0))
+                .animation(.linear(duration: 1).repeatForever(autoreverses: false), value: turning)
+        }
+        .frame(width: 24, height: 24)
+        .onAppear { turning = true }
+        .help("Refreshing")
+        .accessibilityLabel("Refreshing")
     }
 }
 
@@ -210,6 +272,27 @@ struct BannerView: View {
     }
 }
 
+/// `Couldn't dismiss: daemon not running` (Main.html `.fail`): set apart
+/// from the yellow warning band, below it.
+struct FailureBand: View {
+    var text: String
+    @Environment(\.textScale) var k
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            IconView(icon: BoardIcons.failure, size: 14 * k, color: Palette.orangeText.color)
+            Text(text).fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .font(.system(size: 12 * k))
+        .foregroundColor(Palette.orangeText.color)
+        .padding(EdgeInsets(top: 7, leading: 10, bottom: 7, trailing: 10))
+        .background(RoundedRectangle(cornerRadius: 8).fill(Palette.orangeIconBackground.color))
+        .padding(EdgeInsets(top: 8, leading: 12, bottom: 0, trailing: 12))
+        .accessibilityElement(children: .combine)
+    }
+}
+
 struct CenteredMessage: View {
     var title: String
     var detail: String?
@@ -231,96 +314,80 @@ struct CenteredMessage: View {
     }
 }
 
-// MARK: - Tabs and the filter rows
+// MARK: - Tabs and the search row
 
-struct Tabs: View {
-    @Binding var tab: PopoverTab
+/// All | Review | Mine with their unread counts, and the Dismissed button
+/// at the right end (Main.html `.ptabs`).
+struct TabRow: View {
+    @ObservedObject var list: SurfaceListModel
     @Environment(\.textScale) var k
 
     var body: some View {
-        HStack(spacing: 2) {
-            tabButton("PRs", .prs)
-            tabButton("Activity", .activity)
-            Spacer()
+        HStack(alignment: .bottom, spacing: 2) {
+            ForEach(ListTab.allCases, id: \.self) { tab in
+                tabButton(tab)
+            }
+            Spacer(minLength: 0)
+            dismissedButton
+                .padding(.bottom, 3)
         }
         .padding(EdgeInsets(top: 8, leading: 12, bottom: 0, trailing: 12))
         .overlay(alignment: .bottom) { Rectangle().fill(Palette.border.color).frame(height: 1) }
     }
 
-    func tabButton(_ title: String, _ value: PopoverTab) -> some View {
-        let on = tab == value
-        return Button { tab = value } label: {
-            Text(title)
-                .font(.system(size: 12 * k, weight: on ? .semibold : .regular))
-                .foregroundColor(on ? Palette.text.color : Palette.secondary.color)
-                .padding(EdgeInsets(top: 4 * k, leading: 10, bottom: 6 * k, trailing: 10))
-                .overlay(alignment: .bottom) {
-                    Rectangle().fill(on ? Palette.text.color : .clear).frame(height: 2)
+    func tabButton(_ tab: ListTab) -> some View {
+        // No tab is underlined while the Dismissed list shows.
+        let on = tab == list.tab && !list.showingDismissed
+        let count = list.unreadCount(tab)
+        return Button { list.openTab(tab) } label: {
+            HStack(spacing: 5 * k) {
+                Text(tab.title)
+                    .font(.system(size: 12 * k, weight: on ? .semibold : .regular))
+                    .foregroundColor(on ? Palette.text.color : Palette.secondary.color)
+                if count > 0 {
+                    Text("\(count)")
+                        .font(.system(size: 10 * k, weight: .bold))
+                        .foregroundColor(Palette.blueDot.color)
                 }
-                .contentShape(Rectangle())
+            }
+            .padding(EdgeInsets(top: 4 * k, leading: 10, bottom: 6 * k, trailing: 10))
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(on ? Palette.text.color : .clear).frame(height: 2)
+            }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(count > 0 ? "\(tab.title), \(count) unread" : tab.title)
+        .accessibilityAddTraits(on ? .isSelected : [])
     }
-}
 
-/// A push-in button, the standard macOS control whose on state takes the
-/// system accent color (DESIGN.md, "Screens"), as wide as its text.
-struct ChipButton: View {
-    var title: String
-    var on: Bool
-    var press: () -> Void
-    @Environment(\.textScale) var k
-
-    var body: some View {
-        Toggle(isOn: Binding(get: { on }, set: { _ in press() })) {
-            Text(title).font(.system(size: 11 * k))
-        }
-        .toggleStyle(.button)
-        .controlSize(.small)
-        .fixedSize()
-    }
-}
-
-/// Row 1 of the PRs tab: All, Authored by me, Assigned to me, Review
-/// requested; one is always on. Left-aligned; it does not stretch.
-struct ChipRow: View {
-    @ObservedObject var model: AccountViewModel
-
-    var body: some View {
-        HStack(spacing: 8) {
-            ForEach(PrFilter.allCases, id: \.self) { segment in
-                ChipButton(title: ListOptions.title(segment), on: model.options.segment == segment) {
-                    model.options.segment = segment
+    var dismissedButton: some View {
+        let open = list.showingDismissed
+        let count = list.dismissedCount
+        let color = open ? Palette.settingsTabSelected.color : Palette.botIcon.color
+        return Button { open ? list.closeDismissedList() : list.openDismissedList() } label: {
+            HStack(spacing: 4) {
+                IconView(icon: BoardIcons.dismissedBox, size: 14 * k, color: color)
+                if count > 0 {
+                    Text("\(count)").font(.system(size: 11 * k)).foregroundColor(color)
                 }
             }
-            Spacer(minLength: 0)
+            .padding(.horizontal, 6)
+            .frame(height: 22 * k)
+            .background(RoundedRectangle(cornerRadius: 6).fill(open ? Palette.settingsTabSelectedBackground.color : .clear))
+            .contentShape(Rectangle())
         }
-        .padding(EdgeInsets(top: 8, leading: 12, bottom: 0, trailing: 12))
+        .buttonStyle(.plain)
+        .help("Dismissed")
+        .accessibilityLabel(count > 0 ? "Dismissed, \(count)" : "Dismissed")
     }
 }
 
-/// Activity: `All owners`, then one button per owner; several can be on.
-struct OwnerButtons: View {
-    var account: Account
-    @ObservedObject var model: AccountViewModel
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ChipButton(title: "All owners", on: model.allOwnersOn) { model.showAllOwners() }
-                ForEach(ActivityOwners.buttons(account)) { owner in
-                    ChipButton(title: owner.displayName, on: model.isOwnerOn(owner.id)) { model.toggleOwner(owner.id) }
-                }
-            }
-            .padding(EdgeInsets(top: 8, leading: 12, bottom: 0, trailing: 12))
-        }
-    }
-}
-
-/// Row 2: the search field (the only part that grows), then Group by and
-/// the sort order on the PRs tab, as pop-up buttons showing their value.
+/// The search field (the only part that grows), then in All the Group by,
+/// Then by and sort pop-up buttons showing their values.
 struct SearchRow: View {
-    @ObservedObject var model: SurfaceListModel
+    @ObservedObject var list: SurfaceListModel
+    @ObservedObject var model: AccountViewModel
     @FocusState private var focused: Bool
     @Environment(\.textScale) var k
 
@@ -328,7 +395,7 @@ struct SearchRow: View {
         HStack(spacing: 8) {
             HStack(spacing: 6) {
                 IconView(icon: BoardIcons.search, size: 13 * k, color: Palette.waiting.color)
-                TextField("Search", text: Binding(get: { model.search }, set: { model.setSearch($0) }))
+                TextField("Search", text: Binding(get: { list.search }, set: { list.setSearch($0) }))
                     .textFieldStyle(.plain)
                     .font(.system(size: 12 * k))
                     .focused($focused)
@@ -339,37 +406,137 @@ struct SearchRow: View {
             .background(RoundedRectangle(cornerRadius: 6).fill(Palette.surface.color))
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.controlBorder.color, lineWidth: 1))
             .frame(maxWidth: .infinity)
-            if model.tab == .prs {
-                Picker("Group by", selection: Binding(get: { model.data.options.groupBy }, set: { model.data.options.groupBy = $0 })) {
-                    ForEach(GroupBy.allCases, id: \.self) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .controlSize(.small)
-                .fixedSize()
-                .help("Group by")
-                Picker("Sort", selection: Binding(get: { model.data.options.sort }, set: { model.data.options.sort = $0 })) {
-                    ForEach(SortOrder.allCases, id: \.self) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .controlSize(.small)
-                .fixedSize()
-                .help("Sort")
+            if list.tab == .all && !list.showingDismissed {
+                let options = model.options
+                PullDown(title: options.groupBy.title, toolTip: "Group by", items: groupByItems(options))
+                PullDown(title: options.thenByTitle, toolTip: "Then by", enabled: options.groupBy != .none, items: thenByItems(options))
+                PullDown(title: options.sort.title, toolTip: "Sort", items: SortOrder.allCases.map { order in
+                    IconMenuItem(order.title, checked: order == options.sort) { model.setSort(order) }
+                })
             }
         }
         .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
-        .onChange(of: model.searchFocused) { _, value in if focused != value { focused = value } }
-        .onChange(of: focused) { _, value in if model.searchFocused != value { model.searchFocused = value } }
+        .onChange(of: list.searchFocused) { _, value in if focused != value { focused = value } }
+        .onChange(of: focused) { _, value in if list.searchFocused != value { list.searchFocused = value } }
+    }
+
+    /// The five values, the current one checked, then `Grouping…`.
+    func groupByItems(_ options: ListOptions) -> [IconMenuItem?] {
+        var items: [IconMenuItem?] = GroupBy.allCases.map { value in
+            IconMenuItem(value.title, checked: value == options.groupBy) { model.setGroupBy(value) }
+        }
+        items.append(nil)
+        items.append(IconMenuItem("Grouping…") { list.showsGrouping = true })
+        return items
+    }
+
+    /// The same values without Group by's.
+    func thenByItems(_ options: ListOptions) -> [IconMenuItem?] {
+        options.thenByChoices.map { value in
+            IconMenuItem(value.title, checked: value == options.thenBy) { model.setThenBy(value) }
+        }
     }
 }
 
+/// A standard pull-down pop-up button whose title is the current value
+/// (NSPopUpButton with `pullsDown`: the first item is the title and the rest
+/// are the menu). A pull-down, so that Group by can end with `Grouping…`
+/// and Then by can read `Then by` while it is None.
+struct PullDown: NSViewRepresentable {
+    var title: String
+    var toolTip: String
+    var enabled = true
+    var items: [IconMenuItem?]
+    @Environment(\.textScale) var k
+
+    final class Coordinator {
+        var targets: [IconMenu.Target] = []
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSPopUpButton {
+        let button = NSPopUpButton(frame: .zero, pullsDown: true)
+        button.controlSize = .small
+        button.setContentHuggingPriority(.required, for: .horizontal)
+        button.setContentCompressionResistancePriority(.required, for: .horizontal)
+        update(button, context: context)
+        return button
+    }
+
+    func updateNSView(_ button: NSPopUpButton, context: Context) {
+        update(button, context: context)
+    }
+
+    private func update(_ button: NSPopUpButton, context: Context) {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        menu.addItem(NSMenuItem(title: title, action: nil, keyEquivalent: ""))
+        var targets: [IconMenu.Target] = []
+        for item in items {
+            guard let item else {
+                menu.addItem(.separator())
+                continue
+            }
+            let entry = NSMenuItem(title: item.title, action: #selector(IconMenu.Target.run(_:)), keyEquivalent: "")
+            let target = IconMenu.Target(item.action)
+            entry.target = target
+            entry.state = item.checked ? .on : .off
+            entry.isEnabled = item.enabled
+            targets.append(target)
+            menu.addItem(entry)
+        }
+        context.coordinator.targets = targets
+        button.menu = menu
+        button.font = .systemFont(ofSize: 11 * k)
+        button.isEnabled = enabled
+        button.toolTip = toolTip
+        button.setAccessibilityLabel(toolTip)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSPopUpButton, context: Context) -> CGSize? {
+        nsView.intrinsicContentSize
+    }
+}
+
+/// `← Dismissed`, the PR count and the note (Main.html `.dhead`).
+struct DismissedHeading: View {
+    @ObservedObject var list: SurfaceListModel
+    var keepDays: Int64
+    @Environment(\.textScale) var k
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Button { list.closeDismissedList() } label: {
+                    Text("\u{2190}").font(.system(size: 13 * k)).foregroundColor(Palette.strongText.color)
+                        .padding(.horizontal, 4)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(HoverButtonStyle())
+                .accessibilityLabel("Back")
+                Text("Dismissed").font(.system(size: 12 * k, weight: .semibold))
+                Text(list.dismissedCount == 1 ? "1 PR" : "\(list.dismissedCount) PRs")
+                    .font(.system(size: 11 * k)).foregroundColor(Palette.secondary.color)
+                Spacer(minLength: 0)
+            }
+            .padding(EdgeInsets(top: 2, leading: 12, bottom: 4, trailing: 14))
+            Text(DismissedText.note(keepDays: keepDays))
+                .font(.system(size: 11 * k))
+                .foregroundColor(Palette.waiting.color)
+                .padding(EdgeInsets(top: 2, leading: 16, bottom: 8, trailing: 16))
+        }
+    }
+}
+
+/// The hint line: wraps to a second line when it does not fit (DESIGN.md,
+/// "Keyboard").
 struct KeyHints: View {
     var hints: [KeyHint]
     @Environment(\.textScale) var k
 
     var body: some View {
-        HStack(spacing: 10) {
+        FlowLayout(spacing: 9, lineSpacing: 2) {
             ForEach(Array(hints.enumerated()), id: \.offset) { _, hint in
                 HStack(spacing: 3) {
                     Text(hint.key)
@@ -379,517 +546,149 @@ struct KeyHints: View {
                         .background(RoundedRectangle(cornerRadius: 3).fill(Palette.tint.color))
                     Text(hint.text)
                 }
+                .fixedSize()
             }
-            Spacer()
         }
         .font(.system(size: 11 * k))
         .foregroundColor(Palette.secondary.color)
-        .lineLimit(1)
-        .padding(EdgeInsets(top: 6, leading: 16, bottom: 8, trailing: 16))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(EdgeInsets(top: 6, leading: 14, bottom: 8, trailing: 12))
         .overlay(alignment: .top) { Rectangle().fill(Palette.border.color).frame(height: 1) }
     }
 }
 
-// MARK: - The list
+/// Lays its views out in rows, wrapping to the next row when the width runs
+/// out (the SwiftUI `Layout` protocol, macOS 13 and later).
+struct FlowLayout: Layout {
+    var spacing: CGFloat
+    var lineSpacing: CGFloat
 
-struct ListArea: View {
-    @ObservedObject var app: AppModel
-    @ObservedObject var model: SurfaceListModel
-    @ObservedObject var avatars: AvatarStore
-    var now: Int64
-
-    var body: some View {
-        ScrollViewReader { reader in
-            ScrollView {
-                VStack(spacing: 0) {
-                    if model.tab == .prs {
-                        prs
-                    } else {
-                        activity
-                    }
-                }
-                .padding(.bottom, 8)
+    func rows(_ width: CGFloat, _ subviews: Subviews) -> [[(Int, CGSize)]] {
+        var rows: [[(Int, CGSize)]] = [[]]
+        var x: CGFloat = 0
+        for (index, subview) in subviews.enumerated() {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0 && x + size.width > width {
+                rows.append([])
+                x = 0
             }
-            .onChange(of: model.selection) { _, selection in
-                if let selection {
-                    withAnimation(.easeOut(duration: 0.1)) { reader.scrollTo(selection.id) }
-                }
-            }
+            rows[rows.count - 1].append((index, size))
+            x += size.width + spacing
         }
+        return rows
     }
 
-    @ViewBuilder
-    var prs: some View {
-        if let empty = model.emptyText {
-            EmptyList(text: empty)
-        }
-        ForEach(model.sections) { section in
-            if section.showsHeader {
-                SectionHeaderView(section: section, model: model)
-            }
-            ForEach(section.cards) { card in
-                CardView(card: card, model: model, avatars: avatars, now: now)
-            }
-            if let more = section.moreText {
-                MoreRow(text: more, section: section.key, model: model)
-            }
-        }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? .greatestFiniteMagnitude
+        let rows = rows(width, subviews)
+        let height = rows.map { $0.map(\.1.height).max() ?? 0 }.reduce(0, +) + lineSpacing * CGFloat(max(0, rows.count - 1))
+        let used = rows.map { row in row.map(\.1.width).reduce(0, +) + spacing * CGFloat(max(0, row.count - 1)) }.max() ?? 0
+        return CGSize(width: proposal.width ?? used, height: height)
     }
 
-    @ViewBuilder
-    var activity: some View {
-        let rows = model.activity
-        if let empty = model.activityEmptyText {
-            EmptyList(text: empty)
-        } else if !rows.isEmpty {
-            VStack(spacing: 0) {
-                ForEach(rows) { row in
-                    RowView(row: row, model: model, now: now, showsPR: true, card: nil)
-                }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in rows(bounds.width, subviews) {
+            var x = bounds.minX
+            let height = row.map(\.1.height).max() ?? 0
+            for (index, size) in row {
+                subviews[index].place(at: CGPoint(x: x, y: y + (height - size.height) / 2), proposal: ProposedViewSize(size))
+                x += size.width + spacing
             }
-            .background(Palette.surface.color)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.border.color, lineWidth: 1))
-            .padding(.horizontal, 12)
+            y += height + lineSpacing
         }
     }
 }
 
-/// A section header (Main.html `.sec`): the name, the red count of PRs
-/// waiting for your review, the PR count and the chevron. Pressing it folds
-/// the section.
-struct SectionHeaderView: View {
-    var section: SectionLayout
-    @ObservedObject var model: SurfaceListModel
+// MARK: - Grouping sheet
+
+/// The Grouping sheet (Main.html `.gsheet`): Group by and Then by, then the
+/// order of each chosen value's groups, changed by dragging a row. Shown
+/// inside the popover or the window; Done closes it.
+struct GroupingSheet: View {
+    @ObservedObject var model: AccountViewModel
+    var done: () -> Void
     @Environment(\.textScale) var k
 
     var body: some View {
-        let selected = model.selection == .section(section.key)
-        Button { model.perform(.toggleSection(section.key)) } label: {
-            HStack(spacing: 8) {
-                Text(section.title)
-                    .font(.system(size: 12 * k, weight: .semibold))
-                    .foregroundColor(section.collapsed ? Palette.secondary.color : Palette.text.color)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                if let count = section.reviewCount {
-                    Text("\(count)")
-                        .font(.system(size: 10 * k, weight: .bold))
-                        .foregroundColor(Palette.onColor.color)
-                        .padding(.horizontal, 6 * k)
-                        .frame(height: 15 * k)
-                        .background(Capsule().fill(Palette.badge.color))
-                }
-                Text(section.detail).font(.system(size: 11 * k)).foregroundColor(Palette.secondary.color)
-                IconView(icon: section.collapsed ? BoardIcons.sectionClosed : BoardIcons.sectionOpen, size: 12 * k, color: Palette.faded.color)
-                    .frame(width: 14 * k, height: 14 * k)
-            }
-            .padding(EdgeInsets(top: 10 * k, leading: 16, bottom: 6 * k, trailing: 14))
-            .background(RoundedRectangle(cornerRadius: 6).fill(selected ? Palette.selection.color : .clear).padding(.horizontal, 8))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .id(SelectionItem.section(section.key).id)
-    }
-}
-
-/// "+ 2 more PRs": pressing it shows the rest.
-struct MoreRow: View {
-    var text: String
-    var section: String
-    @ObservedObject var model: SurfaceListModel
-    @Environment(\.textScale) var k
-
-    var body: some View {
-        let selected = model.selection == .more(section)
-        Button { model.perform(.expand(section)) } label: {
-            Text(text)
-                .font(.system(size: 12 * k))
-                .foregroundColor(Palette.waiting.color)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(EdgeInsets(top: 2 * k, leading: 12, bottom: 2 * k, trailing: 12))
-                .background(RoundedRectangle(cornerRadius: 6).fill(selected ? Palette.selection.color : .clear))
+        let options = model.options
+        ZStack(alignment: .top) {
+            Color.black.opacity(0.12)
                 .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .padding(EdgeInsets(top: 0, leading: 12, bottom: 8, trailing: 12))
-        .id(SelectionItem.more(section).id)
-    }
-}
-
-struct EmptyList: View {
-    var text: String
-    @Environment(\.textScale) var k
-
-    var body: some View {
-        Text(text)
-            .font(.system(size: 12 * k))
-            .foregroundColor(Palette.faded.color)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 40 * k)
-    }
-}
-
-extension View {
-    /// Click selects, double-click opens, right-click selects and shows the
-    /// menu (DESIGN.md, "What a press does"). Buttons inside (the status
-    /// icons, the clock) keep their own click.
-    func pressable(_ item: SelectionItem, model: SurfaceListModel) -> some View {
-        self
-            .contentShape(Rectangle())
-            .onTapGesture { model.select(item) }
-            .simultaneousGesture(TapGesture(count: 2).onEnded { model.doubleClick(item) })
-            .overlay(RightClickArea(
-                menu: { model.rightClick(item) },
-                perform: { model.perform($0) }
-            ))
-    }
-}
-
-struct CardView: View {
-    var card: Card
-    @ObservedObject var model: SurfaceListModel
-    @ObservedObject var avatars: AvatarStore
-    var now: Int64
-    @Environment(\.textScale) var k
-
-    var stateBar: Color? {
-        switch card.stateLabel.value {
-        case .mergeable: return Palette.green.color
-        case .draft: return Palette.gray.color
-        case .merged: return Palette.purple.color
-        case .closed: return Palette.badge.color
-        default: return nil
-        }
-    }
-
-    var body: some View {
-        let item = SelectionItem.header(card: card.id)
-        let selected = model.selection == item
-        VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 3 * k) {
-                HStack(spacing: 7) {
-                    StateLabelView(label: card.stateLabel)
-                    Text(Warnings.prLabel(card.pr))
-                        .font(.system(size: 11 * k))
-                        .foregroundColor(Palette.secondary.color)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    if card.awaitingReview {
-                        ReviewRequestedMark()
-                    }
-                    Spacer(minLength: 0)
-                    if !card.isFinished {
-                        StatusIcons(card: card, model: model)
-                    }
-                }
-                HStack(spacing: 6) {
-                    Avatar(data: avatars.image(for: card.authorAvatarUrl))
-                        .onAppear { avatars.request(card.authorAvatarUrl) }
-                    Text(card.title)
-                        .font(.system(size: 12 * k, weight: .semibold))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Spacer(minLength: 0)
-                }
-                // Line 3; the times wrap to a fourth line rather than shorten.
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) {
-                        branches
-                        Spacer(minLength: 0)
-                        times
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        branches
-                        HStack(spacing: 0) {
-                            Spacer(minLength: 0)
-                            times
+                .onTapGesture {}
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Grouping").font(.system(size: 13 * k, weight: .semibold))
+                HStack(spacing: 8) {
+                    Text("Group by").font(.system(size: 11 * k, weight: .semibold)).foregroundColor(Palette.strongText.color)
+                    PullDown(title: options.groupBy.title, toolTip: "Group by", items: GroupBy.allCases.map { value in
+                        IconMenuItem(value.title, checked: value == options.groupBy) { model.setGroupBy(value) }
+                    })
+                    Text("Then by").font(.system(size: 11 * k, weight: .semibold)).foregroundColor(Palette.strongText.color)
+                    PullDown(
+                        title: options.thenByTitle, toolTip: "Then by", enabled: options.groupBy != .none,
+                        items: options.thenByChoices.map { value in
+                            IconMenuItem(value.title, checked: value == options.thenBy) { model.setThenBy(value) }
                         }
-                    }
+                    )
+                    Spacer(minLength: 0)
+                }
+                ForEach([options.groupBy, options.thenBy].filter { $0 != .none }, id: \.self) { by in
+                    Text("Order of " + by.title).font(.system(size: 11 * k, weight: .semibold)).foregroundColor(Palette.strongText.color)
+                    GroupOrderList(model: model, by: by)
+                }
+                HStack {
+                    Spacer()
+                    SettingsButton(title: "Done", action: done)
                 }
             }
-            .padding(EdgeInsets(top: 6 * k, leading: 12, bottom: 5 * k, trailing: 10))
-            .background(selected ? Palette.selection.color : .clear)
-            .pressable(item, model: model)
-            .id(item.id)
-            VStack(spacing: 0) {
-                ForEach(card.rows) { row in
-                    RowView(row: row, model: model, now: now, showsPR: false, card: card.id)
-                }
-            }
-        }
-        .background(Palette.surface.color)
-        .overlay(alignment: .leading) {
-            if let stateBar { Rectangle().fill(stateBar).frame(width: 4) }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.border.color, lineWidth: 1))
-        .padding(EdgeInsets(top: 0, leading: 12, bottom: 8, trailing: 12))
-    }
-
-    var branches: some View {
-        Text("\(card.base) \u{2190} \(card.head)")
-            .font(.system(size: 11 * k))
-            .foregroundColor(Palette.secondary.color)
-            .lineLimit(1)
-            .truncationMode(.tail)
-    }
-
-    var times: some View {
-        HStack(spacing: 4) {
-            Text(CardText.times(card, now: now))
-                .font(.system(size: 11 * k))
-                .foregroundColor(Palette.waiting.color)
-                .lineLimit(1)
-                .fixedSize()
-                .help(CardText.exactTimes(card))
-            // A snoozed card looks like any other; its clock unsnoozes
-            // (DESIGN.md, "Snooze").
-            Button { model.perform(card.snoozed ? .unsnooze(pr: card.pr) : .snooze(pr: card.pr)) } label: {
-                IconView(icon: BoardIcons.clock, size: 14 * k, color: Palette.snoozeIcon.color)
-                    .frame(width: 18 * k, height: 18 * k)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help(card.snoozed ? "Unsnooze" : "Snooze")
-            .accessibilityLabel(card.snoozed ? "Unsnooze" : "Snooze")
+            .padding(EdgeInsets(top: 14, leading: 16, bottom: 14, trailing: 16))
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Palette.settingsBackground.color)
+                    .shadow(color: .black.opacity(0.22), radius: 15, y: 12)
+            )
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.settingsTabBarBorder.color, lineWidth: 1))
+            .padding(EdgeInsets(top: 118, leading: 20, bottom: 20, trailing: 20))
         }
     }
 }
 
-/// `Review requested` (Main.html `.rq`): light orange with dark orange text,
-/// while the PR waits for your review.
-struct ReviewRequestedMark: View {
+/// One group order, its rows moved by dragging (List `onMove`).
+struct GroupOrderList: View {
+    @ObservedObject var model: AccountViewModel
+    var by: GroupBy
     @Environment(\.textScale) var k
 
     var body: some View {
-        Text(CardText.reviewRequestedMark)
-            .font(.system(size: 10 * k, weight: .bold))
-            .foregroundColor(Palette.orangeText.color)
-            .padding(.horizontal, 6 * k)
-            .frame(height: 16 * k)
-            .background(RoundedRectangle(cornerRadius: 4).fill(Palette.reviewMark.color))
-            .fixedSize()
-    }
-}
-
-struct StateLabelView: View {
-    var label: Lenient<StateLabel>
-    @Environment(\.textScale) var k
-
-    var body: some View {
-        let style: (String, Color, Color)? = {
-            switch label.value {
-            case .mergeable: return ("Mergeable", Palette.green.color, Palette.onColor.color)
-            case .draft: return ("Draft", Palette.tint.color, Palette.draftText.color)
-            case .merged: return ("Merged", Palette.purpleBackground.color, Palette.purpleText.color)
-            case .closed: return ("Closed", Palette.orangeIconBackground.color, Palette.orangeText.color)
-            case .open, nil: return nil
-            }
-        }()
-        if let (text, background, foreground) = style {
-            Text(text)
-                .font(.system(size: 10 * k, weight: .semibold))
-                .foregroundColor(foreground)
-                .padding(.horizontal, 6 * k)
-                .frame(height: 16 * k)
-                .background(RoundedRectangle(cornerRadius: 4).fill(background))
-                .fixedSize()
-        }
-    }
-}
-
-struct StatusIcons: View {
-    var card: Card
-    var model: SurfaceListModel
-    @Environment(\.textScale) var k
-
-    var body: some View {
-        HStack(spacing: 2) {
-            slot(review, "Review", card.links.review)
-            slot(checks, "Checks", card.links.checks)
-            slot(base, "Base", card.links.base)
-        }
-    }
-
-    var review: (StatusIcon.Look, String) {
-        switch card.review.value {
-        case .approved: return (.ok, "Approved")
-        case .reviewRequired: return (.waiting, "Review required")
-        case .changesRequested: return (.bad, "Changes requested")
-        case .some(.none), nil: return (.empty, "None")
-        }
-    }
-
-    var checks: (StatusIcon.Look, String) {
-        switch card.checks.value {
-        case .passed: return (.ok, "Passed")
-        case .inProgress: return (.waiting, "In progress")
-        case .failed: return (.bad, "Failed")
-        case .some(.none), nil: return (.empty, "None")
-        }
-    }
-
-    var base: (StatusIcon.Look, String) {
-        switch card.baseStatus.value {
-        case .upToDate: return (.ok, "Up to date")
-        case .behind: return (.waiting, "Behind")
-        case .conflicts: return (.bad, "Conflicts")
-        case .some(.none), nil: return (.empty, "None")
-        }
-    }
-
-    func slot(_ value: (StatusIcon.Look, String), _ axis: String, _ url: String) -> some View {
-        Button { model.perform(.open(url, read: nil)) } label: {
-            StatusIcon(look: value.0)
-                .scaleEffect(k)
-                .frame(width: 20 * k, height: 20 * k)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(HoverButtonStyle())
-        .help("\(axis): \(value.1)")
-        .accessibilityLabel("\(axis): \(value.1)")
-    }
-}
-
-struct Avatar: View {
-    var data: Data?
-    @Environment(\.textScale) var k
-
-    var body: some View {
-        Group {
-            if let data, let image = NSImage(data: data) {
-                Image(nsImage: image).resizable().interpolation(.high)
-            } else {
-                Circle().fill(Palette.avatarFill.color).overlay(Circle().stroke(Palette.avatarBorder.color, lineWidth: 1))
-            }
-        }
-        .frame(width: 16 * k, height: 16 * k)
-        .clipShape(Circle())
-    }
-}
-
-struct RowView: View {
-    var row: Row
-    @ObservedObject var model: SurfaceListModel
-    var now: Int64
-    var showsPR: Bool
-    var card: String?
-    @Environment(\.textScale) var k
-
-    var body: some View {
-        let p = RowPresentation(row, now: now)
-        let item = SelectionItem.row(id: row.id, card: card)
-        let selected = model.selection == item
-        let textColor = p.dimmed ? Palette.waiting.color : Palette.text.color
-        HStack(alignment: .top, spacing: 8) {
-            Circle()
-                .fill(p.unreadDot ? Palette.blueDot.color : .clear)
-                .frame(width: 7 * k, height: 7 * k)
-                .padding(.top, 6 * k)
-            IconView(icon: BoardIcons.row(row.kind), size: 14 * k, color: p.dimmed ? Palette.readIcon.color : Palette.botIcon.color)
-                .padding(.top, 2 * k)
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 6) {
-                    Text(p.label)
-                        .font(.system(size: 11 * k, weight: .semibold))
-                        .foregroundColor(p.dimmed ? Palette.waiting.color : Palette.strongText.color)
-                        .lineLimit(1)
-                    if let counts = p.counts {
-                        Text(counts).font(.system(size: 12 * k))
-                    }
-                    Text(p.meta)
-                        .font(.system(size: 11 * k))
-                        .foregroundColor(Palette.secondary.color)
-                        .lineLimit(1)
+        let groups = model.groups(by)
+        List {
+            ForEach(groups) { group in
+                HStack(spacing: 8) {
+                    Text("\u{2261}").foregroundColor(Palette.grip.color)
+                    Text(group.title).lineLimit(1)
                 }
-                if let body = p.body {
-                    Text(body)
-                        .font(.system(size: 12 * k))
-                        .foregroundColor(textColor)
-                        .lineLimit(p.bodyLines)
-                        .truncationMode(.tail)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if showsPR {
-                    Text("\(Warnings.prLabel(row.pr)) · \(row.prTitle)")
-                        .font(.system(size: 11 * k))
-                        .foregroundColor(Palette.secondary.color)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
+                .font(.system(size: 12 * k))
             }
-            Spacer(minLength: 0)
+            .onMove { source, destination in model.moveGroups(by, from: source, to: destination) }
         }
-        .padding(EdgeInsets(top: 5 * k, leading: 14, bottom: 6 * k, trailing: 10))
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(selected ? Palette.selection.color : Palette.surface.color)
-        .overlay(alignment: .top) { Rectangle().fill(Palette.rowDivider.color).frame(height: 1) }
-        .pressable(item, model: model)
-        .id(item.id)
+        .listStyle(.plain)
+        .frame(height: min(CGFloat(groups.count), 6) * 24 * k + 4)
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.groupBorder.color, lineWidth: 1))
     }
 }
 
-/// Catches the right click (and the Control click) over an item, and only
-/// that: other clicks pass through to the SwiftUI views below (NSView
-/// `hitTest(_:)`, which the window uses to find the view for a mouse-down).
-/// The item is selected (a row read) before the menu shows.
-struct RightClickArea: NSViewRepresentable {
-    var menu: () -> [MenuEntry?]
-    var perform: (PopoverAction) -> Void
-
-    func makeNSView(context: Context) -> CatcherView {
-        let view = CatcherView()
-        view.handler = self
-        return view
-    }
-
-    func updateNSView(_ view: CatcherView, context: Context) {
-        view.handler = self
-    }
-
-    final class CatcherView: NSView {
-        var handler: RightClickArea?
-
-        override func hitTest(_ point: NSPoint) -> NSView? {
-            guard let event = NSApp.currentEvent else { return nil }
-            let isMenuClick = event.type == .rightMouseDown
-                || (event.type == .leftMouseDown && event.modifierFlags.contains(.control))
-            return isMenuClick ? super.hitTest(point) : nil
-        }
-
-        override func rightMouseDown(with event: NSEvent) {
-            show(event)
-        }
-
-        override func mouseDown(with event: NSEvent) {
-            if event.modifierFlags.contains(.control) { show(event) } else { super.mouseDown(with: event) }
-        }
-
-        private func show(_ event: NSEvent) {
-            guard let handler else { return }
-            let entries = handler.menu()
-            guard !entries.isEmpty else { return }
-            let perform = handler.perform
-            let items: [IconMenuItem?] = entries.map { entry in
-                entry.map { entry in IconMenuItem(entry.title) { perform(entry.action) } }
-            }
-            NSMenu.popUpContextMenu(IconMenu.make(items), with: event, for: self)
-        }
-    }
-}
+// MARK: - No accounts
 
 /// The popover of the shiibar-gh icon while there is no account
-/// (DESIGN.md, "First run, failure and empty"), or the unreadable state.
+/// (MenuBarIcon.html), or the unreadable state.
 struct NoAccountsView: View {
+    static let height: CGFloat = 200
     @ObservedObject var app: AppModel
     var actions: SurfaceActions
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("shiibar-gh").font(.system(size: 14, weight: .semibold))
                 Spacer()
                 MenuIconButton(icon: BoardIcons.chevron, label: "More", items: actions.menuItems)
             }
@@ -901,12 +700,12 @@ struct NoAccountsView: View {
                 if let dialog = KeychainDialog.for(app.keychain) {
                     BannerView(lines: [BannerLine.keychain(dialog)]) { app.bannerButton($0, account: nil) }
                 }
-                CenteredMessage(title: EmptyState.noAccountsTitle, detail: EmptyState.noAccountsDetail, button: "Settings") {
-                    actions.openSettings(.accounts)
+                CenteredMessage(title: EmptyState.noAccountsTitle, detail: EmptyState.noAccountsDetail, button: "Add account…") {
+                    actions.openSettings(.addAccount)
                 }
             }
         }
-        .frame(width: 300, height: 200)
+        .frame(maxWidth: .infinity, minHeight: Self.height, maxHeight: Self.height)
         .background(Palette.background.color)
         .foregroundColor(Palette.text.color)
     }

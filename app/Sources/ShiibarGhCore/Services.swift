@@ -38,19 +38,30 @@ public protocol ImageLoading: AnyObject, Sendable {
     func load(_ url: URL) async throws -> Data
 }
 
-/// The UI state of DESIGN.md, "Saved state", per account: the chip, Group
-/// by and the sort order, the collapsed sections (per Group by and
-/// section), the Activity owner buttons, the window frame and Keep on top.
+/// The UI state of DESIGN.md, "Saved state", per account: the last tab of
+/// the popover and of the window, Group by, Then by and the sort order, the
+/// group orders, the collapsed sections and the expanded "+ N more PRs" (by
+/// section key), the repositories seen, the window frame and Keep on top.
 /// Keys carry the account id (the GitHub user id, numeric, as a string,
-/// which does not change with the login) and owner ids as they are. The
-/// search and "+ N more PRs" are not kept.
+/// which does not change with the login). The search, the selected text and
+/// whether the Dismissed list is open are not kept.
+///
+/// Every key starts with `v4.`: 0.4 reads none of the UI state of 0.3 and
+/// earlier (DESIGN.md, "Updating from 0.3 and 0.2"), whose keys had no
+/// prefix and stay unread.
 public final class UIStateStore {
     private let defaults: UserDefaults
-    static let filterKey = "popover.filter."
-    static let collapsedKey = "popover.collapsed."
-    static let activityOwnersKey = "popover.activityOwners."
-    static let windowFrameKey = "window.frame."
-    static let keepOnTopKey = "window.keepOnTop."
+    static let prefix = "v4."
+    static let optionsKey = prefix + "options."
+    static let groupOrdersKey = prefix + "groupOrders."
+    static let repositoriesKey = prefix + "repositories."
+    static let collapsedKey = prefix + "collapsed."
+    static let expandedKey = prefix + "expanded."
+    static let tabKey = prefix + "tab."
+    static let windowFrameKey = prefix + "window.frame."
+    static let keepOnTopKey = prefix + "window.keepOnTop."
+    /// Not UI state: whether the Launch at login default was applied once.
+    /// Kept from 0.3 so an update does not register the login item again.
     static let didApplyLaunchDefaultKey = "launchAtLogin.didApplyDefault"
 
     public init(defaults: UserDefaults) {
@@ -58,32 +69,63 @@ public final class UIStateStore {
     }
 
     public func options(account: String) -> ListOptions {
-        guard let data = defaults.data(forKey: Self.filterKey + account),
+        guard let data = defaults.data(forKey: Self.optionsKey + account),
               let options = try? JSONDecoder().decode(ListOptions.self, from: data)
         else { return ListOptions() }
         return options
     }
 
-    public func setOptions(_ filter: ListOptions, account: String) {
-        defaults.set(try? JSONEncoder().encode(filter), forKey: Self.filterKey + account)
+    public func setOptions(_ options: ListOptions, account: String) {
+        defaults.set(try? JSONEncoder().encode(options), forKey: Self.optionsKey + account)
     }
 
-    /// Section key to collapsed, for the sections the user toggled.
-    public func collapsed(account: String) -> [String: Bool] {
-        defaults.dictionary(forKey: Self.collapsedKey + account) as? [String: Bool] ?? [:]
+    public func groupOrders(account: String) -> GroupOrders {
+        guard let saved = defaults.dictionary(forKey: Self.groupOrdersKey + account) as? [String: [String]] else { return [:] }
+        var out: GroupOrders = [:]
+        for (key, order) in saved {
+            if let by = GroupBy(rawValue: key) { out[by] = order }
+        }
+        return out
     }
 
-    public func setCollapsed(_ collapsed: [String: Bool], account: String) {
-        defaults.set(collapsed, forKey: Self.collapsedKey + account)
+    public func setGroupOrders(_ orders: GroupOrders, account: String) {
+        var saved: [String: [String]] = [:]
+        for (by, order) in orders { saved[by.rawValue] = order }
+        defaults.set(saved, forKey: Self.groupOrdersKey + account)
     }
 
-    /// The owner ids whose Activity button is on.
-    public func activityOwners(account: String) -> Set<String> {
-        Set(defaults.stringArray(forKey: Self.activityOwnersKey + account) ?? [])
+    /// The repositories that have had cards, in the order they came.
+    public func repositories(account: String) -> [String] {
+        defaults.stringArray(forKey: Self.repositoriesKey + account) ?? []
     }
 
-    public func setActivityOwners(_ owners: Set<String>, account: String) {
-        defaults.set(owners.sorted(), forKey: Self.activityOwnersKey + account)
+    public func setRepositories(_ names: [String], account: String) {
+        defaults.set(names, forKey: Self.repositoriesKey + account)
+    }
+
+    public func collapsed(account: String) -> Set<String> {
+        Set(defaults.stringArray(forKey: Self.collapsedKey + account) ?? [])
+    }
+
+    public func setCollapsed(_ keys: Set<String>, account: String) {
+        defaults.set(keys.sorted(), forKey: Self.collapsedKey + account)
+    }
+
+    public func expanded(account: String) -> Set<String> {
+        Set(defaults.stringArray(forKey: Self.expandedKey + account) ?? [])
+    }
+
+    public func setExpanded(_ keys: Set<String>, account: String) {
+        defaults.set(keys.sorted(), forKey: Self.expandedKey + account)
+    }
+
+    /// The tab the popover or the window showed last; All at first.
+    public func lastTab(account: String, surface: Surface) -> ListTab {
+        defaults.string(forKey: Self.tabKey + surface.rawValue + "." + account).flatMap(ListTab.init(rawValue:)) ?? .all
+    }
+
+    public func setLastTab(_ tab: ListTab, account: String, surface: Surface) {
+        defaults.set(tab.rawValue, forKey: Self.tabKey + surface.rawValue + "." + account)
     }
 
     /// The window frame as `NSStringFromRect` writes it.

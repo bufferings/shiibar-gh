@@ -11,72 +11,80 @@ import Foundation
 public struct DaemonError: Error, Equatable, CustomStringConvertible {
     public var code: Lenient<ErrorCode>?
     public var message: String
+    /// The daemon did not answer: it is missing or the socket failed.
+    public var isUnreachable: Bool
 
-    public init(code: ErrorCode?, message: String) {
+    public init(code: ErrorCode?, message: String, isUnreachable: Bool = false) {
         self.code = code.map(Lenient.known)
         self.message = message
+        self.isUnreachable = isUnreachable
     }
 
     public var description: String { message }
 
     /// Not an answer from the daemon: it is missing or the socket failed.
     public static func unreachable(_ error: Error) -> DaemonError {
-        DaemonError(code: nil, message: "Cannot reach the daemon (\(error))")
+        DaemonError(code: nil, message: "Cannot reach the daemon (\(error))", isUnreachable: true)
     }
 }
 
-/// `list`: the PRs tab, or its Snoozed section. The app sends neither
-/// `filter` nor `search`: it filters by itself (DESIGN.md, "What the
-/// filters mean"); they stay for the CLI.
+/// `list`. The app asks for every card, dismissed ones included, without
+/// `tab`, `filter`, `owner` or `search`, and works the tabs out itself
+/// (DESIGN.md, "What the filters mean"); the rest stays for the CLI.
 public struct ListQuery: Equatable {
     public var account: String?
+    public var tab: PlacementTab?
     public var owner: String?
     public var filter: PrFilter?
     public var search: String?
-    public var snoozed: Bool
+    public var dismissed: DismissedFilter?
 
-    public init(account: String? = nil, owner: String? = nil, filter: PrFilter? = nil, search: String? = nil, snoozed: Bool = false) {
+    public init(
+        account: String? = nil, tab: PlacementTab? = nil, owner: String? = nil, filter: PrFilter? = nil,
+        search: String? = nil, dismissed: DismissedFilter? = nil
+    ) {
         self.account = account
+        self.tab = tab
         self.owner = owner
         self.filter = filter
         self.search = search
-        self.snoozed = snoozed
+        self.dismissed = dismissed
+    }
+
+    /// What the app sends: the account and `dismissed: include`.
+    public static func app(_ account: String) -> ListQuery {
+        ListQuery(account: account, dismissed: .include)
     }
 
     var fields: [String: Any] {
         var fields: [String: Any] = ["cmd": "list"]
-        if snoozed { fields["snoozed"] = true }
         if let account { fields["account"] = account }
+        if let tab { fields["tab"] = tab.rawValue }
         if let owner { fields["owner"] = owner }
         if let filter { fields["filter"] = filter.rawValue }
         if let search { fields["search"] = search }
+        if let dismissed { fields["dismissed"] = dismissed.rawValue }
         return fields
     }
 }
 
-/// `activity`: the Activity tab. `owners` are owner arguments (login or
-/// `public`); empty is every owner. The app sends only the account.
-public struct ActivityQuery: Equatable {
-    public var account: String?
-    public var owners: [String]
-    public var filter: PrFilter?
-    public var search: String?
+/// Where `place` puts a card in its section (DESIGN.md, "Wire format"):
+/// right before a card, at the top or the bottom, or the default (to
+/// Todo from Doing or Waiting: top; otherwise: bottom).
+public enum PlacePosition: Equatable {
+    case before(String)
+    case top
+    case bottom
+    case byDefault
+}
 
-    public init(account: String? = nil, owners: [String] = [], filter: PrFilter? = nil, search: String? = nil) {
-        self.account = account
-        self.owners = owners
-        self.filter = filter
-        self.search = search
-    }
-
-    var fields: [String: Any] {
-        var fields: [String: Any] = ["cmd": "activity"]
-        if let account { fields["account"] = account }
-        if !owners.isEmpty { fields["owners"] = owners }
-        if let filter { fields["filter"] = filter.rawValue }
-        if let search { fields["search"] = search }
-        return fields
-    }
+/// The target of `place`: a Review section (Done included), Mine, Mine's
+/// Done, or no placement.
+public enum PlaceTarget: Equatable {
+    case review(PlacementSection)
+    case mine
+    case mineDone
+    case none
 }
 
 /// `owner_lookup`'s answer.
@@ -91,16 +99,20 @@ public struct OwnerLookup: Equatable, Decodable {
 public protocol DaemonAPI: AnyObject, Sendable {
     func info() async throws -> InfoResponse
     func list(_ query: ListQuery) async throws -> [Card]
-    func activity(_ query: ActivityQuery) async throws -> [Row]
     /// Clears the unread mark of these rows; one unknown id refuses all.
     func read(_ rowIds: [String]) async throws
-    /// Every row of the account but the snoozed PRs' (the CLI's `read --all`;
-    /// the popover's ⇧R sends `read` instead).
+    /// Every row of the account but the dismissed PRs' (the CLI's `read
+    /// --all`; the popover's ⇧R sends `read` instead).
     func readAll(account: String) async throws
     func popoverOpened(_ account: String) async throws
     func popoverClosed(_ account: String) async throws
-    func snooze(account: String, pr: String) async throws
-    func unsnooze(account: String, pr: String) async throws
+    /// `pr` is `owner/repo#number`.
+    func place(account: String, pr: String, target: PlaceTarget, position: PlacePosition) async throws
+    func dismiss(account: String, pr: String) async throws
+    func restore(account: String, pr: String) async throws
+    func mute(account: String, kind: MuteKind, name: String) async throws -> Mutes
+    func unmute(account: String, kind: MuteKind, name: String) async throws -> Mutes
+    func mutes(account: String) async throws -> Mutes
     func refresh(_ account: String?) async throws -> [Warning]
     func configGet(_ key: String) async throws -> ConfigValue
     func configSet(_ key: String, _ value: ConfigValue) async throws -> ConfigValue
@@ -116,9 +128,6 @@ public protocol DaemonAPI: AnyObject, Sendable {
     func ownerEvents(account: String, owner: String) async throws -> [String: EventCell]
     func ownerEventsSet(account: String, owner: String, event: EventKind, column: EventColumn, on: Bool) async throws -> [String: EventCell]
     func ownerEventsCopy(account: String, from: String, to: String) async throws -> [String: EventCell]
-    func ownerExclusions(account: String, owner: String) async throws -> Exclusions
-    func ownerExclusionsSet(account: String, owner: String, kind: ExclusionKind, name: String, state: ExclusionState) async throws -> Exclusions
-    func ownerExclusionsRemove(account: String, owner: String, kind: ExclusionKind, name: String) async throws -> Exclusions
     func tokenSet(account: String, token: String) async throws
     /// Without `account` the token is checked as for a new account; without
     /// `token` the saved one is.
@@ -190,10 +199,6 @@ public final class SocketDaemonAPI: DaemonAPI, @unchecked Sendable {
         try decode(ListResponse.self, try await call(query.fields)).cards
     }
 
-    public func activity(_ query: ActivityQuery) async throws -> [Row] {
-        try decode(ActivityResponse.self, try await call(query.fields)).rows
-    }
-
     public func read(_ rowIds: [String]) async throws {
         try await ack(["cmd": "read", "row_ids": rowIds])
     }
@@ -210,12 +215,52 @@ public final class SocketDaemonAPI: DaemonAPI, @unchecked Sendable {
         try await ack(["cmd": "popover_closed", "account": account])
     }
 
-    public func snooze(account: String, pr: String) async throws {
-        try await ack(["cmd": "snooze", "account": account, "pr": pr])
+    /// The answer's `card` is not read: the next `list` brings it.
+    public func place(account: String, pr: String, target: PlaceTarget, position: PlacePosition) async throws {
+        try await ack(Self.placeFields(account: account, pr: pr, target: target, position: position))
     }
 
-    public func unsnooze(account: String, pr: String) async throws {
-        try await ack(["cmd": "unsnooze", "account": account, "pr": pr])
+    static func placeFields(account: String, pr: String, target: PlaceTarget, position: PlacePosition) -> [String: Any] {
+        var fields: [String: Any] = ["cmd": "place", "account": account, "pr": pr]
+        switch target {
+        case .review(let section):
+            fields["tab"] = "review"
+            fields["section"] = section.rawValue
+        case .mine:
+            fields["tab"] = "mine"
+        case .mineDone:
+            fields["tab"] = "mine"
+            fields["section"] = "done"
+        case .none:
+            fields["tab"] = "none"
+        }
+        switch position {
+        case .before(let other): fields["before"] = other
+        case .top: fields["at"] = "top"
+        case .bottom: fields["at"] = "bottom"
+        case .byDefault: break
+        }
+        return fields
+    }
+
+    public func dismiss(account: String, pr: String) async throws {
+        try await ack(["cmd": "dismiss", "account": account, "pr": pr])
+    }
+
+    public func restore(account: String, pr: String) async throws {
+        try await ack(["cmd": "restore", "account": account, "pr": pr])
+    }
+
+    public func mute(account: String, kind: MuteKind, name: String) async throws -> Mutes {
+        try decode(MutesResponse.self, try await call(["cmd": "mute", "account": account, "kind": kind.rawValue, "name": name])).mutes
+    }
+
+    public func unmute(account: String, kind: MuteKind, name: String) async throws -> Mutes {
+        try decode(MutesResponse.self, try await call(["cmd": "unmute", "account": account, "kind": kind.rawValue, "name": name])).mutes
+    }
+
+    public func mutes(account: String) async throws -> Mutes {
+        try decode(MutesResponse.self, try await call(["cmd": "mutes_get", "account": account])).mutes
     }
 
     public func refresh(_ account: String?) async throws -> [Warning] {
@@ -300,25 +345,6 @@ public final class SocketDaemonAPI: DaemonAPI, @unchecked Sendable {
         try decode(EventsResponse.self, try await call([
             "cmd": "owner_events_copy", "account": account, "from_owner": from, "to_owner": to,
         ])).events
-    }
-
-    public func ownerExclusions(account: String, owner: String) async throws -> Exclusions {
-        try decode(ExclusionsResponse.self, try await call(["cmd": "owner_exclusions_get", "account": account, "owner": owner])).exclusions
-    }
-
-    public func ownerExclusionsSet(
-        account: String, owner: String, kind: ExclusionKind, name: String, state: ExclusionState
-    ) async throws -> Exclusions {
-        try decode(ExclusionsResponse.self, try await call([
-            "cmd": "owner_exclusions_set", "account": account, "owner": owner,
-            "kind": kind.rawValue, "name": name, "state": state.rawValue,
-        ])).exclusions
-    }
-
-    public func ownerExclusionsRemove(account: String, owner: String, kind: ExclusionKind, name: String) async throws -> Exclusions {
-        try decode(ExclusionsResponse.self, try await call([
-            "cmd": "owner_exclusions_remove", "account": account, "owner": owner, "kind": kind.rawValue, "name": name,
-        ])).exclusions
     }
 
     public func tokenSet(account: String, token: String) async throws {

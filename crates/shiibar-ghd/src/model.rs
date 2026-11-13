@@ -11,6 +11,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const PUBLIC: &str = "public";
 
+/// DESIGN.md, "Constants": the discovery range D of the open PR searches.
+pub const DISCOVERY_DAYS: i64 = 14;
+/// DESIGN.md, "Rows in a card": the rows kept per PR.
+pub const KEEP_ROWS: usize = 20;
+/// DESIGN.md, "Constants": the defaults of n and m.
+pub const AUTO_DISMISS_DAYS_DEFAULT: i64 = 3;
+pub const DISMISSED_KEEP_DAYS_DEFAULT: i64 = 7;
+
 /// DESIGN.md, "Constants": `text_size` is a whole number of points.
 pub const TEXT_SIZE_DEFAULT: i64 = 12;
 pub const TEXT_SIZE_MIN: i64 = 9;
@@ -110,17 +118,20 @@ stored_enum!(EventKind {
     Mentioned = "mentioned",
     TeamMentioned = "team_mentioned",
     Comment = "comment",
+    CommentOther = "comment_other",
     Reply = "reply",
     ReplyMentioned = "reply_mentioned",
     Reaction = "reaction",
     Approved = "approved",
     ChangesRequested = "changes_requested",
     ChecksFailed = "checks_failed",
+    ChecksPassed = "checks_passed",
     Conflicts = "conflicts",
     Mergeable = "mergeable",
     MergeQueueAdded = "merge_queue_added",
     MergeQueueRemoved = "merge_queue_removed",
     MergedClosed = "merged_closed",
+    Reopened = "reopened",
 });
 both_ways!(EventKind {
     ReviewRequested,
@@ -128,37 +139,43 @@ both_ways!(EventKind {
     Mentioned,
     TeamMentioned,
     Comment,
+    CommentOther,
     Reply,
     ReplyMentioned,
     Reaction,
     Approved,
     ChangesRequested,
     ChecksFailed,
+    ChecksPassed,
     Conflicts,
     Mergeable,
     MergeQueueAdded,
     MergeQueueRemoved,
     MergedClosed,
+    Reopened,
 });
 
 impl EventKind {
-    pub const ALL: [EventKind; 16] = [
+    pub const ALL: [EventKind; 19] = [
         EventKind::ReviewRequested,
         EventKind::TeamReviewRequested,
         EventKind::Mentioned,
         EventKind::TeamMentioned,
         EventKind::Comment,
+        EventKind::CommentOther,
         EventKind::Reply,
         EventKind::ReplyMentioned,
         EventKind::Reaction,
         EventKind::Approved,
         EventKind::ChangesRequested,
         EventKind::ChecksFailed,
+        EventKind::ChecksPassed,
         EventKind::Conflicts,
         EventKind::Mergeable,
         EventKind::MergeQueueAdded,
         EventKind::MergeQueueRemoved,
         EventKind::MergedClosed,
+        EventKind::Reopened,
     ];
 
     /// The defaults of DESIGN.md, "Row kinds and states": List and Notify.
@@ -175,18 +192,21 @@ stored_enum!(RowKind {
     Mentioned = "mentioned",
     TeamMentioned = "team_mentioned",
     Comment = "comment",
+    CommentOther = "comment_other",
     Reply = "reply",
     ReplyMentioned = "reply_mentioned",
     Reaction = "reaction",
     Approved = "approved",
     ChangesRequested = "changes_requested",
     ChecksFailed = "checks_failed",
+    ChecksPassed = "checks_passed",
     Conflicts = "conflicts",
     Mergeable = "mergeable",
     MergeQueueAdded = "merge_queue_added",
     MergeQueueRemoved = "merge_queue_removed",
     Merged = "merged",
     Closed = "closed",
+    Reopened = "reopened",
 });
 both_ways!(RowKind {
     ReviewRequested,
@@ -194,18 +214,21 @@ both_ways!(RowKind {
     Mentioned,
     TeamMentioned,
     Comment,
+    CommentOther,
     Reply,
     ReplyMentioned,
     Reaction,
     Approved,
     ChangesRequested,
     ChecksFailed,
+    ChecksPassed,
     Conflicts,
     Mergeable,
     MergeQueueAdded,
     MergeQueueRemoved,
     Merged,
     Closed,
+    Reopened,
 });
 
 impl From<proto::IngestKind> for RowKind {
@@ -217,6 +240,7 @@ impl From<proto::IngestKind> for RowKind {
             I::Mentioned => Self::Mentioned,
             I::TeamMentioned => Self::TeamMentioned,
             I::Comment => Self::Comment,
+            I::CommentOther => Self::CommentOther,
             I::Reply => Self::Reply,
             I::ReplyMentioned => Self::ReplyMentioned,
             I::Approved => Self::Approved,
@@ -224,6 +248,7 @@ impl From<proto::IngestKind> for RowKind {
             I::MergeQueueRemoved => Self::MergeQueueRemoved,
             I::Merged => Self::Merged,
             I::Closed => Self::Closed,
+            I::Reopened => Self::Reopened,
         }
     }
 }
@@ -238,17 +263,20 @@ impl RowKind {
             Mentioned => EventKind::Mentioned,
             TeamMentioned => EventKind::TeamMentioned,
             Comment => EventKind::Comment,
+            CommentOther => EventKind::CommentOther,
             Reply => EventKind::Reply,
             ReplyMentioned => EventKind::ReplyMentioned,
             Reaction => EventKind::Reaction,
             Approved => EventKind::Approved,
             ChangesRequested => EventKind::ChangesRequested,
             ChecksFailed => EventKind::ChecksFailed,
+            ChecksPassed => EventKind::ChecksPassed,
             Conflicts => EventKind::Conflicts,
             Mergeable => EventKind::Mergeable,
             MergeQueueAdded => EventKind::MergeQueueAdded,
             MergeQueueRemoved => EventKind::MergeQueueRemoved,
             Merged | Closed => EventKind::MergedClosed,
+            Reopened => EventKind::Reopened,
         }
     }
 
@@ -256,16 +284,26 @@ impl RowKind {
         matches!(self, Self::ReviewRequested | Self::TeamReviewRequested)
     }
 
-    /// Rows the Users of the Exclusions apply to: not the state changes
-    /// and not reactions (DESIGN.md, "Exclusions").
+    /// Rows a muted user applies to by their actor: not the state changes
+    /// and not reactions (DESIGN.md, "Mute").
     pub fn has_actor(self) -> bool {
         !matches!(
             self,
             Self::Reaction
                 | Self::ChangesRequested
                 | Self::ChecksFailed
+                | Self::ChecksPassed
                 | Self::Conflicts
                 | Self::Mergeable
+        )
+    }
+
+    /// DESIGN.md, "Dismiss": the rows that bring a dismissed card back.
+    /// A review request to a team is not one.
+    pub fn is_return_trigger(self) -> bool {
+        matches!(
+            self,
+            Self::Mentioned | Self::Reply | Self::ReviewRequested | Self::Reopened
         )
     }
 
@@ -279,18 +317,21 @@ impl RowKind {
             Mentioned => "Mentioned",
             TeamMentioned => "My team mentioned",
             Comment => "Comment on my PR",
+            CommentOther => "Comment on other PRs",
             Reply => "Reply in a thread I commented in",
             ReplyMentioned => "Reply in a thread I was mentioned in",
             Reaction => "Reaction to my comment",
             Approved => "Approved",
             ChangesRequested => "Changes requested",
             ChecksFailed => "Checks failed",
+            ChecksPassed => "Checks passed",
             Conflicts => "Conflicts",
             Mergeable => "Mergeable",
             MergeQueueAdded => "Added to merge queue",
             MergeQueueRemoved => "Removed from merge queue",
             Merged => "Merged",
             Closed => "Closed",
+            Reopened => "Reopened",
         }
     }
 }
@@ -300,10 +341,6 @@ stored_enum!(NotifyState {
     None = "none",
     // Waiting for the app. Becomes a summary if the app was not there.
     Pending = "pending",
-    // Made on a snoozed PR, waiting for the release.
-    Held = "held",
-    // Undelivered before the PR was snoozed.
-    HeldUndelivered = "held_undelivered",
     Delivered = "delivered",
 });
 
@@ -346,11 +383,20 @@ impl AccountColor {
     ];
 }
 
-stored_enum!(ExclusionState {
-    Hidden = "hidden",
-    ListOnly = "list_only",
+stored_enum!(PlacedTab {
+    Review = "review",
+    Mine = "mine",
 });
-both_ways!(ExclusionState { Hidden, ListOnly });
+both_ways!(PlacedTab { Review, Mine });
+
+// The section a placed card is in. A card in Done (`PrRec::done_at`) keeps
+// this as the section it was in before it entered Done.
+stored_enum!(Section {
+    Doing = "doing",
+    Todo = "todo",
+    Waiting = "waiting",
+    Main = "main",
+});
 
 stored_enum!(Appearance {
     System = "system",
@@ -386,18 +432,23 @@ impl EventTable {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExclusionRec {
-    pub name: String,
-    pub state: ExclusionState,
-}
-
-/// A login compared for the Exclusions: without case, as GraphQL spells it.
-/// DESIGN.md, "Exclusions": a bot is compared by `Bot.login` (`renovate`,
-/// without `[bot]`). Every actor shiibar-gh records comes from GraphQL, so
-/// no REST `[bot]` suffix ever needs removing.
+/// A login compared for Mute: without case, as GraphQL spells it.
+/// DESIGN.md, "Mute": a bot is compared by `Bot.login` (`renovate`, without
+/// `[bot]`). Every actor shiibar-gh records comes from GraphQL, so no REST
+/// `[bot]` suffix ever needs removing.
 pub fn user_key(login: &str) -> String {
     login.to_lowercase()
+}
+
+/// The three Mute lists of an account, in the order they were added.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MuteRec {
+    /// `owner/repo`.
+    pub repos: Vec<String>,
+    /// Logins.
+    pub users: Vec<String>,
+    /// `owner/repo#number`.
+    pub prs: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -417,8 +468,6 @@ pub struct OwnerRec {
     /// The last time the search and status fetch of this owner succeeded.
     pub fetched_at: Option<i64>,
     pub events: EventTable,
-    pub repos: Vec<ExclusionRec>,
-    pub users: Vec<ExclusionRec>,
 }
 
 impl OwnerRec {
@@ -493,12 +542,37 @@ pub struct OwnComment {
     pub baseline_done: bool,
 }
 
+/// One request of a run that failed, kept so that the next run makes only
+/// the failed requests again (DESIGN.md, "Fetch success and failure"). The
+/// fetch layer decides what it needs to make a request again; the core only
+/// keeps the list.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct FailedRequest {
+    /// The log name: `Search`, `Status`, `Compare`, `Contexts`, `Events`,
+    /// `Reactions`, or `GET <path>` for REST.
+    pub name: String,
+    /// The owner id of an owner's request.
+    #[serde(default)]
+    pub owner: Option<String>,
+    /// The ids (PR or comment node ids) or search texts it carried.
+    #[serde(default)]
+    pub items: Vec<String>,
+    /// The start of the event window, for `Events`.
+    #[serde(default)]
+    pub since: Option<i64>,
+}
+
 /// A PR whose events must be fetched again from `since`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RetryRec {
     pub pr_id: String,
     pub since: i64,
     pub failures: u32,
+    /// The owner id of a PR the core does not know (a closed PR found by a
+    /// search, shown only through a return trigger): the run of that owner
+    /// fetches it again.
+    #[serde(default)]
+    pub owner: Option<String>,
 }
 
 /// What the fetcher keeps between runs for one account. PR, thread and
@@ -515,6 +589,14 @@ pub struct FetchRec {
     pub notif_since: Option<String>,
     pub poll_interval: Option<i64>,
     pub notif_checked_at: Option<i64>,
+    /// PRs (node ids) whose `Status`, `Compare` or `Contexts` request failed
+    /// even alone: `status_fetch_failed`, fetched again every run.
+    pub status_failures: BTreeSet<String>,
+    /// Requests the last run could not make; the next run makes only these
+    /// unless a full run is due.
+    pub failed_requests: Vec<FailedRequest>,
+    /// The start of the last full run (every request).
+    pub full_run_started_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -537,15 +619,28 @@ pub struct AccountRec {
     /// Every fetch of the account stops until this time.
     pub stopped_until: Option<i64>,
     pub fetch: FetchRec,
+    pub mutes: MuteRec,
 }
 
-/// The values a state change row compares against.
+/// The values a state change row compares against: what the last status
+/// fetch saw.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PrevValues {
     pub review: Review,
     pub checks: Checks,
     pub base_status: BaseStatus,
     pub mergeable: bool,
+}
+
+/// Where a card is placed. DESIGN.md, "Card states".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlaceRec {
+    pub tab: PlacedTab,
+    /// The section; in Done, the section before Done.
+    pub section: Section,
+    /// The order in the section, the smallest first. Kept while dismissed
+    /// and while in Done.
+    pub rank: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -563,6 +658,8 @@ pub struct PrRec {
     pub author_avatar_url: Option<String>,
     pub base: String,
     pub head: String,
+    /// GraphQL `headRefOid` of the last status fetch.
+    pub head_oid: Option<String>,
     pub state: PrState,
     pub is_draft: bool,
     pub review: Review,
@@ -572,12 +669,14 @@ pub struct PrRec {
     pub failed_check: Option<String>,
     pub changes_requested_by: Option<String>,
     pub updated_at: i64,
-    /// GraphQL `createdAt`; `None` until the first fetch after the move from
-    /// 0.2.
+    /// GraphQL `createdAt`.
     pub created_at: Option<i64>,
     /// The newest review the account submitted on the PR, from the last
     /// status fetch. DESIGN.md, "Awaiting review".
     pub my_review_at: Option<i64>,
+    /// The newest REVIEW_REQUESTED_EVENT to the account or one of its
+    /// teams, rows or not. DESIGN.md, "Awaiting review".
+    pub last_request_at: Option<i64>,
     pub is_private: bool,
     pub requested_me: bool,
     pub requested_team: bool,
@@ -586,11 +685,45 @@ pub struct PrRec {
     pub link_checks: String,
     pub link_base: String,
     pub unreadable: bool,
-    pub snoozed: bool,
+    /// When the card first showed (`Recently added`).
     pub added_at: Option<i64>,
+    /// `None` when there is nothing to compare against: the PR was just
+    /// found, its owner's watch started, or it came back from Dismiss.
     pub prev: Option<PrevValues>,
-    /// When the card was last seen to disappear. `None` while it shows.
-    pub gone_at: Option<i64>,
+    /// The last settled Checks result (`passed` or `failed`) and the head
+    /// commit it was seen on. DESIGN.md, "State change rows".
+    pub settled: Option<Checks>,
+    pub settled_head: Option<String>,
+    /// The watch of the PR's owner started and the PR was not fetched since:
+    /// the review requests still open become rows (DESIGN.md, "Events before
+    /// the watch started").
+    pub watch_reset: bool,
+    pub place: Option<PlaceRec>,
+    /// When the merge or close now in effect was detected; `None` while the
+    /// PR is open. The n days count from it.
+    pub closed_at: Option<i64>,
+    /// When the card entered Done: the detection of the merge or close, or
+    /// the user's move to Done. `None` while the card is not in Done (open,
+    /// or merged or closed and moved out of Done by the user, DESIGN.md,
+    /// "Review"). On an unplaced PR, the detection of its merge or close.
+    /// The order in Done, newest first.
+    pub done_at: Option<i64>,
+    /// A Mentioned or Reply in a thread I commented in row came after the
+    /// merge or close: no automatic Dismiss.
+    pub keep_after_close: bool,
+    pub dismissed_at: Option<i64>,
+    /// The user restored the card: no automatic Dismiss.
+    pub restored: bool,
+    /// While dismissed, a search or an event showed the PR closed.
+    pub seen_closed: bool,
+    /// The last time the card was dismissed until it came back: events of
+    /// that time make no rows after the return either (DESIGN.md,
+    /// "Dismiss").
+    pub quiet_from: Option<i64>,
+    pub quiet_until: Option<i64>,
+    /// The time of the newest MERGED_EVENT: a CLOSED_EVENT at or after it is
+    /// its pair and makes no row.
+    pub merged_event_at: Option<i64>,
     /// The account's comments and threads were collected since the PR last
     /// became watched.
     pub collected: bool,
@@ -622,8 +755,26 @@ pub struct RowRec {
     pub occurred_at: i64,
     pub comment_id: Option<String>,
     pub unread: bool,
-    pub pruned: bool,
+    /// The kind's List was on when the row was made. A row recorded while
+    /// it was off triggers nothing (DESIGN.md, "Applying the table").
+    pub listed: bool,
+    /// When the row was made.
+    pub made_at: i64,
     pub notify: NotifyState,
+}
+
+/// DESIGN.md, "Dismiss record": an open PR that left the Dismissed list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DismissRecord {
+    /// `<account>:<node id>`, the key the PR had.
+    pub key: String,
+    pub account: String,
+    pub pr_id: String,
+    /// The owner id the PR belonged to.
+    pub owner: String,
+    /// `updatedAt` when recorded, moved on when a search finds it again
+    /// without a return.
+    pub updated_at: i64,
 }
 
 /// The last counted reactions of one of the account's comments.
@@ -640,9 +791,10 @@ pub struct Config {
     pub launch_at_login: bool,
     pub status_interval_minutes: i64,
     pub reactions_interval_minutes: i64,
-    pub snooze_return_time: (u8, u8),
-    pub keep_watching_days: i64,
-    pub drop_after_days: i64,
+    /// n: days after a merge or close before the automatic Dismiss.
+    pub auto_dismiss_after_days: i64,
+    /// m: days a dismissed card stays in the Dismissed list.
+    pub dismissed_keep_days: i64,
     pub appearance: Appearance,
     /// The body text size of the popover and its window, in points.
     pub text_size: i64,
@@ -654,9 +806,8 @@ impl Default for Config {
             launch_at_login: true,
             status_interval_minutes: 1,
             reactions_interval_minutes: 3,
-            snooze_return_time: (9, 0),
-            keep_watching_days: 3,
-            drop_after_days: 14,
+            auto_dismiss_after_days: AUTO_DISMISS_DAYS_DEFAULT,
+            dismissed_keep_days: DISMISSED_KEEP_DAYS_DEFAULT,
             appearance: Appearance::System,
             text_size: TEXT_SIZE_DEFAULT,
         }
@@ -670,9 +821,12 @@ pub struct Data {
     pub owners: BTreeMap<String, OwnerRec>,
     pub prs: BTreeMap<String, PrRec>,
     pub rows: BTreeMap<String, RowRec>,
+    /// Ids of deleted rows, to the PR key: the same event never makes a row
+    /// again (DESIGN.md, "Rows in a card").
+    pub deleted_rows: BTreeMap<String, String>,
+    pub records: BTreeMap<String, DismissRecord>,
     pub baselines: BTreeMap<String, Baseline>,
     pub config: Config,
-    pub last_release_at: i64,
     /// The last number given to an account, owner (ids and order).
     pub seq: u64,
     /// After `reset`: the next Keychain read restores the accounts.
@@ -686,6 +840,8 @@ pub struct Dirty {
     pub owners: BTreeSet<String>,
     pub prs: BTreeSet<String>,
     pub rows: BTreeSet<String>,
+    pub deleted_rows: BTreeSet<String>,
+    pub records: BTreeSet<String>,
     pub baselines: BTreeSet<String>,
     pub config: bool,
     pub meta: bool,
@@ -697,6 +853,8 @@ impl Dirty {
             && self.owners.is_empty()
             && self.prs.is_empty()
             && self.rows.is_empty()
+            && self.deleted_rows.is_empty()
+            && self.records.is_empty()
             && self.baselines.is_empty()
             && !self.config
             && !self.meta

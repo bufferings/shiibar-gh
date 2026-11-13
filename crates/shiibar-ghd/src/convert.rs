@@ -206,6 +206,7 @@ pub fn pr_values(node: &Value, extra: &StatusExtra, ctx: Ctx<'_>) -> Option<Inge
         author_avatar_url: node["author"]["avatarUrl"].as_str().map(str::to_string),
         base: text(&node["baseRefName"]).to_string(),
         head: text(&node["headRefName"]).to_string(),
+        head_oid: node["headRefOid"].as_str().map(str::to_string),
         state,
         is_draft: node["isDraft"].as_bool().unwrap_or(false),
         review: review_value(&node["reviewDecision"], latest),
@@ -403,7 +404,8 @@ pub struct EventInput<'a> {
     /// `reviewThreads` nodes, each with `comments.nodes`.
     pub threads: &'a [Value],
     /// Every ADDED_TO_ and REMOVED_FROM_MERGE_QUEUE_EVENT of the PR, when
-    /// they were read regardless of `since`.
+    /// they were read regardless of `since`; empty when that read was
+    /// refused, which makes a removal row from the timeline item alone.
     pub merge_queue: Option<&'a [Value]>,
     pub since: i64,
     /// Comments of the viewer created after this start from zero.
@@ -560,7 +562,13 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
                     .filter(|t| after(t.mention_at))
                     .map(|_| IngestKind::ReplyMentioned)
             })
-            .or_else(|| mine.then_some(IngestKind::Comment));
+            .or_else(|| mine.then_some(IngestKind::Comment))
+            // DESIGN.md, "Comment and Reply sources": a conversation comment
+            // on someone else's PR; review bodies and review comments are
+            // not sources.
+            .or_else(|| {
+                (!mine && !post.review && post.thread.is_none()).then_some(IngestKind::CommentOther)
+            });
         if let Some(kind) = kind {
             out.events.push(IngestEvent {
                 id: post.id.to_string(),
@@ -593,6 +601,12 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
         });
     }
 
+    let merged_at = input
+        .timeline
+        .iter()
+        .filter(|item| item["__typename"] == "MergedEvent")
+        .map(|item| time(&item["createdAt"]))
+        .min();
     for item in input.timeline {
         let at = time(&item["createdAt"]);
         if at < input.since {
@@ -622,12 +636,21 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
                 actor,
                 None,
             )),
+            // DESIGN.md, "Merged, Closed and Reopened rows": the
+            // CLOSED_EVENT paired with a MERGED_EVENT (at or after it) makes
+            // no row; one before it does.
+            Some("ClosedEvent") if merged_at.is_some_and(|m| at >= m) => {}
             Some("ClosedEvent") => out.events.push(event(
                 IngestKind::Closed,
                 text(&item["url"]).to_string(),
                 actor,
                 None,
             )),
+            // `ReopenedEvent` has no URL: the row opens the PR page.
+            Some("ReopenedEvent") => {
+                out.events
+                    .push(event(IngestKind::Reopened, pr_url.clone(), actor, None))
+            }
             Some("AddedToMergeQueueEvent") => out.events.push(event(
                 IngestKind::MergeQueueAdded,
                 pr_url.clone(),
@@ -644,9 +667,17 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
                     continue;
                 };
                 let adder = enqueuer(queue, &id);
+                // The queue read carries `beforeCommit`; the timeline item
+                // may not.
+                let removal = queue
+                    .iter()
+                    .find(|q| q["id"] == id.as_str())
+                    .unwrap_or(item);
+                let url = removal_url(removal, &pr_url);
                 let reason = reason.map(|r| match r {
                     "failed_checks" => "Checks failed".to_string(),
                     "manual" => "Removed manually".to_string(),
+                    "merge_conflict" => "Merge conflict".to_string(),
                     other => other.to_string(),
                 });
                 let body = match (reason, adder) {
@@ -655,12 +686,8 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
                     (None, Some(a)) => Some(format!("added by {a}")),
                     (None, None) => None,
                 };
-                out.events.push(event(
-                    IngestKind::MergeQueueRemoved,
-                    pr_url.clone(),
-                    actor,
-                    body,
-                ));
+                out.events
+                    .push(event(IngestKind::MergeQueueRemoved, url, actor, body));
             }
             _ => {}
         }
@@ -668,9 +695,66 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
     out
 }
 
+/// DESIGN.md, "Row text and targets": where a removal from the merge queue
+/// opens. For `failed_checks`, from the checks of `beforeCommit` (the commit
+/// the queue made): the `detailsUrl` of a failed required CheckRun, else the
+/// `targetUrl` of a failed required StatusContext, else the URL of the first
+/// failed check, else the PR's Checks page. Every other reason opens the PR
+/// page (`beforeCommit` is null for `merge_conflict`).
+pub fn removal_url(removal: &Value, pr_url: &str) -> String {
+    if removal["reason"] != "failed_checks" {
+        return pr_url.to_string();
+    }
+    let contexts = nodes(&removal["beforeCommit"]["statusCheckRollup"]["contexts"]);
+    // A CheckRun failed once it completed (a conclusion) with anything but
+    // SUCCESS, NEUTRAL or SKIPPED; a StatusContext with FAILURE or ERROR.
+    let failed_run = |c: &&Value| {
+        c["__typename"] == "CheckRun"
+            && c["conclusion"]
+                .as_str()
+                .is_some_and(|s| !matches!(s, "SUCCESS" | "NEUTRAL" | "SKIPPED"))
+    };
+    let failed_status = |c: &&Value| {
+        c["__typename"] == "StatusContext"
+            && matches!(c["state"].as_str(), Some("FAILURE" | "ERROR"))
+    };
+    let required = |c: &&Value| c["isRequired"] == true;
+    let url_of = |c: &Value| {
+        let field = if c["__typename"] == "CheckRun" {
+            "detailsUrl"
+        } else {
+            "targetUrl"
+        };
+        c[field]
+            .as_str()
+            .filter(|u| !u.is_empty())
+            .map(str::to_string)
+    };
+    contexts
+        .iter()
+        .filter(failed_run)
+        .filter(required)
+        .find_map(url_of)
+        .or_else(|| {
+            contexts
+                .iter()
+                .filter(failed_status)
+                .filter(required)
+                .find_map(url_of)
+        })
+        .or_else(|| {
+            contexts
+                .iter()
+                .filter(|c| failed_run(c) || failed_status(c))
+                .find_map(url_of)
+        })
+        .unwrap_or_else(|| format!("{pr_url}/checks"))
+}
+
 /// The person who added the PR to the queue for one removal: each removal,
-/// in time order, takes the oldest addition not taken yet. `enqueuer` is not
-/// used (docs/tasks/M2.md, "Row text and targets").
+/// in time order, takes the oldest addition not taken yet. GitHub's
+/// `enqueuer` of a removal is not used: it names the one who removed the PR
+/// (DESIGN.md, "Row text and targets").
 pub fn enqueuer(queue: &[Value], removal_id: &str) -> Option<String> {
     let mut items: Vec<(i64, usize, &Value)> = queue
         .iter()
@@ -895,10 +979,17 @@ pub fn next_link(header: &str) -> Option<String> {
 
 // ------------------------------------------------------------------ search
 
-/// The four searches of an owner. DESIGN.md, "API usage". `qualifier` is
+/// The six searches of an owner. DESIGN.md, "API usage". `qualifier` is
 /// `org:x`, `user:x` or `is:public`; `since` is the `YYYY-MM-DD` of D;
-/// `team_requests` is the List of Review requested to my team.
-pub fn search_queries(qualifier: &str, since: &str, team_requests: bool) -> [String; 4] {
+/// `window` the start of the owner's event window as `2026-11-12T14:30:00Z`
+/// (the T of the closed PR searches); `team_requests` is the List of Review
+/// requested to my team.
+pub fn search_queries(
+    qualifier: &str,
+    since: &str,
+    window: &str,
+    team_requests: bool,
+) -> [String; 6] {
     let requested = if team_requests {
         "review-requested:@me"
     } else {
@@ -909,17 +1000,27 @@ pub fn search_queries(qualifier: &str, since: &str, team_requests: bool) -> [Str
         format!("is:pr is:open reviewed-by:@me updated:>={since} {qualifier}"),
         format!("is:pr is:open author:@me {qualifier}"),
         format!("is:pr is:open {requested} {qualifier}"),
+        format!("is:pr is:closed involves:@me updated:>={window} {qualifier}"),
+        format!("is:pr is:closed reviewed-by:@me updated:>={window} {qualifier}"),
     ]
 }
 
-/// PR ids from a search answer. Public leaves out registered owners.
-pub fn search_ids(connection: &Value, exclude_owners: &BTreeSet<String>) -> Vec<String> {
+/// The PRs of a search answer with their `updatedAt` and state. Public
+/// leaves out registered owners. `events_fetched` is left false.
+pub fn search_hits(connection: &Value, exclude_owners: &BTreeSet<String>) -> Vec<proto::SearchHit> {
     nodes(connection)
         .iter()
         .filter(|node| {
             let owner = text(&node["repository"]["owner"]["login"]).to_lowercase();
             !exclude_owners.contains(&owner)
         })
-        .filter_map(|node| node["id"].as_str().map(str::to_string))
+        .filter_map(|node| {
+            Some(proto::SearchHit {
+                id: node["id"].as_str()?.to_string(),
+                updated_at: time(&node["updatedAt"]),
+                open: node["state"] == "OPEN",
+                events_fetched: false,
+            })
+        })
         .collect()
 }
