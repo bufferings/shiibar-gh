@@ -220,6 +220,13 @@ body{margin:0;padding:24px;background:#e9e9ee}
 .t.x5{white-space:normal;line-height:16px;display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical}
 .band.drop{background:#DCE7F7;box-shadow:inset 0 0 0 1.5px #0A66D6}
 .dcount{position:absolute;right:-6px;top:-6px;min-width:16px;height:16px;padding:0 4px;box-sizing:border-box;border-radius:8px;background:#0A66D6;color:#FFFFFF;font-size:10px;font-weight:700;line-height:16px;text-align:center}
+/* 0.5 (M8) display mode switch */
+.dmode{margin-left:auto;align-self:center;display:flex;margin-bottom:3px}
+.dmode .dseg{width:26px;height:20px;box-sizing:border-box;border:1px solid #C9C9CE;background:#FFFFFF;color:#55555B;display:flex;align-items:center;justify-content:center;padding:0;margin-left:-1px;position:relative}
+.dmode .dseg:first-child{border-radius:6px 0 0 6px;margin-left:0}
+.dmode .dseg:last-child{border-radius:0 6px 6px 0}
+.dmode .dseg.on{background:#DCE7F7;border-color:#9DB9E4;color:#0A4FA6;z-index:1}
+.dmode + .dbtn{margin-left:4px}
 </style>
 </head>
 <body>
@@ -244,7 +251,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
             <div style="flex: 1">SSO authorization required for example-org</div>
             <button class="btn">Authorize…</button>
           </div>
-          <div class="ptabs"><button class="ptab">All<span class="uc">6</span></button><button class="ptab on">Review<span class="uc">4</span></button><button class="ptab">Mine<span class="uc">2</span></button><button class="smt" aria-pressed="false" title="Show muted"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8s-2.4 4.5-6.5 4.5S1.5 8 1.5 8z"></path><circle cx="8" cy="8" r="2"></circle></svg><span>Show muted</span></button><button class="dbtn" aria-label="Dismissed" title="Dismissed"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><rect x="1.8" y="2.8" width="12.4" height="3.2" rx="1"></rect><path d="M3 6v7h10V6M6.5 8.8h3"></path></svg><span>12</span></button></div>
+          <div class="ptabs"><button class="ptab">All<span class="uc">6</span></button><button class="ptab on">Review<span class="uc">4</span></button><button class="ptab">Mine<span class="uc">2</span></button><span class="dmode" role="radiogroup" aria-label="Display mode"><button class="dseg on" aria-pressed="true" aria-label="Detailed" title="Detailed"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="2"></rect><path d="M4.6 5h6.8M6.6 8.2h4.8M6.6 11h4.8"></path></svg></button><button class="dseg" aria-pressed="false" aria-label="Compact" title="Compact"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2.6" width="12" height="4.4" rx="1.6"></rect><rect x="2" y="9" width="12" height="4.4" rx="1.6"></rect></svg></button></span><button class="dbtn" aria-label="Dismissed" title="Dismissed"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><rect x="1.8" y="2.8" width="12.4" height="3.2" rx="1"></rect><path d="M3 6v7h10V6M6.5 8.8h3"></path></svg><span>12</span></button></div>
           <div style="padding: 10px 12px 14px; color: #6E6E76; font-size: 12px">(PRs in example-org are not fetched; acme-corp and Public still fetch. No triangle.)</div>
         </div>
         <div><div class="gh">Account</div><div class="group">
