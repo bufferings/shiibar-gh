@@ -171,8 +171,32 @@ private struct QuickHelp: ViewModifier {
     }
 }
 
+/// `.quickHelp(ifAny:)`: a tooltip only while there is a text (the
+/// summary of `Filter` while it is cut short).
+private struct OptionalQuickHelp: ViewModifier {
+    var text: String?
+    @State private var owner = QuickTip.Owner()
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { inside in
+                if inside, let text {
+                    QuickTip.schedule(text, owner: owner, appearance: NSApp.keyWindow?.effectiveAppearance)
+                } else {
+                    QuickTip.cancel(owner: owner)
+                }
+            }
+            .onChange(of: text) { _, value in if value == nil { QuickTip.cancel(owner: owner) } }
+            .onDisappear { QuickTip.cancel(owner: owner) }
+    }
+}
+
 extension View {
     public func quickHelp(_ text: String) -> some View {
         modifier(QuickHelp(text: text))
+    }
+
+    public func quickHelp(ifAny text: String?) -> some View {
+        modifier(OptionalQuickHelp(text: text))
     }
 }

@@ -553,7 +553,7 @@ final class PresentationTests: XCTestCase {
         XCTAssertEqual(SettingsText.enabledDetail, "Off hides this owner's PRs and stops fetching.")
         XCTAssertEqual(SettingsText.copyNote("example-org"), "Replaces example-org's table. The switches stay as they are.")
         XCTAssertEqual(SettingsText.addOwnerNote("example-org"), "The account's token reads pull requests in example-org's repositories.")
-        XCTAssertEqual(SettingsText.mutedReposDetail, "Hidden unless Show muted is on. Not applied to your own PRs.")
+        XCTAssertEqual(SettingsText.mutedReposDetail, "Hidden unless Filter shows muted pull requests. Not applied to your own PRs.")
         XCTAssertEqual(SettingsText.mutedUsersDetail, "Their PRs (not yours) and their events. Bots are users too.")
         XCTAssertEqual(SettingsText.mutedPullRequestsDetail, "Single pull requests you muted.")
         XCTAssertEqual(SettingsText.autoDismissDetail, "Merged and closed PRs move to Dismissed after this many days")

@@ -88,24 +88,34 @@ func sampleCards() -> [Card] {
 func layout(
     _ tab: ListTab, options: ListOptions = ListOptions(), cards: [Card] = sampleCards(), orders: GroupOrders = [:],
     repositories: [String]? = nil, collapsed: Set<String> = [], expanded: Set<String> = [], search: String = "",
-    account: Account = sampleAccount(), showMuted: Bool = true
+    account: Account = sampleAccount(), filter: ListFilter = mutedShown, kept: Set<String> = []
 ) -> [SectionLayout] {
     Listing.sections(
         tab: tab, cards: cards, account: account, options: options, orders: orders,
         repositories: repositories ?? Listing.knownRepositories([], cards: cards),
-        folding: Listing.Folding(collapsed: collapsed, expanded: expanded, search: search, showMuted: showMuted)
+        folding: Listing.Folding(collapsed: collapsed, expanded: expanded, search: search, visibility: Visibility(filter: filter, kept: kept))
     )
 }
 
-/// The tests that do not name Show muted see the muted cards (Show muted
-/// on), as the boards of the muted cards do.
+/// Filter › Muted: Show, the rest at the defaults.
+let mutedShown = ListFilter(muted: .show)
+/// The default Filter: the muted cards hidden.
+let mutedHidden = ListFilter()
+
+/// Visibility without kept cards.
+func shows(_ filter: ListFilter) -> Visibility {
+    Visibility(filter: filter, kept: [])
+}
+
+/// The tests that do not name a Filter see the muted cards (Muted: Show),
+/// as the boards of the muted cards do.
 func view(
     _ tab: ListTab?, cards: [Card] = sampleCards(), options: ListOptions = ListOptions(), expandedRows: Set<String> = [],
-    showMuted: Bool = true, search: String = ""
+    filter: ListFilter = mutedShown, search: String = ""
 ) -> ListView {
     guard let tab else { return ListView(tab: nil, dismissed: Listing.dismissed(cards), expandedRows: expandedRows, cards: cards) }
     return ListView(
-        tab: tab, sections: layout(tab, options: options, cards: cards, search: search, showMuted: showMuted), expandedRows: expandedRows,
+        tab: tab, sections: layout(tab, options: options, cards: cards, search: search, filter: filter), expandedRows: expandedRows,
         cards: cards
     )
 }

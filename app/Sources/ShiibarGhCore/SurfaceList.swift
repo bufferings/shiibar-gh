@@ -1,9 +1,10 @@
 // What one surface (the popover or the window) of an account shows: its
 // tab, whether the Dismissed list is open, its searches and its selection
 // (the selected item and the selected cards) (DESIGN.md, "Open in window": the popover and the window keep
-// these apart). The expanded rows of the cards and of the row bodies, and
-// Show muted, are the account's and shared. The data and the saved choices come
-// from the shared `AccountViewModel`.
+// these apart), and the cards `Unread only` keeps showing for a while
+// (`UnreadLinger`). The expanded rows of the cards and of the row bodies, the
+// Filters and whether `Filter` is open are the account's and shared. The
+// data and the saved choices come from the shared `AccountViewModel`.
 
 import Combine
 import Foundation
@@ -68,14 +69,14 @@ public final class SurfaceListModel: ObservableObject {
     @Published public private(set) var dismissedSearch = ""
     /// Whether the search field has the keyboard.
     @Published public var searchFocused = false
-    @Quiet public private(set) var selection: SelectionItem? = nil { didSet { refreshChrome() } }
+    @Quiet public private(set) var selection: SelectionItem? = nil { didSet { refreshChrome(); selectionMoved() } }
     /// Cards whose rows show past the newest three: the account's, kept
     /// (DESIGN.md, "Rows in a card"), mirrored here for the list.
     @Published public private(set) var expandedRows: Set<String>
     /// The selected cards of this surface (DESIGN.md, "Selection"): the
     /// card of the selected item, or several with ⌘-click, ⇧-click, ⇧↑↓ and
     /// ⌘A. Not kept.
-    @Quiet public private(set) var selectedCards = CardSelection() { didSet { refreshChrome() } }
+    @Quiet public private(set) var selectedCards = CardSelection() { didSet { refreshChrome(); selectionMoved() } }
     /// The Grouping sheet shows.
     @Published public var showsGrouping = false
     /// The card being dragged, while a drag is on.
@@ -85,12 +86,27 @@ public final class SurfaceListModel: ObservableObject {
     @Quiet public private(set) var draggingCount = 1
     /// Where the dragged card would land, for the insertion line.
     @Quiet public private(set) var dropTarget: DropTarget? = nil
+    /// The cards `Unread only` keeps showing after they were read
+    /// (DESIGN.md, "Filter"): shown, counted and selectable like the others.
+    @Published public private(set) var lingering: Set<String> = []
+    /// The kept cards in their last 0.3 seconds: drawn faded.
+    @Quiet public private(set) var fading: Set<String> = []
+    /// Sent with the kept cards whose time is up, right before they hide:
+    /// the list keeps the selected item (or the first in view) where it is
+    /// on the screen.
+    public let lingerHides = PassthroughSubject<Set<String>, Never>()
+    private var linger: UnreadLinger
+    private var lingerDeadline: Double?
+    private var lingerGeneration = 0
+    /// A right-click menu shows: no kept card hides until it closes.
+    public private(set) var menuShowing = false
     private var forward: AnyCancellable?
     private var clicks = ClickClassifier()
 
     init(data: AccountViewModel, surface: Surface) {
         self.data = data
         self.surface = surface
+        linger = UnreadLinger(duration: data.app.linger.duration)
         tab = data.app.store.lastTab(account: data.accountId, surface: surface)
         expandedRows = data.expandedRows
         forward = data.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
@@ -129,16 +145,173 @@ public final class SurfaceListModel: ObservableObject {
         showingDismissed ? dismissedSearch : searches[tab] ?? ""
     }
 
-    /// Show muted: the account's.
-    public var showMuted: Bool { data.showMuted }
+    // MARK: Filter
 
-    /// The blue dot of the Show muted toggle.
-    public var showMutedDot: Bool {
-        Listing.showMutedDot(data.cards, showMuted: data.showMuted)
+    /// The Filter of the tab shown (the account's).
+    public var filter: ListFilter { data.filter(tab) }
+
+    /// What the tab shows: its Filter and the cards kept by `Unread only`.
+    public var visibility: Visibility {
+        Visibility(filter: filter, kept: lingering)
     }
 
-    public func toggleShowMuted() {
-        data.setShowMuted(!data.showMuted)
+    /// The blue dot of `Filter`: a card of the tab shown that the Filter
+    /// hides has a blue unread row (DESIGN.md, "Filter").
+    public var filterDot: Bool {
+        Listing.filterDot(data.cards, tab: tab, filter: filter)
+    }
+
+    /// `Filter` open (the account's: every tab, the popover and the
+    /// window).
+    public var filterOpen: Bool { data.filterOpen }
+
+    /// The operation row shows `Filter` (not in the Dismissed list, which
+    /// shows the search field only).
+    public var showsFilter: Bool { !showingDismissed }
+
+    /// The options show: `Filter` open and not the Dismissed list (whose
+    /// opening leaves the open state as it is).
+    public var showsFilterOptions: Bool { data.filterOpen && !showingDismissed }
+
+    /// A press on the word, the chevron, the dot or the summary.
+    public func toggleFilterOpen() {
+        data.setFilterOpen(!data.filterOpen)
+    }
+
+    public func setMuteChoice(_ choice: MuteChoice) {
+        var next = filter
+        next.muted = choice
+        data.setFilter(next, tab: tab)
+    }
+
+    /// A status checkbox pressed: the last one on stays on.
+    public func toggleStatus(_ status: PRStatus) {
+        var next = filter
+        next.setStatus(status, !next.shows(status))
+        data.setFilter(next, tab: tab)
+    }
+
+    public func setUnreadOnly(_ on: Bool) {
+        var next = filter
+        next.unreadOnly = on
+        data.setFilter(next, tab: tab)
+    }
+
+    /// A tab's Filter changed (here or on the other surface): on that tab
+    /// the cards `Unread only` kept hide at once, the cards it hides now
+    /// leave the selection.
+    func filterChanged(_ changed: ListTab) {
+        guard changed == tab, !showingDismissed else { return }
+        resetLinger()
+        keepSelection()
+    }
+
+    // MARK: Unread only
+
+    /// The selection moved: a kept card held by it starts counting once
+    /// it is let go.
+    private func selectionMoved() {
+        updateLinger()
+    }
+
+    /// The cards changed (AccountViewModel), or the selection did: a card
+    /// shown that lost its last blue unread row is kept. Worked out before
+    /// the selection follows the change, so a selected card that was read
+    /// stays selected.
+    func updateLinger() {
+        guard !showingDismissed else { return }
+        // A popover or window not shown keeps nothing: a card read while it
+        // is closed does not show when it opens (DESIGN.md, "Filter").
+        guard isShown else {
+            if !linger.ids.isEmpty || !lingering.isEmpty || !fading.isEmpty { dropLinger() }
+            linger.reset()
+            return
+        }
+        let filter = self.filter
+        guard filter.unreadOnly || !lingering.isEmpty || !fading.isEmpty else { return }
+        var selected = selectedCards.cards
+        if let card = selection?.owningCard { selected.insert(card) }
+        let now = app.linger.now()
+        linger.update(cards: Listing.cards(data.cards, tab: tab), filter: filter, selected: selected, now: now)
+        publishLinger(now: now)
+    }
+
+    /// Whether this surface is shown: the popover while it is open, the
+    /// window while it is open (with the focus or not).
+    public var isShown: Bool {
+        app.isDisplayed(surface, account: data.accountId)
+    }
+
+    /// Nothing kept, no timer, nothing faded.
+    private func dropLinger() {
+        linger.reset()
+        lingerGeneration += 1
+        lingerDeadline = nil
+        if !fading.isEmpty { fading = [] }
+        if !lingering.isEmpty { lingering = [] }
+    }
+
+    /// The surface is shown again (the popover opened, the window opened):
+    /// the cards without a blue unread row now do not show, selected or
+    /// not (DESIGN.md, "Filter").
+    func shown() {
+        resetLinger()
+        keepSelection()
+    }
+
+    /// Nothing kept: a tab opened, the Filter changed, the Dismissed list,
+    /// the surface closed. The cards shown now are the ones kept next.
+    private func resetLinger() {
+        dropLinger()
+        updateLinger()
+    }
+
+    private var lingerBlocked: Bool { dragging != nil || menuShowing }
+
+    private func publishLinger(now: Double) {
+        let ids = linger.ids
+        if ids != lingering { lingering = ids }
+        let faded = linger.fading(now: now)
+        if faded != fading { fading = faded }
+        guard var next = linger.nextDeadline(now: now) else {
+            lingerDeadline = nil
+            lingerGeneration += 1
+            return
+        }
+        // Time is up but a drag or a menu holds the cards: the end of it
+        // hides them (`lingerTick`).
+        if lingerBlocked, next <= now { return }
+        next = max(next, now)
+        if lingerDeadline == next { return }
+        lingerDeadline = next
+        lingerGeneration += 1
+        let generation = lingerGeneration
+        app.linger.schedule(next - now) { [weak self] in
+            guard let self, self.lingerGeneration == generation else { return }
+            self.lingerDeadline = nil
+            self.lingerTick()
+        }
+    }
+
+    /// The time of a kept card came: it fades, or it hides (not during a
+    /// drag or a menu).
+    public func lingerTick() {
+        guard !showingDismissed else { return }
+        let now = app.linger.now()
+        let gone = linger.expire(now: now, blocked: lingerBlocked)
+        if !gone.isEmpty { lingerHides.send(gone) }
+        publishLinger(now: now)
+        if !gone.isEmpty { keepSelection() }
+    }
+
+    /// The right-click menu shows, then closes.
+    public func menuOpened() {
+        menuShowing = true
+    }
+
+    public func menuClosed() {
+        menuShowing = false
+        if !lingering.isEmpty { lingerTick() }
     }
 
     /// Row bodies expanded with `more` (the account's).
@@ -149,6 +322,7 @@ public final class SurfaceListModel: ObservableObject {
         var tab: ListTab
         var dismissed: Bool
         var search: String
+        var kept: Set<String>
     }
 
     /// The last few: switching tabs back and forth finds them.
@@ -156,7 +330,7 @@ public final class SurfaceListModel: ObservableObject {
 
     /// Worked out once per change of the data, the tab or the search.
     public var sections: [SectionLayout] {
-        let key = SectionsKey(revision: data.revision, tab: tab, dismissed: showingDismissed, search: search)
+        let key = SectionsKey(revision: data.revision, tab: tab, dismissed: showingDismissed, search: search, kept: lingering)
         if let (_, sections) = cachedSections.first(where: { $0.0 == key }) { return sections }
         let sections: [SectionLayout]
         if let account = data.account, !showingDismissed {
@@ -164,7 +338,7 @@ public final class SurfaceListModel: ObservableObject {
                 tab: tab, cards: data.cards, account: account, options: data.options, orders: data.groupOrders,
                 repositories: data.repositories,
                 folding: Listing.Folding(
-                    collapsed: data.collapsed, expanded: data.expanded, search: search, showMuted: data.showMuted
+                    collapsed: data.collapsed, expanded: data.expanded, search: search, visibility: visibility
                 )
             )
         } else {
@@ -198,9 +372,9 @@ public final class SurfaceListModel: ObservableObject {
 
     /// The text in place of an empty list.
     public var emptyText: String? {
-        Listing.emptyText(
-            loaded: data.loaded, tab: showingDismissed ? nil : tab, cards: data.cards, search: search, showMuted: data.showMuted
-        )
+        showingDismissed
+            ? Listing.dismissedEmptyText(loaded: data.loaded, cards: data.cards, search: search)
+            : Listing.emptyText(loaded: data.loaded, tab: tab, cards: data.cards, search: search, visibility: visibility)
     }
 
     public var items: [SelectionItem] {
@@ -215,7 +389,7 @@ public final class SurfaceListModel: ObservableObject {
 
     /// The rows ⇧R and Mark all as read send.
     public var rowsToRead: [String] {
-        showingDismissed ? [] : Listing.rowsToRead(tab: tab, cards: data.cards, search: search, showMuted: data.showMuted)
+        showingDismissed ? [] : Listing.rowsToRead(tab: tab, cards: data.cards, search: search, visibility: visibility)
     }
 
     /// The cards laid out now, in order (the ⇧-click range, ⌘A).
@@ -234,9 +408,9 @@ public final class SurfaceListModel: ObservableObject {
     public var multiple: Bool { selectedCards.isMultiple }
 
     /// The cards of the tab before the search, folding and collapsing:
-    /// without the muted ones while Show muted is off.
+    /// those the Filter shows.
     private var tabShown: [Card] {
-        Listing.shown(data.cards, tab: tab, showMuted: data.showMuted)
+        Listing.shown(data.cards, tab: tab, visibility: visibility)
     }
 
     func keepSelection() {
@@ -246,7 +420,7 @@ public final class SurfaceListModel: ObservableObject {
     }
 
     /// Selected cards that are no longer shown leave the selection
-    /// (dismissed, moved out, folded, muted while Show muted is off…), the
+    /// (dismissed, moved out, folded, hidden by the Filter…), the
     /// anchor with its card (DESIGN.md, "Selection"). The selected item's
     /// card stays selected.
     private func updateSelectedCards() {
@@ -279,11 +453,13 @@ public final class SurfaceListModel: ObservableObject {
         tab = next
         app.store.setLastTab(next, account: data.accountId, surface: surface)
         clearSelectedCards()
+        resetLinger()
         keepSelection()
     }
 
     public func openDismissedList() {
         guard !showingDismissed else { return }
+        resetLinger()
         showingDismissed = true
         searchFocused = false
         clearSelectedCards()
@@ -298,6 +474,7 @@ public final class SurfaceListModel: ObservableObject {
         searchFocused = false
         clearSelectedCards()
         selection = nil
+        resetLinger()
     }
 
     // MARK: Selection, keys and clicks
@@ -646,9 +823,11 @@ public final class SurfaceListModel: ObservableObject {
         }
         openTab(card.tab)
         searches[tab] = nil
-        // A muted card shows only with Show muted (DESIGN.md, "macOS
-        // notifications").
-        if card.isMuted && !card.isDismissed { data.setShowMuted(true) }
+        // The tab's Filter hides the card: only what hides it changes
+        // (DESIGN.md, "Filter", "Opening a tab to select a card").
+        if !card.isDismissed, !visibility.shows(card) {
+            data.setFilter(filter.revealing(card), tab: tab)
+        }
         guard !card.isDismissed else {
             keepSelection()
             return
@@ -732,6 +911,7 @@ public final class SurfaceListModel: ObservableObject {
             dragging = nil
             draggingCount = 1
             dropTarget = nil
+            if !lingering.isEmpty { lingerTick() }
         }
         guard let id = dragging, let card = data.cards.first(where: { $0.id == id }), let zone,
               let target = CardDrop.target(zone, sections: sections) else { return false }
@@ -768,6 +948,7 @@ public final class SurfaceListModel: ObservableObject {
         dragging = nil
         draggingCount = 1
         dropTarget = nil
+        if !lingering.isEmpty { lingerTick() }
     }
 
     // MARK: Open and closed
@@ -792,6 +973,7 @@ public final class SurfaceListModel: ObservableObject {
             showingDismissed = false
             clearSearches()
             clearSelectedCards()
+            resetLinger()
         }
         keepSelection()
     }
@@ -803,5 +985,6 @@ public final class SurfaceListModel: ObservableObject {
         showingDismissed = false
         clearSearches()
         clearSelectedCards()
+        resetLinger()
     }
 }

@@ -305,7 +305,7 @@ final class PerfRunner: NSObject {
         /// scroll): start, and the end. nil: not in this version.
         var autoScroll: ((SurfaceListModel, NSScrollView) -> Void)?
         var stopAutoScroll: ((SurfaceListModel) -> Void)?
-        /// Before measuring: the version's view switches (0.5: Show muted).
+        /// Before measuring: the version's view switches.
         var prepare: ((AccountViewModel) -> Void)?
         /// Whether a card's heading is in view (a click selects only what
         /// is in view). nil: the version cannot tell; the first cards are
@@ -402,7 +402,8 @@ final class PerfRunner: NSObject {
             for tab in ListTab.allCases {
                 for section in Listing.sections(
                     tab: tab, cards: cards, account: account, options: ListOptions(), orders: [:],
-                    repositories: Listing.knownRepositories([], cards: cards), folding: .init()
+                    repositories: Listing.knownRepositories([], cards: cards),
+                    folding: .init(visibility: Visibility(filter: ListFilter(muted: .show), kept: []))
                 ) {
                     keys.insert(section.key)
                 }
@@ -411,10 +412,12 @@ final class PerfRunner: NSObject {
         }
         let data = app.viewModel(account.id)
         steps.prepare?(data)
-        // `SHIIBAR_GH_PERF_MUTED=off` measures with Show muted off; on (the
-        // condition of docs/tasks/M7.md) otherwise.
+        // `SHIIBAR_GH_PERF_MUTED=off` measures with the Filter's Muted at
+        // Hide; Show (the condition of DESIGN.md, "Speed of operation": the
+        // rest at the defaults, `Filter` closed) otherwise.
         let muted = ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_MUTED"] != "off"
-        data.setShowMuted(muted)
+        for tab in ListTab.allCases { data.setFilter(ListFilter(muted: muted ? .show : .hide), tab: tab) }
+        data.setFilterOpen(false)
         // `SHIIBAR_GH_PERF_SURFACE=popover` measures the popover instead of
         // the window.
         let popover = ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_SURFACE"] == "popover"
@@ -440,7 +443,7 @@ final class PerfRunner: NSObject {
             window.alphaValue = 0
             window.ignoresMouseEvents = true
         }
-        notes.append("surface: \(popover ? "popover" : "window"), Show muted \(muted ? "on" : "off")")
+        notes.append("surface: \(popover ? "popover" : "window"), Filter Muted \(muted ? "Show" : "Hide")")
         measuredWindow = window
         await pause(1.5)
         log("window open; \(steps.describe?(list) ?? "")")
@@ -538,6 +541,7 @@ final class PerfRunner: NSObject {
             await operations(tab: tab, list: list, data: data, scroll: scroll)
         }
         await tabSwitches(list)
+        await filterOperations(list: list, window: window)
         await compactOperations(list: list, window: window)
         finish()
     }
@@ -1141,6 +1145,7 @@ final class PerfRunner: NSObject {
             }
         }
         if list.compact { list.toggleCompact() }
+        await filterScenarios(list: list, window: window, run: run)
         // All, grouped by repository: what changes which card a line shows,
         // its size or its look.
         let data = list.data
@@ -1162,8 +1167,8 @@ final class PerfRunner: NSObject {
         await run("All Compact: Group by Repository") { data.setGroupBy(.repository) }
         await run("All Compact: sort by added") { data.setSort(.recentlyAdded) }
         await run("All Compact: sort by updated") { data.setSort(.recentlyUpdated) }
-        await run("All Compact: Show muted off") { data.setShowMuted(false) }
-        await run("All Compact: Show muted on") { data.setShowMuted(true) }
+        await run("All Compact: Filter Muted Hide") { list.setMuteChoice(.hide) }
+        await run("All Compact: Filter Muted Show") { list.setMuteChoice(.show) }
         await run("All Compact: search") { list.setSearch("repo-01") }
         await run("All Compact: search cleared") { list.setSearch("") }
         await run("All Compact: the list read again") { data.reload() }
@@ -1188,6 +1193,151 @@ final class PerfRunner: NSObject {
         }
         log("consistency: \(consistencyChecks - consistencyFailures) of \(consistencyChecks) ok")
         notes.append("consistency: \(consistencyChecks - consistencyFailures) of \(consistencyChecks) ok")
+    }
+
+    /// The Filter (DESIGN.md, "Filter"): its settings changed in Review and
+    /// All, its options opened and closed (the line at the top of the list
+    /// stays), and a card read under `Unread only` that hides after its
+    /// wait (the selected item stays where it is on the screen).
+    private func filterScenarios(list: SurfaceListModel, window: NSWindow, run: (String, () -> Void) async -> Void) async {
+        let controller = { [weak self] in self?.tableController(window) }
+        let scroll = listScrollView(in: window)
+        func expectSame(_ label: String, _ before: (String, CGFloat)?, _ after: (String, CGFloat)?) {
+            guard let before else { return }
+            if let after, after.0 == before.0, abs(after.1 - before.1) < 0.5 {
+                log("consistency \(label): the line at the top stays (\(before.0))")
+            } else {
+                consistencyFailures += 1
+                consistencyChecks += 1
+                log("consistency \(label): FAIL the top line was \(before.0) at \(before.1), now \(String(describing: after))")
+                notes.append("\(label): FAIL the line at the top moved")
+            }
+        }
+        for tab in [ListTab.review, .all] {
+            list.openTab(tab)
+            if let scroll { scrollTo(scroll, y: 0) }
+            await pause(0.6)
+            let name = tab.title
+            await run("\(name) Filter: Status Merged off") { list.toggleStatus(.merged) }
+            await run("\(name) Filter: Status Closed off") { list.toggleStatus(.closed) }
+            await run("\(name) Filter: Status Merged and Closed on") {
+                list.toggleStatus(.merged)
+                list.toggleStatus(.closed)
+            }
+            await run("\(name) Filter: Muted Only") { list.setMuteChoice(.only) }
+            await run("\(name) Filter: Muted Hide") { list.setMuteChoice(.hide) }
+            await run("\(name) Filter: Muted Show") { list.setMuteChoice(.show) }
+            if let scroll { scrollTo(scroll, y: 900) }
+            await pause(0.6)
+            for step in ["open", "close"] {
+                let before = controller()?.topLineForMeasurement()
+                await run("\(name) Filter: \(step), scrolled") { list.toggleFilterOpen() }
+                expectSame("\(name) Filter \(step)", before, controller()?.topLineForMeasurement())
+            }
+            list.toggleFilterOpen()
+            await pause(0.6)
+            if tab == .all { await checkShortSurface(list: list, window: window) }
+            await run("\(name) Filter open: Status Draft off") { list.toggleStatus(.draft) }
+            await run("\(name) Filter open: Status Draft on") { list.toggleStatus(.draft) }
+            list.toggleFilterOpen()
+            await pause(0.6)
+        }
+        // Unread only in Review: a card read and left hides after its wait.
+        // Scrolled, so the list can keep the selected card where it is (at
+        // the very top the list cannot scroll up past its start).
+        list.openTab(.review)
+        if let scroll { scrollTo(scroll, y: 0) }
+        await pause(0.6)
+        await run("Review Filter: Unread only on") { list.setUnreadOnly(true) }
+        if let scroll { scrollTo(scroll, y: 600) }
+        await pause(0.6)
+        let shown = shownCards(list).map(\.0).filter { card in
+            controller()?.offsetForMeasurement(ofLine: "card:" + card.id).map { $0 >= 0 && $0 < 700 } ?? false
+        }
+        if shown.count >= 3, let row = shown[1].rows.last(where: \.isBlueUnread) {
+            let read = shown[1]
+            let next = shown[2]
+            // Its other blue rows read first (selecting a row reads it; the
+            // rows past the newest three by Mark all as read's way is not
+            // here: the card's own rows).
+            for other in read.rows where other.isBlueUnread && other.id != row.id {
+                list.select(.row(id: other.id, card: read.id))
+            }
+            await run("Review Unread only: its last row read, the card kept") { list.select(.row(id: row.id, card: read.id)) }
+            await run("Review Unread only: the next card selected") { list.select(.header(card: next.id)) }
+            let before = controller()?.offsetForMeasurement(ofLine: "card:" + next.id)
+            snapshot(window, (ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_CONSISTENCY"] ?? "/tmp") + "/unread-kept.png")
+            await pause(app.linger.duration - 0.15)
+            snapshot(window, (ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_CONSISTENCY"] ?? "/tmp") + "/unread-fading.png")
+            await run("Review Unread only: the read card hides after its wait") {}
+            let after = controller()?.offsetForMeasurement(ofLine: "card:" + next.id)
+            if list.lingering.isEmpty, !list.sections.contains(where: { $0.matching.contains { $0.id == read.id } }),
+               let before, let after, abs(before - after) < 0.5 {
+                log("consistency Unread only: \(read.pr) hid; the selected card stayed at \(before)")
+            } else {
+                consistencyFailures += 1
+                consistencyChecks += 1
+                log("consistency Unread only: FAIL kept \(list.lingering), selected card at \(String(describing: before)) then \(String(describing: after))")
+                notes.append("Unread only: FAIL")
+            }
+            // Scrolled, nothing selected in view: the first line in view stays.
+            if let scroll { scrollTo(scroll, y: 300) }
+            await pause(0.6)
+            let inView = shownCards(list).map(\.0).filter { card in
+                controller()?.offsetForMeasurement(ofLine: "card:" + card.id).map { $0 > 40 && $0 < 400 } ?? false
+            }
+            if let card = inView.first(where: { $0.rows.filter(\.isBlueUnread).count <= Listing.rowsShown }) {
+                for row in card.rows where row.isBlueUnread { list.select(.row(id: row.id, card: card.id)) }
+                list.clearSelection()
+                await pause(0.3)
+                let top = controller()?.topLineForMeasurement()
+                await pause(app.linger.duration)
+                await run("Review Unread only: a card hides above the selection's place") {}
+                expectSame("Unread only, nothing selected", top, controller()?.topLineForMeasurement())
+            }
+        } else {
+            log("consistency Unread only: not enough unread cards in view")
+        }
+        await run("Review Filter: Unread only off") { list.setUnreadOnly(false) }
+    }
+
+    /// With the options open in a short window, the list keeps 100 points
+    /// (at text size 12) and the options scroll inside (DESIGN.md,
+    /// "Filter").
+    private func checkShortSurface(list: SurfaceListModel, window: NSWindow) async {
+        let frame = window.frame
+        defer { window.setFrame(frame, display: true) }
+        window.setFrame(NSRect(x: frame.minX, y: frame.maxY - 420, width: frame.width, height: 420), display: true)
+        await pause(0.8)
+        consistencyChecks += 1
+        let root = window.contentView.flatMap { view -> SurfaceRoot? in
+            var queue = [view]
+            while !queue.isEmpty {
+                let next = queue.removeFirst()
+                if let root = next as? SurfaceRoot { return root }
+                queue += next.subviews
+            }
+            return nil
+        }
+        let listHeight = root?.frames.list?.height ?? 0
+        let listScroll = listScrollView(in: window)
+        var options: NSScrollView?
+        func walk(_ view: NSView) {
+            if let scroll = view as? NSScrollView, scroll !== listScroll, scroll.documentView.map({ $0.frame.height > 60 }) == true {
+                options = scroll
+            }
+            view.subviews.forEach(walk)
+        }
+        if let content = window.contentView { walk(content) }
+        let inner = options.map { ($0.documentView?.frame.height ?? 0, $0.contentView.bounds.height) }
+        let scrolls = inner.map { $0.0 > $0.1 + 0.5 } ?? false
+        if listHeight >= 100 - 0.5, scrolls {
+            log(String(format: "consistency short window: the list keeps %.0f pt; the options scroll (%.0f in %.0f)", listHeight, inner?.0 ?? 0, inner?.1 ?? 0))
+        } else {
+            consistencyFailures += 1
+            log("consistency short window: FAIL list \(listHeight) pt, options \(String(describing: inner))")
+            notes.append("short window: FAIL list \(listHeight) pt")
+        }
     }
 
     // MARK: Snapshots
@@ -1237,7 +1387,7 @@ final class PerfRunner: NSObject {
             await pause(0.8)
             snapshot(window, directory + "/all-long-body\(suffix).png")
         }
-        // A muted card (Show muted on): drawn gray; its menu has Unmute.
+        // A muted card (Filter Muted Show): drawn gray; its menu has Unmute.
         if let (card, _) = shownCards(list).first(where: { $0.0.isMuted }) {
             list.select(.header(card: card.id))
             await pause(0.8)
@@ -1245,6 +1395,32 @@ final class PerfRunner: NSObject {
             let menu = list.rightClick(.header(card: card.id)).compactMap { $0?.title }
             log("menu of muted \(card.pr): \(menu.joined(separator: " | "))")
         }
+        // The Filter: the summary closed, the options open in All and
+        // in Review, the blue dot, Compact on.
+        let saved = list.filter
+        list.setMuteChoice(.hide)
+        list.toggleStatus(.merged)
+        list.toggleStatus(.closed)
+        list.setUnreadOnly(true)
+        await pause(0.8)
+        snapshot(window, directory + "/filter-closed\(suffix).png")
+        list.toggleFilterOpen()
+        await pause(0.8)
+        snapshot(window, directory + "/filter-open-all\(suffix).png")
+        list.openTab(.review)
+        list.setMuteChoice(.show)
+        list.setUnreadOnly(true)
+        await pause(0.8)
+        snapshot(window, directory + "/filter-open-review\(suffix).png")
+        list.toggleFilterOpen()
+        list.setUnreadOnly(false)
+        list.setMuteChoice(.show)
+        list.toggleCompact()
+        await pause(0.8)
+        snapshot(window, directory + "/compact-on\(suffix).png")
+        list.toggleCompact()
+        list.openTab(.all)
+        list.data.setFilter(saved, tab: .all)
         list.openTab(.review)
         await pause(1.5)
         snapshot(window, directory + "/review\(suffix).png")
@@ -1561,6 +1737,34 @@ final class PerfRunner: NSObject {
         }
         record("Review Compact drag and drop", samples)
         list.toggleCompact()
+    }
+
+    /// The Filter (DESIGN.md, "Speed of operation"): a setting changed, and
+    /// the options opened and closed, in All and Review. Measured with
+    /// `Filter` closed and Muted Show, the rest at the defaults, between
+    /// the operations.
+    private func filterOperations(list: SurfaceListModel, window: NSWindow) async {
+        for tab in [ListTab.all, .review] {
+            list.openTab(tab)
+            if let scroll = listScrollView(in: window) { scrollTo(scroll, y: 0) }
+            await pause(0.5)
+            var samples: [Sample] = []
+            for i in 0..<10 {
+                samples.append(await measure("filter", "\(tab.title) Status Open \(i % 2 == 0 ? "off" : "on")") { list.toggleStatus(.open) })
+            }
+            record("\(tab.title) Filter change (Status)", samples)
+            samples = []
+            for i in 0..<10 {
+                let choice: MuteChoice = i % 2 == 0 ? .hide : .show
+                samples.append(await measure("filter", "\(tab.title) Muted \(choice.title)") { list.setMuteChoice(choice) })
+            }
+            record("\(tab.title) Filter change (Muted)", samples)
+            samples = []
+            for i in 0..<10 {
+                samples.append(await measure("filter", "\(tab.title) \(i % 2 == 0 ? "open" : "close")") { list.toggleFilterOpen() })
+            }
+            record("\(tab.title) Filter open/close", samples)
+        }
     }
 
     private func tabSwitches(_ list: SurfaceListModel) async {

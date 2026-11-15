@@ -80,9 +80,10 @@ public struct ListOptions: Equatable, Codable {
         GroupBy.allCases.filter { $0 != groupBy }
     }
 
-    /// The Then by button reads `Then by` while it is None.
+    /// The Then by button shows its value, `None` included (DESIGN.md,
+    /// "All").
     public var thenByTitle: String {
-        thenBy == .none ? "Then by" : thenBy.title
+        thenBy.title
     }
 }
 
@@ -186,7 +187,7 @@ extension Card {
     }
 
     /// Dragging: placed in Review or Mine, Done included; a muted card
-    /// shown with Show muted too (DESIGN.md, "What a press does").
+    /// the Filter shows too (DESIGN.md, "What a press does").
     public var canDrag: Bool {
         guard let placement, placement.section.value != nil else { return false }
         return true
@@ -298,24 +299,34 @@ public enum Listing {
         cards.filter { !$0.isDismissed && (tab == .all || $0.tab == tab) }
     }
 
-    /// The cards a tab shows before the search: without the muted ones
-    /// while Show muted is off (DESIGN.md, "Mute").
-    public static func shown(_ cards: [Card], tab: ListTab, showMuted: Bool) -> [Card] {
-        Self.cards(cards, tab: tab).filter { showMuted || !$0.isMuted }
+    /// The cards a tab shows before the search: those its Filter does not
+    /// hide (DESIGN.md, "Filter").
+    public static func shown(_ cards: [Card], tab: ListTab, visibility: Visibility) -> [Card] {
+        Self.cards(cards, tab: tab).filter(visibility.shows)
     }
 
-    /// The unread count of a tab: its cards with a blue unread row; muted
-    /// gray ones do not count, a hidden muted card with an unread mention
-    /// does (DESIGN.md, "Tabs").
+    /// The unread count of a tab: its cards with a blue unread row, whatever
+    /// the Filter and the search; muted gray ones do not count, a hidden
+    /// muted card with an unread mention does (DESIGN.md, "Tabs").
     public static func unreadCount(_ cards: [Card], tab: ListTab) -> Int {
         Self.cards(cards, tab: tab).filter(\.hasBlueUnread).count
     }
 
-    /// The blue dot of Show muted: while it is off, some muted card of the
-    /// account that is not dismissed has a blue unread row (a mention of
-    /// you or your team), whatever the tab (DESIGN.md, "Show muted").
-    public static func showMutedDot(_ cards: [Card], showMuted: Bool) -> Bool {
-        !showMuted && cards.contains { !$0.isDismissed && $0.isMuted && $0.hasBlueUnread }
+    /// The blue dot of `Filter`: a card of this tab that the Filter hides
+    /// has a blue unread row. The search does not count (DESIGN.md,
+    /// "Filter", "Blue dot"); `Unread only` never hides such a card.
+    public static func filterDot(_ cards: [Card], tab: ListTab, filter: ListFilter) -> Bool {
+        Self.cards(cards, tab: tab).contains { $0.hasBlueUnread && !filter.shows($0, kept: false) }
+    }
+
+    /// The status of a PR: Group by Status and the Filter's statuses.
+    public static func status(_ card: Card) -> PRStatus {
+        switch card.stateLabel.value {
+        case .draft: return .draft
+        case .merged: return .merged
+        case .closed: return .closed
+        case .open, .mergeable, nil: return .open
+        }
     }
 
     /// The Dismissed list: newest dismissal first.
@@ -335,7 +346,7 @@ public enum Listing {
 
     /// All's order inside the innermost group (DESIGN.md, "All"): open PRs
     /// (Draft included) first, then Merged and Closed, each newest first by
-    /// the chosen order; muted cards shown with Show muted are placed by the
+    /// the chosen order; muted cards the Filter shows are placed by the
     /// same rule.
     public static func sorted(_ cards: [Card], by order: SortOrder) -> [Card] {
         cards.sorted { a, b in
@@ -359,7 +370,7 @@ public enum Listing {
 
     // MARK: Groups
 
-    static let statusGroups = [("open", "Open"), ("draft", "Draft"), ("merged", "Merged"), ("closed", "Closed")]
+    static let statusGroups = PRStatus.allCases.map { ($0.rawValue, $0.title) }
     static let involvementGroups = [
         ("review_requested", "Review requested"), ("authored", "Authored by me"),
         ("assigned", "Assigned to me"), ("others", "Others"),
@@ -371,12 +382,7 @@ public enum Listing {
         case .owner: return card.owner
         case .repository: return repository(card.pr)
         case .status:
-            switch card.stateLabel.value {
-            case .draft: return "draft"
-            case .merged: return "merged"
-            case .closed: return "closed"
-            case .open, .mergeable, nil: return "open"
-            }
+            return status(card).rawValue
         case .involvement:
             // A PR you authored is Authored by me even with a team asked
             // for its review; otherwise the first that applies.
@@ -432,18 +438,19 @@ public enum Listing {
 
     // MARK: Layout
 
-    /// The fold state of the account, Show muted and the surface's search.
+    /// The fold state of the account, the surface's search and what the
+    /// tab's Filter shows.
     public struct Folding: Equatable {
         public var collapsed: Set<String>
         public var expanded: Set<String>
         public var search: String
-        public var showMuted: Bool
+        public var visibility: Visibility
 
-        public init(collapsed: Set<String> = [], expanded: Set<String> = [], search: String = "", showMuted: Bool = false) {
+        public init(collapsed: Set<String> = [], expanded: Set<String> = [], search: String = "", visibility: Visibility) {
             self.collapsed = collapsed
             self.expanded = expanded
             self.search = search
-            self.showMuted = showMuted
+            self.visibility = visibility
         }
     }
 
@@ -464,9 +471,9 @@ public enum Listing {
     }
 
     /// The sections of a tab. `cards` are every card as the daemon sent
-    /// them (dismissed ones included). While Show muted is off the muted
-    /// cards are left out of everything: the sections, the counts, "+ N
-    /// more PRs" and the groups (DESIGN.md, "Mute"). Sections without a
+    /// them (dismissed ones included). The cards the Filter hides are left
+    /// out of everything: the sections, the counts, "+ N more PRs" and the
+    /// groups (DESIGN.md, "Filter"). Sections without a
     /// card after the search are left out; the counts ignore the search.
     /// Review and Mine keep their empty sections (Done and Mine's first
     /// list included) while the tab shows a card and nothing is searched,
@@ -475,7 +482,7 @@ public enum Listing {
         tab: ListTab, cards allCards: [Card], account: Account, options: ListOptions, orders: GroupOrders,
         repositories: [String], folding: Folding
     ) -> [SectionLayout] {
-        let tabCards = shown(allCards, tab: tab, showMuted: folding.showMuted)
+        let tabCards = shown(allCards, tab: tab, visibility: folding.visibility)
         let searching = !Search.words(folding.search).isEmpty
         let found = Set(search(tabCards, folding.search).map(\.id))
         switch tab {
@@ -533,29 +540,36 @@ public enum Listing {
         }
     }
 
-    /// The text in place of an empty tab or Dismissed list: `Nothing
-    /// matches` when the search leaves no card; nil before the first
-    /// answer or when something shows.
-    public static func emptyText(loaded: Bool, tab: ListTab?, cards: [Card], search: String, showMuted: Bool = true) -> String? {
+    /// The text in place of an empty tab: when no card shows, `Nothing
+    /// matches` if there is search text or the Filter is not at its
+    /// defaults, else the tab's own text (DESIGN.md, "First run, failure
+    /// and empty"); nil before the first answer or when something shows.
+    public static func emptyText(loaded: Bool, tab: ListTab, cards: [Card], search: String, visibility: Visibility) -> String? {
         guard loaded else { return nil }
-        let list = tab.map { shown(cards, tab: $0, showMuted: showMuted) } ?? dismissed(cards)
-        if list.isEmpty {
-            switch tab {
-            case .all?: return EmptyState.all
-            case .review?: return EmptyState.review
-            case .mine?: return EmptyState.mine
-            case nil: return EmptyState.dismissed
-            }
+        guard Self.search(shown(cards, tab: tab, visibility: visibility), search).isEmpty else { return nil }
+        if !Search.words(search).isEmpty || !visibility.filter.isDefault { return EmptyState.nothingMatches }
+        switch tab {
+        case .all: return EmptyState.all
+        case .review: return EmptyState.review
+        case .mine: return EmptyState.mine
         }
+    }
+
+    /// The text in place of an empty Dismissed list (no Filter there):
+    /// `Nothing matches` when its search leaves no card.
+    public static func dismissedEmptyText(loaded: Bool, cards: [Card], search: String) -> String? {
+        guard loaded else { return nil }
+        let list = dismissed(cards)
+        if list.isEmpty { return EmptyState.dismissed }
         return Self.search(list, search).isEmpty ? EmptyState.nothingMatches : nil
     }
 
     /// ⇧R and Mark all as read: every unread row of the tab's cards after
     /// the search, in collapsed and folded sections and in "+ N more" too,
-    /// muted rows of muted cards shown with Show muted included; not those
-    /// of muted cards Show muted hides (DESIGN.md, "How unread clears").
-    public static func rowsToRead(tab: ListTab, cards: [Card], search: String, showMuted: Bool = true) -> [String] {
-        Self.search(shown(cards, tab: tab, showMuted: showMuted), search).flatMap(\.rows).filter(\.unread).map(\.id)
+    /// muted rows of muted cards the Filter shows included; not those of
+    /// the cards the Filter hides (DESIGN.md, "How unread clears").
+    public static func rowsToRead(tab: ListTab, cards: [Card], search: String, visibility: Visibility) -> [String] {
+        Self.search(shown(cards, tab: tab, visibility: visibility), search).flatMap(\.rows).filter(\.unread).map(\.id)
     }
 
     /// Whether a card's rows show past the newest three: it is expanded and

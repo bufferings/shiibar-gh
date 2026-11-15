@@ -221,7 +221,10 @@ class PressView: NSView {
         let items: [IconMenuItem?] = entries.map { entry in
             entry.map { entry in IconMenuItem(entry.title) { [weak list] in list?.perform(entry.action) } }
         }
+        // A card `Unread only` kept does not hide under the menu.
+        list.menuOpened()
         NSMenu.popUpContextMenu(IconMenu.make(items), with: event, for: self)
+        list.menuClosed()
     }
 
     /// Where `item` is in this view, if it is here.

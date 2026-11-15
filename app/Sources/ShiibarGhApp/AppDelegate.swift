@@ -56,7 +56,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         if perf { PerfMode.removeLeftoverSuite() }
         let store = UIStateStore(defaults: perf ? ScratchDefaults() : .standard)
-        model = AppModel(api: api, store: store, opener: WorkspaceOpener(), notifier: notifier, copier: PasteboardCopier())
+        // `SHIIBAR_GH_UNREAD_ONLY_SECONDS` changes the 5 seconds of `Unread
+        // only` without a rebuild (docs/tasks/M8.md: a development switch).
+        let linger = LingerTiming(duration: LingerTiming.duration(environment: ProcessInfo.processInfo.environment))
+        model = AppModel(
+            api: api, store: store, opener: WorkspaceOpener(), notifier: notifier, copier: PasteboardCopier(), linger: linger
+        )
         let avatars = perf
             ? AvatarStore(loader: FileImageLoader(), schemes: ["file"])
             : AvatarStore(loader: URLSessionImageLoader())

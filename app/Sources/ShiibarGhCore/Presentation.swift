@@ -669,7 +669,7 @@ public enum SettingsText {
     public static let notifyDetail = "Off keeps the table below but sends no notifications for this owner."
     public static let skipDraftsDetail = "Events on draft PRs stay in the list but never notify."
     public static let copyDetail = "Replaces the table above with that owner's."
-    public static let mutedReposDetail = "Hidden unless Show muted is on. Not applied to your own PRs."
+    public static let mutedReposDetail = "Hidden unless Filter shows muted pull requests. Not applied to your own PRs."
     public static let mutedUsersDetail = "Their PRs (not yours) and their events. Bots are users too."
     public static let mutedPullRequestsDetail = "Single pull requests you muted."
     public static let autoDismissDetail = "Merged and closed PRs move to Dismissed after this many days"

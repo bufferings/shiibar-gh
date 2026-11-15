@@ -33,7 +33,7 @@ final class OptionsTests: XCTestCase {
         var options = ListOptions()
         XCTAssertEqual(options.groupBy, .repository)
         XCTAssertEqual(options.thenBy, .none)
-        XCTAssertEqual(options.thenByTitle, "Then by")
+        XCTAssertEqual(options.thenByTitle, "None", "the value, None included")
         options.setThenBy(.status)
         XCTAssertEqual(options.thenBy, .status)
         XCTAssertEqual(options.thenByTitle, "Status")
@@ -91,14 +91,18 @@ final class TabTests: XCTestCase {
     }
 
     func testEmptyTexts() {
-        XCTAssertNil(Listing.emptyText(loaded: false, tab: .all, cards: [], search: ""))
-        XCTAssertEqual(Listing.emptyText(loaded: true, tab: .all, cards: [], search: ""), "No pull requests")
-        XCTAssertEqual(Listing.emptyText(loaded: true, tab: .review, cards: [], search: ""), "No pull requests to review")
-        XCTAssertEqual(Listing.emptyText(loaded: true, tab: .mine, cards: [], search: ""), "No pull requests of yours")
-        XCTAssertEqual(Listing.emptyText(loaded: true, tab: nil, cards: [], search: ""), "No dismissed pull requests")
-        XCTAssertEqual(Listing.emptyText(loaded: true, tab: .review, cards: sampleCards(), search: "retry timeout"), "Nothing matches")
-        XCTAssertEqual(Listing.emptyText(loaded: true, tab: nil, cards: sampleCards(), search: "zzz"), "Nothing matches")
-        XCTAssertNil(Listing.emptyText(loaded: true, tab: .review, cards: sampleCards(), search: "retry"))
+        let plain = shows(mutedHidden)
+        XCTAssertNil(Listing.emptyText(loaded: false, tab: .all, cards: [], search: "", visibility: plain))
+        XCTAssertEqual(Listing.emptyText(loaded: true, tab: .all, cards: [], search: "", visibility: plain), "No pull requests")
+        XCTAssertEqual(Listing.emptyText(loaded: true, tab: .review, cards: [], search: "", visibility: plain), "No pull requests to review")
+        XCTAssertEqual(Listing.emptyText(loaded: true, tab: .mine, cards: [], search: "", visibility: plain), "No pull requests of yours")
+        XCTAssertEqual(Listing.dismissedEmptyText(loaded: true, cards: [], search: ""), "No dismissed pull requests")
+        XCTAssertNil(Listing.dismissedEmptyText(loaded: false, cards: [], search: ""))
+        XCTAssertEqual(
+            Listing.emptyText(loaded: true, tab: .review, cards: sampleCards(), search: "retry timeout", visibility: plain), "Nothing matches"
+        )
+        XCTAssertEqual(Listing.dismissedEmptyText(loaded: true, cards: sampleCards(), search: "zzz"), "Nothing matches")
+        XCTAssertNil(Listing.emptyText(loaded: true, tab: .review, cards: sampleCards(), search: "retry", visibility: plain))
     }
 }
 
@@ -152,7 +156,7 @@ final class SectionTests: XCTestCase {
         XCTAssertNil(sections[0].foldLine)
     }
 
-    /// 0.5: a muted card shown with Show muted is at its own rank, not
+    /// 0.5: a muted card the Filter shows is at its own rank, not
     /// last (DESIGN.md, "Review").
     func testMutedCardsShowAtTheirRankAndAGrayFoldGetsTheRing() {
         var ranked = sampleCards()
@@ -193,7 +197,7 @@ final class SectionTests: XCTestCase {
         XCTAssertEqual(sections[0].cards.map(\.id), ["M1", "M2"])
     }
 
-    /// Open first, then Merged and Closed; muted cards shown with Show muted
+    /// Open first, then Merged and Closed; muted cards the Filter shows
     /// by the same rule (DESIGN.md, "All").
     func testAllGroupsByRepositoryAndSortsOpenFirst() {
         let sections = layout(.all)
@@ -253,15 +257,17 @@ final class SectionTests: XCTestCase {
     }
 
     /// ⇧R: the tab's unread rows after the search, folded, collapsed and
-    /// muted ones shown with Show muted too; not those of the muted cards
-    /// Show muted hides (DESIGN.md, "How unread clears").
+    /// muted ones the Filter shows too; not those of the cards the Filter
+    /// hides (DESIGN.md, "How unread clears").
     func testMarkAllReadTakesEveryUnreadRowOfTheTab() {
         let cards = sampleCards()
-        XCTAssertEqual(Listing.rowsToRead(tab: .review, cards: cards, search: ""), ["A", "D", "t6", "t7"])
-        XCTAssertEqual(Listing.rowsToRead(tab: .review, cards: cards, search: "renovate"), ["t6", "t7"])
-        XCTAssertEqual(Listing.rowsToRead(tab: .all, cards: cards, search: "").count, 6, "N1's gray row and M1's too")
-        XCTAssertEqual(Listing.rowsToRead(tab: .review, cards: cards, search: "", showMuted: false), ["A", "D"], "hidden muted cards")
-        XCTAssertEqual(Listing.rowsToRead(tab: .review, cards: cards, search: "renovate", showMuted: false), [])
+        let all = shows(mutedShown)
+        XCTAssertEqual(Listing.rowsToRead(tab: .review, cards: cards, search: "", visibility: all), ["A", "D", "t6", "t7"])
+        XCTAssertEqual(Listing.rowsToRead(tab: .review, cards: cards, search: "renovate", visibility: all), ["t6", "t7"])
+        XCTAssertEqual(Listing.rowsToRead(tab: .all, cards: cards, search: "", visibility: all).count, 6, "N1's gray row and M1's too")
+        let hide = shows(mutedHidden)
+        XCTAssertEqual(Listing.rowsToRead(tab: .review, cards: cards, search: "", visibility: hide), ["A", "D"], "hidden muted cards")
+        XCTAssertEqual(Listing.rowsToRead(tab: .review, cards: cards, search: "renovate", visibility: hide), [])
     }
 
     func testTheRowsOfACard() {

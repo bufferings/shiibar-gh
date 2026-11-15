@@ -57,7 +57,7 @@ public enum CardDrop {
     /// Where a drop over `zone` lands, or nil where nothing can drop: All
     /// and the Dismissed list (DESIGN.md, "What a press does"). The places
     /// are among the reference cards (`SectionLayout.matching`: the cards
-    /// the search and Show muted leave, folded and collapsed ones
+    /// the search and the Filter leave, folded and collapsed ones
     /// included), V1, V2, … ("Hidden cards and places"): a heading and the
     /// upper half of V1 are the top, the upper half of Vk is before Vk, the
     /// lower half of Vk is before V(k+1) or the bottom, "+ N more PRs" is

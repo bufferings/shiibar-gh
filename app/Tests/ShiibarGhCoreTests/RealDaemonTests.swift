@@ -219,8 +219,8 @@ final class RealDaemonTests: XCTestCase {
         XCTAssertEqual(muted.first { $0.pr == "example-org/api#1" }?.muted, [.known(.repo)])
         XCTAssertEqual(muted.first { $0.pr == "example-org/api#1" }?.prMute, .known(.none))
         try await wait { data.cards.first { $0.pr == "example-org/api#1" }?.isMuted == true }
-        XCTAssertFalse(view.sections.contains { $0.matching.contains { $0.pr == "example-org/api#1" } }, "hidden while Show muted is off")
-        view.toggleShowMuted()
+        XCTAssertFalse(view.sections.contains { $0.matching.contains { $0.pr == "example-org/api#1" } }, "hidden while the Filter hides muted cards")
+        view.setMuteChoice(.show)
         let menu = view.rightClick(.header(card: "3407303:PR_1"))
         XCTAssertTrue(menu.contains { $0?.title == "Unmute this pull request" })
         view.perform(.unmute(.pr, "example-org/api#1"))

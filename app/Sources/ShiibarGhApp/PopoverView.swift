@@ -1,7 +1,8 @@
 // The popover of one account, also the content of its window
 // (docs/design/Main.html, Keychain.html, MenuBarIcon.html): the header,
-// the banners, the tab row, the search row, the list (CardViews.swift), the
-// key hints and the Grouping sheet.
+// the banners, the tab row, the operation row (the search field and
+// `Filter`), the Filter's options (FilterViews.swift), the list
+// (CardViews.swift), the key hints and the Grouping sheet.
 //
 // Sizes are the boards' points at text size 12, multiplied by
 // `textScale` (DESIGN.md, "Text size"): the fonts are fixed point sizes
@@ -114,19 +115,22 @@ struct TabRowState: Equatable {
     var tab: ListTab
     var showingDismissed: Bool
     var counts: [ListTab: Int]
-    var showMuted: Bool
-    var showMutedDot: Bool
     var compact: Bool
     var dismissedCount: Int
 }
 
-/// The search row.
-struct SearchRowState: Equatable {
+/// The operation row: the search field and `Filter`.
+struct OperationRowState: Equatable {
     var search: String
     var tab: ListTab
     var showingDismissed: Bool
-    var options: ListOptions
     var focused: Bool
+    var filterOpen: Bool
+    var summary: String?
+    var dot: Bool
+
+    /// `Filter` shows (not in the Dismissed list).
+    var showsFilter: Bool { !showingDismissed }
 }
 
 /// The `← Dismissed` heading: shown, and the count.
@@ -140,7 +144,8 @@ struct DismissedHeadingState: Equatable {
 final class SurfaceState {
     let top: Derived<SurfaceTop>
     let tabs: Derived<TabRowState>
-    let search: Derived<SearchRowState>
+    let search: Derived<OperationRowState>
+    let options: Derived<FilterOptionsState>
     let dismissed: Derived<DismissedHeadingState>
     let grouping: Derived<Bool>
 
@@ -160,14 +165,19 @@ final class SurfaceState {
             TabRowState(
                 tab: list.tab, showingDismissed: list.showingDismissed,
                 counts: Dictionary(uniqueKeysWithValues: ListTab.allCases.map { ($0, list.unreadCount($0)) }),
-                showMuted: list.showMuted, showMutedDot: list.showMutedDot, compact: list.compact,
-                dismissedCount: list.dismissedCount
+                compact: list.compact, dismissedCount: list.dismissedCount
             )
         }
-        search = Derived([listChanges]) { [unowned list, unowned model] in
-            SearchRowState(
-                search: list.search, tab: list.tab, showingDismissed: list.showingDismissed, options: model.options,
-                focused: list.searchFocused
+        search = Derived([listChanges]) { [unowned list] in
+            OperationRowState(
+                search: list.search, tab: list.tab, showingDismissed: list.showingDismissed, focused: list.searchFocused,
+                filterOpen: list.filterOpen, summary: list.showsFilter ? list.filter.summary : nil,
+                dot: list.showsFilter && list.filterDot
+            )
+        }
+        options = Derived([listChanges]) { [unowned list, unowned model] in
+            FilterOptionsState(
+                shows: list.showsFilterOptions, tab: list.tab, filter: list.filter, options: model.options
             )
         }
         dismissed = Derived([listChanges]) { [unowned list] in
@@ -249,9 +259,15 @@ struct PopoverView: View {
                     FailureBand(text: failure)
                 }
                 TabRow(list: list, state: state.tabs)
-                SearchRow(list: list, model: model, state: state.search)
+                OperationRow(list: list, state: state.search)
+                // The options take their height when there is room; the
+                // list keeps its minimum, and the options scroll inside
+                // (DESIGN.md, "Filter").
+                FilterOptionsSlot(list: list, model: model, state: state.options)
+                    .layoutPriority(1)
                 DismissedHeadingSlot(list: list, state: state.dismissed, keepDays: value.keepDays)
                 ListSlot(content: CardContext.of(list, avatars: avatars).content, now: now)
+                    .frame(minHeight: FilterOptionsLayout.listMinimum * value.k)
                 KeyHintsSlot(chrome: list.chrome)
                     .background(SurfaceAnchor(content: CardContext.of(list, avatars: avatars).content, part: .hints))
             }
@@ -540,9 +556,9 @@ struct CenteredMessage: View {
 // MARK: - Tabs and the search row
 
 /// All | Review | Mine with their unread counts, and at the right end the
-/// Compact and Show muted toggles and the Dismissed button (Main.html
-/// `.ptabs`). When the row is narrow, the toggles show their icons only
-/// (their names in the tooltips).
+/// display mode switch (`Detailed` and `Compact`, icons, their names in the
+/// tooltips) and the Dismissed button (Main.html `.ptabs`; DESIGN.md,
+/// "Screens", "Compact").
 struct TabRow: View {
     var list: SurfaceListModel
     @ObservedObject var state: Derived<TabRowState>
@@ -554,11 +570,8 @@ struct TabRow: View {
                 tabButton(tab)
             }
             Spacer(minLength: 0)
-            ViewThatFits(in: .horizontal) {
-                toggles(names: true)
-                toggles(names: false)
-            }
-            .padding(.bottom, 3)
+            compactButton
+                .padding(.bottom, 3)
             dismissedButton
                 .padding(.bottom, 3)
         }
@@ -593,67 +606,12 @@ struct TabRow: View {
         .accessibilityAddTraits(on ? .isSelected : [])
     }
 
-    func toggles(names: Bool) -> some View {
-        HStack(spacing: 2) {
-            compactButton(names: names)
-            showMutedButton(names: names)
+    /// Detailed and Compact (DESIGN.md, "Compact"): the display mode as a
+    /// two-segment switch (FilterViews.swift, `DisplayModeSwitch`).
+    var compactButton: some View {
+        DisplayModeSwitch(mode: state.value.compact ? .compact : .detailed) { [list] mode in
+            if (mode == .compact) != list.compact { list.toggleCompact() }
         }
-        .fixedSize()
-    }
-
-    /// Compact (Main.html `.smt`, the Compact scene; DESIGN.md, "Compact"):
-    /// three lines and the word, filled while on.
-    func compactButton(names: Bool) -> some View {
-        let on = state.value.compact
-        let color = on ? Palette.settingsTabSelected.color : Palette.botIcon.color
-        return Button { list.toggleCompact() } label: {
-            HStack(spacing: 4) {
-                IconView(icon: BoardIcons.compact, size: 14 * k, color: color)
-                if names {
-                    Text("Compact").font(.system(size: 11 * k)).foregroundColor(color).lineLimit(1).fixedSize()
-                }
-            }
-            .padding(.horizontal, 6)
-            .frame(height: 22 * k)
-            .background(RoundedRectangle(cornerRadius: 6).fill(on ? Palette.settingsTabSelectedBackground.color : .clear))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .quickHelp("Compact")
-        .accessibilityLabel("Compact")
-        .accessibilityValue(on ? "On" : "Off")
-        .accessibilityAddTraits(on ? .isSelected : [])
-    }
-
-    /// Show muted (Main.html `.smt`): the eye and the words, filled while
-    /// on; a blue dot while off when a hidden muted card has an unread
-    /// mention (DESIGN.md, "Show muted").
-    func showMutedButton(names: Bool) -> some View {
-        let on = state.value.showMuted
-        let dot = state.value.showMutedDot
-        let color = on ? Palette.settingsTabSelected.color : Palette.botIcon.color
-        return Button { list.toggleShowMuted() } label: {
-            HStack(spacing: 4) {
-                IconView(icon: BoardIcons.showMuted, size: 14 * k, color: color)
-                if names {
-                    Text("Show muted").font(.system(size: 11 * k)).foregroundColor(color).lineLimit(1).fixedSize()
-                }
-            }
-            .padding(.horizontal, 6)
-            .frame(height: 22 * k)
-            .background(RoundedRectangle(cornerRadius: 6).fill(on ? Palette.settingsTabSelectedBackground.color : .clear))
-            .overlay(alignment: .topTrailing) {
-                if dot {
-                    Circle().fill(Palette.blueDot.color).frame(width: 6, height: 6).offset(x: -1, y: 2)
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .quickHelp("Show muted")
-        .accessibilityLabel(dot ? "Show muted, unread mention" : "Show muted")
-        .accessibilityValue(on ? "On" : "Off")
-        .accessibilityAddTraits(on ? .isSelected : [])
     }
 
     var dismissedButton: some View {
@@ -678,18 +636,18 @@ struct TabRow: View {
     }
 }
 
-/// The search field (the only part that grows), then in All the Group by,
-/// Then by and sort pop-up buttons showing their values.
-struct SearchRow: View {
+/// The search field, which takes the room left (at least 140 points at
+/// text size 12), then `Filter` (FilterViews.swift); the search field only
+/// while the Dismissed list shows (DESIGN.md, "Screens").
+struct OperationRow: View {
     var list: SurfaceListModel
-    var model: AccountViewModel
-    @ObservedObject var state: Derived<SearchRowState>
+    @ObservedObject var state: Derived<OperationRowState>
     @FocusState private var focused: Bool
     @Environment(\.textScale) var k
 
     var body: some View {
-        let showsChoices = state.value.tab == .all && !state.value.showingDismissed
-        HStack(spacing: 0) {
+        let value = state.value
+        HStack(spacing: 8) {
             HStack(spacing: 6) {
                 IconView(icon: BoardIcons.search, size: 13 * k, color: Palette.waiting.color)
                 TextField("Search", text: Binding(get: { list.search }, set: { list.setSearch($0) }))
@@ -702,59 +660,48 @@ struct SearchRow: View {
             .frame(height: 24 * k)
             .background(RoundedRectangle(cornerRadius: 6).fill(Palette.surface.color))
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.controlBorder.color, lineWidth: 1))
-            .frame(maxWidth: .infinity)
-            // In All only. Kept out of sight in the other tabs rather than
-            // made again on each tab switch (three pop-up buttons).
-            let options = state.value.options
-            HStack(spacing: 8) {
-                PullDown(title: options.groupBy.title, toolTip: "Group by", items: groupByItems(options))
-                PullDown(title: options.thenByTitle, toolTip: "Then by", enabled: options.groupBy != .none, items: thenByItems(options))
-                PullDown(title: options.sort.title, toolTip: "Sort", items: SortOrder.allCases.map { order in
-                    IconMenuItem(order.title, checked: order == options.sort) { model.setSort(order) }
-                })
+            .frame(minWidth: FilterOptionsLayout.searchMinimum * k, maxWidth: .infinity)
+            if value.showsFilter {
+                FilterButton(open: value.filterOpen, dot: value.dot, summary: value.summary) { list.toggleFilterOpen() }
+                    .layoutPriority(1)
             }
-            .padding(.leading, 8)
-            .fixedSize()
-            .frame(width: showsChoices ? nil : 0, alignment: .leading)
-            // Clipped only while out of sight (the bezels reach past the
-            // frame by a point or two).
-            .clipShape(Rectangle().inset(by: showsChoices ? -4 : 0))
-            .opacity(showsChoices ? 1 : 0)
-            .allowsHitTesting(showsChoices)
-            .accessibilityHidden(!showsChoices)
         }
         .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
         .onChange(of: state.value.focused) { _, value in if focused != value { focused = value } }
         .onChange(of: focused) { _, value in if list.searchFocused != value { list.searchFocused = value } }
     }
-
-    /// The five values, the current one checked, then `Grouping…`.
-    func groupByItems(_ options: ListOptions) -> [IconMenuItem?] {
-        var items: [IconMenuItem?] = GroupBy.allCases.map { value in
-            IconMenuItem(value.title, checked: value == options.groupBy) { model.setGroupBy(value) }
-        }
-        items.append(nil)
-        items.append(IconMenuItem("Grouping…") { list.showsGrouping = true })
-        return items
-    }
-
-    /// The same values without Group by's.
-    func thenByItems(_ options: ListOptions) -> [IconMenuItem?] {
-        options.thenByChoices.map { value in
-            IconMenuItem(value.title, checked: value == options.thenBy) { model.setThenBy(value) }
-        }
-    }
 }
 
 /// A standard pull-down pop-up button whose title is the current value
 /// (NSPopUpButton with `pullsDown`: the first item is the title and the rest
-/// are the menu). A pull-down, so that Group by can end with `Grouping…`
-/// and Then by can read `Then by` while it is None.
+/// are the menu). A pull-down, so that Group by can end with `Grouping…`.
+/// In the Filter's options it never takes the keyboard focus
+/// (`refusesFocus`); in the Grouping sheet it does, as in 0.5 (DESIGN.md,
+/// "Filter").
 struct PullDown: NSViewRepresentable {
     var title: String
-    var toolTip: String
+    /// nil: no tooltip (the Filter's rows have names).
+    var toolTip: String?
+    var accessibilityName: String
     var enabled = true
+    /// The narrowest it gets, at text size 12.
+    var minWidth: CGFloat = 0
+    /// Mouse only (the Filter's options).
+    var refusesFocus: Bool
     var items: [IconMenuItem?]
+
+    init(
+        title: String, toolTip: String?, accessibilityName: String? = nil, enabled: Bool = true, minWidth: CGFloat = 0,
+        refusesFocus: Bool = false, items: [IconMenuItem?]
+    ) {
+        self.title = title
+        self.toolTip = toolTip
+        self.accessibilityName = accessibilityName ?? toolTip ?? title
+        self.enabled = enabled
+        self.minWidth = minWidth
+        self.refusesFocus = refusesFocus
+        self.items = items
+    }
     @Environment(\.textScale) var k
 
     final class Coordinator {
@@ -768,6 +715,7 @@ struct PullDown: NSViewRepresentable {
     func makeNSView(context: Context) -> TipPopUpButton {
         let button = TipPopUpButton(frame: .zero, pullsDown: true)
         button.controlSize = .small
+        button.refusesFocus = refusesFocus
         button.setContentHuggingPriority(.required, for: .horizontal)
         button.setContentCompressionResistancePriority(.required, for: .horizontal)
         update(button, context: context)
@@ -811,11 +759,12 @@ struct PullDown: NSViewRepresentable {
         button.font = .systemFont(ofSize: 11 * k)
         button.isEnabled = enabled
         button.help = toolTip
-        button.setAccessibilityLabel(toolTip)
+        button.setAccessibilityLabel(accessibilityName)
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: TipPopUpButton, context: Context) -> CGSize? {
-        nsView.intrinsicContentSize
+        let size = nsView.intrinsicContentSize
+        return CGSize(width: max(size.width, minWidth * k), height: size.height)
     }
 }
 
@@ -824,6 +773,17 @@ struct PullDown: NSViewRepresentable {
 /// its delay).
 final class TipPopUpButton: NSPopUpButton {
     var help: String?
+
+    /// Mouse only (the Filter's options): the keys stay with the list and
+    /// the search field (DESIGN.md, "Filter"), Full Keyboard Access or not.
+    /// Off, the standard pop-up button (the Grouping sheet).
+    var refusesFocus = false {
+        didSet { refusesFirstResponder = refusesFocus }
+    }
+
+    override var acceptsFirstResponder: Bool { refusesFocus ? false : super.acceptsFirstResponder }
+    override var canBecomeKeyView: Bool { refusesFocus ? false : super.canBecomeKeyView }
+    override func becomeFirstResponder() -> Bool { refusesFocus ? false : super.becomeFirstResponder() }
     private let tipOwner = QuickTip.Owner()
     private var area: NSTrackingArea?
 

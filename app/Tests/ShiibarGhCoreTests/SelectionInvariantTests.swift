@@ -250,21 +250,21 @@ final class SelectionInvariantTests: XCTestCase {
         assertSelectionConsistent(list)
     }
 
-    func testShowMutedOffTakesTheMutedCardsOut() async {
+    func testMutedHideTakesTheMutedCardsOut() async {
         let list = await loaded(.review)
-        list.data.setShowMuted(true)
+        list.data.setFilter(ListFilter(muted: .show), tab: .review)
         list.perform(.toggleMore("review|todo"))
         list.select(.header(card: "T1"))
         list.click(card: "T6", extent: .toggle)
         XCTAssertEqual(list.selectedCards.cards, ["T1", "T6"])
-        list.data.setShowMuted(false)
+        list.data.setFilter(ListFilter(), tab: .review)
         XCTAssertEqual(list.selectedCards.cards, ["T1"])
         assertSelectionConsistent(list)
     }
 
     func testFoldingTakesTheHiddenCardsOut() async {
         let list = await loaded(.review)
-        list.data.setShowMuted(true)
+        list.data.setFilter(ListFilter(muted: .show), tab: .review)
         list.perform(.toggleMore("review|todo"))
         list.select(.header(card: "T1"))
         list.click(card: "T7", extent: .toggle)
@@ -276,7 +276,7 @@ final class SelectionInvariantTests: XCTestCase {
         assertSelectionConsistent(list)
     }
 
-    func testACardMutedWhileShowMutedIsOffLeavesTheSelection() async {
+    func testACardMutedWhileTheFilterHidesMutedCardsLeavesTheSelection() async {
         let list = await loaded(.review)
         list.select(.header(card: "T1"))
         list.click(card: "T2", extent: .toggle)
@@ -329,10 +329,10 @@ final class SelectionInvariantTests: XCTestCase {
         XCTAssertNil(store.popoverHeight(account: "other"))
     }
 
-    func testATabWhoseCardsAreAllMutedIsEmptyWhileShowMutedIsOff() {
+    func testATabWhoseCardsAreAllMutedIsEmptyWithTheDefaultFilter() {
         let cards = sampleCards().filter { ["T6", "T7"].contains($0.id) }
-        XCTAssertEqual(Listing.emptyText(loaded: true, tab: .review, cards: cards, search: "", showMuted: false), EmptyState.review)
-        XCTAssertNil(Listing.emptyText(loaded: true, tab: .review, cards: cards, search: "", showMuted: true))
+        XCTAssertEqual(Listing.emptyText(loaded: true, tab: .review, cards: cards, search: "", visibility: shows(mutedHidden)), EmptyState.review)
+        XCTAssertNil(Listing.emptyText(loaded: true, tab: .review, cards: cards, search: "", visibility: shows(mutedShown)))
     }
 
     func testADropWhereOnlySomeCardsMoveSendsEveryRequest() {

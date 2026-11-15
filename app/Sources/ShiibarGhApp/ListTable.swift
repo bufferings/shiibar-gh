@@ -647,6 +647,12 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
         let switching = view != shownView
         if switching, let shownView { positions[shownView] = scrollView.contentView.bounds.origin.y }
         applyLines()
+        if let (id, offset) = anchor {
+            anchor = nil
+            if !switching, let row = rowOf[id], row < table.numberOfRows {
+                scrollTo(y: table.rect(ofRow: row).minY - offset)
+            }
+        }
         if switching {
             shownView = view
             restoring = positions[view] ?? 0
@@ -710,6 +716,8 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
         }
 
         let difference = nextIDs.difference(from: oldIDs)
+        // The rows in view before the change (the table still has them).
+        let inView = table.rows(in: table.visibleRect)
         lines = next
         heights = nextHeights
         rowOf = Dictionary(nextIDs.enumerated().map { ($0.element, $0.offset) }, uniquingKeysWith: { a, _ in a })
@@ -726,6 +734,18 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
             case .remove(let offset, _, _): removed.insert(offset)
             case .insert(let offset, _, _): inserted.insert(offset)
             }
+        }
+        // Lines inserted above or among the lines in view: the table is
+        // reloaded (only the lines in view are configured again). Inserted
+        // there by `insertRows`, the table left the row views in view at
+        // places worked out from estimated heights, about 32 points off,
+        // after the change and after the checks below (the measurement
+        // mode's check: a Filter setting that brought cards back above the
+        // ones in view, with the options open).
+        if let first = inserted.first, inView.length > 0, first < inView.location + inView.length {
+            reload()
+            placeDropLine()
+            return
         }
         table.beginUpdates()
         if !removed.isEmpty { table.removeRows(at: removed, withAnimation: []) }
@@ -753,6 +773,15 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
         // row, the table is reloaded, which tiles every row again.
         if rowViewsMisplaced("rows") { reload() }
         placeDropLine()
+        // The table may move its row views once more in a later layout of
+        // the same change (the measurement mode's check found row views
+        // 32.6 points off, and rows in view without a row view, after a
+        // Filter setting brought cards back above the ones in view with
+        // the options open): looked at again once the pass is over.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.rowViewsMisplaced("rows, later") else { return }
+            self.reload()
+        }
     }
 
     /// The lines in view configured again, the others when they come into
@@ -780,7 +809,13 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
         let range = table.rows(in: table.visibleRect)
         guard range.length > 0 else { return false }
         for row in range.location..<(range.location + range.length) {
-            if let view = table.rowView(atRow: row, makeIfNecessary: false), view.frame != table.rect(ofRow: row) {
+            guard let view = table.rowView(atRow: row, makeIfNecessary: false) else {
+                if PerfMode.enabled {
+                    FileHandle.standardError.write(Data("perf: \(when): row \(row) in view has no row view: reloaded\n".utf8))
+                }
+                return true
+            }
+            if view.frame != table.rect(ofRow: row) {
                 if PerfMode.enabled {
                     FileHandle.standardError.write(Data(String(
                         format: "perf: %@: row view %d at y %.2f, its row at %.2f: reloaded\n", when, row, view.frame.minY, table.rect(ofRow: row).minY
@@ -1099,6 +1134,52 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
         let maxY = max(0, table.frame.height - scrollView.contentView.bounds.height)
         scrollView.contentView.scroll(to: NSPoint(x: 0, y: min(maxY, max(0, y))))
         scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+
+    // MARK: Cards that hide while in view
+
+    /// The line kept where it is on the screen through the next change, and
+    /// its distance from the top of the list.
+    private var anchor: (String, CGFloat)?
+
+    /// Cards `Unread only` kept hide now (DESIGN.md, "Filter"): the
+    /// selected item stays where it is on the screen if it is in view; else
+    /// the first line in view does (the next one, when that is a card
+    /// hiding). Called before the change; the next apply scrolls.
+    func keepPlace(hiding cards: Set<String>) {
+        applyIfNeeded()
+        let visible = scrollView.contentView.bounds
+        let hiding = Set(cards.map { "card:" + $0 })
+        var chosen: Int?
+        if let selection = content.list.selection, let row = rowOf[ListEntry.id(of: selection)], row < lines.count,
+           table.rect(ofRow: row).intersects(visible), !hiding.contains(lines[row].id) {
+            chosen = row
+        }
+        if chosen == nil {
+            let range = table.rows(in: visible)
+            if range.length > 0 {
+                chosen = (range.location..<(range.location + range.length)).first { !hiding.contains(lines[$0].id) }
+            }
+        }
+        guard let row = chosen else { return }
+        anchor = (lines[row].id, table.rect(ofRow: row).minY - visible.minY)
+    }
+
+    /// The measurement mode: the first line in view and its distance from
+    /// the top of the list (negative: partly above).
+    func topLineForMeasurement() -> (String, CGFloat)? {
+        applyIfNeeded()
+        let visible = scrollView.contentView.bounds
+        let range = table.rows(in: visible)
+        guard range.length > 0, range.location < lines.count else { return nil }
+        return (lines[range.location].id, table.rect(ofRow: range.location).minY - visible.minY)
+    }
+
+    /// The measurement mode: where a line is, from the top of the list.
+    func offsetForMeasurement(ofLine id: String) -> CGFloat? {
+        applyIfNeeded()
+        guard let row = rowOf[id], row < table.numberOfRows else { return nil }
+        return table.rect(ofRow: row).minY - scrollView.contentView.bounds.minY
     }
 
     // MARK: The insertion line

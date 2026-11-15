@@ -87,6 +87,9 @@ public final class AppModel: ObservableObject {
     private var displayed: [String: Set<Surface>] = [:]
     private var prompt = KeychainPrompt()
     private let clock: () -> Int64
+    /// The clock, the timer and the length of `Unread only`'s wait
+    /// (`UnreadLinger`).
+    public let linger: LingerTiming
 
     /// Asks the app to show an account's popover (a summary notification).
     public var onOpenPopover: ((String) -> Void)?
@@ -113,8 +116,10 @@ public final class AppModel: ObservableObject {
     public init(
         api: DaemonAPI, store: UIStateStore, opener: URLOpening, notifier: NotificationPresenting,
         copier: LinkCopying? = nil, failureDuration: TimeInterval = OperationFailure.duration,
-        clock: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970) }
+        clock: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970) },
+        linger: LingerTiming = LingerTiming()
     ) {
+        self.linger = linger
         self.api = api
         self.store = store
         self.opener = opener
@@ -271,12 +276,16 @@ public final class AppModel: ObservableObject {
     public func surfaceDisplayed(_ surface: Surface, account: String, _ shown: Bool, opening: Bool = false) {
         if shown {
             let first = displayed[account] == nil
+            let again = displayed[account]?.contains(surface) != true
             displayed[account, default: []].insert(surface)
+            if again { viewModels[account]?.list(surface).shown() }
             if first && !opening { viewModel(account).reload() }
         } else if var set = displayed[account] {
             if surface == .window { viewModels[account]?.list(.window).windowClosed() }
             set.remove(surface)
             displayed[account] = set.isEmpty ? nil : set
+            // Not shown now: it keeps no card `Unread only` kept.
+            viewModels[account]?.list(surface).updateLinger()
         }
     }
 
@@ -462,14 +471,22 @@ public final class AppModel: ObservableObject {
 /// cards with the local operations still on their way applied over them,
 /// and what is saved per account (Group by, Then by, the sort order, the
 /// group orders, the collapsed and expanded sections, the expanded rows of
-/// the cards, the expanded row bodies, Show muted, Keep on top). What each
+/// the cards, the expanded row bodies, the Filters, Compact, Keep on top).
+/// What each
 /// surface shows is its `SurfaceListModel`.
 @MainActor
 public final class AccountViewModel: ObservableObject {
     public let accountId: String
     unowned let app: AppModel
     /// The cards shown: the daemon's, with the local operations applied.
-    @Published public private(set) var cards: [Card] = [] { didSet { revision += 1 } }
+    /// A change shows first in the cards `Unread only` keeps, then in the
+    /// selection (`SurfaceListModel.updateLinger`).
+    @Published public private(set) var cards: [Card] = [] {
+        didSet {
+            revision += 1
+            lists.values.forEach { $0.updateLinger() }
+        }
+    }
     @Published public private(set) var loaded = false
     @Published public private(set) var options: ListOptions { didSet { revision += 1 } }
     @Published public private(set) var groupOrders: GroupOrders { didSet { revision += 1 } }
@@ -477,8 +494,11 @@ public final class AccountViewModel: ObservableObject {
     @Published public private(set) var repositories: [String] { didSet { revision += 1 } }
     @Published public private(set) var collapsed: Set<String> { didSet { revision += 1 } }
     @Published public private(set) var expanded: Set<String> { didSet { revision += 1 } }
-    /// Show muted (DESIGN.md, "Show muted"): muted cards show in gray.
-    @Published public private(set) var showMuted: Bool { didSet { revision += 1 } }
+    /// The Filter of each tab (DESIGN.md, "Filter"): the account's, shared
+    /// by the popover and the window.
+    @Published public private(set) var filters: [ListTab: ListFilter] { didSet { revision += 1 } }
+    /// `Filter` open: one value for the tabs, the popover and the window.
+    @Published public private(set) var filterOpen: Bool
     /// Compact (DESIGN.md, "Compact"): the cards of the tabs show their
     /// heading only. The account's, shared by the popover and the window.
     @Published public private(set) var compact: Bool
@@ -524,7 +544,8 @@ public final class AccountViewModel: ObservableObject {
         repositories = app.store.repositories(account: account)
         collapsed = app.store.collapsed(account: account)
         expanded = app.store.expanded(account: account)
-        showMuted = app.store.showMuted(account: account)
+        filters = app.store.filters(account: account)
+        filterOpen = app.store.filterOpen(account: account)
         compact = app.store.compact(account: account)
         expandedRows = app.store.expandedRows(account: account)
         expandedBodies = app.store.expandedBodies(account: account)
@@ -609,14 +630,25 @@ public final class AccountViewModel: ObservableObject {
         surfacesKeepSelection()
     }
 
-    /// The Show muted toggle, or a notification of a muted card. Turning it
-    /// off takes the muted cards out of the selection (DESIGN.md,
-    /// "Selection and operating on several cards").
-    public func setShowMuted(_ on: Bool) {
-        guard showMuted != on else { return }
-        showMuted = on
-        app.store.setShowMuted(on, account: accountId)
-        surfacesKeepSelection()
+    /// The Filter of a tab.
+    public func filter(_ tab: ListTab) -> ListFilter {
+        filters[tab] ?? ListFilter()
+    }
+
+    /// A change of a tab's Filter: shown at once; the cards it hides leave
+    /// the selection, and the cards `Unread only` kept on that tab go
+    /// (DESIGN.md, "Filter", "Selection").
+    public func setFilter(_ filter: ListFilter, tab: ListTab) {
+        guard self.filter(tab) != filter else { return }
+        filters[tab] = filter
+        app.store.setFilters(filters, account: accountId)
+        lists.values.forEach { $0.filterChanged(tab) }
+    }
+
+    public func setFilterOpen(_ open: Bool) {
+        guard filterOpen != open else { return }
+        filterOpen = open
+        app.store.setFilterOpen(open, account: accountId)
     }
 
     /// The Compact toggle. Turning it on moves a selected row, `+ N more`,
@@ -892,4 +924,40 @@ public final class AccountViewModel: ObservableObject {
         failureTimer = nil
         if failure != nil { failure = nil }
     }
+}
+
+/// The clock and the timer of `Unread only`'s wait (DESIGN.md, "Filter"),
+/// and its length: tests give their own, so no test waits.
+public struct LingerTiming {
+    /// Seconds a card read under `Unread only` stays once not selected.
+    public var duration: Double
+    /// Seconds, any origin, never going back.
+    public var now: () -> Double
+    /// Calls the function once, after about that many seconds, on the main
+    /// actor.
+    public var schedule: (Double, @escaping @MainActor () -> Void) -> Void
+
+    public init(
+        duration: Double = UnreadLinger.standardDuration,
+        now: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime },
+        schedule: @escaping (Double, @escaping @MainActor () -> Void) -> Void = { delay, fire in
+            DispatchQueue.main.asyncAfter(deadline: .now() + max(0, delay)) { MainActor.assumeIsolated { fire() } }
+        }
+    ) {
+        self.duration = duration
+        self.now = now
+        self.schedule = schedule
+    }
+
+    /// The development switch of the wait (docs/tasks/M8.md): the
+    /// environment variable `SHIIBAR_GH_UNREAD_ONLY_SECONDS`, a number of
+    /// seconds above 0; else the standard 5.
+    public static func duration(environment: [String: String]) -> Double {
+        guard let text = environment[environmentKey], let value = Double(text), value > 0, value.isFinite else {
+            return UnreadLinger.standardDuration
+        }
+        return value
+    }
+
+    public static let environmentKey = "SHIIBAR_GH_UNREAD_ONLY_SECONDS"
 }

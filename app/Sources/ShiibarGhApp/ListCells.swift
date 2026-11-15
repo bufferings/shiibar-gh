@@ -1171,6 +1171,9 @@ class LineView: PressView {
         needsLayout = true
     }
 
+    /// The item started or stopped fading (a card `Unread only` kept).
+    func fadingChanged() {}
+
     var snapshot: ItemSnapshot {
         guard let state else { return .none }
         return ItemSnapshot(state)
@@ -1546,7 +1549,6 @@ final class CardLineView: LineView {
         guard let line, let geometry, let env else { return }
         let card = line.card
         let list = env.context.list
-        let state = snapshot
         // The rows and the lines under them, for the press view.
         regions.items = [:]
         for row in geometry.rows { regions.items[.row(row.id)] = row.frame }
@@ -1589,8 +1591,30 @@ final class CardLineView: LineView {
             }
         }
         endControls()
-        let alpha: CGFloat = state.dragged ? 0.35 : 1
-        if alphaValue != alpha { alphaValue = alpha }
+        updateAlpha(animated: false)
+    }
+
+    /// Dragged: faint. A card `Unread only` kept, in its last 0.3 seconds:
+    /// it fades (Main.html `.card.fade`, 0.4). The opacity is the view's,
+    /// not part of its image (`DrawKey`), so the image stays the one the
+    /// card draws.
+    private func updateAlpha(animated: Bool) {
+        let alpha: CGFloat = snapshot.dragged ? 0.35 : (state?.fading == true ? Self.fadedAlpha : 1)
+        guard alphaValue != alpha else { return }
+        if animated && alpha == Self.fadedAlpha {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = UnreadLinger.fade
+                animator().alphaValue = alpha
+            }
+        } else {
+            alphaValue = alpha
+        }
+    }
+
+    static let fadedAlpha: CGFloat = 0.4
+
+    override func fadingChanged() {
+        updateAlpha(animated: true)
     }
 
     // MARK: Accessibility

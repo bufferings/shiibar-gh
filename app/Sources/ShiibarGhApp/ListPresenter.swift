@@ -33,6 +33,9 @@ final class ItemState {
     var dragged = false { didSet { if dragged != oldValue { view?.stateChanged() } } }
     /// A dragged card would land in this collapsed or empty section.
     var over = false { didSet { if over != oldValue { view?.stateChanged() } } }
+    /// A card `Unread only` kept, in its last 0.3 seconds: drawn faded by
+    /// the view's opacity, not in its image (ListCells.swift).
+    var fading = false { didSet { if fading != oldValue { view?.fadingChanged() } } }
 }
 
 @MainActor
@@ -74,6 +77,7 @@ final class ListContent: ObservableObject {
             list.$searches.map { _ in () }.eraseToAnyPublisher(),
             list.$dismissedSearch.map { _ in () }.eraseToAnyPublisher(),
             list.$expandedRows.map { _ in () }.eraseToAnyPublisher(),
+            list.$lingering.map { _ in () }.eraseToAnyPublisher(),
         ]
         Publishers.MergeMany(changes)
             .sink { [weak self] in self?.objectWillChange.send() }
@@ -82,6 +86,10 @@ final class ListContent: ObservableObject {
         list.$selectedCards.sink { [weak self] next in self?.selectedCardsChange(to: next) }.store(in: &cancellables)
         list.$dragging.sink { [weak self] next in self?.draggingChanges(to: next) }.store(in: &cancellables)
         list.$dropTarget.sink { [weak self] next in self?.dropTargetChanges(to: next) }.store(in: &cancellables)
+        list.$fading.sink { [weak self] next in self?.fadingChanges(to: next) }.store(in: &cancellables)
+        // Kept cards about to hide: the list keeps the selected item (or the
+        // first in view) where it is on the screen (DESIGN.md, "Filter").
+        list.lingerHides.sink { [weak self] cards in self?.table?.keepPlace(hiding: cards) }.store(in: &cancellables)
     }
 
     // MARK: The order
@@ -129,6 +137,7 @@ final class ListContent: ObservableObject {
             let card = String(id.dropFirst(5))
             state.marked = Self.marked(list.selectedCards).contains(card)
             state.dragged = isDragged(card, dragging: list.dragging, selected: list.selectedCards)
+            state.fading = list.fading.contains(card)
         }
         states[id] = state
         return state
@@ -165,6 +174,12 @@ final class ListContent: ObservableObject {
             states["card:" + card]?.marked = after.contains(card)
         }
         if let dragging = list.dragging { updateDragged(dragging: dragging, selected: next) }
+    }
+
+    private func fadingChanges(to next: Set<String>) {
+        for card in list.fading.symmetricDifference(next) {
+            states["card:" + card]?.fading = next.contains(card)
+        }
     }
 
     private func draggingChanges(to next: String?) {
