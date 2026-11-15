@@ -99,9 +99,27 @@ fn dot_table() {
             false,
         ),
         (
-            "a muted repository does not",
+            // DESIGN.md, "Mute": PR_1 is my own; a repository Mute leaves
+            // its card alone.
+            "a muted repository does not mute my own PR",
             &[|h| h.mute(MuteKind::Repo, "Org/App"), comment],
+            true,
+        ),
+        (
+            "a PR muted by itself does not",
+            &[|h| h.mute(MuteKind::Pr, &key("PR_1")), comment],
             false,
+        ),
+        (
+            "a team mention on a muted PR does",
+            &[
+                |h| h.mute(MuteKind::Pr, &key("PR_1")),
+                |h| {
+                    let e = h.ev("E_9", "PR_1", IngestKind::TeamMentioned);
+                    h.events(vec![e]);
+                },
+            ],
+            true,
         ),
         (
             "a mention on a muted PR does",

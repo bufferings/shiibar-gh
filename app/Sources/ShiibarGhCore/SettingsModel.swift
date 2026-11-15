@@ -23,11 +23,6 @@ public enum AccountsSelection: Equatable, Hashable {
     }
 }
 
-/// The two tabs of an owner (a segment), Owner first.
-public enum OwnerTab: String, CaseIterable {
-    case owner = "Owner", notifications = "Notifications"
-}
-
 /// A sheet Settings › Accounts shows by itself: Add account from `No
 /// accounts yet` of the popover (DESIGN.md, "Screens").
 public enum SettingsSheetRequest: Equatable {
@@ -75,7 +70,6 @@ public final class SettingsModel: ObservableObject {
     public let launch: LaunchAtLogin?
     @Published public var tab: SettingsTab = .general
     @Published public private(set) var selection: AccountsSelection?
-    @Published public var ownerTab: OwnerTab = .owner
     @Published public var config: [String: ConfigValue] = [:]
     @Published public var errors: [String: String] = [:]
     @Published public var launchOn = false
@@ -165,11 +159,9 @@ public final class SettingsModel: ObservableObject {
     // MARK: - Selection
 
     public func select(_ selection: AccountsSelection) {
-        let changed = self.selection != selection
         self.selection = selection
         switch selection {
         case .owner(let account, let owner):
-            if changed { ownerTab = .owner }
             loadOwner(account: account, owner: owner)
         case .account(let account):
             loadMutes(account)

@@ -298,12 +298,34 @@ impl RowKind {
         )
     }
 
-    /// DESIGN.md, "Dismiss": the rows that bring a dismissed card back.
-    /// A review request to a team is not one.
+    /// DESIGN.md, "Dismiss": the seven rows that bring a dismissed card
+    /// back: the mentions, the replies, the review requests (to the account
+    /// and to its team) and Reopened.
     pub fn is_return_trigger(self) -> bool {
         matches!(
             self,
-            Self::Mentioned | Self::Reply | Self::ReviewRequested | Self::Reopened
+            Self::Mentioned
+                | Self::TeamMentioned
+                | Self::Reply
+                | Self::ReplyMentioned
+                | Self::ReviewRequested
+                | Self::TeamReviewRequested
+                | Self::Reopened
+        )
+    }
+
+    /// The mentions of the account and of its team: they pass Mute
+    /// (DESIGN.md, "Mute").
+    pub fn is_mention(self) -> bool {
+        matches!(self, Self::Mentioned | Self::TeamMentioned)
+    }
+
+    /// DESIGN.md, "Dismiss": a mention or reply row made after the merge or
+    /// close keeps the PR from the automatic Dismiss.
+    pub fn keeps_after_close(self) -> bool {
+        matches!(
+            self,
+            Self::Mentioned | Self::TeamMentioned | Self::Reply | Self::ReplyMentioned
         )
     }
 
@@ -517,6 +539,12 @@ pub struct TokenRec {
 pub struct TeamRec {
     pub database_id: i64,
     pub slug: String,
+    /// The `login` of the team's organization (`organization.login` of
+    /// `GET /user/teams`). Teams saved by 0.4 lack it until the next read
+    /// of the teams; such a team has no team mention search until then
+    /// (DESIGN.md, "Updating from 0.4").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub org: Option<String>,
 }
 
 /// A review thread whose comments become Reply rows.
@@ -560,6 +588,13 @@ pub struct FailedRequest {
     /// The start of the event window, for `Events`.
     #[serde(default)]
     pub since: Option<i64>,
+    /// A team mention search left out because its alias failed (DESIGN.md,
+    /// "Fetch success and failure"): made again by the next run of any
+    /// kind, but no failure of its owner or of the account, and alone it
+    /// never makes the next run one of the failed requests only, so it
+    /// starts no fast retries.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub skipped: bool,
 }
 
 /// A PR whose events must be fetched again from `since`.
@@ -573,6 +608,10 @@ pub struct RetryRec {
     /// fetches it again.
     #[serde(default)]
     pub owner: Option<String>,
+    /// That PR was found only by a team mention search: like a closed one,
+    /// it is taken only through a return trigger, though it is open.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub team_only: bool,
 }
 
 /// What the fetcher keeps between runs for one account. PR, thread and
@@ -597,6 +636,10 @@ pub struct FetchRec {
     pub failed_requests: Vec<FailedRequest>,
     /// The start of the last full run (every request).
     pub full_run_started_at: Option<i64>,
+    /// The closed window (T) of each team mention search that failed and
+    /// has not succeeded since, by `<owner id> <org>/<team>` (lowercase):
+    /// the next full run searches from there, not from the owner's window.
+    pub team_windows: BTreeMap<String, i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -630,6 +673,16 @@ pub struct PrevValues {
     pub checks: Checks,
     pub base_status: BaseStatus,
     pub mergeable: bool,
+}
+
+/// The setting of one PR. DESIGN.md, "Mute": none, Mute or Unmute. Mute is
+/// kept in the account's Mute list by name (it outlives the PR record);
+/// Unmute is kept with the PR record (`PrRec::unmuted`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrMute {
+    None,
+    Mute,
+    Unmute,
 }
 
 /// Where a card is placed. DESIGN.md, "Card states".
@@ -708,13 +761,24 @@ pub struct PrRec {
     /// "Review"). On an unplaced PR, the detection of its merge or close.
     /// The order in Done, newest first.
     pub done_at: Option<i64>,
-    /// A Mentioned or Reply in a thread I commented in row came after the
-    /// merge or close: no automatic Dismiss.
+    /// Breaks a tie of `done_at` in Done: the larger entered later and goes
+    /// first. Every card one fetch moves to Done shares one value, so those
+    /// keep the order of their keys (DESIGN.md, "Review"). 0 for the cards
+    /// 0.4 saved, which keeps their order.
+    pub done_seq: i64,
+    /// The PR's own setting is Unmute (DESIGN.md, "Mute"). Goes with the PR
+    /// record.
+    pub unmuted: bool,
+    /// A mention or reply row (Mentioned, My team mentioned and the two
+    /// Reply kinds) was made after the merge or close: no automatic
+    /// Dismiss.
     pub keep_after_close: bool,
     pub dismissed_at: Option<i64>,
     /// The user restored the card: no automatic Dismiss.
     pub restored: bool,
-    /// While dismissed, a search or an event showed the PR closed.
+    /// While dismissed, a search or an event showed the PR closed. Kept after
+    /// a return until the next status fetch, which then detects the close
+    /// (or a reopen).
     pub seen_closed: bool,
     /// The last time the card was dismissed until it came back: events of
     /// that time make no rows after the return either (DESIGN.md,

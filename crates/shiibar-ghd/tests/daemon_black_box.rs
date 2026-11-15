@@ -1238,3 +1238,87 @@ fn dismiss_and_its_clocks_over_the_socket() {
     assert_eq!(back["dismissed_at"], Value::Null);
     daemon.stop();
 }
+
+#[test]
+fn the_pr_setting_over_the_socket() {
+    // DESIGN.md, "Wire format": `pr_mute`, `muted` and `unmute` of a PR.
+    let (dir, daemon) = setup();
+    daemon.ingest(
+        vec![pr("PR_1", "alice"), pr("PR_2", "me"), pr("PR_3", "carol")],
+        vec![],
+        vec![],
+    );
+    daemon.ok(json!({"cmd":"mute","account":"me","kind":"repo","name":"org/app"}));
+    let one = daemon.card("PR_1").unwrap();
+    assert_eq!(
+        (one["muted"].clone(), one["pr_mute"].clone()),
+        (json!(["repo"]), json!("none"))
+    );
+    let own = daemon.card("PR_2").unwrap();
+    assert_eq!(own["muted"], json!([]), "my own PR");
+    let mut cli = daemon.subscribe("cli");
+    cli.snapshot();
+    let mutes = daemon.ok(json!({"cmd":"unmute","account":"me","kind":"pr","name":"org/app#1"}));
+    assert_eq!(mutes["mutes"]["prs"], json!([]), "Unmute is not listed");
+    assert_eq!(cli.next().unwrap()["event"], "account_changed");
+    let one = daemon.card("PR_1").unwrap();
+    assert_eq!(
+        (one["muted"].clone(), one["pr_mute"].clone()),
+        (json!([]), json!("unmute"))
+    );
+    // Not found: nothing to take out.
+    let answer = daemon
+        .raw(&json!({"cmd":"unmute","account":"me","kind":"pr","name":"org/app#9"}).to_string());
+    assert_eq!(answer["code"], "not_found");
+    let answer = daemon
+        .raw(&json!({"cmd":"unmute","account":"me","kind":"pr","name":"org/app#2"}).to_string());
+    assert_eq!(answer["code"], "not_found", "my own PR is not muted");
+    // A muted card (PR_3, by the repository) is a `before` like any other.
+    for id in ["1", "3"] {
+        daemon.ok(
+            json!({"cmd":"place","account":"me","pr":format!("org/app#{id}"),
+            "tab":"review","section":"doing"}),
+        );
+    }
+    let card = daemon.ok(
+        json!({"cmd":"place","account":"me","pr":"org/app#1","tab":"review",
+        "section":"doing","before":"org/app#3"}),
+    )["card"]
+        .clone();
+    assert_eq!(card["placement"]["position"], 0);
+    let card = daemon.ok(
+        json!({"cmd":"place","account":"me","pr":"org/app#3","tab":"review",
+        "section":"doing","before":"org/app#1"}),
+    )["card"]
+        .clone();
+    assert_eq!(
+        card["placement"]["position"], 0,
+        "the muted PR_3 moves like any other"
+    );
+    // Unmute is saved.
+    let daemon = restart(daemon, dir.path(), T0 + 100);
+    assert_eq!(daemon.card("PR_1").unwrap()["pr_mute"], "unmute");
+    daemon.ok(json!({"cmd":"mute","account":"me","kind":"pr","name":"org/app#1"}));
+    let one = daemon.card("PR_1").unwrap();
+    assert_eq!(
+        (one["muted"].clone(), one["pr_mute"].clone()),
+        (json!(["pr", "repo"]), json!("mute"))
+    );
+    daemon.stop();
+}
+
+#[test]
+fn a_dev_ingest_takes_a_team_only_pr_through_a_return_trigger_only() {
+    let (_dir, daemon) = setup();
+    let ingest = |events: Vec<Value>| {
+        daemon.ok(json!({"cmd":"dev_ingest","account":"me","ingest":{
+            "prs":[pr("PR_1", "alice")],"events":events,"team_only":["PR_1"]
+        }}));
+    };
+    ingest(vec![event("C_1", "PR_1", "comment_other", T0 + 1)]);
+    assert!(daemon.card("PR_1").is_none());
+    ingest(vec![event("M_1", "PR_1", "team_mentioned", T0 + 2)]);
+    let card = daemon.card("PR_1").expect("taken");
+    assert_eq!(row_ids(&card["rows"]), ["1001:M_1"]);
+    daemon.stop();
+}

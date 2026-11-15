@@ -238,6 +238,9 @@ final class FakeAPI: DaemonAPI, @unchecked Sendable {
     /// How long the operations of DESIGN.md, "Showing what an operation
     /// did" take to answer, in nanoseconds.
     var operationDelay: UInt64 = 0
+    /// Calls that fail when their text contains one of these (a PR of a
+    /// `place` or `dismiss`).
+    var refuseContaining: [String: DaemonError] = [:]
     /// Owners `owner_add` refuses, with the error.
     var ownerErrors: [String: DaemonError] = [:]
 
@@ -272,6 +275,7 @@ final class FakeAPI: DaemonAPI, @unchecked Sendable {
         try record(call)
         if operationDelay > 0 { try? await Task.sleep(nanoseconds: operationDelay) }
         if let error = refuse[name] { throw error }
+        if let error = refuseContaining.first(where: { call.contains($0.key) })?.value { throw error }
     }
     func read(_ rowIds: [String]) async throws { try await operation("read \(rowIds.joined(separator: ","))", "read") }
     func readAll(account: String) async throws { try record("read_all \(account)") }
@@ -366,10 +370,39 @@ final class FakeAPI: DaemonAPI, @unchecked Sendable {
     func shutdown() async throws { try record("shutdown") }
 }
 
-/// A suite of its own, removed by the test.
+/// UserDefaults kept in memory only: a test leaves no file in
+/// ~/Library/Preferences (a suite of its own, even removed with
+/// `removePersistentDomain(forName:)`, left one per test). Every call the
+/// app and the tests make is answered from the dictionary; the suite name
+/// is never written to.
+final class MemoryDefaults: UserDefaults {
+    private var values: [String: Any] = [:]
+
+    init() {
+        super.init(suiteName: "shiibar.gh.tests.memory")!
+    }
+
+    override func object(forKey key: String) -> Any? { values[key] }
+    override func set(_ value: Any?, forKey key: String) { values[key] = value }
+    override func set(_ value: Bool, forKey key: String) { values[key] = value }
+    override func set(_ value: Int, forKey key: String) { values[key] = value }
+    override func set(_ value: Double, forKey key: String) { values[key] = value }
+    override func removeObject(forKey key: String) { values[key] = nil }
+    override func string(forKey key: String) -> String? { values[key] as? String }
+    override func data(forKey key: String) -> Data? { values[key] as? Data }
+    override func bool(forKey key: String) -> Bool { values[key] as? Bool ?? false }
+    override func integer(forKey key: String) -> Int { values[key] as? Int ?? 0 }
+    override func array(forKey key: String) -> [Any]? { values[key] as? [Any] }
+    override func stringArray(forKey key: String) -> [String]? { values[key] as? [String] }
+    override func dictionary(forKey key: String) -> [String: Any]? { values[key] as? [String: Any] }
+    override func dictionaryRepresentation() -> [String: Any] { values }
+    override func removePersistentDomain(forName domainName: String) { values = [:] }
+}
+
+/// Defaults of a test's own (in memory) and a name the test may pass to
+/// `removePersistentDomain(forName:)`.
 func testDefaults() -> (UserDefaults, String) {
-    let name = "shiibar.gh.tests." + UUID().uuidString
-    return (UserDefaults(suiteName: name)!, name)
+    (MemoryDefaults(), "shiibar.gh.tests.memory")
 }
 
 /// Wait for the tasks the models start.

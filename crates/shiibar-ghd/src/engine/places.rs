@@ -21,19 +21,21 @@ fn wire_section(section: Section) -> proto::Section {
 impl Engine {
     // ------------------------------------------------------------ positions
 
-    /// The order key of a card inside its section: muted cards last, then
-    /// the user's rank, or in Done the newest entry first (the detection of
-    /// the merge or close, or the user's move to Done).
-    fn order_key(&self, pr: &PrRec) -> (bool, i64, String) {
-        let primary = match pr.done_at {
-            Some(at) => -at,
-            None => pr.place.map_or(0, |p| p.rank),
+    /// The order key of a card inside its section, Mute aside (DESIGN.md,
+    /// "Card states"): the user's rank, or in Done the newest entry first
+    /// (the detection of the merge or close, or the user's move to Done),
+    /// the later entry first within one second, and the key within one
+    /// fetch.
+    fn order_key(&self, pr: &PrRec) -> (i64, i64, String) {
+        let (primary, secondary) = match pr.done_at {
+            Some(at) => (-at, -pr.done_seq),
+            None => (pr.place.map_or(0, |p| p.rank), 0),
         };
-        (self.card_muted(pr), primary, pr.key.clone())
+        (primary, secondary, pr.key.clone())
     }
 
     /// The position of every placed card in the lists, by PR key. DESIGN.md,
-    /// "Wire format": `position` counts from 0, muted cards last.
+    /// "Wire format": `position` counts from 0, muted cards included.
     pub(super) fn positions(&self) -> HashMap<String, u32> {
         let mut sections: HashMap<(String, PlacedTab, proto::Section), Vec<&PrRec>> =
             HashMap::new();
@@ -124,8 +126,7 @@ impl Engine {
     }
 
     /// Automatic additions and `Add to …` go to the end: after every card of
-    /// the section, so after the cards that are not muted, and a muted card
-    /// after the muted ones (DESIGN.md, "Review").
+    /// the section, muted or not (DESIGN.md, "Review").
     pub(super) fn place_at_end(&mut self, key: &str, tab: PlacedTab, section: Section) {
         let Some(account) = self.data.prs.get(key).map(|p| p.account.clone()) else {
             return;
@@ -173,6 +174,9 @@ impl Engine {
         let from = pr.place;
         let from_done = from.is_some() && pr.done_at.is_some();
         let now = self.clock.at;
+        // A move to Done by the user enters it now, before the cards that
+        // entered it earlier in the same second (DESIGN.md, "Review").
+        let done_seq = self.next_done_seq();
         // Where the card goes: a tab and its section, or that tab's Done.
         let (tab, section, to_done) = match args.tab {
             proto::PlaceTab::None => {
@@ -187,7 +191,12 @@ impl Engine {
                     // An unplaced open PR is in no Done. An unplaced closed
                     // one keeps the time it entered Done, or counts its n
                     // days from now when it comes from outside Done.
-                    pr.done_at = if open { None } else { pr.done_at.or(Some(now)) };
+                    if open {
+                        pr.done_at = None;
+                    } else if pr.done_at.is_none() {
+                        pr.done_at = Some(now);
+                        pr.done_seq = done_seq;
+                    }
                 }
                 return self.card_of(&pr_key);
             }
@@ -220,8 +229,11 @@ impl Engine {
             // takes the end of Todo (Mine) when it comes from elsewhere.
             if !open && from.is_none() {
                 self.place_at_end(&pr_key, tab, section);
-                if let Some(pr) = self.pr_mut(&pr_key) {
-                    pr.done_at = pr.done_at.or(Some(now));
+                if let Some(pr) = self.pr_mut(&pr_key)
+                    && pr.done_at.is_none()
+                {
+                    pr.done_at = Some(now);
+                    pr.done_seq = done_seq;
                 }
                 return self.card_of(&pr_key);
             }
@@ -237,6 +249,7 @@ impl Engine {
             }
             if let Some(pr) = self.pr_mut(&pr_key) {
                 pr.done_at = Some(now);
+                pr.done_seq = done_seq;
             }
             return self.card_of(&pr_key);
         }
@@ -258,9 +271,6 @@ impl Engine {
                             && view_of(other) == Some((tab, wire_section(section)))
                     })
                     .ok_or_else(|| invalid(format!("{before} is not in that section")))?;
-                if self.card_muted(target) {
-                    return Err(invalid(format!("{before} is muted")));
-                }
                 members
                     .iter()
                     .position(|k| *k == target.key)
@@ -337,7 +347,8 @@ impl Engine {
         pr.dismissed_at = None;
         pr.prev = None;
         pr.collected = false;
-        pr.seen_closed = false;
+        // `seen_closed` stays: a merge or close seen while dismissed holds
+        // until the next status fetch tells it (`apply_pr`).
         if restored {
             pr.restored = true;
         }
@@ -384,7 +395,7 @@ impl Engine {
     /// of the merge or close, whichever is later; an unplaced one n days
     /// after the detection or its removal from outside Done; one outside Done
     /// never. A restored card and one
-    /// with a Mentioned or Reply row after the close never go.
+    /// with a mention or reply row made after the close never go.
     pub(super) fn auto_dismiss_at(&self, pr: &PrRec) -> Option<i64> {
         if pr.state == PrState::Open
             || pr.dismissed_at.is_some()
@@ -528,13 +539,32 @@ impl Engine {
             .iter()
             .any(|m| same_mute(kind, m, &stored));
         if !present && let Some(record) = self.account_mut(&id) {
-            mute_list_mut(&mut record.mutes, kind).push(stored);
+            mute_list_mut(&mut record.mutes, kind).push(stored.clone());
+        }
+        // DESIGN.md, "Wire format": `mute` of a PR makes its own setting
+        // Mute, from Unmute too.
+        if kind == proto::MuteKind::Pr {
+            let unmuted: Vec<String> = self
+                .data
+                .prs
+                .values()
+                .filter(|pr| pr.account == id && pr.unmuted && same_pr(pr, &stored))
+                .map(|pr| pr.key.clone())
+                .collect();
+            for key in unmuted {
+                if let Some(pr) = self.pr_mut(&key) {
+                    pr.unmuted = false;
+                }
+            }
         }
         Ok(self.wire_mutes(&id))
     }
 
     /// `unmute`: muted rows that are unread turn blue, and raise the menu bar
-    /// dot (DESIGN.md, "How unread rows go away").
+    /// dot (DESIGN.md, "How unread rows go away"). A PR is taken out of
+    /// Mute as `Unmute this pull request` does (DESIGN.md, "Mute"): its own
+    /// Mute goes, and when its repository or author would still mute it,
+    /// its own setting becomes Unmute.
     pub fn unmute(
         &mut self,
         account: &str,
@@ -546,15 +576,48 @@ impl Engine {
         let Some(record) = self.data.accounts.get(&id) else {
             return Err(not_found(format!("account {account}")));
         };
-        let Some(index) = mute_list(&record.mutes, kind)
+        let index = mute_list(&record.mutes, kind)
             .iter()
-            .position(|m| same_mute(kind, m, name))
-        else {
-            return Err(not_found(format!("mute {name}")));
+            .position(|m| same_mute(kind, m, name));
+        // The PR's record and whether its repository or author mutes it
+        // with its own setting none.
+        let pr = (kind == proto::MuteKind::Pr)
+            .then(|| {
+                self.data
+                    .prs
+                    .values()
+                    .find(|pr| pr.account == id && same_pr(pr, name))
+            })
+            .flatten()
+            .map(|pr| (pr.key.clone(), pr.unmuted, !self.others_mute(pr).is_empty()));
+        let set_unmute = match (index, &pr) {
+            // Not in the list, and no record: nothing to take out.
+            (None, None) => return Err(not_found(format!("mute {name}"))),
+            // Already Unmute: no change.
+            (None, Some((_, true, _))) => false,
+            (None, Some((_, false, by_others))) => {
+                // Setting none and not muted otherwise, which is always so
+                // for the account's own PR (a repository or user Mute
+                // leaves its card alone): nothing to take out.
+                if !by_others {
+                    return Err(not_found(format!("mute {name}")));
+                }
+                true
+            }
+            (Some(_), Some((_, unmuted, by_others))) => !unmuted && *by_others,
+            (Some(_), None) => false,
         };
         let before = self.blue_rows(&id);
-        if let Some(record) = self.account_mut(&id) {
+        if let Some(index) = index
+            && let Some(record) = self.account_mut(&id)
+        {
             mute_list_mut(&mut record.mutes, kind).remove(index);
+        }
+        if set_unmute
+            && let Some((key, _, _)) = &pr
+            && let Some(record) = self.pr_mut(key)
+        {
+            record.unmuted = true;
         }
         self.raise_dot_if_new(&id, &before);
         Ok(self.wire_mutes(&id))

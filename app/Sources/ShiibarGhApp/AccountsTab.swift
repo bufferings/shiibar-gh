@@ -1,5 +1,6 @@
 // Settings › Accounts: the sidebar of accounts and owners, the account pane
-// with its Muted lists, the owner pane with its two tabs, and the sheets (Settings.html,
+// with its API usage and Muted lists, the owner pane on one page without
+// tabs, and the sheets (Settings.html,
 // SettingsOwner.html, Sheets.html, Keychain.html; DESIGN.md, "Settings ›
 // Accounts" and "Settings rules").
 
@@ -194,6 +195,21 @@ struct AccountPane: View {
                 if !account.owners.isEmpty { Rectangle().fill(Palette.itemDivider.color).frame(height: 1) }
             }
         }
+        Section2(title: "API usage") {
+            ForEach(Array(ApiUsageLine.lines(account.rateLimit).enumerated()), id: \.offset) { index, line in
+                Item(first: index == 0) {
+                    Label2(title: line.title, sub: line.detail)
+                    Control {
+                        Text(line.value)
+                            .font(.system(size: 12).monospacedDigit())
+                            .fontWeight(line.warn ? .semibold : .regular)
+                            .foregroundColor(line.warn ? Palette.caution.color : Palette.text.color)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                }
+            }
+        }
         Section2(title: "Muted") {
             MutedRow(model: model, account: account, kind: .repo, title: "Repositories", detail: SettingsText.mutedReposDetail, first: true)
             MutedRow(model: model, account: account, kind: .user, title: "Users", detail: SettingsText.mutedUsersDetail)
@@ -240,59 +256,47 @@ struct OwnerPane: View {
     var copy: () -> Void
     @State private var confirmRemove = false
 
+    /// One page, boxes from the top: Owner, Notifications, Events, Remove
+    /// (DESIGN.md, "Settings › Accounts", rule 7). The right side scrolls
+    /// when the page is taller than the window.
     var body: some View {
-        HStack {
-            Spacer()
-            Picker("", selection: $model.ownerTab) {
-                ForEach(OwnerTab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
-            Spacer()
-        }
-        .padding(.bottom, 4)
         ErrorText(text: model.errors["owner:" + owner.id])
-        switch model.ownerTab {
-        case .owner:
-            Section2(title: "Owner") {
-                SettingRow(title: "Enabled", sub: SettingsText.enabledDetail, first: true) {
-                    Toggle("", isOn: Binding(get: { owner.enabled }, set: { model.setOwnerEnabled(owner, of: account, $0) }))
-                        .toggleStyle(.switch).labelsHidden().controlSize(.small)
-                }
+        Section2(title: "Owner") {
+            SettingRow(title: "Enabled", sub: SettingsText.enabledDetail, first: true) {
+                Toggle("", isOn: Binding(get: { owner.enabled }, set: { model.setOwnerEnabled(owner, of: account, $0) }))
+                    .toggleStyle(.switch).labelsHidden().controlSize(.small)
             }
-            Section2(title: "Remove") {
-                SettingRow(title: "Remove this owner", sub: SettingsText.removeOwnerDetail, first: true) {
-                    SettingsButton(title: "Remove…") { confirmRemove = true }
-                }
+        }
+        Section2(title: "Notifications") {
+            SettingRow(title: SettingsText.notifyTitle(owner.displayName), sub: SettingsText.notifyDetail, first: true) {
+                Toggle("", isOn: Binding(get: { owner.notify }, set: { model.setOwnerNotify(owner, of: account, $0) }))
+                    .toggleStyle(.switch).labelsHidden().controlSize(.small)
             }
-            .alert(SettingsText.removeOwnerTitle(owner.displayName), isPresented: $confirmRemove) {
-                Button("Remove") { model.removeOwner(owner, of: account) }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text(SettingsText.removeOwnerDetail)
+            SettingRow(title: "Skip draft pull requests", sub: SettingsText.skipDraftsDetail) {
+                Toggle("", isOn: Binding(get: { owner.skipDrafts }, set: { model.setSkipDrafts(owner, of: account, $0) }))
+                    .toggleStyle(.switch).labelsHidden().controlSize(.small)
             }
-        case .notifications:
-            Section2(title: "Notifications") {
-                SettingRow(title: SettingsText.notifyTitle(owner.displayName), sub: SettingsText.notifyDetail, first: true) {
-                    Toggle("", isOn: Binding(get: { owner.notify }, set: { model.setOwnerNotify(owner, of: account, $0) }))
-                        .toggleStyle(.switch).labelsHidden().controlSize(.small)
-                }
-                SettingRow(title: "Skip draft pull requests", sub: SettingsText.skipDraftsDetail) {
-                    Toggle("", isOn: Binding(get: { owner.skipDrafts }, set: { model.setSkipDrafts(owner, of: account, $0) }))
-                        .toggleStyle(.switch).labelsHidden().controlSize(.small)
-                }
+        }
+        Section2(title: "Events") {
+            EventTable(cells: { model.cell(owner.id, $0) }, editable: true) { kind, column, on in
+                model.setEvent(owner, of: account, kind, column, on)
             }
-            Section2(title: "Events") {
-                EventTable(cells: { model.cell(owner.id, $0) }, editable: true) { kind, column, on in
-                    model.setEvent(owner, of: account, kind, column, on)
-                }
-                .padding(EdgeInsets(top: 4, leading: 10, bottom: 8, trailing: 10))
-                ErrorText(text: model.errors["events:" + owner.id]).padding(.horizontal, 14)
-                SettingRow(title: "Copy table from another owner", sub: SettingsText.copyDetail) {
-                    SettingsButton(title: "Copy…", enabled: !model.otherOwners(of: owner.id, in: account).isEmpty, action: copy)
-                }
+            .padding(EdgeInsets(top: 4, leading: 10, bottom: 8, trailing: 10))
+            ErrorText(text: model.errors["events:" + owner.id]).padding(.horizontal, 14)
+            SettingRow(title: "Copy table from another owner", sub: SettingsText.copyDetail) {
+                SettingsButton(title: "Copy…", enabled: !model.otherOwners(of: owner.id, in: account).isEmpty, action: copy)
             }
+        }
+        Section2(title: "Remove") {
+            SettingRow(title: "Remove this owner", sub: SettingsText.removeOwnerDetail, first: true) {
+                SettingsButton(title: "Remove…") { confirmRemove = true }
+            }
+        }
+        .alert(SettingsText.removeOwnerTitle(owner.displayName), isPresented: $confirmRemove) {
+            Button("Remove") { model.removeOwner(owner, of: account) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(SettingsText.removeOwnerDetail)
         }
     }
 }

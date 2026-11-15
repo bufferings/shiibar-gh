@@ -46,8 +46,11 @@ public enum KeyInput: Equatable {
 
 public enum KeyRules {
     /// `inDismissed`: the Dismissed list shows, where Esc goes back to the
+    /// tab. `hasSelection`: something is selected, which Esc clears in a
     /// tab.
-    public static func decide(_ press: KeyPress, inSearch: Bool, hasSearchText: Bool, inDismissed: Bool = false) -> KeyInput {
+    public static func decide(
+        _ press: KeyPress, inSearch: Bool, hasSearchText: Bool, inDismissed: Bool = false, hasSelection: Bool = false
+    ) -> KeyInput {
         let mods = press.modifiers
         let chars = press.characters
         if mods == [.command] && chars == "q" { return .quit }
@@ -60,6 +63,8 @@ public enum KeyRules {
             case "-": return .textSize(.smaller)
             case "0": return .textSize(.reset)
             case "f" where mods == [.command]: return .key(.find)
+            // ⌘A selects the field's text in the search field.
+            case "a" where mods == [.command]: return inSearch ? .pass : .key(.selectAll)
             case "1" where mods == [.command]: return .key(.tab(.all))
             case "2" where mods == [.command]: return .key(.tab(.review))
             case "3" where mods == [.command]: return .key(.tab(.mine))
@@ -76,7 +81,11 @@ public enum KeyRules {
             }
         }
         if mods == [.shift] {
-            return chars.lowercased() == "r" ? .key(.markAllRead) : .pass
+            switch press.keyCode {
+            case KeyPress.upArrow: return .key(.extend(up: true))
+            case KeyPress.downArrow: return .key(.extend(up: false))
+            default: return chars.lowercased() == "r" ? .key(.markAllRead) : .pass
+            }
         }
         if mods == [.option] {
             switch press.keyCode {
@@ -91,7 +100,9 @@ public enum KeyRules {
         case KeyPress.downArrow: return .key(.down)
         case KeyPress.returnKey, KeyPress.enter: return .key(.open)
         case KeyPress.delete: return .key(.delete)
-        case KeyPress.escape: return inDismissed ? .key(.back) : .pass
+        case KeyPress.escape:
+            if inDismissed { return .key(.back) }
+            return hasSelection ? .key(.clearSelection) : .pass
         default:
             switch chars.lowercased() {
             case "d": return .key(.moveTo(.doing))

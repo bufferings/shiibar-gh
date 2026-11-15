@@ -204,6 +204,22 @@ body{margin:0;padding:24px;background:#e9e9ee}
 .apibar i{position:absolute;left:0;top:0;bottom:0;background:#8A8A90;border-radius:2px}
 
 .errt{font-size:11px;color:#A0390A}
+
+/* 0.5 additions */
+.op.ln.done{color:#1F8A3E}
+.smt{margin-left:auto;align-self:center;height:22px;border:none;background:transparent;border-radius:6px;color:#55555B;display:flex;align-items:center;gap:4px;padding:0 6px;font:inherit;font-size:11px;margin-bottom:3px;position:relative;white-space:nowrap}
+.smt.on{background:#DCE7F7;color:#0A4FA6}
+.smt + .dbtn{margin-left:2px}
+.sdot{width:6px;height:6px;border-radius:3px;background:#0A66D6;position:absolute;top:2px;right:1px}
+.batt{display:inline-block;position:relative;width:40px;height:12px;border-radius:3px;background:#DCDCE0;vertical-align:middle;overflow:hidden;margin:0 0 1px 5px}
+.batt i{position:absolute;left:0;top:0;bottom:0;background:#A9A9AF}
+.batt b{position:absolute;left:0;right:0;top:0;bottom:0;font-size:9px;line-height:12px;font-weight:700;text-align:center;color:#1D1D1F}
+.api.w .batt i{background:#E0A526}
+.api.w .batt b{color:#6B4E00}
+.mre{font-size:11px;color:#0A4FA6;white-space:nowrap;margin-top:2px;flex:0 0 auto}
+.t.x5{white-space:normal;line-height:16px;display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical}
+.band.drop{background:#DCE7F7;box-shadow:inset 0 0 0 1.5px #0A66D6}
+.dcount{position:absolute;right:-6px;top:-6px;min-width:16px;height:16px;padding:0 4px;box-sizing:border-box;border-radius:8px;background:#0A66D6;color:#FFFFFF;font-size:10px;font-weight:700;line-height:16px;text-align:center}
 </style>
 </head>
 <body>
@@ -216,7 +232,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
           <div class="phead">
             <div style="display: flex; flex-direction: column; flex: 1; min-width: 0">
               <div style="display: flex; align-items: center; gap: 8px"><span class="adot"></span><span style="font-weight: 600; font-size: 14px">bufferings-work</span></div>
-              <div class="m">Updated 1 min ago · <span class="api" title="GraphQL API 1,240 / 5,000 · REST API 100 / 5,000">API<span class="apibar"><i style="width: 25%"></i></span>1,240 / 5,000</span></div>
+              <div class="m">Updated 1 min ago · <span class="api">API<span class="batt"><i style="width: 25%"></i><b>25%</b></span></span></div>
             </div>
             <button class="iconbtn" aria-label="Open in window"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5"></rect><path d="M2 6h12"></path></svg></button>
           <button class="iconbtn" aria-label="Refresh"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"></path><path d="M13.5 2.5v3h-3"></path></svg></button>
@@ -228,7 +244,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
             <div style="flex: 1">SSO authorization required for example-org</div>
             <button class="btn">Authorize…</button>
           </div>
-          <div class="ptabs"><button class="ptab">All<span class="uc">6</span></button><button class="ptab on">Review<span class="uc">4</span></button><button class="ptab">Mine<span class="uc">2</span></button><button class="dbtn" aria-label="Dismissed" title="Dismissed"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><rect x="1.8" y="2.8" width="12.4" height="3.2" rx="1"></rect><path d="M3 6v7h10V6M6.5 8.8h3"></path></svg><span>12</span></button></div>
+          <div class="ptabs"><button class="ptab">All<span class="uc">6</span></button><button class="ptab on">Review<span class="uc">4</span></button><button class="ptab">Mine<span class="uc">2</span></button><button class="smt" aria-pressed="false" title="Show muted"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8s-2.4 4.5-6.5 4.5S1.5 8 1.5 8z"></path><circle cx="8" cy="8" r="2"></circle></svg><span>Show muted</span></button><button class="dbtn" aria-label="Dismissed" title="Dismissed"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><rect x="1.8" y="2.8" width="12.4" height="3.2" rx="1"></rect><path d="M3 6v7h10V6M6.5 8.8h3"></path></svg><span>12</span></button></div>
           <div style="padding: 10px 12px 14px; color: #6E6E76; font-size: 12px">(PRs in example-org are not fetched; acme-corp and Public still fetch. No triangle.)</div>
         </div>
         <div><div class="gh">Account</div><div class="group">

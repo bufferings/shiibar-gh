@@ -6,8 +6,8 @@ use shiibar_gh_client::{ClientError, request, request_json, socket_path_from_env
 use shiibar_gh_proto::{
     AccountResponse, AccountsResponse, AckResponse, ActivityResponse, At, Card, ConfigResponse,
     DismissedFilter, EventKind, EventsResponse, InfoResponse, ListResponse, MuteKind,
-    MutesResponse, OpenResponse, OwnerLookupResponse, PlaceTab, PrFilter, RefreshResponse, Request,
-    Row, Section, StatusResponse, Tab, TestResult, TokenTestResponse, Warning,
+    MutesResponse, OpenResponse, OwnerLookupResponse, PlaceTab, PrFilter, PrMute, RefreshResponse,
+    Request, Row, Section, StatusResponse, Tab, TestResult, TokenTestResponse, Warning,
 };
 use std::collections::BTreeMap;
 use std::io::{BufRead, IsTerminal};
@@ -28,8 +28,9 @@ const COMMANDS: [(&str, &str, &str); 33] = [
          order; mine: in order, then Done. --dismissed prints the Dismissed list\n      \
          instead, newest first (--tab is ignored). Marks: [review:todo] or [mine]\n      \
          for the place, [review requested] for a PR awaiting your review, [muted],\n      \
-         and the days left of a dismissed card. --search keeps the PRs where every\n      \
-         word of <text> matches",
+         [unmuted] for a PR whose own setting is Unmute, and the days left of a\n      \
+         dismissed card. Muted PRs are listed too. --search keeps the PRs where\n      \
+         every word of <text> matches",
     ),
     (
         "status",
@@ -70,13 +71,21 @@ const COMMANDS: [(&str, &str, &str); 33] = [
         "mute",
         "pr|repo|user <name> --account <a>",
         "Mute a pull request (owner/repo#number), a repository (owner/repo) or a\n      \
-         user (login): its cards turn gray and only mentions notify",
+         user (login): its cards are hidden unless Show muted is on, and only\n      \
+         mentions of you and your teams notify. A repository or user Mute leaves\n      \
+         the cards of your own PRs alone",
     ),
-    ("unmute", "pr|repo|user <name> --account <a>", "End a Mute"),
+    (
+        "unmute",
+        "pr|repo|user <name> --account <a>",
+        "End a Mute. unmute pr takes the PR out of Mute: when its repository or\n      \
+         author still mutes it, its own setting becomes Unmute. A name without a\n      \
+         PR record only leaves the Mute list",
+    ),
     (
         "mutes",
         "--account <a> [--json]",
-        "Print the Mute lists of an account",
+        "Print the Mute lists of an account (not the PRs set to Unmute)",
     ),
     (
         "refresh",
@@ -847,10 +856,12 @@ fn card_line(card: &Card, logins: &BTreeMap<String, String>) -> String {
     } else {
         ""
     };
-    let muted = if card.muted.is_empty() {
-        ""
-    } else {
+    let muted = if !card.muted.is_empty() {
         " [muted]"
+    } else if card.pr_mute.is(PrMute::Unmute) {
+        " [unmuted]"
+    } else {
+        ""
     };
     let left = card
         .dismiss_expires_at

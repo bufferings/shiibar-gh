@@ -205,6 +205,36 @@ final class RealDaemonTests: XCTestCase {
         }
         XCTAssertEqual(placed.first { $0.pr == "example-org/api#1" }?.placement?.section, .known(.doing), "the daemon moved it")
         XCTAssertNil(data.failure)
+
+        // 0.5's Mute: a repository Mute, then `Unmute this pull request` on
+        // one of its PRs keeps that PR out of Mute (`pr_mute` unmute), shown
+        // at once and by the daemon.
+        _ = try await api.mute(account: "me", kind: .repo, name: "example-org/api")
+        var muted: [Card] = []
+        for _ in 0..<100 {
+            muted = try await api.list(ListQuery(account: "me"))
+            if muted.allSatisfy(\.isMuted) { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertEqual(muted.first { $0.pr == "example-org/api#1" }?.muted, [.known(.repo)])
+        XCTAssertEqual(muted.first { $0.pr == "example-org/api#1" }?.prMute, .known(.none))
+        try await wait { data.cards.first { $0.pr == "example-org/api#1" }?.isMuted == true }
+        XCTAssertFalse(view.sections.contains { $0.matching.contains { $0.pr == "example-org/api#1" } }, "hidden while Show muted is off")
+        view.toggleShowMuted()
+        let menu = view.rightClick(.header(card: "3407303:PR_1"))
+        XCTAssertTrue(menu.contains { $0?.title == "Unmute this pull request" })
+        view.perform(.unmute(.pr, "example-org/api#1"))
+        XCTAssertEqual(data.cards.first { $0.pr == "example-org/api#1" }?.isMuted, false, "shown at once")
+        var unmuted: [Card] = []
+        for _ in 0..<100 {
+            unmuted = try await api.list(ListQuery(account: "me"))
+            if unmuted.first(where: { $0.pr == "example-org/api#1" })?.prMute == .known(.unmute) { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertEqual(unmuted.first { $0.pr == "example-org/api#1" }?.prMute, .known(.unmute))
+        XCTAssertEqual(unmuted.first { $0.pr == "example-org/api#1" }?.muted, [])
+        XCTAssertNil(data.failure)
+        _ = try await api.unmute(account: "me", kind: .repo, name: "example-org/api")
         model.surfaceClosed(.popover, account: "3407303")
 
         // Text size goes through the daemon and comes back as config_changed.

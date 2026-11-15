@@ -222,21 +222,22 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(view.sections[0].cards.map(\.id), ["R1", "T3"])
         api.clearCalls()
         api.operationDelay = 0
-        view.select(.header(card: "T2"))
+        view.select(.header(card: "T4"))
         view.press(.reorder(up: true))
         await settle()
-        XCTAssertEqual(calls("place"), ["place bufferings-work example-org/web#230 review todo before example-org/api#407"],
+        XCTAssertEqual(calls("place"), ["place bufferings-work example-org/api#415 review todo before example-org/web#230"],
                        "`before` names the PR")
     }
 
-    func testDraggingByTheGripPlacesTheCardInBothSurfaces() async {
+    func testDraggingACardPlacesItInBothSurfaces() async {
         let popover = await loaded()
         popover.openTab(.review)
         let window = popover.data.list(.window)
         window.openTab(.review)
         api.operationDelay = 100_000_000
         popover.beginDrag("T4")
-        XCTAssertEqual(popover.dragOver(.card("T1", lowerHalf: false)), DropTarget(section: "review|todo", position: .before("T1")))
+        XCTAssertEqual(popover.dragOver(.card("T1", lowerHalf: false)), DropTarget(section: "review|todo", position: .top), "the first card")
+        XCTAssertEqual(popover.dragOver(.card("T2", lowerHalf: false)), DropTarget(section: "review|todo", position: .before("T2")))
         // Done takes a drop anywhere, by its own order: no position.
         XCTAssertEqual(popover.dragOver(.header("review|done")), DropTarget(section: "review|done", position: .byDefault))
         XCTAssertEqual(popover.dragOver(.card("D1", lowerHalf: true)), DropTarget(section: "review|done", position: .byDefault))
@@ -244,16 +245,16 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(window.sections[3].cards.map(\.id), ["T4", "D1"], "newest entry first, in the window too")
         try? await Task.sleep(nanoseconds: 200_000_000)
         await settle()
-        // And out of Done again by its grip.
+        // And out of Done again, onto a heading: the top of the section.
         popover.beginDrag("T4")
         XCTAssertTrue(popover.drop(.header("review|doing")))
         XCTAssertNil(popover.dragging)
-        XCTAssertEqual(window.sections[0].cards.map(\.id), ["R1", "T4"], "the window shows it too")
+        XCTAssertEqual(window.sections[0].cards.map(\.id), ["T4", "R1"], "the window shows it too")
         try? await Task.sleep(nanoseconds: 200_000_000)
         await settle()
         XCTAssertEqual(calls("place"), [
             "place bufferings-work example-org/api#415 review done",
-            "place bufferings-work example-org/api#415 review doing bottom",
+            "place bufferings-work example-org/api#415 review doing top",
         ])
         // A drop where the card already is sends nothing.
         api.clearCalls()
@@ -340,7 +341,11 @@ final class AppModelTests: XCTestCase {
         view.setSearch("renovate")
         view.perform(.markAllRead)
         await settle()
-        XCTAssertEqual(calls("read"), ["read m1", "read t6,t7"], "after the search, folded and muted rows too")
+        XCTAssertEqual(calls("read"), ["read m1"], "the muted cards Show muted hides are left out")
+        view.toggleShowMuted()
+        view.perform(.markAllRead)
+        await settle()
+        XCTAssertEqual(calls("read"), ["read m1", "read t6,t7"], "after the search, folded and muted rows shown too")
         XCTAssertFalse(api.calls.contains { $0.hasPrefix("read_all") })
     }
 
@@ -426,13 +431,14 @@ final class AppModelTests: XCTestCase {
         view.perform(.expandRows(card: "T1"))
         model.surfaceClosed(.window, account: "3407303")
         XCTAssertEqual(view.search, "retry", "losing the focus keeps it")
-        XCTAssertEqual(view.expandedRows, [], "but the rows show three again")
+        XCTAssertEqual(view.expandedRows, ["T1"], "the rows stay expanded until Show less")
         model.surfaceDisplayed(.window, account: "3407303", false)
         XCTAssertEqual(view.search, "")
     }
 
     func testFoldsAndExpansionsAreKeptPerSectionAndShared() async {
         let popover = await loaded()
+        popover.data.setShowMuted(true)
         popover.openTab(.review)
         popover.perform(.toggleMore("review|todo"))
         XCTAssertEqual(popover.sections[1].foldLine, "Show less")
@@ -454,7 +460,10 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(store.expanded(account: "3407303"), [])
     }
 
-    func testRowsExpandUntilThePopoverCloses() async {
+    /// DESIGN.md, "Rows in a card": "+ N more" stays expanded until `Show
+    /// less`, across closing, kept per account and PR and shared by the
+    /// popover and the window; forgotten once the card is gone.
+    func testRowsStayExpandedUntilShowLess() async {
         let view = await loaded()
         view.openTab(.review)
         view.select(.moreRows(card: "T1"))
@@ -462,12 +471,57 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(view.expandedRows, ["T1"])
         XCTAssertEqual(view.selection, .header(card: "T1"))
         XCTAssertTrue(view.items.contains(.olderActivity(card: "T1")))
+        XCTAssertEqual(view.items.last { $0.owningCard == "T1" }, .lessRows(card: "T1"), "Show less ends the rows")
         view.select(.olderActivity(card: "T1"))
         view.press(.open)
         XCTAssertEqual(opener.opened.map(\.absoluteString), ["https://github.com/p/T1"])
         model.surfaceOpened(.popover, account: "3407303")
         model.surfaceClosed(.popover, account: "3407303")
+        XCTAssertEqual(view.expandedRows, ["T1"], "closing keeps it")
+        XCTAssertEqual(view.data.list(.window).expandedRows, ["T1"], "the window shares it")
+        let store = UIStateStore(defaults: defaults)
+        XCTAssertEqual(store.expandedRows(account: "3407303"), ["T1"])
+        XCTAssertEqual(AccountViewModel(account: "3407303", app: model).expandedRows, ["T1"], "read back")
+        view.select(.lessRows(card: "T1"))
+        XCTAssertEqual(view.selectedCards.cards, ["T1"], "Show less selects its card")
+        view.press(.open)
         XCTAssertEqual(view.expandedRows, [])
+        XCTAssertEqual(view.selection, .moreRows(card: "T1"), "+ N more takes the place of Show less")
+        XCTAssertEqual(store.expandedRows(account: "3407303"), [])
+        view.perform(.expandRows(card: "T1"))
+        api.cards = sampleCards().filter { $0.id != "T1" }
+        view.data.reload()
+        await settle()
+        XCTAssertEqual(store.expandedRows(account: "3407303"), [], "the card is gone")
+    }
+
+    /// DESIGN.md, "Row body": `more` and `less` keep the selection and the
+    /// unread state; the state is kept per account and row until `less`,
+    /// and forgotten when the row is gone.
+    func testRowBodiesExpandUntilLess() async {
+        let view = await loaded()
+        view.openTab(.review)
+        view.select(.header(card: "T2"))
+        view.perform(.toggleBody(row: "A"))
+        XCTAssertEqual(view.expandedBodies, ["A"])
+        XCTAssertEqual(view.selection, .header(card: "T2"), "the selection stays")
+        await settle()
+        XCTAssertEqual(calls("read"), [], "not read")
+        XCTAssertEqual(view.data.list(.window).expandedBodies, ["A"])
+        let store = UIStateStore(defaults: defaults)
+        XCTAssertEqual(store.expandedBodies(account: "3407303"), ["A"])
+        model.surfaceOpened(.popover, account: "3407303")
+        model.surfaceClosed(.popover, account: "3407303")
+        XCTAssertEqual(view.expandedBodies, ["A"], "kept across closing")
+        view.perform(.toggleBody(row: "A"))
+        XCTAssertEqual(view.expandedBodies, [])
+        view.perform(.toggleBody(row: "B"))
+        var gone = sampleCards()
+        gone[1].rows.remove(at: 1)
+        api.cards = gone
+        view.data.reload()
+        await settle()
+        XCTAssertEqual(store.expandedBodies(account: "3407303"), [], "the row was deleted")
     }
 
     func testGroupOrdersAreKeptAndNewRepositoriesComeLast() async {
@@ -522,6 +576,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(notifier.shown, [note])
         model.notificationClicked(type: .single, account: "3407303", url: "https://github.com/x", pr: "example-org/api#402")
         XCTAssertEqual(shown, ["3407303 popover"])
+        XCTAssertTrue(view.data.showMuted, "T7 is muted: Show muted turns on to show it")
         XCTAssertEqual(view.tab, .review)
         XCTAssertEqual(view.search, "")
         XCTAssertEqual(view.selection, .header(card: "T7"))
@@ -542,6 +597,11 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(view.data.list(.window).selection, .header(card: "M1"))
         model.notificationClicked(type: .summary, account: "583231", url: nil)
         XCTAssertEqual(popovers, ["583231"])
+        // A summary with the window open: the window comes to the front, as
+        // for a click on the menu bar icon.
+        model.notificationClicked(type: .summary, account: "3407303", url: nil)
+        XCTAssertEqual(popovers, ["583231"])
+        XCTAssertEqual(shown.last, "3407303 window")
     }
 
     /// The notification came before the list: the card shows once it is
@@ -628,45 +688,18 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(api.calls, [], "⌘− at 9 sends nothing")
     }
 
-    // MARK: Selected text
+    // MARK: Copy
 
-    func testSelectingAnotherItemClearsTheText() async {
-        let view = await loaded()
-        let text = FakeTextSelection()
-        view.textSelection = text
-        view.select(.header(card: "T1"))
-        text.text = "retry"
-        view.select(.header(card: "T1"))
-        XCTAssertEqual(text.text, "retry", "the same item keeps it")
-        view.select(.header(card: "T2"))
-        XCTAssertNil(text.text)
-    }
-
-    func testCopyShowsInTheMenuOnlyWithSelectedTextAndCommandCBranches() async {
+    func testCommandCCopiesTheLinkAndTheMenuHasNoCopy() async {
         let view = await loaded()
         view.openTab(.review)
-        let text = FakeTextSelection()
-        view.textSelection = text
         XCTAssertFalse(view.rightClick(.header(card: "T1")).compactMap { $0?.title }.contains("Copy"))
-        text.text = "limit"
-        XCTAssertTrue(view.rightClick(.header(card: "T1")).compactMap { $0?.title }.contains("Copy"))
-        view.perform(.copySelectedText)
-        view.press(.copy)
-        text.text = nil
         view.press(.copy)
         view.select(.row(id: "A", card: "T1"))
         view.press(.copy)
-        XCTAssertEqual(copier.copied, ["limit", "limit", "https://github.com/p/T1", "https://github.com/c/A"])
-    }
-
-    func testClosingThePopoverClearsTheText() async {
-        let view = await loaded()
-        let text = FakeTextSelection()
-        view.textSelection = text
-        text.text = "x"
-        model.surfaceOpened(.popover, account: "3407303")
-        model.surfaceClosed(.popover, account: "3407303")
-        XCTAssertNil(text.text)
+        view.select(.section("review|todo"))
+        view.press(.copy)
+        XCTAssertEqual(copier.copied, ["https://github.com/p/T1", "https://github.com/c/A"], "nothing for a heading")
     }
 
     func testKeepOnTopIsKeptPerAccount() {
@@ -828,19 +861,6 @@ final class AppModelTests: XCTestCase {
         avatars.request("https://avatars.example/fail")
         await settle()
         XCTAssertEqual(loader.loads.count, 2)
-    }
-}
-
-@MainActor
-final class FakeTextSelection: TextSelecting {
-    var text: String?
-    var clears = 0
-
-    var selectedText: String? { text }
-
-    func clearSelection() {
-        text = nil
-        clears += 1
     }
 }
 

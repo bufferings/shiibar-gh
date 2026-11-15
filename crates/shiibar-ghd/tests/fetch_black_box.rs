@@ -3596,3 +3596,513 @@ fn only_a_node_reported_not_found_makes_a_pr_unreadable() {
     }
     daemon.stop();
 }
+
+// ------------------------------------------------- team mention searches
+
+/// The search texts of every `Search` request, in variable order.
+fn searches(github: &FakeGitHub) -> Vec<Vec<String>> {
+    ops(github, "Search")
+        .iter()
+        .map(|r| {
+            let vars = r.vars().as_object().unwrap();
+            let mut names: Vec<&String> = vars.keys().collect();
+            names.sort_by_key(|n| n[1..].parse::<usize>().unwrap());
+            names
+                .into_iter()
+                .map(|n| vars[n].as_str().unwrap().to_string())
+                .collect()
+        })
+        .collect()
+}
+
+fn team_searches(github: &FakeGitHub) -> Vec<String> {
+    searches(github)
+        .into_iter()
+        .flatten()
+        .filter(|q| q.contains("team:"))
+        .collect()
+}
+
+#[test]
+fn an_organization_owner_searches_the_mentions_of_each_of_its_teams() {
+    // DESIGN.md, "API usage": two searches per team of the account in the
+    // organization, D for the open ones and T for the closed ones; none for
+    // the teams of another organization, for Public or for a personal
+    // owner.
+    let github = world();
+    github.with(|w| {
+        w.owners.insert("solo".into(), "User".into());
+        w.user_teams = vec![
+            team(42, "org", "core"),
+            team(43, "Org", "infra"),
+            team(44, "other", "x"),
+        ];
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.ok(json!({"cmd":"dev_owner_add","account":ME,"owner":"solo","kind":"user"}));
+    daemon.clock(T0 + 100);
+    let all = searches(&github);
+    let window = iso(T0);
+    let org: Vec<&Vec<String>> = all.iter().filter(|q| q[0].ends_with("org:org")).collect();
+    assert_eq!(org.len(), 1, "{all:?}");
+    assert_eq!(org[0].len(), 10, "six searches and two per team");
+    assert_eq!(
+        org[0][6..],
+        [
+            "is:pr is:open org:org team:org/core updated:>=2027-01-01".to_string(),
+            format!("is:pr is:closed org:org team:org/core updated:>={window}"),
+            "is:pr is:open org:org team:org/infra updated:>=2027-01-01".to_string(),
+            format!("is:pr is:closed org:org team:org/infra updated:>={window}"),
+        ]
+    );
+    assert!(
+        org[0][6..].iter().all(|q| q.contains(" org:org ")),
+        "the owner qualifier like the other searches"
+    );
+    for other in all.iter().filter(|q| !q[0].ends_with("org:org")) {
+        assert_eq!(other.len(), 6, "Public and a personal owner: {other:?}");
+    }
+    // My team mentioned off: no team search.
+    daemon.ok(json!({"cmd":"owner_events_set","account":ME,"owner":"org",
+        "event":"team_mentioned","column":"list","on":false}));
+    github.clear_requests();
+    daemon.clock(T0 + 200);
+    assert!(team_searches(&github).is_empty());
+    assert!(!searches(&github).is_empty());
+    daemon.stop();
+}
+
+#[test]
+fn a_team_without_its_organization_has_no_search_until_the_teams_are_read() {
+    // DESIGN.md, "Updating from 0.4": the teams 0.4 saved lack the
+    // organization; until `GET /user/teams` is read again, no team search.
+    let github = world();
+    github.with(|w| w.user_teams = vec![json!({"id":42,"slug":"core"})]);
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    assert!(team_searches(&github).is_empty());
+    // A refused read keeps the saved teams: still none.
+    github.with(|w| {
+        w.teams_forbidden.insert(TOKEN.into());
+        w.user_teams = vec![team(42, "org", "core")];
+    });
+    github.clear_requests();
+    daemon.clock(T0 + 200);
+    assert!(team_searches(&github).is_empty());
+    github.with(|w| {
+        w.teams_forbidden.clear();
+    });
+    github.clear_requests();
+    daemon.clock(T0 + 300);
+    assert_eq!(team_searches(&github).len(), 2);
+    daemon.stop();
+}
+
+/// The world of the team mention tests: `me` is in `org/core` (42) and is
+/// not involved in PR_1 (open) and PR_2 (merged), which mention nothing yet.
+fn team_world() -> FakeGitHub {
+    let github = world();
+    github.with(|w| {
+        w.user_teams = vec![team(42, "org", "core")];
+        w.prs.push(pr_node("PR_1", "org", 1, "alice", json!({})));
+        w.prs.push(pr_node(
+            "PR_2",
+            "org",
+            2,
+            "alice",
+            json!({"state":"MERGED","updatedAt":iso(T0 + 50)}),
+        ));
+        w.uninvolved.insert("PR_1".into());
+        w.uninvolved.insert("PR_2".into());
+        w.team_mentions.insert(
+            "org/core".into(),
+            ["PR_1".to_string(), "PR_2".to_string()].into(),
+        );
+    });
+    github
+}
+
+#[test]
+fn a_pr_found_only_by_a_team_search_shows_only_through_a_return_trigger() {
+    let github = team_world();
+    github.with(|w| {
+        w.timeline.insert(
+            "PR_1".into(),
+            vec![issue_comment("C_1", "bob", T0 + 20, "")],
+        );
+        w.timeline.insert(
+            "PR_2".into(),
+            vec![issue_comment("C_2", "bob", T0 + 30, "")],
+        );
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    assert!(daemon.card("PR_1").is_none(), "an open PR with a comment");
+    assert!(daemon.card("PR_2").is_none(), "a merged PR with a comment");
+    // Now the team is mentioned in both.
+    github.with(|w| {
+        for (id, at) in [("PR_1", T0 + 150), ("PR_2", T0 + 160)] {
+            let pr = w.prs.iter_mut().find(|p| p["id"] == id).unwrap();
+            pr["updatedAt"] = json!(iso(at));
+            w.timeline.get_mut(id).unwrap().push(issue_comment(
+                &format!("M_{id}"),
+                "bob",
+                at,
+                &team_mention_link(42, "org", "core"),
+            ));
+        }
+    });
+    daemon.clock(T0 + 1000);
+    for id in ["PR_1", "PR_2"] {
+        let card = daemon.card(id).unwrap_or_else(|| panic!("{id} is taken"));
+        let rows = card["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "{id}: only the trigger row: {rows:?}");
+        assert_eq!(rows[0]["kind"], "team_mentioned");
+        assert_eq!(rows[0]["unread"], true);
+        assert!(card["placement"].is_null(), "{id}: not placed");
+    }
+    assert!(daemon.row("C_1").is_none());
+    daemon.stop();
+}
+
+#[test]
+fn a_team_search_hit_with_only_a_team_request_follows_the_list() {
+    // DESIGN.md, "API usage": `team:` may match a PR with only a request to
+    // the team; the List of Review requested to my team decides.
+    let review = json!({"__typename":"Team","databaseId":42,"slug":"core"});
+    for list in [false, true] {
+        let github = team_world();
+        github.with(|w| {
+            let pr = w.prs.iter_mut().find(|p| p["id"] == "PR_1").unwrap();
+            pr["reviewRequests"] = json!({"nodes":[{"requestedReviewer":review}]});
+            w.timeline.insert(
+                "PR_1".into(),
+                vec![json!({"__typename":"ReviewRequestedEvent","id":"RR_1",
+                    "createdAt":iso(T0 + 10),"actor":{"login":"alice"},
+                    "requestedReviewer":review})],
+            );
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = start(dir.path(), &github);
+        setup(&daemon);
+        if !list {
+            daemon.ok(json!({"cmd":"owner_events_set","account":ME,"owner":"org",
+                "event":"team_review_requested","column":"list","on":false}));
+        }
+        daemon.clock(T0 + 100);
+        match daemon.card("PR_1") {
+            Some(card) => {
+                assert!(list, "taken with the List off");
+                assert_eq!(card["placement"]["section"], "todo");
+            }
+            None => assert!(!list, "not taken with the List on"),
+        }
+        daemon.stop();
+    }
+}
+
+#[test]
+fn an_error_of_one_team_search_is_skipped_and_searched_again_next_run() {
+    // DESIGN.md, "Fetch success and failure": not the owner's failure; the
+    // search is left out this time, logged, and made again by the next run.
+    let github = team_world();
+    github.with(|w| {
+        w.user_teams.push(team(43, "org", "infra"));
+        w.search_errors
+            .insert("is:pr is:open org:org team:org/core".into());
+        w.prs.push(pr_node("PR_3", "org", 3, "me", json!({})));
+        w.timeline.insert(
+            "PR_1".into(),
+            vec![issue_comment(
+                "M_1",
+                "bob",
+                T0 + 20,
+                &team_mention_link(42, "org", "core"),
+            )],
+        );
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let (daemon, log) = start_logged(dir.path(), &github, "info");
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    assert!(daemon.card("PR_3").is_some(), "the other searches answered");
+    assert!(
+        daemon.card("PR_1").is_none(),
+        "the failed search found nothing"
+    );
+    assert_eq!(daemon.account(ME)["updated_at"], T0 + 100, "a success");
+    assert!(!kinds(&daemon, ME).contains(&"fetch_failed".to_string()));
+    let text = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        text.contains("failed after")
+            && text.contains("GraphQL Search (variables: 10): search failed:"),
+        "{text}"
+    );
+    github.with(|w| w.search_errors.clear());
+    github.clear_requests();
+    daemon.clock(T0 + 200);
+    assert!(
+        team_searches(&github)
+            .contains(&"is:pr is:open org:org team:org/core updated:>=2027-01-01".to_string()),
+        "searched again"
+    );
+    assert!(daemon.card("PR_1").is_some(), "found by the next run");
+    daemon.stop();
+}
+
+const CLOSED_CORE: &str = "is:pr is:closed org:org team:org/core";
+
+/// The closed team search texts of `org/core` in the requests so far.
+fn closed_core_searches(github: &FakeGitHub) -> Vec<String> {
+    team_searches(github)
+        .into_iter()
+        .filter(|q| q.starts_with(CLOSED_CORE))
+        .collect()
+}
+
+#[test]
+fn a_failed_closed_team_search_keeps_its_window_until_it_succeeds() {
+    // A merged PR whose team mention falls between the old window and the
+    // owner's next window (its last success, less five minutes) is still
+    // found and taken once the search succeeds.
+    let github = team_world();
+    github.with(|w| {
+        w.search_errors.insert(CLOSED_CORE.into());
+        let pr = w.prs.iter_mut().find(|p| p["id"] == "PR_2").unwrap();
+        pr["updatedAt"] = json!(iso(T0 + 150));
+        w.timeline.insert(
+            "PR_2".into(),
+            vec![issue_comment(
+                "M_2",
+                "bob",
+                T0 + 150,
+                &team_mention_link(42, "org", "core"),
+            )],
+        );
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    assert_eq!(daemon.account(ME)["updated_at"], T0 + 100, "a success");
+    github.with(|w| w.search_errors.clear());
+    github.clear_requests();
+    daemon.clock(T0 + 1000);
+    assert_eq!(
+        closed_core_searches(&github),
+        [format!("{CLOSED_CORE} updated:>={}", iso(T0))],
+        "the window of the failed search, not the owner's"
+    );
+    let card = daemon.card("PR_2").expect("found and taken");
+    assert_eq!(card["rows"][0]["kind"], "team_mentioned");
+    let events = ops(&github, "Events");
+    assert!(
+        events.iter().any(|e| e.vars()["since"] == iso(T0)),
+        "its events from that window"
+    );
+    // Once it succeeded, the owner's window again.
+    github.clear_requests();
+    daemon.clock(T0 + 2000);
+    assert_eq!(
+        closed_core_searches(&github),
+        [format!("{CLOSED_CORE} updated:>={}", iso(T0 + 1000 - 300))]
+    );
+    daemon.stop();
+}
+
+#[test]
+fn a_failed_team_search_is_made_again_by_runs_of_the_failed_requests() {
+    // DESIGN.md, "Fetch success and failure": a run that failed (here its
+    // notifications check) is followed by runs of the failed requests only;
+    // the skipped team search is one of them, with the same text, also when
+    // it fails again inside such a run.
+    let github = team_world();
+    github.with(|w| {
+        w.search_errors.insert(CLOSED_CORE.into());
+        let pr = w.prs.iter_mut().find(|p| p["id"] == "PR_2").unwrap();
+        pr["updatedAt"] = json!(iso(T0 + 50));
+        w.timeline.insert(
+            "PR_2".into(),
+            vec![issue_comment(
+                "M_2",
+                "bob",
+                T0 + 50,
+                &team_mention_link(42, "org", "core"),
+            )],
+        );
+    });
+    github.intercept(|req| {
+        req.path
+            .starts_with("/notifications")
+            .then(|| Resp::json(500, json!({})))
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    let text = format!("{CLOSED_CORE} updated:>={}", iso(T0));
+    // A run of the failed requests: the alias fails again.
+    github.clear_requests();
+    daemon.clock(T0 + 105);
+    assert_eq!(
+        searches(&github),
+        [vec![text.clone()]],
+        "only the failed search, its text unchanged"
+    );
+    assert!(daemon.card("PR_2").is_none());
+    // Another run of the failed requests, now without errors.
+    github.clear_overrides();
+    github.with(|w| w.search_errors.clear());
+    github.clear_requests();
+    daemon.clock(T0 + 115);
+    assert_eq!(searches(&github), [vec![text]], "made again");
+    assert!(daemon.card("PR_2").is_some(), "found by the retry");
+    daemon.stop();
+}
+
+#[test]
+fn a_team_only_pr_another_search_finds_later_is_taken_like_any_other() {
+    // The events of a PR only a team search found failed; the next run's
+    // `involves:@me` search finds it: it is taken without a trigger row.
+    let github = team_world();
+    github.with(|w| {
+        w.timeline.insert(
+            "PR_1".into(),
+            vec![issue_comment("C_1", "bob", T0 + 20, "")],
+        );
+    });
+    github
+        .intercept(|req| (req.op.as_deref() == Some("Events")).then(|| Resp::json(500, json!({}))));
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    assert!(daemon.card("PR_1").is_none());
+    github.clear_overrides();
+    github.with(|w| {
+        w.uninvolved.remove("PR_1");
+    });
+    daemon.clock(T0 + 1000);
+    let card = daemon.card("PR_1").expect("taken");
+    assert!(
+        card["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["id"] == rid("C_1"))
+    );
+    daemon.stop();
+}
+
+#[test]
+fn a_failing_search_alias_logs_one_line_with_its_request_id() {
+    // DESIGN.md, "Logs": a request GitHub answered with an error is logged
+    // with the status and `x-github-request-id`: one line for a failed
+    // request (another search's alias fails the whole request), and one for
+    // a skipped team search.
+    let github = team_world();
+    github.with(|w| {
+        w.search_errors
+            .insert("is:pr is:open author:@me org:org".into());
+        w.extra_headers
+            .push(("x-github-request-id".into(), "ABCD:1234".into()));
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let (daemon, log) = start_logged(dir.path(), &github, "info");
+    setup(&daemon);
+    let search_lines = || -> Vec<String> {
+        std::fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .filter(|l| l.contains("request of me failed after") && l.contains("GraphQL Search"))
+            .map(str::to_string)
+            .collect()
+    };
+    daemon.clock(T0 + 100);
+    let lines = search_lines();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(
+        lines[0].contains("GraphQL Search (variables: 8): search failed: ")
+            && lines[0].ends_with("(GitHub answered 200, request id ABCD:1234)"),
+        "{}",
+        lines[0]
+    );
+    assert!(
+        daemon.account(ME)["updated_at"].is_null(),
+        "the owner failed"
+    );
+    // A skipped team search: its own line in the same form.
+    github.with(|w| {
+        w.search_errors.clear();
+        w.search_errors.insert(CLOSED_CORE.into());
+    });
+    daemon.clock(T0 + 1000);
+    let lines = search_lines();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(
+        lines[1].ends_with("(GitHub answered 200, request id ABCD:1234)"),
+        "{}",
+        lines[1]
+    );
+    assert_eq!(daemon.account(ME)["updated_at"], T0 + 1000, "a success");
+    daemon.stop();
+}
+
+#[test]
+fn a_team_search_that_keeps_failing_is_no_failure_and_starts_no_fast_retries() {
+    // The skipped search does not fail its owner (its window moves on), does
+    // not hold back Updated, never shows fetch_failed, and starts no 5, 10,
+    // 20, 40 second retries: the runs keep the interval and each makes it
+    // again from its own older window.
+    let github = team_world();
+    github.with(|w| {
+        w.search_errors.insert(CLOSED_CORE.into());
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    let mut last = T0 + 100;
+    for step in 1..=7 {
+        // Within the interval: no run at all, so no fast retry.
+        github.clear_requests();
+        daemon.clock(last + 40);
+        assert!(ops(&github, "Search").is_empty(), "step {step}: no retry");
+        // At the interval: a full run, the failed search with its window.
+        let at = last + 60;
+        daemon.clock(at);
+        let all = searches(&github);
+        let org: Vec<&Vec<String>> = all.iter().filter(|q| q[0].ends_with("org:org")).collect();
+        assert_eq!(org.len(), 1, "step {step}: one full run: {all:?}");
+        assert_eq!(org[0].len(), 8, "step {step}: every search");
+        assert!(
+            org[0].contains(&format!("{CLOSED_CORE} updated:>={}", iso(T0))),
+            "step {step}: its own window"
+        );
+        assert!(
+            org[0].contains(&format!(
+                "is:pr is:closed involves:@me updated:>={} org:org",
+                iso((last - 300).max(T0))
+            )),
+            "step {step}: the owner's window moved on: {:?}",
+            org[0]
+        );
+        assert_eq!(daemon.account(ME)["updated_at"], at, "step {step}");
+        assert!(
+            !kinds(&daemon, ME).contains(&"fetch_failed".to_string()),
+            "step {step}: no fetch_failed"
+        );
+        last = at;
+    }
+    assert!(
+        last - (T0 + 100) > 300,
+        "past the five minutes of fetch_failed"
+    );
+    daemon.stop();
+}

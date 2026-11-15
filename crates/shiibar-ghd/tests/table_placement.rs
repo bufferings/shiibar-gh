@@ -131,27 +131,37 @@ fn a_placed_pr_does_not_move_on_a_review_request() {
 }
 
 #[test]
-fn a_muted_pr_still_goes_to_todo_after_the_others() {
-    // DESIGN.md, "Review": an automatic addition goes after the cards that
-    // are not muted; a muted PR after the muted ones.
+fn an_automatic_addition_goes_to_the_end_muted_or_not() {
+    // DESIGN.md, "Review": placement and ranks have nothing to do with
+    // Mute; an automatic addition goes to the end of the section.
     let mut h = H::new();
     h.prs(vec![other("PR_9")]);
     h.mute(MuteKind::Pr, &key("PR_9"));
     requested(&mut h, "PR_9", T0);
     requested(&mut h, "PR_1", T0);
-    assert_eq!(h.section(Tab::Review, Section::Todo), ["PR_1", "PR_9"]);
-    assert_eq!(h.placement("PR_9"), place("review", "todo", 1));
+    assert_eq!(h.section(Tab::Review, Section::Todo), ["PR_9", "PR_1"]);
+    assert_eq!(h.placement("PR_9"), place("review", "todo", 0));
+    h.prs(vec![other("PR_2")]);
+    h.mute(MuteKind::Pr, &key("PR_2"));
     requested(&mut h, "PR_2", T0);
+    requested(&mut h, "PR_3", T0);
     assert_eq!(
         h.section(Tab::Review, Section::Todo),
-        ["PR_1", "PR_2", "PR_9"]
+        ["PR_9", "PR_1", "PR_2", "PR_3"]
     );
-    // Unmuted, it goes back to the rank it had: it was added first.
     h.unmute(MuteKind::Pr, &key("PR_9"));
     assert_eq!(
         h.section(Tab::Review, Section::Todo),
-        ["PR_9", "PR_1", "PR_2"]
+        ["PR_9", "PR_1", "PR_2", "PR_3"],
+        "Unmute moves nothing"
     );
+    // The account's own PR goes to the end of Mine though its repository
+    // is muted.
+    h.mute(MuteKind::Repo, "org/app");
+    h.prs(vec![pr("PR_5"), pr("PR_6")]);
+    h.mute(MuteKind::Pr, &key("PR_5"));
+    h.prs(vec![pr("PR_7")]);
+    assert_eq!(h.tab(Tab::Mine), ["PR_5", "PR_6", "PR_7"]);
 }
 
 #[test]
@@ -382,16 +392,6 @@ fn place_is_invalid_in_these_cases() {
             ),
         ),
         (
-            "before a muted PR",
-            h.place(
-                &key("PR_3"),
-                r,
-                Some(Section::Todo),
-                Some(&key("PR_4")),
-                None,
-            ),
-        ),
-        (
             "before itself",
             h.place(
                 &key("PR_3"),
@@ -447,9 +447,10 @@ fn place_is_invalid_in_these_cases() {
 }
 
 #[test]
-fn muted_cards_go_last_and_move_only_among_themselves() {
-    // DESIGN.md, "Review": `position` puts the muted cards last; D/T/W move
-    // a muted card among the muted ones of the target section.
+fn place_has_nothing_to_do_with_mute() {
+    // DESIGN.md, "Wire format": `position` counts the muted cards where
+    // their rank puts them; `before` may name a muted card, and `at` and the
+    // default count every card of the section.
     let mut h = H::new();
     h.prs(vec![
         other("PR_1"),
@@ -464,18 +465,49 @@ fn muted_cards_go_last_and_move_only_among_themselves() {
     h.mute(MuteKind::Pr, &key("PR_1"));
     assert_eq!(
         h.section(Tab::Review, Section::Doing),
-        ["PR_2", "PR_3", "PR_1"]
+        ["PR_1", "PR_2", "PR_3"]
     );
-    assert_eq!(h.placement("PR_1"), place("review", "doing", 2));
+    assert_eq!(h.placement("PR_1"), place("review", "doing", 0));
+    // Before a muted card.
     h.place(
-        &key("PR_4"),
+        &key("PR_3"),
         PlaceTab::Review,
-        Some(Section::Todo),
-        None,
+        Some(Section::Doing),
+        Some(&key("PR_1")),
         None,
     )
     .unwrap();
+    assert_eq!(
+        h.section(Tab::Review, Section::Doing),
+        ["PR_3", "PR_1", "PR_2"]
+    );
+    // A muted card moves like any other: to the bottom, then to the top.
+    h.place(
+        &key("PR_1"),
+        PlaceTab::Review,
+        Some(Section::Doing),
+        None,
+        Some(At::Bottom),
+    )
+    .unwrap();
+    assert_eq!(
+        h.section(Tab::Review, Section::Doing),
+        ["PR_3", "PR_2", "PR_1"]
+    );
     h.mute(MuteKind::Pr, &key("PR_4"));
+    h.place(
+        &key("PR_4"),
+        PlaceTab::Review,
+        Some(Section::Doing),
+        None,
+        Some(At::Top),
+    )
+    .unwrap();
+    assert_eq!(
+        h.section(Tab::Review, Section::Doing),
+        ["PR_4", "PR_3", "PR_2", "PR_1"]
+    );
+    // The default to Todo from Doing is its top, muted cards included.
     h.place(
         &key("PR_2"),
         PlaceTab::Review,
@@ -484,7 +516,6 @@ fn muted_cards_go_last_and_move_only_among_themselves() {
         None,
     )
     .unwrap();
-    // A muted card to the top of Todo: first among the muted ones.
     h.place(
         &key("PR_1"),
         PlaceTab::Review,
@@ -493,18 +524,119 @@ fn muted_cards_go_last_and_move_only_among_themselves() {
         None,
     )
     .unwrap();
+    assert_eq!(h.section(Tab::Review, Section::Todo), ["PR_1", "PR_2"]);
+    assert_eq!(h.placement("PR_1"), place("review", "todo", 0));
+}
+
+#[test]
+fn ranks_saved_by_0_4_for_muted_cards_show_where_they_are() {
+    // docs/tasks/M7.md, "Database and migration": 0.4 kept one rank order
+    // for a section, muted cards included, and showed the muted ones last.
+    // 0.5 shows every card at its rank.
+    let mut h = H::new();
+    h.prs(vec![other("PR_1"), other("PR_2"), other("PR_3")]);
+    for id in ["PR_1", "PR_2", "PR_3"] {
+        h.place(
+            &key(id),
+            PlaceTab::Review,
+            Some(Section::Waiting),
+            None,
+            None,
+        )
+        .unwrap();
+    }
+    h.mute(MuteKind::Pr, &key("PR_2"));
+    let ranks: Vec<i64> = ["PR_1", "PR_2", "PR_3"]
+        .iter()
+        .map(|id| h.engine.pr_record(&full(id)).unwrap().place.unwrap().rank)
+        .collect();
+    assert_eq!(ranks, [0, 1, 2]);
     assert_eq!(
-        h.section(Tab::Review, Section::Todo),
-        ["PR_2", "PR_1", "PR_4"]
+        h.section(Tab::Review, Section::Waiting),
+        ["PR_1", "PR_2", "PR_3"]
     );
-    // The repository muted: every card of it is muted, in rank order.
-    h.mute(MuteKind::Repo, "org/app");
-    let card = h.card(&key("PR_2")).unwrap();
+    assert_eq!(h.placement("PR_2"), place("review", "waiting", 1));
+}
+
+#[test]
+fn done_puts_the_later_move_first_within_one_second() {
+    // DESIGN.md, "Review": cards moved to Done at the same time, the later
+    // move first.
+    let mut h = H::new();
+    h.prs(vec![other("PR_1"), other("PR_2"), other("PR_3")]);
+    for id in ["PR_1", "PR_2", "PR_3"] {
+        h.place(&key(id), PlaceTab::Review, Some(Section::Doing), None, None)
+            .unwrap();
+    }
+    for id in ["PR_3", "PR_1", "PR_2"] {
+        h.place(&key(id), PlaceTab::Review, Some(Section::Done), None, None)
+            .unwrap();
+    }
     assert_eq!(
-        card.muted,
-        [Lenient::Known(MuteReason::Repo)],
-        "{:?}",
-        card.muted
+        h.section(Tab::Review, Section::Done),
+        ["PR_2", "PR_1", "PR_3"]
+    );
+    // A later second still goes first.
+    h.prs(vec![other("PR_4")]);
+    h.place(
+        &key("PR_4"),
+        PlaceTab::Review,
+        Some(Section::Done),
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(h.section(Tab::Review, Section::Done)[0], "PR_4");
+}
+
+#[test]
+fn done_keeps_the_key_order_for_one_fetch() {
+    // DESIGN.md, "Review": cards one fetch moved to Done keep the order of
+    // their keys, as in 0.4, also after a move by hand in the same second.
+    let mut h = H::new();
+    h.prs(vec![other("PR_3"), other("PR_1"), other("PR_2")]);
+    for id in ["PR_3", "PR_1", "PR_2"] {
+        h.place(&key(id), PlaceTab::Review, Some(Section::Doing), None, None)
+            .unwrap();
+    }
+    h.prs(vec![other("PR_9")]);
+    h.place(
+        &key("PR_9"),
+        PlaceTab::Review,
+        Some(Section::Done),
+        None,
+        None,
+    )
+    .unwrap();
+    // The fetch in the same second as that move.
+    h.prs(vec![
+        closed("PR_3", false),
+        closed("PR_1", false),
+        closed("PR_2", false),
+    ]);
+    assert_eq!(
+        h.section(Tab::Review, Section::Done),
+        ["PR_1", "PR_2", "PR_3", "PR_9"]
+    );
+}
+
+#[test]
+fn add_to_closed_prs_keeps_the_order_of_their_detection() {
+    // DESIGN.md, "Multiple cards": `Add to Review` of merged or closed
+    // unplaced PRs keeps the time of the detection, so the order of Done is
+    // that of the detections, whatever order the requests come in.
+    let mut h = H::new();
+    h.prs(vec![other("PR_1"), other("PR_2"), other("PR_3")]);
+    h.prs(vec![closed("PR_2", false)]);
+    h.prs(vec![closed("PR_1", false), closed("PR_3", false)]);
+    for id in ["PR_3", "PR_2", "PR_1"] {
+        h.place(&key(id), PlaceTab::Review, Some(Section::Todo), None, None)
+            .unwrap();
+    }
+    assert_eq!(
+        h.section(Tab::Review, Section::Done),
+        ["PR_1", "PR_3", "PR_2"],
+        "the later detection first; one fetch in key order"
     );
 }
 

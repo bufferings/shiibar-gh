@@ -1005,6 +1005,43 @@ pub fn search_queries(
     ]
 }
 
+/// The two team mention searches of one team of an organization owner.
+/// DESIGN.md, "API usage": `team:ORG/TEAM`, ORG the owner's login and TEAM
+/// the team's slug, with the owner qualifier `org:ORG` like the other
+/// searches of the owner; the open PRs from D (`since`) and the closed ones
+/// from T (`window`). `team:` does not join teams with `OR`, so each team
+/// has its own two searches. `org:` together with `team:` was checked
+/// read-only with GraphQL `search(type: ISSUE)` on 2026-11-15: GitHub
+/// accepts it and returned the same count as `team:` alone (2 and 2, for one
+/// real team).
+pub fn team_search_queries(org: &str, slug: &str, since: &str, window: &str) -> [String; 2] {
+    [
+        format!("is:pr is:open org:{org} team:{org}/{slug} updated:>={since}"),
+        format!("is:pr is:closed org:{org} team:{org}/{slug} updated:>={window}"),
+    ]
+}
+
+/// A search text [`team_search_queries`] makes.
+pub fn is_team_query(query: &str) -> bool {
+    team_of_query(query).is_some()
+}
+
+/// The `org/team` (lowercase) of a team mention search, whatever its time.
+pub fn team_of_query(query: &str) -> Option<String> {
+    if !(query.starts_with("is:pr is:open ") || query.starts_with("is:pr is:closed ")) {
+        return None;
+    }
+    query
+        .split_whitespace()
+        .find_map(|w| w.strip_prefix("team:"))
+        .map(str::to_lowercase)
+}
+
+/// The search is one of closed PRs (`is:closed`), whose window is T.
+pub fn is_closed_query(query: &str) -> bool {
+    query.starts_with("is:pr is:closed ")
+}
+
 /// The PRs of a search answer with their `updatedAt` and state. Public
 /// leaves out registered owners. `events_fetched` is left false.
 pub fn search_hits(connection: &Value, exclude_owners: &BTreeSet<String>) -> Vec<proto::SearchHit> {

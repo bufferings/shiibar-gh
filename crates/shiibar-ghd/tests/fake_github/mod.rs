@@ -78,8 +78,18 @@ pub struct World {
     pub token_headers: BTreeMap<String, Vec<(String, String)>>,
     /// Tokens whose `GET /user/teams` answers 403.
     pub teams_forbidden: BTreeSet<String>,
-    /// The teams `GET /user/teams` lists: `{"id","slug"}`.
+    /// The teams `GET /user/teams` lists: `{"id","slug","organization"}`
+    /// (see [`team`]).
     pub user_teams: Vec<Value>,
+    /// `org/team` (lowercase) to the PR ids a `team:org/team` search finds
+    /// (the PRs that mention the team).
+    pub team_mentions: BTreeMap<String, BTreeSet<String>>,
+    /// PR ids only a `team:` search finds: the account is not involved.
+    pub uninvolved: BTreeSet<String>,
+    /// Searches whose text contains one of these answer `null` with a
+    /// GraphQL error naming their alias, the other searches of the request
+    /// answering as usual.
+    pub search_errors: BTreeSet<String>,
     /// Token to the PR ids its searches find; every PR when absent.
     pub visible: BTreeMap<String, BTreeSet<String>>,
     /// Owner login (lowercase) to `Organization` or `User`.
@@ -313,9 +323,14 @@ fn pr_by_id<'a>(world: &'a World, id: &str) -> Option<&'a Value> {
 }
 
 /// A search: `is:open` finds the open PRs, `is:closed` the others whose
-/// `updatedAt` is at or after its `updated:>=` time.
+/// `updatedAt` is at or after its `updated:>=` time. `team:org/team` keeps
+/// the PRs that mention the team.
 fn search(world: &World, token: &str, query: &str) -> Value {
     let words: Vec<&str> = query.split_whitespace().collect();
+    let team = words
+        .iter()
+        .find_map(|w| w.strip_prefix("team:"))
+        .map(str::to_lowercase);
     let public = words.contains(&"is:public");
     let closed = words.contains(&"is:closed");
     let after = words
@@ -345,6 +360,20 @@ fn search(world: &World, token: &str, query: &str) -> Value {
                 .visible
                 .get(token)
                 .is_none_or(|ids| ids.contains(p["id"].as_str().unwrap_or_default()))
+        })
+        .filter(|p| {
+            team.is_some()
+                || !world
+                    .uninvolved
+                    .contains(p["id"].as_str().unwrap_or_default())
+        })
+        .filter(|p| {
+            team.as_ref().is_none_or(|team| {
+                world
+                    .team_mentions
+                    .get(team)
+                    .is_some_and(|ids| ids.contains(p["id"].as_str().unwrap_or_default()))
+            })
         })
         .filter(|p| {
             let login = p["repository"]["owner"]["login"]
@@ -458,21 +487,29 @@ fn answer(world: &World, req: &Req) -> Resp {
                     .collect();
                 gql(json!({"node":{"timelineItems":{"nodes":queue}}}))
             }
-            // Only the `involves:@me` searches find anything, so a PR is
-            // found once per state.
+            // Only the `involves:@me` and `team:` searches find anything,
+            // so a PR is found once per state.
             "Search" => {
                 let mut data = json!({});
-                for i in 0..6 {
-                    let Some(query) = vars[format!("q{i}")].as_str() else {
+                let mut errors = vec![];
+                let count = vars.as_object().map_or(0, serde_json::Map::len);
+                for (name, query) in vars.as_object().into_iter().flatten() {
+                    let (Some(i), Some(query)) = (name.strip_prefix('q'), query.as_str()) else {
                         continue;
                     };
-                    data[format!("s{i}")] = if query.contains("involves:@me") {
+                    let alias = format!("s{i}");
+                    data[&alias] = if world.search_errors.iter().any(|e| query.contains(e)) {
+                        errors.push(json!({"type":"SERVICE_UNAVAILABLE","path":[alias],
+                            "message":"Something went wrong while executing your query."}));
+                        Value::Null
+                    } else if query.contains("involves:@me") || query.contains("team:") {
                         search(world, &req.token, query)
                     } else {
                         json!({"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]})
                     };
                 }
-                gql(data)
+                assert!(count > 0, "a Search without searches");
+                with_errors(data, errors)
             }
             "Status" => {
                 let (nodes, errors) =
@@ -617,6 +654,19 @@ pub fn issue_comment(id: &str, author: &str, at: i64, html: &str) -> Value {
     json!({"__typename":"IssueComment","id":id,"url":format!("https://github.com/c/{id}"),
            "createdAt":iso(at),"bodyText":format!("text {id}"),"bodyHTML":html,
            "author":{"__typename":"User","login":author}})
+}
+
+/// A team of `GET /user/teams`, as GitHub returns it (the fields the
+/// daemon reads).
+pub fn team(id: i64, org: &str, slug: &str) -> Value {
+    json!({"id":id,"slug":slug,"privacy":"closed","organization":{"login":org}})
+}
+
+/// A team mention link in a post, as GitHub renders it.
+pub fn team_mention_link(id: i64, org: &str, slug: &str) -> String {
+    format!(
+        "<a class=\"team-mention js-team-mention notranslate\" data-id=\"{id}\" href=\"https://github.com/orgs/{org}/teams/{slug}\">@{org}/{slug}</a>"
+    )
 }
 
 pub fn mention_link(login: &str) -> String {

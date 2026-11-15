@@ -169,6 +169,9 @@ fn stops_the_run_result<T>(answer: &Result<T, CallError>) -> bool {
 struct Split {
     /// The parts GitHub answered, with their items.
     ok: Vec<(Vec<String>, Gql)>,
+    /// How long GitHub took for each part of `ok`, in milliseconds, and the
+    /// `x-github-request-id` of its answer.
+    ok_meta: Vec<(u128, Option<String>)>,
     /// Items whose one-item request still got a 502 or 504, and that error.
     alone: Vec<String>,
     gateway_error: Option<CallError>,
@@ -193,6 +196,8 @@ struct OwnerWork {
     /// PRs the core does not know whose events failed before: closed ones
     /// found by a search, fetched again until their events are read.
     candidates: BTreeSet<String>,
+    /// Those of them found only by a team mention search.
+    team_only: BTreeSet<String>,
 }
 
 pub struct Run<'a> {
@@ -225,6 +230,22 @@ pub struct Run<'a> {
     owner_run_started: BTreeMap<String, i64>,
     /// The first error that failed the account fetch, for its log line.
     first_error: Option<String>,
+    /// Open PRs the core does not know that only a team mention search
+    /// found: taken only through a return trigger (DESIGN.md, "API usage").
+    team_only: BTreeSet<String>,
+    /// The closed window (T) of each team mention search that has to look
+    /// back further than its owner's, by [`team_key`]: the window of a search
+    /// that failed and has not succeeded since.
+    team_windows: BTreeMap<String, i64>,
+    /// PRs whose events start earlier than their owner's window: those a
+    /// team mention search with an older window found.
+    since_override: BTreeMap<String, i64>,
+}
+
+/// The key of a team mention search of an owner, whatever its time:
+/// `<owner id> <org>/<team>`, lowercase.
+fn team_key(owner: &str, query: &str) -> Option<String> {
+    convert::team_of_query(query).map(|team| format!("{owner} {team}"))
 }
 
 /// Run the fetches the plan names and hand back what they found.
@@ -233,7 +254,9 @@ pub async fn run(api: &Api, plan: &Plan) -> Outcome {
     // DESIGN.md, "Fetch success and failure": only the failed requests,
     // until the interval since the last full run has passed.
     let retry_only = plan.due.status
-        && !plan.failed_requests.is_empty()
+        // A skipped team search alone does not make a run of the failed
+        // requests; it is made again by whatever run comes next.
+        && plan.failed_requests.iter().any(|r| !r.skipped)
         && plan
             .full_run_started_at
             .is_some_and(|at| plan.now < at + interval);
@@ -263,6 +286,9 @@ pub async fn run(api: &Api, plan: &Plan) -> Outcome {
         status_ok: BTreeSet::new(),
         owner_run_started: BTreeMap::new(),
         first_error: None,
+        team_only: BTreeSet::new(),
+        team_windows: plan.team_windows.clone(),
+        since_override: BTreeMap::new(),
     };
     run.execute().await;
     run.finish()
@@ -339,8 +365,15 @@ impl Run<'_> {
             items.chunks(size.max(1)).map(<[String]>::to_vec).collect();
         while let Some(part) = queue.pop_front() {
             let (text, vars) = build(&part);
+            let started = Instant::now();
             match self.gql(&text, vars).await {
-                Ok(answer) => out.ok.push((part, answer)),
+                Ok(answer) => {
+                    out.ok.push((part, answer));
+                    out.ok_meta.push((
+                        started.elapsed().as_millis(),
+                        self.rec.last_request_id.clone(),
+                    ));
+                }
                 Err(e) if stops_the_run(&e) => return Err(e),
                 Err(_) if self.gateway() && part.len() > 1 => {
                     let (first, second) = part.split_at(part.len().div_ceil(2));
@@ -389,10 +422,41 @@ impl Run<'_> {
             owner: owner.map(str::to_string),
             items,
             since: None,
+            skipped: false,
         };
         if !self.failed.contains(&request) {
             self.failed.push(request);
         }
+    }
+
+    /// A request that failed without failing its owner or the account (a
+    /// team mention search whose alias failed): recorded like a failed
+    /// request, so that a run that makes only the failed requests makes it
+    /// again with the same text.
+    fn request_skipped(&mut self, name: &str, owner: Option<&str>, items: Vec<String>) {
+        let request = FailedRequest {
+            name: name.to_string(),
+            owner: owner.map(str::to_string),
+            items,
+            since: None,
+            skipped: true,
+        };
+        if !self.failed.contains(&request) {
+            self.failed.push(request);
+        }
+    }
+
+    /// DESIGN.md, "Logs": the line of a request GitHub answered with a
+    /// GraphQL error (status 200), with its request id when it had one.
+    fn log_answered_error(&self, what: &str, ms: u128, error: &str, request_id: Option<&str>) {
+        let detail = match request_id {
+            Some(id) => format!(" (GitHub answered 200, request id {id})"),
+            None => " (GitHub answered 200)".to_string(),
+        };
+        logging::info(format_args!(
+            "request of {} failed after {ms} ms: {what}: {error}{detail}",
+            self.plan.login
+        ));
     }
 
     /// The last request failed in this run before: made again only when it
@@ -515,6 +579,7 @@ impl Run<'_> {
                                 Some(TeamRec {
                                     database_id: team["id"].as_i64()?,
                                     slug: team["slug"].as_str()?.to_string(),
+                                    org: team["organization"]["login"].as_str().map(str::to_string),
                                 })
                             }),
                     );
@@ -684,6 +749,9 @@ impl Run<'_> {
             if owner == &op.id && !plan.prs.contains_key(id) {
                 work.status.insert(id.clone());
                 work.candidates.insert(id.clone());
+                if plan.retry_team_only.contains(id) {
+                    work.team_only.insert(id.clone());
+                }
             }
         }
         // DESIGN.md, "Fetch success and failure": a PR whose status failed
@@ -752,7 +820,11 @@ impl Run<'_> {
         true
     }
 
-    /// The six searches of a full run.
+    /// The searches of a full run: the six of every owner, then, for an
+    /// organization owner whose My team mentioned List is on, two for each
+    /// of the account's teams in that organization (DESIGN.md, "API
+    /// usage"). A team saved without its organization (by 0.4) has none
+    /// until the teams are read again.
     fn all_searches(&self, op: &OwnerPlan) -> Vec<String> {
         let qualifier = match (&op.login, op.kind) {
             (None, _) => "is:public".to_string(),
@@ -761,7 +833,39 @@ impl Run<'_> {
         };
         let since = date_before(self.plan.now, self.plan.discovery_days);
         let window = format_time(op.since());
-        convert::search_queries(&qualifier, &since, &window, op.team_requests).to_vec()
+        let mut searches =
+            convert::search_queries(&qualifier, &since, &window, op.team_requests).to_vec();
+        if let (Some(login), OwnerKind::Org, true) = (&op.login, op.kind, op.team_mentions) {
+            for team in &self.teams {
+                if team
+                    .org
+                    .as_deref()
+                    .is_some_and(|org| org.eq_ignore_ascii_case(login))
+                {
+                    // A team search that failed keeps its older window until
+                    // it succeeds, so nothing since its last success is lost
+                    // though the owner's window moved on.
+                    let key = format!(
+                        "{} {}/{}",
+                        op.id,
+                        login.to_lowercase(),
+                        team.slug.to_lowercase()
+                    );
+                    let start = self
+                        .plan
+                        .team_windows
+                        .get(&key)
+                        .map_or(op.since(), |at| (*at).min(op.since()));
+                    searches.extend(convert::team_search_queries(
+                        login,
+                        &team.slug,
+                        &since,
+                        &format_time(start),
+                    ));
+                }
+            }
+        }
+        searches
     }
 
     /// Search, status and events of one owner. `Ok(false)` when a request of
@@ -779,15 +883,38 @@ impl Run<'_> {
             std::mem::take(&mut work.searches)
         };
         // PRs that show only through a return trigger: closed ones the core
-        // does not know, and those with a Dismiss record (DESIGN.md, "API
-        // usage").
+        // does not know, those with a Dismiss record, and open ones only a
+        // team mention search found (DESIGN.md, "API usage").
         let mut candidates: BTreeSet<String> = std::mem::take(&mut work.candidates);
+        let mut team_only: BTreeSet<String> = std::mem::take(&mut work.team_only);
         self.needs_events.extend(candidates.iter().cloned());
         if !searches.is_empty() {
             let Some(hits) = self.search(op, &searches).await? else {
                 return Ok(false);
             };
-            for hit in hits {
+            // DESIGN.md, "API usage": a PR only a team mention search found
+            // (no other search of the owner) is taken like a closed one.
+            let elsewhere: BTreeSet<String> = hits
+                .iter()
+                .filter(|(_, team)| team.is_none())
+                .map(|(hit, _)| hit.id.clone())
+                .collect();
+            // A PR fetched again as team-only that another search finds now
+            // is a PR like any other from now on.
+            for id in team_only.intersection(&elsewhere) {
+                candidates.remove(id);
+                self.out.retry_untagged.insert(id.clone());
+            }
+            team_only.retain(|id| !elsewhere.contains(id));
+            for (hit, team) in hits {
+                let only_team = team.is_some() && !elsewhere.contains(&hit.id);
+                // The events of a PR a team search with an older window found
+                // start from that window.
+                if let Some(at) = team.as_ref().and_then(|key| plan.team_windows.get(key)) {
+                    let at = (*at).min(op.since());
+                    let entry = self.since_override.entry(hit.id.clone()).or_insert(at);
+                    *entry = (*entry).min(at);
+                }
                 match self.pr_of(op, &hit.id) {
                     // A dismissed card: its events only, once it moved.
                     Some(pr) if pr.dismissed => {
@@ -808,6 +935,12 @@ impl Run<'_> {
                                 work.status.insert(hit.id.clone());
                                 self.needs_events.insert(hit.id.clone());
                             }
+                        }
+                        None if hit.open && only_team => {
+                            team_only.insert(hit.id.clone());
+                            candidates.insert(hit.id.clone());
+                            work.status.insert(hit.id.clone());
+                            self.needs_events.insert(hit.id.clone());
                         }
                         None if hit.open => {
                             work.status.insert(hit.id.clone());
@@ -841,7 +974,9 @@ impl Run<'_> {
         // A PR the core does not know is a candidate unless it is open
         // without a Dismiss record (a retried one may have been reopened).
         candidates.retain(|id| {
-            plan.records.contains_key(id) || nodes.get(id).is_none_or(|n| n["state"] != "OPEN")
+            plan.records.contains_key(id)
+                || team_only.contains(id)
+                || nodes.get(id).is_none_or(|n| n["state"] != "OPEN")
         });
         for (id, node) in &nodes {
             if !plan.prs.contains_key(id)
@@ -889,19 +1024,26 @@ impl Run<'_> {
         for id in wanted.intersection(&candidates) {
             if !plan.prs.contains_key(id) {
                 self.out.retry_owners.insert(id.clone(), op.id.clone());
+                if team_only.contains(id) {
+                    self.out.retry_team_only.insert(id.clone());
+                }
             }
         }
+        team_only.retain(|id| !plan.prs.contains_key(id) && !plan.records.contains_key(id));
+        self.team_only.extend(team_only);
         self.events_of(op, &wanted, &candidates, ctx).await?;
         Ok(true)
     }
 
     /// The owner's searches, split on 502 and 504, each followed page by
-    /// page. `None` when the owner needs SSO authorization.
+    /// page. Each hit carries the [`team_key`] of the team mention search
+    /// that found it, if one did. `None` when the owner needs SSO
+    /// authorization.
     async fn search(
         &mut self,
         op: &OwnerPlan,
         queries: &[String],
-    ) -> Result<Option<Vec<SearchHit>>, CallError> {
+    ) -> Result<Option<Vec<(SearchHit, Option<String>)>>, CallError> {
         let plan = self.plan;
         let exclude = if op.public() {
             plan.registered_owners.clone()
@@ -949,17 +1091,73 @@ impl Run<'_> {
             // alone is the failure of that request.
             self.request_failed(SEARCH, Some(&op.id), text_of(&answer.alone), error);
         }
-        let mut found: Vec<SearchHit> = Vec::new();
-        for (part, answer) in answer.ok {
-            if let Some(e) = answer.errors.iter().find(|e| !e.is_permission()) {
-                let error = CallError::Other(format!("search failed: {}", e.message));
+        let mut found: Vec<(SearchHit, Option<String>)> = Vec::new();
+        for ((part, answer), (ms, request_id)) in answer.ok.into_iter().zip(answer.ok_meta) {
+            let what = format!("GraphQL Search (variables: {})", part.len());
+            // The search of an alias (`s3`) an error names by its path.
+            let alias_of = |e: &crate::github::GqlError| {
+                e.path
+                    .first()
+                    .and_then(|p| p.strip_prefix('s'))
+                    .and_then(|i| i.parse::<usize>().ok())
+                    .filter(|i| part.contains(&i.to_string()))
+            };
+            let errors: Vec<&crate::github::GqlError> = answer
+                .errors
+                .iter()
+                .filter(|e| !e.is_permission())
+                .collect();
+            // DESIGN.md, "Fetch success and failure": an error of a team
+            // mention search alone is not the owner's failure. That search
+            // is left out this time, logged and recorded like a failed
+            // request, and made again: by a run of the failed requests with
+            // the same text, or by the next full run from its older window.
+            let skipped: BTreeSet<usize> = errors
+                .iter()
+                .filter_map(|e| alias_of(e))
+                .filter(|i| convert::is_team_query(&queries[*i]))
+                .collect();
+            let other_error = errors
+                .iter()
+                .find(|e| alias_of(e).is_none_or(|i| !convert::is_team_query(&queries[i])));
+            if let Some(e) = other_error {
+                let text = format!("search failed: {}", e.message);
+                self.log_answered_error(&what, ms, &text, request_id.as_deref());
+                let error = CallError::Other(text);
                 self.request_failed(SEARCH, Some(&op.id), text_of(&part), &error);
                 continue;
             }
+            for e in errors {
+                let text = format!("search failed: {}", e.message);
+                self.log_answered_error(&what, ms, &text, request_id.as_deref());
+            }
+            for i in &skipped {
+                let query = &queries[*i];
+                self.request_skipped(SEARCH, Some(&op.id), vec![query.clone()]);
+                if convert::is_closed_query(query)
+                    && let Some(key) = team_key(&op.id, query)
+                {
+                    self.team_windows.entry(key).or_insert(op.since());
+                }
+            }
             for i in part.iter().filter_map(|i| i.parse::<usize>().ok()) {
+                if skipped.contains(&i) {
+                    continue;
+                }
                 let query = &queries[i];
+                let team = team_key(&op.id, query);
+                // A closed team search that answered covers its window.
+                if convert::is_closed_query(query)
+                    && let Some(key) = &team
+                {
+                    self.team_windows.remove(key);
+                }
                 let connection = answer.data[format!("s{i}")].clone();
-                found.extend(convert::search_hits(&connection, &exclude));
+                found.extend(
+                    convert::search_hits(&connection, &exclude)
+                        .into_iter()
+                        .map(|hit| (hit, team.clone())),
+                );
                 let mut cursor = has_next(&connection);
                 let mut pages = 1;
                 while let Some(after) = cursor {
@@ -984,7 +1182,11 @@ impl Run<'_> {
                     }
                     match page {
                         Ok(page) => {
-                            found.extend(convert::search_hits(&page.data["s"], &exclude));
+                            found.extend(
+                                convert::search_hits(&page.data["s"], &exclude)
+                                    .into_iter()
+                                    .map(|hit| (hit, team.clone())),
+                            );
                             cursor = has_next(&page.data["s"]);
                             pages += 1;
                         }
@@ -1068,7 +1270,7 @@ impl Run<'_> {
             return Ok(None);
         }
         broken.extend(answer.alone.iter().cloned());
-        for (part, answer) in answer.ok {
+        for ((part, answer), (ms, request_id)) in answer.ok.into_iter().zip(answer.ok_meta) {
             let mut fatal = None;
             for e in &answer.errors {
                 if e.is_permission() {
@@ -1078,7 +1280,14 @@ impl Run<'_> {
                 }
             }
             if let Some(message) = fatal {
-                let error = CallError::Other(format!("status failed: {message}"));
+                let text = format!("status failed: {message}");
+                self.log_answered_error(
+                    &format!("GraphQL Status (ids: {})", part.len()),
+                    ms,
+                    &text,
+                    request_id.as_deref(),
+                );
+                let error = CallError::Other(text);
                 self.request_failed(STATUS, Some(&op.id), part, &error);
                 continue;
             }
@@ -1423,10 +1632,14 @@ impl Run<'_> {
     }
 
     fn since_of(&self, id: &str, owner_since: i64) -> i64 {
-        self.plan
+        let since = self
+            .plan
             .retries
             .get(id)
-            .map_or(owner_since, |since| (*since).min(owner_since))
+            .map_or(owner_since, |since| (*since).min(owner_since));
+        self.since_override
+            .get(id)
+            .map_or(since, |at| (*at).min(since))
     }
 
     async fn events_of_pr(
@@ -1701,6 +1914,7 @@ impl Run<'_> {
                 succeeded_owners: Some(self.succeeded),
                 owner_run_started: self.owner_run_started,
                 search,
+                team_only: self.team_only.into_iter().collect(),
             });
         }
         self.out.token = std::mem::take(&mut self.rec.token);
@@ -1745,6 +1959,16 @@ impl Run<'_> {
                     std::mem::take(&mut self.failed)
                 });
             }
+        }
+        if plan.due.status {
+            // Only the owners there still are keep an older team window.
+            let mut windows = std::mem::take(&mut self.team_windows);
+            windows.retain(|key, _| {
+                key.split(' ')
+                    .next()
+                    .is_some_and(|owner| plan.owners.iter().any(|o| o.id == owner))
+            });
+            self.out.team_windows = Some(windows);
         }
         self.out.retry_only = self.retry_only;
         self.out.rest = self.rec.rest;

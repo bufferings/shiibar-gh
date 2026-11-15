@@ -87,14 +87,11 @@ final class SettingsModelTests: XCTestCase {
         XCTAssertEqual(settings.selection, .account("583231"))
         settings.show(.general)
         XCTAssertEqual(settings.tab, .general)
+        // An owner is one page without tabs (DESIGN.md, "Settings rules" 7).
         settings.select(.owner(account: "3407303", owner: "o2"))
-        settings.ownerTab = .notifications
-        settings.select(.owner(account: "3407303", owner: "o2"))
-        XCTAssertEqual(settings.ownerTab, .notifications, "the same owner keeps its tab")
-        XCTAssertEqual(OwnerTab.allCases.map(\.rawValue), ["Owner", "Notifications"])
+        XCTAssertEqual(settings.selection, .owner(account: "3407303", owner: "o2"))
         XCTAssertEqual(SettingsTab.allCases.map(\.rawValue), ["General", "Accounts", "Dismissed"])
         settings.select(.owner(account: "3407303", owner: "o3"))
-        XCTAssertEqual(settings.ownerTab, .owner, "another owner opens on Owner")
         XCTAssertEqual(settings.selectedOwner?.name, "acme-corp")
         await settle()
         XCTAssertTrue(api.calls.contains("owner_events_get bufferings-work acme-corp"))

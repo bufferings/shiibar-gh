@@ -5,9 +5,10 @@ tells you what happened on them (unread marks and notifications), and you
 keep the PRs you review and your own PRs in the order you choose: the
 popover has the tabs All, Review (Doing, Todo, Waiting, Done) and Mine.
 Dismiss a PR when you are done with it; it comes back when someone mentions
-you, replies in a thread you commented in, requests your review, or reopens
-it. Mute a repository, a user or a single PR to keep its cards in gray
-without notifications, except for mentions.
+you or your team, replies in a thread you take part in, requests your
+review, or reopens it. Mute a repository, a user or a single PR to hide its
+cards (Show muted brings them back in gray) and silence them, except for
+mentions of you or your team.
 It only reads from GitHub. See `docs/DESIGN.md` and `CLAUDE.md`.
 
 **Several GitHub accounts.** Each account has its own menu bar icon and one
@@ -15,9 +16,10 @@ classic personal access token (scopes `repo`, `notifications`, `read:org`).
 Under an account you add owners (organizations or personal accounts) and,
 if you like, Public.
 
-**Upgrading.** Version 0.4 keeps only the accounts (with their colors and
-order) and their tokens from 0.3 and 0.2. Owners, event tables, settings,
-PRs and rows start empty: add your owners again. Version 0.2 and later do
+**Upgrading.** Version 0.5 keeps everything from 0.4. From 0.3 and 0.2 it
+keeps only the accounts (with their colors and order) and their tokens:
+owners, event tables, settings, PRs and rows start empty, so add your
+owners again. Version 0.2 and later do
 not read the saved state or tokens of 0.1: add your accounts again.
 
 ## Install / Uninstall

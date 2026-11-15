@@ -416,17 +416,20 @@ public final class AppModel: ObservableObject {
     }
 
     /// A clicked notification (DESIGN.md, "macOS notifications"): a summary
-    /// opens the account's popover on its last tab; an individual one shows
+    /// opens the account's popover on its last tab (the window in front
+    /// instead while it is open); an individual one shows
     /// the account (the window in front if it is open, else the popover),
     /// opens the tab of the PR's placement (All without one) and selects the
     /// card, unfolding it. Rows are not read.
     public func notificationClicked(type: NotificationType?, account: String, url: String?, pr: String? = nil) {
         guard self.account(account) != nil else { return }
+        let surface = SurfaceRules.surfaceToShow(windowOpen: displayed[account]?.contains(.window) == true)
         if type == .summary {
-            onOpenPopover?(account)
+            // The last tab; the window in front when it is open, as a click
+            // on the menu bar icon (DESIGN.md, "macOS notifications").
+            if surface == .window { onShowAccount?(account, .window) } else { onOpenPopover?(account) }
             return
         }
-        let surface: Surface = displayed[account]?.contains(.window) == true ? .window : .popover
         onShowAccount?(account, surface)
         if let pr { viewModel(account).list(surface).reveal(pr: pr) }
     }
@@ -458,21 +461,36 @@ public final class AppModel: ObservableObject {
 /// One account's data, shared by its popover and its window: the daemon's
 /// cards with the local operations still on their way applied over them,
 /// and what is saved per account (Group by, Then by, the sort order, the
-/// group orders, the collapsed and expanded sections, Keep on top). What
-/// each surface shows is its `SurfaceListModel`.
+/// group orders, the collapsed and expanded sections, the expanded rows of
+/// the cards, the expanded row bodies, Show muted, Keep on top). What each
+/// surface shows is its `SurfaceListModel`.
 @MainActor
 public final class AccountViewModel: ObservableObject {
     public let accountId: String
     unowned let app: AppModel
     /// The cards shown: the daemon's, with the local operations applied.
-    @Published public private(set) var cards: [Card] = []
+    @Published public private(set) var cards: [Card] = [] { didSet { revision += 1 } }
     @Published public private(set) var loaded = false
-    @Published public private(set) var options: ListOptions
-    @Published public private(set) var groupOrders: GroupOrders
+    @Published public private(set) var options: ListOptions { didSet { revision += 1 } }
+    @Published public private(set) var groupOrders: GroupOrders { didSet { revision += 1 } }
     /// The repositories that have had cards (the Repository group order).
-    @Published public private(set) var repositories: [String]
-    @Published public private(set) var collapsed: Set<String>
-    @Published public private(set) var expanded: Set<String>
+    @Published public private(set) var repositories: [String] { didSet { revision += 1 } }
+    @Published public private(set) var collapsed: Set<String> { didSet { revision += 1 } }
+    @Published public private(set) var expanded: Set<String> { didSet { revision += 1 } }
+    /// Show muted (DESIGN.md, "Show muted"): muted cards show in gray.
+    @Published public private(set) var showMuted: Bool { didSet { revision += 1 } }
+    /// Compact (DESIGN.md, "Compact"): the cards of the tabs show their
+    /// heading only. The account's, shared by the popover and the window.
+    @Published public private(set) var compact: Bool
+    /// Cards whose rows show past the newest three, until `Show less`
+    /// (DESIGN.md, "Rows in a card").
+    @Published public private(set) var expandedRows: Set<String>
+    /// Rows whose body shows up to 5 lines, until `less` (DESIGN.md, "Row
+    /// body").
+    @Published public private(set) var expandedBodies: Set<String>
+    /// Counts the changes of what the sections are made of, so a surface
+    /// works its sections out once per change, not once per view.
+    public private(set) var revision = 0
     /// Keep on top of the window, kept per account.
     @Published public private(set) var keepOnTop: Bool
     /// The account's mutes, read once a menu or Settings needs them.
@@ -506,6 +524,10 @@ public final class AccountViewModel: ObservableObject {
         repositories = app.store.repositories(account: account)
         collapsed = app.store.collapsed(account: account)
         expanded = app.store.expanded(account: account)
+        showMuted = app.store.showMuted(account: account)
+        compact = app.store.compact(account: account)
+        expandedRows = app.store.expandedRows(account: account)
+        expandedBodies = app.store.expandedBodies(account: account)
         keepOnTop = app.store.keepOnTop(account: account)
     }
 
@@ -587,6 +609,57 @@ public final class AccountViewModel: ObservableObject {
         surfacesKeepSelection()
     }
 
+    /// The Show muted toggle, or a notification of a muted card. Turning it
+    /// off takes the muted cards out of the selection (DESIGN.md,
+    /// "Selection and operating on several cards").
+    public func setShowMuted(_ on: Bool) {
+        guard showMuted != on else { return }
+        showMuted = on
+        app.store.setShowMuted(on, account: accountId)
+        surfacesKeepSelection()
+    }
+
+    /// The Compact toggle. Turning it on moves a selected row, `+ N more`,
+    /// `Older activity on GitHub` or `Show less` of a card to the card's
+    /// heading (DESIGN.md, "Compact").
+    public func setCompact(_ on: Bool) {
+        guard compact != on else { return }
+        compact = on
+        app.store.setCompact(on, account: accountId)
+        lists.values.forEach { $0.compactChanged() }
+    }
+
+    func setRowsExpanded(_ card: String, _ value: Bool) {
+        guard expandedRows.contains(card) != value else { return }
+        if value { expandedRows.insert(card) } else { expandedRows.remove(card) }
+        app.store.setExpandedRows(expandedRows, account: accountId)
+        lists.values.forEach { $0.rowsChanged() }
+    }
+
+    func setBodyExpanded(_ row: String, _ value: Bool) {
+        guard expandedBodies.contains(row) != value else { return }
+        if value { expandedBodies.insert(row) } else { expandedBodies.remove(row) }
+        app.store.setExpandedBodies(expandedBodies, account: accountId)
+    }
+
+    /// The expansions of cards and rows gone from the list are forgotten
+    /// (DESIGN.md, "Rows in a card", "Row body").
+    private func forgetGone(_ cards: [Card]) {
+        let cardIds = Set(cards.map(\.id))
+        let rows = expandedRows.intersection(cardIds)
+        if rows != expandedRows {
+            expandedRows = rows
+            app.store.setExpandedRows(rows, account: accountId)
+            lists.values.forEach { $0.rowsChanged() }
+        }
+        let rowIds = Set(cards.lazy.flatMap(\.rows).map(\.id))
+        let bodies = expandedBodies.intersection(rowIds)
+        if bodies != expandedBodies {
+            expandedBodies = bodies
+            app.store.setExpandedBodies(bodies, account: accountId)
+        }
+    }
+
     public func toggleKeepOnTop() {
         keepOnTop.toggle()
         app.store.setKeepOnTop(keepOnTop, account: accountId)
@@ -624,6 +697,7 @@ public final class AccountViewModel: ObservableObject {
 
     func arrived(_ cards: [Card], number: Int) {
         received = cards
+        forgetGone(cards)
         pending.removeAll { $0.dropAfter.map { number > $0 } ?? false }
         let known = Listing.knownRepositories(repositories, cards: cards)
         if known != repositories {
@@ -635,9 +709,15 @@ public final class AccountViewModel: ObservableObject {
         lists.values.forEach { $0.listArrived() }
     }
 
+    /// The mutes the local mute changes start from: the list read, or what
+    /// the cards tell before it is read.
+    private var mutesNow: Mutes { mutes ?? Mutes.inferred(from: received) }
+
     private func recompute() {
-        let users = mutes?.users ?? []
-        cards = pending.reduce(received) { $1.change.apply($0, mutedUsers: users) }
+        var mutes = mutesNow
+        var next = received
+        for item in pending { next = item.change.apply(next, mutes: &mutes) }
+        cards = next
     }
 
     // MARK: Local operations
@@ -665,6 +745,74 @@ public final class AccountViewModel: ObservableObject {
             }
             reload()
         }
+    }
+
+    /// Several local operations of one action (a key, the multi-card menu
+    /// or a drag of several selected cards): shown at once, sent one after another
+    /// in order; a refused one alone is taken back, and one failure band
+    /// shows for the action. `failed` gets the cards taken back.
+    func runAll(_ items: [(card: String, change: LocalChange, request: (DaemonAPI) async throws -> Void)], failed: @escaping ([String]) -> Void) {
+        guard !items.isEmpty else { return }
+        clearFailure()
+        var ids: [Int] = []
+        for item in items {
+            ids.append(nextChange)
+            pending.append(Pending(id: nextChange, change: item.change))
+            nextChange += 1
+        }
+        recompute()
+        surfacesKeepSelection()
+        let api = app.api
+        Task {
+            var refused: [String] = []
+            var firstError: (OperationVerb, Error)?
+            for (item, id) in zip(items, ids) {
+                do {
+                    try await item.request(api)
+                    if let index = pending.firstIndex(where: { $0.id == id }) { pending[index].dropAfter = listsStarted }
+                } catch {
+                    pending.removeAll { $0.id == id }
+                    refused.append(item.card)
+                    if firstError == nil { firstError = (item.change.verb, error) }
+                }
+            }
+            if let (verb, error) = firstError {
+                recompute()
+                surfacesKeepSelection()
+                showFailure(OperationFailure.text(verb, error))
+                failed(refused)
+            }
+            reload()
+        }
+    }
+
+    /// `place` for several moves, in order.
+    func placeAll(_ moves: [PlaceMove], failed: @escaping ([String]) -> Void) {
+        guard let login = account?.login else { return }
+        var items: [(card: String, change: LocalChange, request: (DaemonAPI) async throws -> Void)] = []
+        for move in moves {
+            guard let pr = pr(move.card) else { continue }
+            var position = move.position
+            if case .before(let other) = move.position {
+                guard let otherPR = self.pr(other) else { continue }
+                position = .before(otherPR)
+            }
+            let target = move.target
+            items.append((move.card, .place(move), { try await $0.place(account: login, pr: pr, target: target, position: position) }))
+        }
+        runAll(items, failed: failed)
+    }
+
+    /// Dismiss several cards, in order.
+    func dismissAll(_ cards: [String], failed: @escaping ([String]) -> Void) {
+        guard let login = account?.login else { return }
+        let now = app.now
+        var items: [(card: String, change: LocalChange, request: (DaemonAPI) async throws -> Void)] = []
+        for card in cards {
+            guard let pr = pr(card) else { continue }
+            items.append((card, .dismiss(card: card, at: now, expiresAt: now + app.keepDays * 86_400), { try await $0.dismiss(account: login, pr: pr) }))
+        }
+        runAll(items, failed: failed)
     }
 
     private func pr(_ card: String) -> String? {
@@ -743,364 +891,5 @@ public final class AccountViewModel: ObservableObject {
         failureTimer?.cancel()
         failureTimer = nil
         if failure != nil { failure = nil }
-    }
-}
-
-/// What one surface (the popover or the window) of an account shows: its
-/// tab, whether the Dismissed list is open, its searches, its selection and
-/// its expanded rows (DESIGN.md, "Open in window": the popover and the
-/// window keep these apart). The data and the saved choices come from the
-/// shared `AccountViewModel`.
-@MainActor
-public final class SurfaceListModel: ObservableObject {
-    public let surface: Surface
-    public unowned let data: AccountViewModel
-    /// The last tab, kept per surface (DESIGN.md, "Tabs").
-    @Published public private(set) var tab: ListTab
-    @Published public private(set) var showingDismissed = false
-    /// The search of each tab. Not kept.
-    @Published public private(set) var searches: [ListTab: String] = [:]
-    /// The Dismissed list's own search, gone when the list closes.
-    @Published public private(set) var dismissedSearch = ""
-    /// Whether the search field has the keyboard.
-    @Published public var searchFocused = false
-    @Published public private(set) var selection: SelectionItem?
-    /// Cards whose rows show past the newest three. Not kept.
-    @Published public private(set) var expandedRows: Set<String> = []
-    /// The Grouping sheet shows.
-    @Published public var showsGrouping = false
-    /// The text selected in this surface's cards and rows, read and cleared
-    /// here (DESIGN.md, "What a press does"). The app sets it.
-    public var textSelection: TextSelecting?
-    /// The card being dragged by its grip, while a drag is on.
-    @Published public private(set) var dragging: String?
-    /// Where the dragged card would land, for the insertion line.
-    @Published public private(set) var dropTarget: DropTarget?
-    private var forward: AnyCancellable?
-
-    init(data: AccountViewModel, surface: Surface) {
-        self.data = data
-        self.surface = surface
-        tab = data.app.store.lastTab(account: data.accountId, surface: surface)
-        forward = data.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
-    }
-
-    var app: AppModel { data.app }
-
-    /// `auto_dismiss_after_days`, for the tooltip of `Dismissed in N days`.
-    public var autoDismissDays: Int64 { app.autoDismissDays }
-
-    // MARK: Derived lists
-
-    /// The search of what shows: the tab's, or the Dismissed list's.
-    public var search: String {
-        showingDismissed ? dismissedSearch : searches[tab] ?? ""
-    }
-
-    public var sections: [SectionLayout] {
-        guard let account = data.account, !showingDismissed else { return [] }
-        return Listing.sections(
-            tab: tab, cards: data.cards, account: account, options: data.options, orders: data.groupOrders,
-            repositories: data.repositories,
-            folding: Listing.Folding(collapsed: data.collapsed, expanded: data.expanded, search: search)
-        )
-    }
-
-    /// The Dismissed list after its search.
-    public var dismissedCards: [Card] {
-        Listing.search(Listing.dismissed(data.cards), dismissedSearch)
-    }
-
-    /// Every dismissed card, whatever the search: the count.
-    public var dismissedCount: Int {
-        Listing.dismissed(data.cards).count
-    }
-
-    public func unreadCount(_ tab: ListTab) -> Int {
-        Listing.unreadCount(data.cards, tab: tab)
-    }
-
-    public var view: ListView {
-        showingDismissed
-            ? ListView(tab: nil, dismissed: dismissedCards, expandedRows: expandedRows, cards: data.cards)
-            : ListView(tab: tab, sections: sections, expandedRows: expandedRows, cards: data.cards)
-    }
-
-    /// The text in place of an empty list.
-    public var emptyText: String? {
-        Listing.emptyText(loaded: data.loaded, tab: showingDismissed ? nil : tab, cards: data.cards, search: search)
-    }
-
-    public var items: [SelectionItem] {
-        PopoverLogic.items(view)
-    }
-
-    public var hints: [KeyHint] {
-        PopoverLogic.hints(selection: selection, view: view)
-    }
-
-    /// The rows ⇧R and Mark all as read send.
-    public var rowsToRead: [String] {
-        showingDismissed ? [] : Listing.rowsToRead(tab: tab, cards: data.cards, search: search)
-    }
-
-    func keepSelection() {
-        let kept = PopoverLogic.keep(selection, in: items)
-        if kept != selection { selection = kept }
-    }
-
-    /// A new list arrived.
-    func listArrived() {
-        keepSelection()
-        if let pr = pendingReveal {
-            pendingReveal = nil
-            reveal(pr: pr, waitForList: false)
-        }
-    }
-
-    /// A PR to show once the next list arrives: the notification came
-    /// before the card was read.
-    private var pendingReveal: String?
-
-    // MARK: Tabs and the Dismissed list
-
-    public func openTab(_ next: ListTab) {
-        if showingDismissed { closeDismissedList() }
-        guard next != tab else { return }
-        tab = next
-        app.store.setLastTab(next, account: data.accountId, surface: surface)
-        textSelection?.clearSelection()
-        keepSelection()
-    }
-
-    public func openDismissedList() {
-        guard !showingDismissed else { return }
-        showingDismissed = true
-        searchFocused = false
-        textSelection?.clearSelection()
-        selection = nil
-    }
-
-    /// ← or Esc: back to the tab; the list's search goes.
-    public func closeDismissedList() {
-        guard showingDismissed else { return }
-        showingDismissed = false
-        dismissedSearch = ""
-        searchFocused = false
-        textSelection?.clearSelection()
-        selection = nil
-    }
-
-    // MARK: Selection, keys and clicks
-
-    /// Select an item: by ↑↓, a click or a right click. A row is read.
-    /// Selecting another item clears the selected text (DESIGN.md, "What a
-    /// press does").
-    public func select(_ item: SelectionItem?) {
-        if item != selection { textSelection?.clearSelection() }
-        selection = item
-        if case .row(let id, _)? = item { data.markRead([id]) }
-    }
-
-    /// The right-click menu of an item, after selecting (and reading) it.
-    /// `Copy` shows only while text stays selected.
-    public func rightClick(_ item: SelectionItem) -> [MenuEntry?] {
-        select(item)
-        if case .row = item, data.mutes == nil { data.loadMutes() }
-        return PopoverLogic.menu(
-            for: item, view: view, hasTextSelection: textSelection?.selectedText != nil,
-            login: data.account?.login ?? "", mutedUsers: data.mutes?.users ?? []
-        )
-    }
-
-    /// A key while the surface has the focus and the search field does not.
-    public func press(_ key: Key) {
-        switch key {
-        case .up, .down:
-            select(PopoverLogic.move(selection, up: key == .up, in: items))
-        case .find:
-            searchFocused = true
-        case .copy:
-            if let text = textSelection?.selectedText {
-                app.copy(text)
-            } else if let link = PopoverLogic.link(for: selection, view: view) {
-                app.copy(link)
-            }
-        case .tab(let next):
-            openTab(next)
-        case .back:
-            closeDismissedList()
-        case .open, .markAllRead, .delete, .reorder, .moveTo:
-            if let action = PopoverLogic.action(for: key, selection: selection, view: view) {
-                perform(action)
-            }
-        }
-    }
-
-    /// Esc or ↓ in the search field (DESIGN.md, "Search field"): Esc clears
-    /// the text, if any, and both go back to the list. The popover stays.
-    public func leaveSearch(clearing: Bool) {
-        if clearing { setSearch("") }
-        searchFocused = false
-    }
-
-    public func setSearch(_ text: String) {
-        if showingDismissed {
-            dismissedSearch = text
-        } else {
-            searches[tab] = text
-        }
-        keepSelection()
-    }
-
-    func clearSearches() {
-        searches = [:]
-        dismissedSearch = ""
-        searchFocused = false
-        keepSelection()
-    }
-
-    public func perform(_ action: PopoverAction) {
-        switch action {
-        case .open(let url, let read):
-            if let read { data.markRead([read]) }
-            app.open(url)
-        case .copyLink(let text), .copyText(let text):
-            app.copy(text)
-        case .copySelectedText:
-            if let text = textSelection?.selectedText { app.copy(text) }
-        case .place(let move):
-            data.place(move)
-        case .dismiss(let card):
-            data.dismiss(card)
-        case .restore(let card):
-            data.restore(card)
-        case .mute(let kind, let name):
-            data.mute(kind, name, on: true)
-        case .unmute(let kind, let name):
-            data.mute(kind, name, on: false)
-        case .toggleSection(let key):
-            let section = sections.first { $0.key == key }
-            data.setCollapsed(key, !(section?.collapsed ?? false))
-        case .toggleMore(let key):
-            guard let section = sections.first(where: { $0.key == key }) else { return }
-            data.setExpanded(key, section.more > 0)
-        case .expandRows(let card):
-            expandedRows.insert(card)
-            if selection == .moreRows(card: card) { selection = .header(card: card) }
-        case .showInTab(let card):
-            if let pr = data.cards.first(where: { $0.id == card })?.pr { reveal(pr: pr) }
-        case .markAllRead:
-            data.markRead(rowsToRead)
-        }
-    }
-
-    /// Show the PR's card: its tab (All without a placement), no search,
-    /// its section and group unfolded, the card selected. A card no longer
-    /// shown (dismissed, gone) only opens the tab (DESIGN.md, "macOS
-    /// notifications").
-    public func reveal(pr: String, waitForList: Bool = true) {
-        closeDismissedList()
-        guard let card = data.cards.first(where: { $0.pr == pr }) else {
-            // Not read yet (the surface just opened): the list on its way
-            // decides.
-            if waitForList { pendingReveal = pr }
-            return
-        }
-        openTab(card.tab)
-        searches[tab] = nil
-        guard !card.isDismissed else {
-            keepSelection()
-            return
-        }
-        for _ in 0..<3 {
-            let sections = self.sections
-            if let leaf = sections.first(where: { $0.isLeaf && $0.matching.contains { $0.id == card.id } }) {
-                if leaf.collapsed {
-                    data.setCollapsed(leaf.key, false)
-                    continue
-                }
-                if !leaf.cards.contains(where: { $0.id == card.id }) {
-                    data.setExpanded(leaf.key, true)
-                    continue
-                }
-                textSelection?.clearSelection()
-                selection = .header(card: card.id)
-                return
-            }
-            guard let parent = sections.first(where: { !$0.isLeaf && $0.matching.contains { $0.id == card.id } }) else { return }
-            data.setCollapsed(parent.key, false)
-        }
-    }
-
-    // MARK: Drag and drop
-
-    /// A drag started at a card's grip.
-    public func beginDrag(_ card: String) {
-        dragging = card
-        dropTarget = nil
-    }
-
-    /// The pointer of a card drag moved over `zone`: where it would land,
-    /// nil when it cannot (the line goes and the drop is refused).
-    @discardableResult
-    public func dragOver(_ zone: DropZone) -> DropTarget? {
-        guard dragging != nil else { return nil }
-        let target = CardDrop.target(zone, sections: sections)
-        if dropTarget != target { dropTarget = target }
-        return target
-    }
-
-    /// The pointer left `zone`.
-    public func dragExited(_ zone: DropZone) {
-        if dropTarget != nil, dropTarget == CardDrop.target(zone, sections: sections) { dropTarget = nil }
-    }
-
-    /// The card dropped over `zone`. True when it was taken (even where it
-    /// changes nothing), false when refused.
-    @discardableResult
-    public func drop(_ zone: DropZone) -> Bool {
-        defer {
-            dragging = nil
-            dropTarget = nil
-        }
-        guard let id = dragging, let card = data.cards.first(where: { $0.id == id }),
-              let target = CardDrop.target(zone, sections: sections) else { return false }
-        if let move = CardDrop.move(card, to: target, cards: data.cards) { data.place(move) }
-        return true
-    }
-
-    /// The drag ended without a drop here (released elsewhere, or Esc).
-    public func endDrag() {
-        dragging = nil
-        dropTarget = nil
-    }
-
-    // MARK: Open and closed
-
-    /// The surface opened: the search field does not take the keyboard
-    /// (DESIGN.md, "Search field"); ⌘F moves there.
-    func opened() {
-        searchFocused = false
-    }
-
-    /// The popover closed, or the window lost the focus: a card's rows show
-    /// the newest three again. The popover also drops its searches, its
-    /// selected text and the Dismissed list.
-    func closed(clearsSearch: Bool) {
-        expandedRows = []
-        if clearsSearch {
-            showingDismissed = false
-            clearSearches()
-            textSelection?.clearSelection()
-        }
-        keepSelection()
-    }
-
-    /// The window closed: its searches and the Dismissed list go.
-    func windowClosed() {
-        showingDismissed = false
-        clearSearches()
-        textSelection?.clearSelection()
     }
 }

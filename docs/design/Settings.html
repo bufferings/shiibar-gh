@@ -205,6 +205,10 @@ body{margin:0;padding:24px;background:#e9e9ee}
 .item.top{align-items:flex-start}
 .sq[disabled]{opacity:.45}
 .errt{font-size:11px;color:#A0390A}
+
+/* 0.5: API usage values */
+.st2.val{color:#1D1D1F;font-variant-numeric:tabular-nums}
+.st2.val.w{color:#8A5A00;font-weight:600}
 </style>
 </head>
 <body>
@@ -258,7 +262,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
   </section>
 <section class="scene">
     <div class="cap">Settings › Accounts: an account selected</div>
-    <div class="desc" style="width: 760px">Muted: a framed list, below it a field with <b>Add</b> and − (removes the selected row). Enter in the field also adds. <b>Add</b> stays off for an empty value, a name already in the list, and (Repositories) a value that is not <b>owner/repo</b>; above, example-org/sandbox is typed and renovate is selected. Names are compared without case. <b>Pull requests</b> lists single PRs muted from a card (<b>owner/repo#number</b>); removing one there unmutes it, as does <b>Unmute this pull request</b> in the card’s menu.</div>
+    <div class="desc" style="width: 760px">Muted: a framed list, below it a field with <b>Add</b> and − (removes the selected row). Enter in the field also adds. <b>Add</b> stays off for an empty value, a name already in the list, and (Repositories) a value that is not <b>owner/repo</b>; above, example-org/sandbox is typed and renovate is selected. Names are compared without case. <b>Pull requests</b> lists single PRs muted from a card (<b>owner/repo#number</b>); removing one there unmutes it, as does <b>Unmute this pull request</b> in the card’s menu (on a PR whose repository or author is muted, that keeps the PR unmuted; such a PR is not listed). Muted PRs are hidden in the popover unless <b>Show muted</b> is on. <b>API usage</b>: GraphQL and REST, each with the usage and limit of the last response (warning color at 80% or more) and the reset time; <b>–</b> before the first value. The popover header shows only the higher rate as a percentage.</div>
     <div class="win" style="width: 760px">
       <div class="titlebar">
         <div class="tl"><div class="dots" aria-hidden="true"><span style="background: #EC6A5E"></span><span style="background: #F4BF4F"></span><span style="background: #61C554"></span></div><div class="wt">Accounts</div><div style="width: 50px"></div></div>
@@ -285,9 +289,13 @@ body{margin:0;padding:24px;background:#e9e9ee}
             <div class="item"><div class="lbl"><span style="font-weight: 600">Public</span><span class="sub">Public repositories</span></div><div class="ctl"><span class="gray">&rsaquo;</span></div></div>
             <div style="padding: 8px 14px; border-top: 1px solid #ECECEF; display: flex; justify-content: flex-end"><button class="btn">Add owner…</button></div>
           </div></div>
+          <div><div class="gh">API usage</div><div class="group">
+            <div class="item"><div class="lbl"><span style="font-weight: 600">GraphQL API</span><span class="sub">Resets at 14:05</span></div><div class="ctl"><span class="st2 val">1,240 / 5,000</span></div></div>
+            <div class="item"><div class="lbl"><span style="font-weight: 600">REST API</span><span class="sub">Resets at 14:12</span></div><div class="ctl"><span class="st2 val">100 / 5,000</span></div></div>
+          </div></div>
           <div><div class="gh">Muted</div><div class="group">
-            <div class="item top"><div class="lbl"><span style="font-weight: 600">Repositories</span><span class="sub">Muted PRs stay in the list in gray. Only mentions notify.</span></div><div class="ctl"><div class="mlist"><div class="listbox"><div class="lrow">example-org/legacy</div><div class="lrow">example-org/infra</div></div><div class="madd"><span class="fld">example-org/sandbox</span><button class="btn">Add</button><button class="sq" disabled aria-label="Remove">&minus;</button></div></div></div></div>
-            <div class="item top"><div class="lbl"><span style="font-weight: 600">Users</span><span class="sub">Their PRs and their events. Bots are users too.</span></div><div class="ctl"><div class="mlist"><div class="listbox"><div class="lrow on">renovate</div><div class="lrow">octo-release-bot</div></div><div class="madd"><span class="fld ph">&nbsp;</span><button class="btn" disabled>Add</button><button class="sq" aria-label="Remove">&minus;</button></div></div></div></div>
+            <div class="item top"><div class="lbl"><span style="font-weight: 600">Repositories</span><span class="sub">Hidden unless Show muted is on. Not applied to your own PRs.</span></div><div class="ctl"><div class="mlist"><div class="listbox"><div class="lrow">example-org/legacy</div><div class="lrow">example-org/infra</div></div><div class="madd"><span class="fld">example-org/sandbox</span><button class="btn">Add</button><button class="sq" disabled aria-label="Remove">&minus;</button></div></div></div></div>
+            <div class="item top"><div class="lbl"><span style="font-weight: 600">Users</span><span class="sub">Their PRs (not yours) and their events. Bots are users too.</span></div><div class="ctl"><div class="mlist"><div class="listbox"><div class="lrow on">renovate</div><div class="lrow">octo-release-bot</div></div><div class="madd"><span class="fld ph">&nbsp;</span><button class="btn" disabled>Add</button><button class="sq" aria-label="Remove">&minus;</button></div></div></div></div>
             <div class="item top"><div class="lbl"><span style="font-weight: 600">Pull requests</span><span class="sub">Single pull requests you muted.</span></div><div class="ctl"><div class="mlist"><div class="listbox"><div class="lrow">example-org/api#402</div></div><div class="madd"><span class="fld ph">&nbsp;</span><button class="btn" disabled>Add</button><button class="sq" disabled aria-label="Remove">&minus;</button></div></div></div></div>
           </div></div>
           <div><div class="gh">Remove</div><div class="group"><div class="item"><div class="lbl"><span style="font-weight: 600">Remove this account</span><span class="sub">Deletes this account and its owners from shiibar-gh: token, PRs, mutes and settings. Nothing changes on GitHub.</span></div><div class="ctl"><button class="btn">Remove…</button></div></div></div></div>

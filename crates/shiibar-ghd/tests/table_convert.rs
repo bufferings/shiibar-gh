@@ -21,6 +21,7 @@ fn teams() -> Vec<TeamRec> {
     vec![TeamRec {
         database_id: 42,
         slug: "core".into(),
+        org: Some("org".into()),
     }]
 }
 

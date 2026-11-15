@@ -14,12 +14,14 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// M6 (0.4). Versions 5 (0.3) and 4 (0.2) move to 6 at startup, keeping
-/// only the accounts. Versions 1 to 3 are the 0.1 schema, which is not
-/// migrated: such a database is treated like an unreadable one (DESIGN.md,
-/// "Saved state").
-pub const SCHEMA_VERSION: i64 = 6;
-/// The 0.3 and 0.2 schemas, moved to 6 at startup.
+/// M7 (0.5). Version 6 (0.4) moves to 7 at startup keeping everything;
+/// versions 5 (0.3) and 4 (0.2) move to 7 keeping only the accounts.
+/// Versions 1 to 3 are the 0.1 schema, which is not migrated: such a
+/// database is treated like an unreadable one (DESIGN.md, "Saved state").
+pub const SCHEMA_VERSION: i64 = 7;
+/// The 0.4 schema, moved to 7 at startup with all its data.
+const V04_VERSION: i64 = 6;
+/// The 0.3 and 0.2 schemas, moved to 7 at startup with only the accounts.
 const MOVED_VERSIONS: [i64; 2] = [4, 5];
 /// The newest version of the 0.1 schema.
 const LAST_V01_VERSION: i64 = 3;
@@ -27,10 +29,11 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 const FILE_MODE: u32 = 0o600;
 const SIDE_FILES: [&str; 2] = ["-wal", "-shm"];
 
-/// The 0.4 schema. A PR's placement, Dismiss state, Checks results and
-/// newest review request are columns of `prs`; Mute lists hang off the
-/// account; deleted row ids and Dismiss records have their own tables.
-const SCHEMA_V6: &str = "
+/// The 0.5 schema. A PR's placement, Dismiss state, Checks results, newest
+/// review request and own Unmute are columns of `prs`; Mute lists hang off
+/// the account; deleted row ids and Dismiss records have their own tables.
+/// It is the 0.4 schema (version 6) with `prs.done_seq` and `prs.unmuted`.
+const SCHEMA_V7: &str = "
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE accounts (
@@ -128,7 +131,9 @@ CREATE TABLE prs (
     quiet_from INTEGER,
     quiet_until INTEGER,
     merged_event_at INTEGER,
-    collected INTEGER NOT NULL
+    collected INTEGER NOT NULL,
+    done_seq INTEGER NOT NULL DEFAULT 0,
+    unmuted INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE pr_rows (
     id TEXT PRIMARY KEY,
@@ -161,12 +166,25 @@ CREATE TABLE reaction_baselines (
 );
 ";
 
+/// DESIGN.md, "Updating from 0.4": inside the caller's transaction, add the
+/// two columns of version 7 to `prs` and set `user_version`. Every table and
+/// row of version 6 stays. A PR starts without Unmute, and `done_seq` 0
+/// keeps the order 0.4 gave the cards in Done (time, then key). Any error
+/// leaves the transaction for the caller to roll back.
+fn migrate_v6_to_v7(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    tx.execute_batch(
+        "ALTER TABLE prs ADD COLUMN done_seq INTEGER NOT NULL DEFAULT 0;
+         ALTER TABLE prs ADD COLUMN unmuted INTEGER NOT NULL DEFAULT 0;",
+    )?;
+    tx.pragma_update(None, "user_version", SCHEMA_VERSION)
+}
+
 /// DESIGN.md, "Updating from 0.3 and 0.2": inside the caller's transaction,
 /// keep each account's id, login, color and order, drop every table, create
-/// the version 6 tables, put the accounts back and set `user_version`. The
+/// the version 7 tables, put the accounts back and set `user_version`. The
 /// `accounts` table of versions 4 and 5 has the same four columns. Any error
 /// leaves the transaction for the caller to roll back.
-fn migrate_to_v6(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+fn migrate_accounts_only(tx: &Transaction<'_>) -> rusqlite::Result<()> {
     let mut accounts: Vec<(String, String, String, i64)> = Vec::new();
     {
         let mut statement = tx.prepare("SELECT id, login, color, seq FROM accounts")?;
@@ -190,7 +208,7 @@ fn migrate_to_v6(tx: &Transaction<'_>) -> rusqlite::Result<()> {
     for table in tables {
         tx.execute_batch(&format!("DROP TABLE \"{}\"", table.replace('"', "\"\"")))?;
     }
-    tx.execute_batch(SCHEMA_V6)?;
+    tx.execute_batch(SCHEMA_V7)?;
     let token = to_json(&TokenRec::default());
     let fetch = to_json(&FetchRec::default());
     let mut seq = 0;
@@ -407,15 +425,21 @@ impl Store {
             return Ok(OpenOutcome::Unreadable);
         }
         if version == 0 {
-            tx.execute_batch(SCHEMA_V6)?;
+            tx.execute_batch(SCHEMA_V7)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
-        let migrating = MOVED_VERSIONS.contains(&version);
+        let accounts_only = MOVED_VERSIONS.contains(&version);
+        let migrating = accounts_only || version == V04_VERSION;
         if migrating {
-            // DESIGN.md, "Updating from 0.3 and 0.2": a failed move rolls
-            // back and leaves the database as it was, in the unreadable
-            // state.
-            if let Err(e) = migrate_to_v6(&tx) {
+            // DESIGN.md, "Updating from 0.4" and "Updating from 0.3 and
+            // 0.2": a failed move rolls back and leaves the database as it
+            // was, in the unreadable state.
+            let moved = if accounts_only {
+                migrate_accounts_only(&tx)
+            } else {
+                migrate_v6_to_v7(&tx)
+            };
+            if let Err(e) = moved {
                 drop(tx);
                 crate::logging::error(format_args!(
                     "cannot move the database of schema version {version} to {SCHEMA_VERSION}: {e}"
@@ -452,9 +476,13 @@ impl Store {
             ));
             return Ok(OpenOutcome::Unreadable);
         }
-        if migrating {
+        if accounts_only {
             crate::logging::info(format_args!(
                 "moved the database of schema version {version} to {SCHEMA_VERSION}; only the accounts were kept"
+            ));
+        } else if migrating {
+            crate::logging::info(format_args!(
+                "moved the database of schema version {version} to {SCHEMA_VERSION}"
             ));
         }
 
@@ -749,11 +777,11 @@ fn save_pr(tx: &Transaction<'_>, pr: &PrRec) -> rusqlite::Result<()> {
           link_base, unreadable, added_at, prev_review, prev_checks, prev_base_status,
           prev_mergeable, settled, settled_head, watch_reset, place_tab, place_section,
           place_rank, closed_at, done_at, keep_after_close, dismissed_at, restored,
-          seen_closed, quiet_from, quiet_until, merged_event_at, collected)
+          seen_closed, quiet_from, quiet_until, merged_event_at, collected, done_seq, unmuted)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
                  ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32,
                  ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47,
-                 ?48, ?49, ?50, ?51, ?52, ?53, ?54)",
+                 ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56)",
         rusqlite::params_from_iter(pr_params(pr)),
     )?;
     Ok(())
@@ -821,6 +849,8 @@ fn pr_params(pr: &PrRec) -> Vec<rusqlite::types::Value> {
         opt_int(pr.quiet_until),
         opt_int(pr.merged_event_at),
         flag(pr.collected),
+        int(pr.done_seq),
+        flag(pr.unmuted),
     ]
 }
 
@@ -982,7 +1012,7 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
                 prev_checks, prev_base_status, prev_mergeable, settled, settled_head,
                 watch_reset, place_tab, place_section, place_rank, closed_at, done_at,
                 keep_after_close, dismissed_at, restored, seen_closed, quiet_from,
-                quiet_until, merged_event_at, collected
+                quiet_until, merged_event_at, collected, done_seq, unmuted
          FROM prs",
     )?;
     let prs = statement.query_map([], |row| {
@@ -1064,6 +1094,8 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
             quiet_until: row.get(51)?,
             merged_event_at: row.get(52)?,
             collected: row.get(53)?,
+            done_seq: row.get(54)?,
+            unmuted: row.get(55)?,
         })
     })?;
     for pr in prs {

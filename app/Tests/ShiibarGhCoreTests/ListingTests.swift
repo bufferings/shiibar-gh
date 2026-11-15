@@ -113,7 +113,7 @@ final class SectionTests: XCTestCase {
         XCTAssertEqual(sections.map(\.detail), ["0 PRs", "1 PR", "0 PRs", "0 PRs"])
         XCTAssertEqual(
             CardDrop.target(.header("review|doing"), sections: sections),
-            DropTarget(section: "review|doing", position: .bottom)
+            DropTarget(section: "review|doing", position: .top)
         )
         XCTAssertEqual(
             CardDrop.target(.header("review|done"), sections: sections),
@@ -152,12 +152,13 @@ final class SectionTests: XCTestCase {
         XCTAssertNil(sections[0].foldLine)
     }
 
-    func testMutedCardsGoLastInTheirRankAndAGrayFoldGetsTheRing() {
+    /// 0.5: a muted card shown with Show muted is at its own rank, not
+    /// last (DESIGN.md, "Review").
+    func testMutedCardsShowAtTheirRankAndAGrayFoldGetsTheRing() {
+        var ranked = sampleCards()
+        ranked[6].placement?.position = -1
+        XCTAssertEqual(layout(.review, cards: ranked)[1].matching.map(\.id), ["T6", "T1", "T2", "T3", "T4", "T5", "T7"])
         var cards = sampleCards()
-        // T6 ranked first by the daemon, but muted: after the others.
-        cards[6].placement?.position = -1
-        let todo = layout(.review, cards: cards)[1]
-        XCTAssertEqual(todo.matching.map(\.id), ["T1", "T2", "T3", "T4", "T5", "T6", "T7"])
         cards[7].rows[0].unread = false
         XCTAssertEqual(layout(.review, cards: cards)[1].moreMark, .ring, "only gray unread left in the fold")
         cards[6].rows[0].unread = false
@@ -192,12 +193,14 @@ final class SectionTests: XCTestCase {
         XCTAssertEqual(sections[0].cards.map(\.id), ["M1", "M2"])
     }
 
-    func testAllGroupsByRepositoryAndSortsOpenFirstMutedLast() {
+    /// Open first, then Merged and Closed; muted cards shown with Show muted
+    /// by the same rule (DESIGN.md, "All").
+    func testAllGroupsByRepositoryAndSortsOpenFirst() {
         let sections = layout(.all)
         XCTAssertEqual(sections.map(\.title), ["acme-corp/infra", "acme-corp/web", "example-org/api", "example-org/docs", "example-org/web"])
         XCTAssertEqual(sections.map(\.level), [1, 1, 1, 1, 1])
-        XCTAssertEqual(sections[2].cards.map(\.id), ["T4", "T1", "M1", "M3", "T7"])
-        XCTAssertEqual(sections[4].cards.map(\.id), ["T5", "T2", "R1", "T6"])
+        XCTAssertEqual(sections[2].cards.map(\.id), ["T7", "T4", "T1", "M1", "M3"])
+        XCTAssertEqual(sections[4].cards.map(\.id), ["T6", "T5", "T2", "R1"])
         XCTAssertEqual(sections[0].cards.map(\.id), ["W1", "D1"])
         XCTAssertEqual(sections[2].key, "all|repository|none|example-org/api|")
         XCTAssertTrue(sections.allSatisfy { !$0.accepts })
@@ -216,7 +219,7 @@ final class SectionTests: XCTestCase {
         XCTAssertEqual(api.map(\.level), [1, 2, 2])
         XCTAssertEqual(api.map(\.isLeaf), [false, true, true])
         XCTAssertEqual(api[0].detail, "5 PRs")
-        XCTAssertEqual(api[1].cards.map(\.id), ["T4", "T1", "M1", "T7"])
+        XCTAssertEqual(api[1].cards.map(\.id), ["T7", "T4", "T1", "M1"])
         XCTAssertEqual(api[2].key, "all|repository|status|example-org/api|closed")
         // Folding the first level hides its groups; the key has no second
         // part.
@@ -250,12 +253,15 @@ final class SectionTests: XCTestCase {
     }
 
     /// ⇧R: the tab's unread rows after the search, folded, collapsed and
-    /// muted ones too.
+    /// muted ones shown with Show muted too; not those of the muted cards
+    /// Show muted hides (DESIGN.md, "How unread clears").
     func testMarkAllReadTakesEveryUnreadRowOfTheTab() {
         let cards = sampleCards()
         XCTAssertEqual(Listing.rowsToRead(tab: .review, cards: cards, search: ""), ["A", "D", "t6", "t7"])
         XCTAssertEqual(Listing.rowsToRead(tab: .review, cards: cards, search: "renovate"), ["t6", "t7"])
         XCTAssertEqual(Listing.rowsToRead(tab: .all, cards: cards, search: "").count, 6, "N1's gray row and M1's too")
+        XCTAssertEqual(Listing.rowsToRead(tab: .review, cards: cards, search: "", showMuted: false), ["A", "D"], "hidden muted cards")
+        XCTAssertEqual(Listing.rowsToRead(tab: .review, cards: cards, search: "renovate", showMuted: false), [])
     }
 
     func testTheRowsOfACard() {
@@ -302,7 +308,7 @@ final class SelectionAndHintTests: XCTestCase {
     func testTheHintTable() {
         let review = view(.review)
         XCTAssertEqual(hint(.header(card: "T1"), review), "↑↓ Move  ⏎ Open  ⌥↑↓ Reorder  D T W Move to  ⌫ Dismiss  ⇧R Mark all read  ⌘F Search")
-        XCTAssertEqual(hint(.header(card: "T7"), review), "↑↓ Move  ⏎ Open  D T W Move to  ⌫ Dismiss  ⇧R Mark all read  ⌘F Search", "muted: no Reorder")
+        XCTAssertEqual(hint(.header(card: "T7"), review), "↑↓ Move  ⏎ Open  ⌥↑↓ Reorder  D T W Move to  ⌫ Dismiss  ⇧R Mark all read  ⌘F Search", "a muted card shown moves like the others")
         XCTAssertEqual(hint(.header(card: "D1"), review), "↑↓ Move  ⏎ Open  D T W Move to  ⌫ Dismiss  ⇧R Mark all read  ⌘F Search",
                        "Done: no Reorder")
         XCTAssertEqual(hint(.header(card: "M1"), view(.mine)), "↑↓ Move  ⏎ Open  ⌥↑↓ Reorder  ⌫ Dismiss  ⇧R Mark all read  ⌘F Search")
@@ -321,6 +327,7 @@ final class SelectionAndHintTests: XCTestCase {
         XCTAssertEqual(hint(.more("review|todo"), expanded), "↑↓ Move  ⏎ Show less  ⇧R Mark all read  ⌘F Search")
         XCTAssertEqual(hint(.moreRows(card: "T1"), review), "↑↓ Move  ⏎ Expand  ⇧R Mark all read  ⌘F Search")
         XCTAssertEqual(hint(.olderActivity(card: "T1"), review), "↑↓ Move  ⏎ Open  ⇧R Mark all read  ⌘F Search")
+        XCTAssertEqual(hint(.lessRows(card: "T1"), view(.review, expandedRows: ["T1"])), "↑↓ Move  ⏎ Show less  ⇧R Mark all read  ⌘F Search")
     }
 
     func testWhatTheKeysAskFor() {
@@ -334,20 +341,26 @@ final class SelectionAndHintTests: XCTestCase {
         XCTAssertEqual(act(.open, .more("review|todo")), .toggleMore("review|todo"))
         XCTAssertEqual(act(.open, .moreRows(card: "T1")), .expandRows(card: "T1"))
         XCTAssertEqual(act(.open, .olderActivity(card: "T1")), .open("https://github.com/p/T1", read: nil))
+        XCTAssertEqual(act(.open, .lessRows(card: "T1")), .collapseRows(card: "T1"))
         XCTAssertEqual(act(.markAllRead, nil), .markAllRead)
         XCTAssertNil(act(.markAllRead, nil, view(nil)), "no rows in the Dismissed list")
         // ⌫: the card of the header or the row; Restore in Dismissed.
         XCTAssertEqual(act(.delete, .row(id: "A", card: "T1")), .dismiss(card: "T1"))
         XCTAssertEqual(act(.delete, .header(card: "X1"), view(nil)), .restore(card: "X1"))
         XCTAssertNil(act(.delete, .section("review|todo")))
-        // ⌥↑↓ among the cards that are not muted.
+        // ⌥↑↓ past the previous or next reference card; past V1, the top.
         XCTAssertEqual(act(.reorder(up: true), .header(card: "T2")),
-                       .place(PlaceMove(card: "T2", target: .review(.todo), position: .before("T1"), verb: .move)))
+                       .place(PlaceMove(card: "T2", target: .review(.todo), position: .top, verb: .move)))
+        XCTAssertEqual(act(.reorder(up: true), .header(card: "T3")),
+                       .place(PlaceMove(card: "T3", target: .review(.todo), position: .before("T2"), verb: .move)))
         XCTAssertEqual(act(.reorder(up: false), .row(id: "A", card: "T1")),
                        .place(PlaceMove(card: "T1", target: .review(.todo), position: .before("T3"), verb: .move)))
         XCTAssertNil(act(.reorder(up: true), .header(card: "T1")), "the top")
-        XCTAssertNil(act(.reorder(up: false), .header(card: "T5")), "the last that is not muted")
-        XCTAssertNil(act(.reorder(up: true), .header(card: "T7")), "a muted card does not move")
+        XCTAssertEqual(act(.reorder(up: false), .header(card: "T5")),
+                       .place(PlaceMove(card: "T5", target: .review(.todo), position: .before("T7"), verb: .move)), "past muted T6, shown")
+        XCTAssertEqual(act(.reorder(up: true), .header(card: "T7")),
+                       .place(PlaceMove(card: "T7", target: .review(.todo), position: .before("T6"), verb: .move)), "a muted card shown moves")
+        XCTAssertNil(act(.reorder(up: false), .header(card: "T7")), "the last")
         XCTAssertNil(act(.reorder(up: true), .header(card: "D1")), "Done")
         XCTAssertNil(act(.reorder(up: true), .header(card: "T2"), view(.all)), "All")
         XCTAssertEqual(act(.reorder(up: false), .header(card: "M1"), view(.mine)),
@@ -381,7 +394,7 @@ final class MenuTests: XCTestCase {
 
     /// Main.html, "Right-click on a card header in Review › Todo".
     func testACardInTodo() {
-        let menu = PopoverLogic.menu(for: .header(card: "T1"), view: view(.review), hasTextSelection: false, login: "bufferings-work")
+        let menu = PopoverLogic.menu(for: .header(card: "T1"), view: view(.review), login: "bufferings-work")
         XCTAssertEqual(titles(menu), [
             "Open on GitHub", "Copy link", "-", "Move to Doing", "Move to Waiting", "Move to Done", "Remove from Review", "-",
             "Mute this pull request", "Mute example-org/api", "Mute @al", "-", "Dismiss", "-", "Mark all as read",
@@ -392,14 +405,14 @@ final class MenuTests: XCTestCase {
         XCTAssertEqual(menu[9]?.action, .mute(.repo, "example-org/api"))
     }
 
-    /// Main.html, "Text selected in a title, then right-click".
-    func testAnAssignedCardInMineWithSelectedText() {
-        let menu = PopoverLogic.menu(for: .header(card: "M2"), view: view(.all), hasTextSelection: true, login: "bufferings-work")
+    /// An assigned card in Mine: no `Copy` item (no text can be selected).
+    func testAnAssignedCardInMine() {
+        let menu = PopoverLogic.menu(for: .header(card: "M2"), view: view(.all), login: "bufferings-work")
         XCTAssertEqual(titles(menu), [
-            "Open on GitHub", "Copy", "Copy link", "-", "Move to Done", "Remove from Mine", "-",
+            "Open on GitHub", "Copy link", "-", "Move to Done", "Remove from Mine", "-",
             "Mute this pull request", "Mute acme-corp/web", "Mute @mk", "-", "Dismiss", "-", "Mark all as read",
         ])
-        XCTAssertEqual(menu[4]?.action, .place(PlaceMove(card: "M2", target: .mineDone, position: .byDefault, verb: .move)))
+        XCTAssertEqual(menu[3]?.action, .place(PlaceMove(card: "M2", target: .mineDone, position: .byDefault, verb: .move)))
     }
 
     /// A card in Done moves out and is removed like any other (DESIGN.md,
@@ -407,7 +420,7 @@ final class MenuTests: XCTestCase {
     func testACardInDone() {
         let all = view(.all)
         func items(_ id: String) -> [MenuEntry?] {
-            PopoverLogic.menu(for: .header(card: id), view: all, hasTextSelection: false, login: "bufferings-work")
+            PopoverLogic.menu(for: .header(card: id), view: all, login: "bufferings-work")
         }
         let d1 = items("D1")
         XCTAssertEqual(Array(titles(d1)[2...7]), ["-", "Move to Doing", "Move to Todo", "Move to Waiting", "Remove from Review", "-"])
@@ -420,45 +433,45 @@ final class MenuTests: XCTestCase {
     func testPlacementItemsLeaveOutWhatDoesNotApply() {
         let all = view(.all)
         func items(_ id: String) -> [String] {
-            titles(PopoverLogic.menu(for: .header(card: id), view: all, hasTextSelection: false, login: "bufferings-work"))
+            titles(PopoverLogic.menu(for: .header(card: id), view: all, login: "bufferings-work"))
         }
         XCTAssertFalse(items("M1").contains("Remove from Mine"), "your own PR stays in Mine")
         XCTAssertFalse(items("M1").contains { $0.hasPrefix("Mute @") }, "no Mute @<your login>")
         XCTAssertTrue(items("M1").contains("Mute example-org/api"))
         XCTAssertTrue(items("N1").contains("Add to Review"))
         XCTAssertTrue(items("N1").contains("Add to Mine"))
-        let menu = PopoverLogic.menu(for: .header(card: "N1"), view: all, hasTextSelection: false, login: "x")
+        let menu = PopoverLogic.menu(for: .header(card: "N1"), view: all, login: "x")
         XCTAssertEqual(menu[3]?.action, .place(PlaceMove(card: "N1", target: .review(.todo), position: .byDefault, verb: .add)))
         XCTAssertEqual(menu[4]?.action, .place(PlaceMove(card: "N1", target: .mine, position: .byDefault, verb: .add)))
         let own = card("O", authored: true)
-        let ownMenu = titles(PopoverLogic.menu(for: .header(card: "O"), view: view(.all, cards: [own]), hasTextSelection: false, login: "x"))
+        let ownMenu = titles(PopoverLogic.menu(for: .header(card: "O"), view: view(.all, cards: [own]), login: "x"))
         XCTAssertFalse(ownMenu.contains("Add to Review"), "your own PR is never in Review")
         XCTAssertTrue(ownMenu.contains("Add to Mine"))
-        let t7 = titles(PopoverLogic.menu(for: .header(card: "T7"), view: view(.review), hasTextSelection: false, login: "x"))
-        XCTAssertTrue(t7.contains("Mute this pull request"))
-        XCTAssertTrue(t7.contains("Unmute example-org/api"))
+        let t7 = titles(PopoverLogic.menu(for: .header(card: "T7"), view: view(.review), login: "x"))
+        XCTAssertTrue(t7.contains("Unmute this pull request"))
+        XCTAssertTrue(t7.contains("Mute example-org/api"))
         XCTAssertTrue(t7.contains("Unmute @renovate"))
     }
 
     /// Main.html, "Right-click on a row".
     func testARowMenu() {
         let review = view(.review)
-        let menu = PopoverLogic.menu(for: .row(id: "A", card: "T1"), view: review, hasTextSelection: false, login: "bufferings-work")
+        let menu = PopoverLogic.menu(for: .row(id: "A", card: "T1"), view: review, login: "bufferings-work")
         XCTAssertEqual(titles(menu), ["Open on GitHub", "Copy link", "-", "Mute @al", "-", "Mark all as read"])
         XCTAssertEqual(menu[0]?.action, .open("https://github.com/c/A", read: "A"))
-        XCTAssertEqual(titles(PopoverLogic.menu(for: .row(id: "A", card: "T1"), view: review, hasTextSelection: false, login: "AL")),
+        XCTAssertEqual(titles(PopoverLogic.menu(for: .row(id: "A", card: "T1"), view: review, login: "AL")),
                        ["Open on GitHub", "Copy link", "-", "Mark all as read"], "your own row")
-        XCTAssertEqual(titles(PopoverLogic.menu(for: .row(id: "r1", card: "R1"), view: review, hasTextSelection: true, login: "x")),
-                       ["Open on GitHub", "Copy", "Copy link", "-", "Mark all as read"], "no actor")
-        XCTAssertEqual(PopoverLogic.menu(for: .row(id: "A", card: "T1"), view: review, hasTextSelection: false, login: "x", mutedUsers: ["Al"])[3]?.action,
+        XCTAssertEqual(titles(PopoverLogic.menu(for: .row(id: "r1", card: "R1"), view: review, login: "x")),
+                       ["Open on GitHub", "Copy link", "-", "Mark all as read"], "no actor")
+        XCTAssertEqual(PopoverLogic.menu(for: .row(id: "A", card: "T1"), view: review, login: "x", mutes: Mutes(users: ["Al"]))[3]?.action,
                        .unmute(.user, "al"))
-        XCTAssertEqual(PopoverLogic.menu(for: .section("review|todo"), view: review, hasTextSelection: false, login: "x"), [])
+        XCTAssertEqual(PopoverLogic.menu(for: .section("review|todo"), view: review, login: "x"), [])
     }
 
     func testADismissedCardMenu() {
-        let menu = PopoverLogic.menu(for: .header(card: "X1"), view: view(nil), hasTextSelection: true, login: "x")
-        XCTAssertEqual(titles(menu), ["Open on GitHub", "Copy", "Copy link", "-", "Restore"])
-        XCTAssertEqual(menu[4]?.action, .restore(card: "X1"))
+        let menu = PopoverLogic.menu(for: .header(card: "X1"), view: view(nil), login: "x")
+        XCTAssertEqual(titles(menu), ["Open on GitHub", "Copy link", "-", "Restore"])
+        XCTAssertEqual(menu[3]?.action, .restore(card: "X1"))
     }
 }
 
@@ -467,14 +480,20 @@ final class CardMoveTests: XCTestCase {
         let sections = layout(.review)
         XCTAssertEqual(CardDrop.target(.card("T3", lowerHalf: false), sections: sections), DropTarget(section: "review|todo", position: .before("T3")))
         XCTAssertEqual(CardDrop.target(.card("T3", lowerHalf: true), sections: sections), DropTarget(section: "review|todo", position: .before("T4")))
-        XCTAssertEqual(CardDrop.target(.card("T5", lowerHalf: true), sections: sections), DropTarget(section: "review|todo", position: .bottom),
-                       "muted cards always stay after")
-        XCTAssertEqual(CardDrop.target(.card("T6", lowerHalf: false), sections: sections), DropTarget(section: "review|todo", position: .bottom),
-                       "over a muted card: after the last that is not")
-        XCTAssertEqual(CardDrop.target(.header("review|doing"), sections: sections), DropTarget(section: "review|doing", position: .bottom))
-        XCTAssertEqual(CardDrop.target(.more("review|todo"), sections: sections), DropTarget(section: "review|todo", position: .bottom))
+        XCTAssertEqual(CardDrop.target(.card("T5", lowerHalf: true), sections: sections), DropTarget(section: "review|todo", position: .before("T6")),
+                       "the lower half of the last shown: before the first folded")
+        XCTAssertEqual(CardDrop.target(.card("T6", lowerHalf: false), sections: sections), DropTarget(section: "review|todo", position: .before("T6")),
+                       "a muted card shown is a place like the others")
+        XCTAssertEqual(CardDrop.target(.card("T7", lowerHalf: true), sections: sections), DropTarget(section: "review|todo", position: .bottom))
+        XCTAssertEqual(CardDrop.target(.header("review|doing"), sections: sections), DropTarget(section: "review|doing", position: .top),
+                       "a heading: the top")
+        let first = sections[1].matching[0].id
+        XCTAssertEqual(CardDrop.target(.card(first, lowerHalf: false), sections: sections), DropTarget(section: "review|todo", position: .top),
+                       "the first card's upper half: the top")
+        XCTAssertEqual(CardDrop.target(.more("review|todo"), sections: sections), DropTarget(section: "review|todo", position: .before("T6")),
+                       "+ N more PRs: right after the last card shown")
         let collapsed = layout(.review, collapsed: ["review|waiting"])
-        XCTAssertEqual(CardDrop.target(.header("review|waiting"), sections: collapsed), DropTarget(section: "review|waiting", position: .bottom))
+        XCTAssertEqual(CardDrop.target(.header("review|waiting"), sections: collapsed), DropTarget(section: "review|waiting", position: .top))
         XCTAssertEqual(CardDrop.target(.header("review|done"), sections: sections), DropTarget(section: "review|done", position: .byDefault),
                        "Done by its own order")
         XCTAssertEqual(CardDrop.target(.card("D1", lowerHalf: false), sections: sections), DropTarget(section: "review|done", position: .byDefault))
@@ -487,8 +506,11 @@ final class CardMoveTests: XCTestCase {
         let todo = layout(.review)[1]
         XCTAssertEqual(CardDrop.lineAbove(DropTarget(section: todo.key, position: .before("T3")), in: todo), "T3")
         XCTAssertNil(CardDrop.lineAbove(DropTarget(section: todo.key, position: .bottom), in: todo), "above + 2 more PRs")
+        XCTAssertEqual(CardDrop.lineAbove(DropTarget(section: todo.key, position: .top), in: todo), todo.cards.first?.id, "the top")
         let open = layout(.review, expanded: ["review|todo"])[1]
-        XCTAssertEqual(CardDrop.lineAbove(DropTarget(section: open.key, position: .bottom), in: open), "T6", "above the muted cards")
+        XCTAssertNil(CardDrop.lineAbove(DropTarget(section: open.key, position: .bottom), in: open), "below the last card")
+        XCTAssertEqual(CardDrop.lineAbove(DropTarget(section: open.key, position: .before("T6")), in: open), "T6")
+        XCTAssertNil(CardDrop.lineAbove(DropTarget(section: todo.key, position: .before("T6")), in: todo), "a folded card: the end")
         let done = layout(.review)[3]
         XCTAssertEqual(CardDrop.lineAbove(DropTarget(section: done.key, position: .byDefault), in: done), "D1", "Done: the top")
     }
@@ -499,7 +521,9 @@ final class CardMoveTests: XCTestCase {
         XCTAssertNil(CardDrop.move(t2, to: DropTarget(section: "review|todo", position: .before("T3")), cards: cards))
         XCTAssertEqual(CardDrop.move(t2, to: DropTarget(section: "review|todo", position: .before("T5")), cards: cards),
                        PlaceMove(card: "T2", target: .review(.todo), position: .before("T5"), verb: .move))
-        XCTAssertNil(CardDrop.move(cards[5], to: DropTarget(section: "review|todo", position: .bottom), cards: cards), "T5 is the last already")
+        XCTAssertNil(CardDrop.move(cards[7], to: DropTarget(section: "review|todo", position: .bottom), cards: cards), "T7 is the last already")
+        XCTAssertEqual(CardDrop.move(cards[5], to: DropTarget(section: "review|todo", position: .bottom), cards: cards),
+                       PlaceMove(card: "T5", target: .review(.todo), position: .bottom, verb: .move), "past the muted cards")
         XCTAssertEqual(CardDrop.move(cards[0], to: DropTarget(section: "review|todo", position: .bottom), cards: cards),
                        PlaceMove(card: "R1", target: .review(.todo), position: .bottom, verb: .move))
         XCTAssertEqual(CardDrop.move(cards[11], to: DropTarget(section: "mine|main", position: .before("M1")), cards: cards),
@@ -533,10 +557,10 @@ final class CardMoveTests: XCTestCase {
         XCTAssertEqual(moved.first { $0.id == "T7" }?.placement?.position, 7)
         moved = place("W1", .review(.todo))
         XCTAssertEqual(order(moved, "review|todo").first, "W1")
-        // From elsewhere: the bottom, before the muted cards.
+        // From elsewhere: the bottom, muted cards or not.
         moved = place("N1", .review(.todo))
-        XCTAssertEqual(order(moved, "review|todo"), ["T1", "T2", "T3", "T4", "T5", "N1", "T6", "T7"])
-        // A muted card goes among the muted ones.
+        XCTAssertEqual(order(moved, "review|todo"), ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "N1"])
+        // A muted card moves like the others.
         moved = place("T6", .review(.doing))
         XCTAssertEqual(order(moved, "review|doing"), ["R1", "T6"])
         moved = place("T1", .review(.todo), .before("T4"))
@@ -561,7 +585,7 @@ final class CardMoveTests: XCTestCase {
         var due = cards
         due[due.firstIndex { $0.id == "D1" }!].autoDismissAt = T0 + 86_400
         moved = LocalChange.place(PlaceMove(card: "D1", target: .review(.todo), position: .byDefault, verb: .move)).apply(due)
-        XCTAssertEqual(order(moved, "review|todo"), ["T1", "T2", "T3", "T4", "T5", "D1", "T6", "T7"], "from Done: the bottom")
+        XCTAssertEqual(order(moved, "review|todo"), ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "D1"], "from Done: the bottom")
         XCTAssertNil(moved.first { $0.id == "D1" }?.autoDismissAt)
     }
 
@@ -582,7 +606,7 @@ final class CardMoveTests: XCTestCase {
         XCTAssertEqual(r1.muted, [.known(.repo)])
         XCTAssertEqual(r1.rows[0].muted, true)
         XCTAssertEqual(order(repo, "review|doing"), ["R1"])
-        XCTAssertEqual(order(repo, "review|todo"), ["T1", "T3", "T4", "T2", "T5", "T6", "T7"], "muted cards go last, in their rank")
+        XCTAssertEqual(order(repo, "review|todo"), ["T1", "T2", "T3", "T4", "T5", "T6", "T7"], "a mute moves no card")
         // A user's rows in other PRs, but not mentions, state changes or
         // reactions.
         var mixed = cards
@@ -596,9 +620,10 @@ final class CardMoveTests: XCTestCase {
         let unmuted = LocalChange.unmute(.user, "renovate").apply(cards)
         XCTAssertEqual(unmuted[6].muted, [])
         XCTAssertEqual(unmuted[6].rows[0].muted, false)
-        XCTAssertEqual(unmuted[7].muted, [.known(.repo)], "still muted for its repository")
+        XCTAssertEqual(unmuted[7].muted, [.known(.pr)], "still muted by itself")
         let pr = LocalChange.mute(.pr, "acme-corp/web#80").apply(cards)
         XCTAssertEqual(pr[13].muted, [.known(.pr)])
+        XCTAssertEqual(pr[13].prMute, .known(.mute))
         XCTAssertEqual(LocalChange.mute(.pr, "x").verb, .mute)
         XCTAssertEqual(LocalChange.read([]).verb, .markAsRead)
     }

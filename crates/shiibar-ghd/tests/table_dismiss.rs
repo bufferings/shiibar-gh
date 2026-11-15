@@ -75,7 +75,7 @@ fn dismissed_keep_days_applies_to_the_dismissed_cards() {
 fn the_automatic_dismiss_table() {
     // (name, setup after the merge, days passed, want dismissed)
     type Step = fn(&mut H);
-    let cases: [(&str, Step, i64, bool); 9] = [
+    let cases: [(&str, Step, i64, bool); 12] = [
         ("before n days", |_| {}, 2, false),
         ("after n days", |_| {}, 3, true),
         (
@@ -116,9 +116,37 @@ fn the_automatic_dismiss_table() {
             true,
         ),
         (
-            "a reply where I was mentioned",
+            "a reply where I or my team was mentioned",
             |h| {
                 let e = h.ev("R_1", "PR_1", IngestKind::ReplyMentioned);
+                h.events(vec![e]);
+            },
+            3,
+            false,
+        ),
+        (
+            "a team mention after the merge",
+            |h| {
+                let e = h.ev("M_1", "PR_1", IngestKind::TeamMentioned);
+                h.events(vec![e]);
+            },
+            3,
+            false,
+        ),
+        (
+            "a team mention recorded with its List off",
+            |h| {
+                h.table(EventKind::TeamMentioned, EventColumn::List, false);
+                let e = h.ev("M_1", "PR_1", IngestKind::TeamMentioned);
+                h.events(vec![e]);
+            },
+            3,
+            true,
+        ),
+        (
+            "a review request after the merge",
+            |h| {
+                let e = h.ev("RR_1", "PR_1", IngestKind::ReviewRequested);
                 h.events(vec![e]);
             },
             3,
@@ -166,6 +194,28 @@ fn the_automatic_dismiss_table() {
             );
         }
     }
+}
+
+#[test]
+fn after_the_close_is_judged_when_the_row_is_made() {
+    // DESIGN.md, "Dismiss": "after the merge or close" means the PR was
+    // known merged or closed when the row was made, whatever the time of
+    // the event.
+    let mut h = H::new();
+    h.prs(vec![other("PR_1"), other("PR_2")]);
+    let before = h.ev("M_1", "PR_1", IngestKind::TeamMentioned);
+    h.events(vec![before]);
+    h.advance(600);
+    let merged_at = h.at();
+    h.prs(vec![merged(other("PR_1")), merged(other("PR_2"))]);
+    // An event of before the merge, made into a row after it.
+    let late = h.ev_at("M_2", "PR_2", IngestKind::ReplyMentioned, merged_at - 60);
+    h.events(vec![late]);
+    h.set_time(merged_at + 3 * DAY);
+    h.tick();
+    assert!(h.dismissed("PR_1"), "the row was made while open");
+    assert!(h.has_row("M_2"));
+    assert!(!h.dismissed("PR_2"), "the row was made after the merge");
 }
 
 #[test]
@@ -300,11 +350,26 @@ fn disabled_and_unreadable_cards_keep_their_state_and_their_clocks() {
 #[test]
 fn return_trigger_table() {
     // (name, kind, actor, List off, returns)
+    // DESIGN.md, "Dismiss": the seven return trigger rows.
     let cases = [
         ("mention", IngestKind::Mentioned, "alice", None, true),
         (
+            "team mention",
+            IngestKind::TeamMentioned,
+            "alice",
+            None,
+            true,
+        ),
+        (
             "reply to my comment",
             IngestKind::Reply,
+            "alice",
+            None,
+            true,
+        ),
+        (
+            "reply where I or my team was mentioned",
+            IngestKind::ReplyMentioned,
             "alice",
             None,
             true,
@@ -316,36 +381,37 @@ fn return_trigger_table() {
             None,
             true,
         ),
-        ("reopen", IngestKind::Reopened, "alice", None, true),
-        ("my own reopen", IngestKind::Reopened, ME, None, true),
         (
             "review request to my team",
             IngestKind::TeamReviewRequested,
             "alice",
             None,
-            false,
+            true,
         ),
-        (
-            "team mention",
-            IngestKind::TeamMentioned,
-            "alice",
-            None,
-            false,
-        ),
-        (
-            "reply where I was mentioned",
-            IngestKind::ReplyMentioned,
-            "alice",
-            None,
-            false,
-        ),
+        ("reopen", IngestKind::Reopened, "alice", None, true),
+        ("my own reopen", IngestKind::Reopened, ME, None, true),
         ("comment", IngestKind::Comment, "alice", None, false),
+        (
+            "comment on others",
+            IngestKind::CommentOther,
+            "alice",
+            None,
+            false,
+        ),
+        ("approval", IngestKind::Approved, "alice", None, false),
         ("merged", IngestKind::Merged, "alice", None, false),
         (
             "mention, its List off",
             IngestKind::Mentioned,
             "alice",
             Some(EventKind::Mentioned),
+            false,
+        ),
+        (
+            "review request to my team, its List off",
+            IngestKind::TeamReviewRequested,
+            "alice",
+            Some(EventKind::TeamReviewRequested),
             false,
         ),
     ];
@@ -381,8 +447,11 @@ fn return_trigger_table() {
             assert_eq!(row.unread, !own, "{name}: unread");
             assert_eq!(h.dot(), !own, "{name}: dot");
             assert_eq!(h.delivered().len(), usize::from(!own), "{name}: notified");
-        } else if off.is_none() && kind != IngestKind::TeamReviewRequested {
+        } else if off.is_none() {
             assert!(!h.has_row("E_1"), "{name}: no row while dismissed");
+        } else {
+            assert!(!h.dot(), "{name}: no dot");
+            assert!(h.delivered().is_empty(), "{name}: not notified");
         }
     }
 }
@@ -576,15 +645,57 @@ fn a_closed_pr_found_new_shows_only_through_a_return_trigger() {
     let cases = [
         ("someone else's, merged event only", false, None, None),
         (
+            "someone else's, a comment",
+            false,
+            Some(IngestKind::CommentOther),
+            None,
+        ),
+        (
             "someone else's, a mention",
             false,
             Some(IngestKind::Mentioned),
             Some(None),
         ),
         (
+            "someone else's, a team mention",
+            false,
+            Some(IngestKind::TeamMentioned),
+            Some(None),
+        ),
+        (
+            "someone else's, a reply where my team was mentioned",
+            false,
+            Some(IngestKind::ReplyMentioned),
+            Some(None),
+        ),
+        (
+            "someone else's, a reply to my comment",
+            false,
+            Some(IngestKind::Reply),
+            Some(None),
+        ),
+        (
+            "someone else's, a reopen",
+            false,
+            Some(IngestKind::Reopened),
+            Some(None),
+        ),
+        (
+            "someone else's, a review request to my team",
+            false,
+            Some(IngestKind::TeamReviewRequested),
+            Some(Some(("review", "done"))),
+        ),
+        (
             "mine, a mention",
             true,
             Some(IngestKind::Mentioned),
+            Some(Some(("mine", "done"))),
+        ),
+        (
+            "mine, a team mention",
+            true,
+            Some(IngestKind::TeamMentioned),
             Some(Some(("mine", "done"))),
         ),
     ];
@@ -717,4 +828,223 @@ fn a_reopen_ends_the_restore_exception() {
     h.set_time(merged_again + 3 * DAY);
     h.tick();
     assert!(h.dismissed("PR_1"), "n days after the new merge");
+}
+
+#[test]
+fn a_closed_pr_found_with_a_team_request_whose_list_is_off_is_not_taken() {
+    let mut h = H::new();
+    h.table(EventKind::TeamReviewRequested, EventColumn::List, false);
+    let request = h.ev("RR_1", "PR_1", IngestKind::TeamReviewRequested);
+    h.push(vec![merged(other("PR_1"))], vec![request], vec![]);
+    assert!(h.engine.pr_record(&full("PR_1")).is_none());
+}
+
+#[test]
+fn a_closed_pr_found_new_counts_n_days_only_through_a_request_or_a_reopen() {
+    // DESIGN.md, "Dismiss": a mention or reply row is after the close, so
+    // no automatic Dismiss; a review request or Reopened counts n days.
+    // (name, trigger, counts n days)
+    let cases = [
+        ("review request", IngestKind::ReviewRequested, true),
+        ("team review request", IngestKind::TeamReviewRequested, true),
+        ("reopened", IngestKind::Reopened, true),
+        ("mention", IngestKind::Mentioned, false),
+        ("team mention", IngestKind::TeamMentioned, false),
+        ("reply", IngestKind::Reply, false),
+        ("reply where mentioned", IngestKind::ReplyMentioned, false),
+    ];
+    for (name, kind, counts) in cases {
+        let mut h = H::new();
+        let detected = h.at();
+        let trigger = h.ev("T_1", "PR_1", kind);
+        h.push(vec![merged(other("PR_1"))], vec![trigger], vec![]);
+        let card = h.card_by_id("PR_1").expect(name);
+        assert_eq!(
+            card.auto_dismiss_at,
+            counts.then_some(detected + 3 * DAY),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn a_record_shows_again_through_each_return_trigger() {
+    for kind in [
+        IngestKind::Mentioned,
+        IngestKind::TeamMentioned,
+        IngestKind::Reply,
+        IngestKind::ReplyMentioned,
+        IngestKind::ReviewRequested,
+        IngestKind::TeamReviewRequested,
+        IngestKind::Reopened,
+    ] {
+        let mut h = H::new();
+        recorded(&mut h);
+        let later = IngestPr {
+            updated_at: T0 + 8 * DAY + 10,
+            ..other("PR_1")
+        };
+        let trigger = h.ev("T_1", "PR_1", kind);
+        h.push(vec![later], vec![trigger], vec![]);
+        assert!(h.visible("PR_1"), "{kind:?}");
+        assert!(h.engine.record(&full("PR_1")).is_none(), "{kind:?}");
+    }
+}
+
+/// An open PR only a team mention search found (`Ingest::team_only`).
+fn found_by_team(h: &mut H, events: Vec<IngestEvent>) {
+    let ingest = Ingest {
+        prs: vec![IngestPr {
+            requested_team: true,
+            ..other("PR_1")
+        }],
+        events,
+        team_only: vec!["PR_1".into()],
+        ..Ingest::default()
+    };
+    h.engine.ingest(ACCOUNT, ingest, &h.now.clone()).unwrap();
+    h.advance(1);
+}
+
+#[test]
+fn an_open_pr_found_only_by_a_team_search_shows_only_through_a_return_trigger() {
+    // DESIGN.md, "API usage": taken like a closed PR the core does not know.
+    let mut h = H::new();
+    let comment = h.ev("E_1", "PR_1", IngestKind::CommentOther);
+    found_by_team(&mut h, vec![comment]);
+    assert!(h.engine.pr_record(&full("PR_1")).is_none(), "a comment");
+    let mention = h.ev("E_2", "PR_1", IngestKind::TeamMentioned);
+    let comment = h.ev("E_3", "PR_1", IngestKind::CommentOther);
+    found_by_team(&mut h, vec![mention, comment]);
+    assert!(h.visible("PR_1"));
+    assert!(h.has_row("E_2"));
+    assert!(!h.has_row("E_3"), "only the trigger row");
+    assert_eq!(h.placement("PR_1"), None);
+    assert_eq!(h.delivered().len(), 1);
+}
+
+#[test]
+fn a_team_only_pr_has_no_ongoing_request_exception() {
+    // A request older than the watch makes no row, so the PR is not taken.
+    let mut h = H::new();
+    let old = h.ev_at("RR_1", "PR_1", IngestKind::TeamReviewRequested, T0 - DAY);
+    found_by_team(&mut h, vec![old]);
+    assert!(h.engine.pr_record(&full("PR_1")).is_none());
+}
+
+#[test]
+fn a_team_only_pr_with_a_team_request_follows_the_list() {
+    // DESIGN.md, "API usage": `team:` may match a PR with only a request to
+    // the team; it is taken only when that request makes a row.
+    let mut h = H::new();
+    h.table(EventKind::TeamReviewRequested, EventColumn::List, false);
+    let request = h.ev("RR_1", "PR_1", IngestKind::TeamReviewRequested);
+    found_by_team(&mut h, vec![request]);
+    assert!(h.engine.pr_record(&full("PR_1")).is_none(), "List off");
+    let mut h = H::new();
+    let request = h.ev("RR_1", "PR_1", IngestKind::TeamReviewRequested);
+    found_by_team(&mut h, vec![request]);
+    assert_eq!(
+        h.placement("PR_1").map(|p| (p.0, p.1)),
+        Some(("review".to_string(), "todo".to_string())),
+        "List on: a request row puts it in Todo"
+    );
+}
+
+#[test]
+fn a_pr_closed_while_dismissed_keeps_the_after_close_exception_of_its_trigger() {
+    // DESIGN.md, "Dismiss": the exception is judged when the row is made.
+    // While dismissed no status is fetched, but the events show the merge:
+    // a mention or reply that brings the card back comes after the close.
+    // A review request counts n days from the detection by the status.
+    // (name, trigger, the merge in an earlier fetch, want kept)
+    let cases = [
+        ("mention, same fetch", IngestKind::Mentioned, false, true),
+        ("mention, earlier fetch", IngestKind::Mentioned, true, true),
+        ("team mention", IngestKind::TeamMentioned, false, true),
+        ("reply", IngestKind::Reply, true, true),
+        (
+            "reply where mentioned",
+            IngestKind::ReplyMentioned,
+            false,
+            true,
+        ),
+        ("review request", IngestKind::ReviewRequested, false, false),
+        (
+            "team review request",
+            IngestKind::TeamReviewRequested,
+            true,
+            false,
+        ),
+    ];
+    for (name, kind, earlier, kept) in cases {
+        let mut h = H::new();
+        h.prs(vec![other("PR_1")]);
+        h.place(
+            &key("PR_1"),
+            PlaceTab::Review,
+            Some(Section::Waiting),
+            None,
+            None,
+        )
+        .unwrap();
+        h.dismiss(&key("PR_1")).unwrap();
+        h.advance(60);
+        let merge = h.ev("MG_1", "PR_1", IngestKind::Merged);
+        h.advance(5);
+        let trigger = h.ev("T_1", "PR_1", kind);
+        if earlier {
+            h.events(vec![merge]);
+            h.events(vec![trigger]);
+        } else {
+            h.events(vec![merge, trigger]);
+        }
+        assert!(!h.dismissed("PR_1"), "{name}: back");
+        assert!(!h.has_row("MG_1"), "{name}: the merge made no row");
+        // The first status after the return detects the merge.
+        h.advance(60);
+        let detected = h.at();
+        h.prs(vec![merged(other("PR_1"))]);
+        let card = h.card_by_id("PR_1").unwrap();
+        assert_eq!(
+            card.placement.as_ref().map(|p| p.section.as_text()),
+            Some("done".into()),
+            "{name}: to Done at the detection"
+        );
+        assert_eq!(
+            card.auto_dismiss_at,
+            (!kept).then_some(detected + 3 * DAY),
+            "{name}"
+        );
+        h.set_time(detected + 3 * DAY);
+        h.tick();
+        assert_eq!(h.dismissed("PR_1"), !kept, "{name}: after n days");
+    }
+}
+
+#[test]
+fn a_reopen_seen_while_dismissed_leaves_no_after_close_exception() {
+    let mut h = H::new();
+    h.prs(vec![other("PR_1")]);
+    h.dismiss(&key("PR_1")).unwrap();
+    h.advance(60);
+    let close = h.ev("CL_1", "PR_1", IngestKind::Closed);
+    h.advance(5);
+    let reopen = h.ev("RO_1", "PR_1", IngestKind::Reopened);
+    h.advance(5);
+    let mention = h.ev("M_1", "PR_1", IngestKind::Mentioned);
+    h.events(vec![close, reopen, mention]);
+    assert!(!h.dismissed("PR_1"));
+    assert!(!h.engine.pr_record(&full("PR_1")).unwrap().keep_after_close);
+    // Closed later: n days from that detection.
+    h.prs(vec![other("PR_1")]);
+    let detected = h.at();
+    h.prs(vec![IngestPr {
+        state: PrState::Closed,
+        ..other("PR_1")
+    }]);
+    assert_eq!(
+        h.card_by_id("PR_1").unwrap().auto_dismiss_at,
+        Some(detected + 3 * DAY)
+    );
 }

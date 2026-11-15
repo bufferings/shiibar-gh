@@ -22,7 +22,19 @@ public enum PathSegment: Equatable {
 }
 
 public enum SVGPath {
+    /// The paths parsed so far: an icon is drawn again on every layout, and
+    /// the boards' paths are few.
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var parsed: [String: [PathSegment]] = [:]
+
     public static func parse(_ d: String) -> [PathSegment] {
+        if let cached = lock.withLock({ parsed[d] }) { return cached }
+        let segments = parseUncached(d)
+        lock.withLock { parsed[d] = segments }
+        return segments
+    }
+
+    static func parseUncached(_ d: String) -> [PathSegment] {
         var tokens = tokenize(d)[...]
         var segments: [PathSegment] = []
         var current = Point(0, 0)

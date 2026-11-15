@@ -207,6 +207,9 @@ fn every_command_has_help_with_exit_0_and_needs_no_daemon() {
         "dismissed_keep_days",
         "[review:todo]",
         "[muted]",
+        "[unmuted]",
+        "Show muted",
+        "not the PRs set to Unmute",
     ] {
         assert!(help.contains(wanted), "{wanted}: {help}");
     }
@@ -1113,6 +1116,57 @@ mod with_events {
         let text = daemon.cli(&["list"]).stdout;
         assert!(text.contains("org/app#3 [draft] [muted] review="), "{text}");
         assert!(text.contains(" comment [muted] text E_1"), "{text}");
+    }
+
+    /// DESIGN.md, "CLI": `unmute pr` takes the PR out of Mute, setting
+    /// Unmute when its repository or author still mutes it; `[unmuted]`
+    /// marks such a PR; `mutes` leaves Unmute out.
+    #[test]
+    fn unmute_pr_and_the_unmuted_mark() {
+        let daemon = seeded();
+        let ok = |args: &[&str]| {
+            let result = daemon.cli(args);
+            assert_eq!(result.code, 0, "{args:?}: {}", result.stderr);
+            result.stdout
+        };
+        // Mute to none.
+        ok(&["mute", "pr", "org/app#2", "--account", "me"]);
+        assert!(ok(&["list"]).contains("org/app#2 [open] [muted]"));
+        ok(&["unmute", "pr", "org/app#2", "--account", "me"]);
+        let text = ok(&["list"]);
+        assert!(text.contains("org/app#2 [open] review="), "{text}");
+        // None, the repository muted: Unmute.
+        ok(&["mute", "repo", "org/app", "--account", "me"]);
+        assert!(ok(&["list"]).contains("org/app#2 [open] [muted]"));
+        ok(&["unmute", "pr", "org/app#2", "--account", "me"]);
+        let text = ok(&["list"]);
+        assert!(
+            text.contains("org/app#2 [open] [unmuted] review="),
+            "{text}"
+        );
+        assert!(text.contains("org/app#3 [draft] [muted] review="), "{text}");
+        // Mute, the author muted too: Unmute.
+        ok(&["mute", "user", "alice", "--account", "me"]);
+        ok(&["mute", "pr", "org/app#3", "--account", "me"]);
+        ok(&["unmute", "pr", "org/app#3", "--account", "me"]);
+        assert!(ok(&["list"]).contains("org/app#3 [draft] [unmuted] review="));
+        // `mutes` lists no Unmute.
+        let mutes = json_of(daemon.cli(&["mutes", "--account", "me", "--json"]));
+        assert_eq!(mutes["mutes"]["prs"], json!([]));
+        assert!(!ok(&["mutes", "--account", "me"]).contains("org/app#"));
+        // A name without a PR record only leaves the list.
+        ok(&["mute", "pr", "org/app#1", "--account", "me"]);
+        ok(&["owner", "remove", "org", "--account", "me"]);
+        ok(&["unmute", "pr", "org/app#1", "--account", "me"]);
+        let mutes = json_of(daemon.cli(&["mutes", "--account", "me", "--json"]));
+        assert_eq!(mutes["mutes"]["prs"], json!([]));
+        assert_eq!(
+            daemon
+                .cli(&["unmute", "pr", "org/app#1", "--account", "me"])
+                .code,
+            2,
+            "not_found"
+        );
     }
 
     #[test]

@@ -142,6 +142,7 @@ fn since_is_five_minutes_before_the_last_success_never_before_the_watch() {
         fetched_at,
         watch_started_at: watch,
         team_requests: true,
+        team_mentions: true,
     };
     let cases = [
         (None, T0, T0, T0),
@@ -290,6 +291,7 @@ fn teams_are_kept_per_account() {
     let teams = vec![TeamRec {
         database_id: 42,
         slug: "core".into(),
+        org: Some("org".into()),
     }];
     apply(
         &mut h,
@@ -306,6 +308,91 @@ fn teams_are_kept_per_account() {
         teams,
         "a run without teams keeps them"
     );
+}
+
+#[test]
+fn rate_limit_has_each_api_or_null() {
+    // DESIGN.md, "Wire format": `rate_limit` is null without values, and
+    // `graphql` and `rest` are each null until a response tells them.
+    let mut h = H::new();
+    assert_eq!(h.account().rate_limit, None);
+    apply(
+        &mut h,
+        Outcome {
+            graphql: Some(LimitRec {
+                limit: 5000,
+                remaining: 3760,
+                reset_at: Some(T0 + 3600),
+            }),
+            ..Outcome::default()
+        },
+    );
+    assert_eq!(
+        h.account().rate_limit,
+        Some(RateLimit {
+            graphql: Some(Limit {
+                used: 1240,
+                limit: 5000,
+                reset_at: Some(T0 + 3600),
+            }),
+            rest: None,
+        })
+    );
+    apply(
+        &mut h,
+        Outcome {
+            rest: Some(LimitRec {
+                limit: 5000,
+                remaining: 4900,
+                reset_at: Some(T0 + 1800),
+            }),
+            ..Outcome::default()
+        },
+    );
+    let rate = h.account().rate_limit.unwrap();
+    assert_eq!(rate.graphql.map(|l| l.used), Some(1240), "kept");
+    assert_eq!(
+        rate.rest,
+        Some(Limit {
+            used: 100,
+            limit: 5000,
+            reset_at: Some(T0 + 1800),
+        })
+    );
+}
+
+#[test]
+fn a_retry_of_a_pr_found_only_by_a_team_search_stays_team_only() {
+    // The events of such a PR failed: the next run fetches it again as a
+    // PR that shows only through a return trigger.
+    let mut h = H::new();
+    let org = h.owner_id(ORG);
+    apply(
+        &mut h,
+        Outcome {
+            retries_failed: vec![("PR_T".into(), T0 - 300), ("PR_C".into(), T0 - 300)],
+            retry_owners: [
+                ("PR_T".to_string(), org.clone()),
+                ("PR_C".to_string(), org.clone()),
+            ]
+            .into(),
+            retry_team_only: ["PR_T".to_string()].into(),
+            ..Outcome::default()
+        },
+    );
+    let p = plan(&h, true);
+    assert_eq!(p.retry_owners.len(), 2);
+    assert_eq!(
+        p.retry_team_only,
+        ["PR_T".to_string()].into(),
+        "only the team-only one"
+    );
+    let team_mentions: Vec<bool> = p.owners.iter().map(|o| o.team_mentions).collect();
+    assert!(team_mentions.iter().all(|on| *on), "the default List");
+    h.table(EventKind::TeamMentioned, EventColumn::List, false);
+    let p = plan(&h, true);
+    let org_plan = p.owners.iter().find(|o| o.id == org).unwrap();
+    assert!(!org_plan.team_mentions);
 }
 
 // ---------------------------------------------------- notification summaries
@@ -1445,6 +1532,7 @@ fn failed_requests_are_kept_for_the_next_run() {
         owner: Some(h.owner_id(ORG)),
         items: vec!["PR_1".into()],
         since: None,
+        skipped: false,
     };
     let at = h.at();
     apply(

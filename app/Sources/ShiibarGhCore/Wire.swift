@@ -150,6 +150,11 @@ public enum PlacementSection: String, Equatable, Codable, CaseIterable {
 /// What a card is muted for (`card.muted`).
 public enum MuteReason: String, Equatable { case pr, repo, author }
 
+/// A PR's own Mute setting (`card.pr_mute`, DESIGN.md, "Mute"): none, Mute,
+/// or Unmute, which keeps the card out of Mute though its repository or
+/// author is muted.
+public enum PrMute: String, Equatable { case none, mute, unmute }
+
 /// The `kind` of `mute` and `unmute`.
 public enum MuteKind: String, Equatable, CaseIterable { case pr, repo, user }
 
@@ -423,10 +428,17 @@ public struct Row: Equatable, Decodable, Identifiable {
         muted = try c.decodeIfPresent(Bool.self, forKey: .muted) ?? false
     }
 
+    /// Mentioned and My team mentioned: they pass every Mute (DESIGN.md,
+    /// "Mute").
+    public var isMention: Bool {
+        kind.value == .mentioned || kind.value == .teamMentioned
+    }
+
     /// An unread row that counts: blue, not gray (DESIGN.md, "How unread
-    /// clears": muted rows count only when they are mentions).
+    /// clears": muted rows count only when they are mentions of you or your
+    /// team).
     public var isBlueUnread: Bool {
-        unread && (!muted || kind.value == .mentioned)
+        unread && (!muted || isMention)
     }
 
     /// An unread row shown with the gray ring.
@@ -434,7 +446,8 @@ public struct Row: Equatable, Decodable, Identifiable {
 }
 
 /// Where a card is placed: a Review section or Mine, with its rank in the
-/// section, muted cards last (DESIGN.md, "Wire format", `placement`).
+/// section, muted cards counted where their rank puts them (DESIGN.md,
+/// "Wire format", `placement`).
 public struct Placement: Equatable, Decodable {
     public var tab: Lenient<PlacementTab>
     public var section: Lenient<PlacementSection>
@@ -481,8 +494,12 @@ public struct Card: Equatable, Decodable, Identifiable {
     public var rows: [Row]
     /// nil while the card has no placement.
     public var placement: Placement?
-    /// Why the card is muted; empty when it is not.
+    /// Why the card is muted; empty when it is not. The PR's own Unmute
+    /// and your own PR leave out `repo` and `author` (DESIGN.md, "Wire
+    /// format").
     public var muted: [Lenient<MuteReason>]
+    /// The PR's own setting; `none` when the daemon sends none.
+    public var prMute: Lenient<PrMute>
     public var dismissedAt: Int64?
     public var dismissExpiresAt: Int64?
     /// When the automatic Dismiss is due; nil when none is scheduled
@@ -509,6 +526,7 @@ public struct Card: Equatable, Decodable, Identifiable {
         case dismissExpiresAt = "dismiss_expires_at"
         case autoDismissAt = "auto_dismiss_at"
         case olderRows = "older_rows"
+        case prMute = "pr_mute"
     }
 
     public init(
@@ -519,8 +537,8 @@ public struct Card: Equatable, Decodable, Identifiable {
         checks: ChecksStatus = .none, baseStatus: BaseStatus = .none, base: String = "main",
         head: String = "topic", addedAt: Int64? = nil,
         createdAt: Int64? = nil, updatedAt: Int64 = 0, links: Links = Links(review: "r", checks: "c", base: "b"), rows: [Row] = [],
-        placement: Placement? = nil, muted: [MuteReason] = [], dismissedAt: Int64? = nil, dismissExpiresAt: Int64? = nil,
-        autoDismissAt: Int64? = nil, olderRows: Bool = false
+        placement: Placement? = nil, muted: [MuteReason] = [], prMute: PrMute = .none, dismissedAt: Int64? = nil,
+        dismissExpiresAt: Int64? = nil, autoDismissAt: Int64? = nil, olderRows: Bool = false
     ) {
         self.id = id
         self.pr = pr
@@ -547,6 +565,7 @@ public struct Card: Equatable, Decodable, Identifiable {
         self.rows = rows
         self.placement = placement
         self.muted = muted.map(Lenient.known)
+        self.prMute = .known(prMute)
         self.dismissedAt = dismissedAt
         self.dismissExpiresAt = dismissExpiresAt
         self.autoDismissAt = autoDismissAt
@@ -580,6 +599,7 @@ public struct Card: Equatable, Decodable, Identifiable {
         rows = try c.decode([Row].self, forKey: .rows)
         placement = try c.decodeIfPresent(Placement.self, forKey: .placement)
         muted = try c.decodeIfPresent([Lenient<MuteReason>].self, forKey: .muted) ?? []
+        prMute = try c.decodeIfPresent(Lenient<PrMute>.self, forKey: .prMute) ?? .known(.none)
         dismissedAt = try c.decodeIfPresent(Int64.self, forKey: .dismissedAt)
         dismissExpiresAt = try c.decodeIfPresent(Int64.self, forKey: .dismissExpiresAt)
         autoDismissAt = try c.decodeIfPresent(Int64.self, forKey: .autoDismissAt)
