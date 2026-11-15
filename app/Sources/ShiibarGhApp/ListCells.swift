@@ -221,11 +221,12 @@ enum Ink {
         var lines: Int
     }
 
-    private static var wrapped: [WrapKey: [CTLine]] = [:]
+    private static var wrapped: [WrapKey: [(CTLine, Range<Int>)]] = [:]
 
     /// `text` wrapped at `width` into at most `limit` lines, the last cut
-    /// with "…" when text is left over.
-    private static func wrappedLines(_ text: String, _ font: NSFont, width: CGFloat, limit: Int) -> [CTLine] {
+    /// with "…" when text is left over; each line with the UTF-16 range of
+    /// `text` it shows.
+    private static func wrappedLines(_ text: String, _ font: NSFont, width: CGFloat, limit: Int) -> [(CTLine, Range<Int>)] {
         let key = WrapKey(text: TextKey(text: text, font: key(font)), width: width, lines: limit)
         if let lines = wrapped[key] { return lines }
         if wrapped.count > 2_000 { wrapped = [:] }
@@ -233,17 +234,97 @@ enum Ink {
         let string = attributed(text, font)
         let typesetter = CTTypesetterCreateWithAttributedString(string)
         let ranges = breaks(text, font, width: width)
-        var lines: [CTLine] = []
+        var lines: [(CTLine, Range<Int>)] = []
         for (i, range) in ranges.prefix(limit).enumerated() {
             if i == limit - 1 && ranges.count > limit {
                 let rest = CTTypesetterCreateLine(typesetter, CFRange(location: range.location, length: string.length - range.location))
-                lines.append(CTLineCreateTruncatedLine(rest, Double(width), .end, ellipsis(font)) ?? rest)
+                let cut = CTLineCreateTruncatedLine(rest, Double(width), .end, ellipsis(font))
+                lines.append(cut.map { ($0, range.location..<shownEnd(cut: $0, from: range.location)) } ?? (rest, range.location..<string.length))
             } else {
-                lines.append(CTTypesetterCreateLine(typesetter, range))
+                lines.append((CTTypesetterCreateLine(typesetter, range), range.location..<(range.location + range.length)))
             }
         }
         wrapped[key] = lines
         return lines
+    }
+
+    /// Where the text a line cut with "…" shows ends: the "…" is its last
+    /// glyph run, whose string range starts at the first character it
+    /// stands for (CTLineCreateTruncatedLine; checked by laying out a cut
+    /// line: the runs before it keep the characters' own offsets and
+    /// positions).
+    private static func shownEnd(cut line: CTLine, from start: Int) -> Int {
+        guard let runs = CTLineGetGlyphRuns(line) as? [CTRun], let last = runs.last else { return start }
+        return max(start, CTRunGetStringRange(last).location)
+    }
+
+    /// The lines `draw(_:_:_:in:lines:)` draws for `text` in `width`, each
+    /// with the UTF-16 range of `text` it shows.
+    private static func laidOut(_ text: String, _ font: NSFont, width: CGFloat, lines: Int) -> [(CTLine, Range<Int>)] {
+        if lines != 1 { return wrappedLines(text, font, width: width, limit: lines) }
+        let drawn = line(text, font, width: width)
+        let length = (text as NSString).length
+        let cut = self.width(text, font) > width + 0.5
+        return [(drawn, 0..<(cut ? min(length, shownEnd(cut: drawn, from: 0)) : length))]
+    }
+
+    /// The UTF-16 offset where the text `draw(_:_:_:in:lines:)` shows of
+    /// `text` ends, nil when it shows all of it.
+    static func shownEnd(_ text: String, _ font: NSFont, width: CGFloat, lines: Int = 1) -> Int? {
+        guard width > 0 else { return 0 }
+        let end = laidOut(text, font, width: width, lines: lines).last?.1.upperBound ?? 0
+        return end < (text as NSString).length ? end : nil
+    }
+
+    /// The yellow background of the search's matches (DESIGN.md, "Showing
+    /// what matched") under `text` as `draw(_:_:_:in:lines:)` lays it out
+    /// in `rect`: `ranges` are UTF-16 offsets of `text`; what is not shown
+    /// (after a "…") gets none. Drawn before the text.
+    static func drawMatches(_ text: String, _ font: NSFont, _ ranges: [Range<Int>], in rect: CGRect, lines: Int = 1) {
+        guard !ranges.isEmpty, rect.width > 0 else { return }
+        let fragment = fragmentHeight(font)
+        var baseline = rect.minY + (lineHeight(font) - fragment) / 2 + font.ascender
+        Palette.searchMatchColor.setFill()
+        for (line, shown) in laidOut(text, font, width: rect.width, lines: lines) {
+            for range in ranges {
+                let start = max(range.lowerBound, shown.lowerBound)
+                let end = min(range.upperBound, shown.upperBound)
+                guard start < end else { continue }
+                let x1 = CTLineGetOffsetForStringIndex(line, start, nil)
+                let x2 = CTLineGetOffsetForStringIndex(line, end, nil)
+                CGRect(x: rect.minX + x1, y: baseline - font.ascender, width: max(0, x2 - x1), height: font.ascender - font.descender).fill()
+            }
+            baseline += fragment
+        }
+    }
+
+    /// The yellow background under the "…" of `text` as `draw(_:_:_:in:
+    /// lines:)` lays it out in `rect` (a match is in the part it cuts off):
+    /// the "…" is the cut line's last glyph run (`shownEnd(cut:from:)`).
+    static func drawEllipsisMark(_ text: String, _ font: NSFont, in rect: CGRect, lines: Int = 1) {
+        guard rect.width > 0 else { return }
+        let laid = laidOut(text, font, width: rect.width, lines: lines)
+        guard let (line, shown) = laid.last, shown.upperBound < (text as NSString).length,
+              let runs = CTLineGetGlyphRuns(line) as? [CTRun], let run = runs.last, CTRunGetGlyphCount(run) > 0 else { return }
+        var origin = CGPoint.zero
+        CTRunGetPositions(run, CFRange(location: 0, length: 1), &origin)
+        let width = CGFloat(CTRunGetTypographicBounds(run, CFRange(location: 0, length: 0), nil, nil, nil))
+        let fragment = fragmentHeight(font)
+        let baseline = rect.minY + (lineHeight(font) - fragment) / 2 + font.ascender + fragment * CGFloat(laid.count - 1)
+        Palette.searchMatchColor.setFill()
+        CGRect(x: rect.minX + origin.x, y: baseline - font.ascender, width: width, height: font.ascender - font.descender).fill()
+    }
+
+    /// The matches of a one-line text and the background of its "…".
+    static func drawMarks(_ text: String, _ font: NSFont, _ marks: Highlight.TextMarks, in rect: CGRect) {
+        drawMatches(text, font, marks.found, in: rect)
+        if marks.ellipsis { drawEllipsisMark(text, font, in: rect) }
+    }
+
+    /// `drawMatches` for `drawLine(_:_:_:in:)`.
+    static func drawLineMatches(_ text: String, _ font: NSFont, _ ranges: [Range<Int>], in rect: CGRect) {
+        let height = lineHeight(font)
+        drawMatches(text, font, ranges, in: CGRect(x: rect.minX, y: rect.midY - height / 2, width: rect.width, height: height))
     }
 
     private static func ellipsis(_ font: NSFont) -> CTLine {
@@ -275,7 +356,7 @@ enum Ink {
     static func draw(_ text: String, _ font: NSFont, _ color: NSColor, in rect: CGRect, lines: Int = 1, center: Bool = false) {
         guard rect.width > 0 else { return }
         if !center {
-            let typeset = lines == 1 ? [line(text, font, width: rect.width)] : wrappedLines(text, font, width: rect.width, limit: lines)
+            let typeset = lines == 1 ? [line(text, font, width: rect.width)] : wrappedLines(text, font, width: rect.width, limit: lines).map(\.0)
             drawLines(typeset, font, color, in: rect)
             return
         }
@@ -407,8 +488,10 @@ final class ListButton: NSView {
     enum Look: Equatable {
         case icon(BoardIcon, size: CGFloat, color: Shade)
         case status(StatusLook)
-        /// Plain text in the settings blue (`Show less`, `more`, `less`).
-        case text(String, size: CGFloat)
+        /// Plain text in the settings blue (`Show less`, `more`, `less`);
+        /// `marked`: on the yellow background of a search match (a `more`
+        /// that hides a match of its row body).
+        case text(String, size: CGFloat, marked: Bool = false)
         /// The placement tag of All (Main.html `.tag`).
         case tag(String)
         /// The board's `.btn.sm`.
@@ -583,8 +666,10 @@ final class ListButton: NSView {
         case .status(let look):
             if hovering { Shapes.rounded(bounds, radius: 6, fill: Palette.tint.nsColor) }
             Shapes.status(look, in: bounds, k: k)
-        case .text(let text, let size):
-            Ink.drawLine(text, Ink.font(size), Palette.settingsTabSelected.nsColor, in: bounds)
+        case .text(let text, let size, let marked):
+            let font = Ink.font(size)
+            if marked { Ink.drawLineMatches(text, font, [0..<(text as NSString).length], in: bounds) }
+            Ink.drawLine(text, font, Palette.settingsTabSelected.nsColor, in: bounds)
         case .tag(let text):
             let capsule = bounds.insetBy(dx: 0.5, dy: 0.5)
             Shapes.rounded(capsule, radius: capsule.height / 2, fill: Palette.tagBackground.nsColor, stroke: Palette.tagBorder.nsColor)
@@ -1043,7 +1128,12 @@ enum LayerImage {
             if view is CardLineView { PerfCounters.frame.cardImages += 1 }
         }
         layer.contentsScale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
-        layer.contentsGravity = .topLeft
+        // The image stays at the view's top edge while the layer's height
+        // differs from the image's (a card's height animation). The views
+        // are flipped (`contentsAreFlipped`), where Core Animation's
+        // "bottom" is the edge seen at the top (the measurement mode's
+        // check "card image at the top").
+        layer.contentsGravity = .bottomLeft
     }
 }
 
@@ -1503,6 +1593,29 @@ final class EmptyLineView: LineView {
 final class CardLineView: LineView {
     private(set) var line: CardLine?
     private var geometry: CardGeometry?
+    /// What the search matched in the card (DESIGN.md, "Showing what
+    /// matched"), worked out from `line` and the geometry when configured;
+    /// nil without search text.
+    private var matches: Highlight.CardMarks?
+
+    /// The marks of `line` laid out in `geometry`: the texts cut with "…"
+    /// are measured as they are drawn.
+    static func marks(_ line: CardLine, _ geometry: CardGeometry, k: CGFloat, now: Int64) -> Highlight.CardMarks {
+        let f11 = Ink.font(11 * k)
+        let titleFont = Ink.font(12 * k, line.card.isMuted ? .regular : .semibold)
+        return Highlight.card(
+            line.card, words: line.search, now: now, expanded: line.expanded, expandedBodies: line.expandedBodies, compact: line.compact
+        ) { cut, text in
+            switch cut {
+            case .prLabel: return Ink.shownEnd(text, f11, width: geometry.prLabel.width)
+            case .title: return Ink.shownEnd(text, titleFont, width: geometry.title.width)
+            case .baseHead: return Ink.shownEnd(text, f11, width: geometry.baseHead.width)
+            case .body(let id):
+                guard let frame = geometry.rows.first(where: { $0.id == id }), let rect = frame.body, frame.bodyLines > 0 else { return 0 }
+                return Ink.shownEnd(text, Ink.font(12 * k), width: rect.width, lines: frame.bodyLines)
+            }
+        }
+    }
 
     private struct Inputs: Equatable {
         var line: CardLine?
@@ -1531,6 +1644,7 @@ final class CardLineView: LineView {
         self.line = line
         self.geometry = geometry
         self.env = env
+        matches = line.search.isEmpty ? nil : Self.marks(line, geometry, k: env.k, now: env.now)
         kind = .card(line.card, section: line.section, canDrag: line.canDrag)
         context = env.context
         bind(state)
@@ -1570,7 +1684,7 @@ final class CardLineView: LineView {
         }
         chainControl("chain", url: card.url, frame: geometry.chain)
         control("dismiss", .icon(BoardIcons.dismiss, size: 12 * k, color: Palette.faded), frame: geometry.dismiss, help: "Dismiss", label: "Dismiss") { [weak list] in
-            list?.perform(.dismiss(card: id))
+            list?.perform(.confirmDismiss(card: id))
         }
         if let tag = geometry.tag, let text = card.placementTag {
             control("tag", .tag(text), frame: tag, help: "Open in its tab", label: text) { [weak list] in
@@ -1585,7 +1699,9 @@ final class CardLineView: LineView {
             if let toggle = row.toggle {
                 let expanded = line.expandedBodies.contains(row.id)
                 let rowId = row.id
-                control("body:\(i)", .text(expanded ? "less" : "more", size: 11 * k), frame: toggle, help: nil, label: expanded ? "less" : "more") { [weak list] in
+                // `more` hiding a match of the body.
+                let marked = !expanded && matches?.rows[row.id]?.more == true
+                control("body:\(i)", .text(expanded ? "less" : "more", size: 11 * k, marked: marked), frame: toggle, help: nil, label: expanded ? "less" : "more") { [weak list] in
                     list?.perform(.toggleBody(row: rowId))
                 }
             }
@@ -1780,8 +1896,14 @@ final class CardLineView: LineView {
             if let counts = p.counts, let rect = frame.counts {
                 Ink.drawLine(counts, f12, Palette.text.nsColor, in: rect)
             }
+            let found = matches?.rows[row.id]
+            if let found { Ink.drawLineMatches(p.meta, f11, found.meta, in: frame.meta) }
             Ink.drawLine(p.meta, f11, p.gray ? Palette.mutedText.nsColor : Palette.secondary.nsColor, in: frame.meta)
             if let body = p.body, let rect = frame.body, frame.bodyLines > 0 {
+                if let found {
+                    Ink.drawMatches(body, f12, found.body.found, in: rect, lines: frame.bodyLines)
+                    if found.body.ellipsis { Ink.drawEllipsisMark(body, f12, in: rect, lines: frame.bodyLines) }
+                }
                 Ink.draw(body, f12, p.gray ? Palette.mutedText.nsColor : Palette.text.nsColor, in: rect, lines: frame.bodyLines)
             }
         }
@@ -1795,7 +1917,12 @@ final class CardLineView: LineView {
             let line = CGRect(x: 0, y: foot.frame.minY + 4 * k, width: foot.frame.width, height: foot.frame.height - 9 * k)
             Shapes.dot(foot.mark, in: CGRect(x: 14, y: LineLayout.center(7 * k, in: line), width: 7 * k, height: 7 * k))
             let x = 14 + 7 * k + 8
-            Ink.drawLine(foot.text, f12, Palette.secondary.nsColor, in: CGRect(x: x, y: line.minY, width: max(0, foot.frame.width - 10 - x), height: line.height))
+            let textRect = CGRect(x: x, y: line.minY, width: max(0, foot.frame.width - 10 - x), height: line.height)
+            // "+ N more" folding rows that match.
+            if case .moreRows = foot.item, matches?.moreRows == true {
+                Ink.drawLineMatches(foot.text, f12, [0..<(foot.text as NSString).length], in: textRect)
+            }
+            Ink.drawLine(foot.text, f12, Palette.secondary.nsColor, in: textRect)
         }
 
         if let bar = Shapes.stateColor(card.stateLabel) {
@@ -1812,6 +1939,7 @@ final class CardLineView: LineView {
             Ink.drawLine(style.text, Ink.font(10 * k, .semibold), style.foreground.nsColor, in: rect.insetBy(dx: 6 * k, dy: 0))
         }
         let f11 = Ink.font(11 * k)
+        if let matches { Ink.drawMarks(Warnings.prLabel(card.pr), f11, matches.prLabel, in: geometry.prLabel) }
         Ink.draw(Warnings.prLabel(card.pr), f11, muted ? Palette.mutedText.nsColor : Palette.secondary.nsColor, in: geometry.prLabel)
         for (text, rect, filled) in geometry.marks {
             if filled {
@@ -1825,18 +1953,22 @@ final class CardLineView: LineView {
 
         // Line 2.
         drawAvatar(card, in: geometry.avatar, muted: muted)
-        Ink.draw(
-            card.title, Ink.font(12 * k, muted ? .regular : .semibold), muted ? Palette.mutedTitle.nsColor : Palette.text.nsColor,
-            in: geometry.title
-        )
+        let titleFont = Ink.font(12 * k, muted ? .regular : .semibold)
+        if let matches { Ink.drawMarks(card.title, titleFont, matches.title, in: geometry.title) }
+        Ink.draw(card.title, titleFont, muted ? Palette.mutedTitle.nsColor : Palette.text.nsColor, in: geometry.title)
 
         // Line 3.
-        Ink.draw("\(card.base) \u{2190} \(card.head)", f11, muted ? Palette.mutedText.nsColor : Palette.secondary.nsColor, in: geometry.baseHead)
+        let baseHead = "\(card.base) \u{2190} \(card.head)"
+        if let matches { Ink.drawMarks(baseHead, f11, matches.baseHead, in: geometry.baseHead) }
+        Ink.draw(baseHead, f11, muted ? Palette.mutedText.nsColor : Palette.secondary.nsColor, in: geometry.baseHead)
         let parts = geometry.timeParts(card, k: k, now: now)
         if let rect = parts.dismissedIn, let text = DismissedText.dismissedIn(card.autoDismissAt, now: now) {
             Ink.draw(text, f11, Palette.faded.nsColor, in: rect)
         }
-        Ink.draw(CardText.times(card, now: now), f11, muted ? Palette.mutedText.nsColor : Palette.waiting.nsColor, in: parts.times.insetBy(dx: -1, dy: 0))
+        let times = CardText.times(card, now: now)
+        let timesRect = parts.times.insetBy(dx: -1, dy: 0)
+        if let matches { Ink.drawMatches(times, f11, matches.author, in: timesRect) }
+        Ink.draw(times, f11, muted ? Palette.mutedText.nsColor : Palette.waiting.nsColor, in: timesRect)
     }
 
     private func drawAvatar(_ card: Card, in rect: CGRect, muted: Bool) {
@@ -1861,10 +1993,12 @@ final class CardLineView: LineView {
 /// Restore. No rows, no status icons, no ×.
 final class DismissedLineView: LineView {
     private var card: Card?
+    private var search: [String] = []
     private var geometry: DismissedGeometry?
 
     private struct Inputs: Equatable {
         var card: Card?
+        var search: [String]
         var size: CGSize?
         var k: CGFloat
         var now: Int64
@@ -1873,18 +2007,19 @@ final class DismissedLineView: LineView {
 
     override func drawInputs() -> AnyEquatable? {
         AnyEquatable(Inputs(
-            card: card, size: geometry?.size, k: env?.k ?? 1, now: env?.now ?? 0,
+            card: card, search: search, size: geometry?.size, k: env?.k ?? 1, now: env?.now ?? 0,
             avatar: env?.context.avatars.image(for: card?.authorAvatarUrl) != nil
         ))
     }
 
-    func configure(_ card: Card, geometry: DismissedGeometry, env: LineEnvironment, state: ItemState) {
+    func configure(_ card: Card, search: [String], geometry: DismissedGeometry, env: LineEnvironment, state: ItemState) {
         cardShape = true
         if self.card?.id != card.id {
             resetControls()
             hideTip()
         }
         self.card = card
+        self.search = search
         self.geometry = geometry
         self.env = env
         kind = .card(card, section: nil, canDrag: false)
@@ -1939,6 +2074,11 @@ final class DismissedLineView: LineView {
             Ink.drawLine(style.text, Ink.font(10 * k, .semibold), style.foreground.nsColor, in: rect.insetBy(dx: 6 * k, dy: 0))
         }
         let f11 = Ink.font(11 * k)
+        if !search.isEmpty {
+            let label = Warnings.prLabel(card.pr)
+            let marks = Highlight.TextMarks(Highlight.prLabel(search, pr: card.pr)) { Ink.shownEnd(label, f11, width: geometry.prLabel.width) }
+            Ink.drawMarks(label, f11, marks, in: geometry.prLabel)
+        }
         Ink.draw(Warnings.prLabel(card.pr), f11, Palette.secondary.nsColor, in: geometry.prLabel)
         if let image = DecodedAvatars.image(card.authorAvatarUrl, data: env.context.avatars.image(for: card.authorAvatarUrl)) {
             NSGraphicsContext.saveGraphicsState()
@@ -1948,6 +2088,11 @@ final class DismissedLineView: LineView {
         } else {
             Palette.avatarFill.nsColor.setFill()
             NSBezierPath(ovalIn: geometry.avatar).fill()
+        }
+        if !search.isEmpty {
+            let font = Ink.font(12 * k, .semibold)
+            let marks = Highlight.TextMarks(Highlight.ranges(search, in: card.title)) { Ink.shownEnd(card.title, font, width: geometry.title.width) }
+            Ink.drawMarks(card.title, font, marks, in: geometry.title)
         }
         Ink.draw(card.title, Ink.font(12 * k, .semibold), Palette.text.nsColor, in: geometry.title)
         Ink.draw(DismissedText.daysLeft(card.dismissExpiresAt, now: env.now), f11, Palette.secondary.nsColor, in: geometry.daysLeft)
@@ -1986,6 +2131,23 @@ final class LineCell: NSView {
     var lineID: String?
     var contentFrame: CGRect = .zero {
         didSet { if content.frame != contentFrame { content.frame = contentFrame } }
+    }
+
+    /// A card's height after `more`, `less`, "+ N more" or `Show less`
+    /// (DESIGN.md, "Row body"): the frame is the new one at once (drawn once
+    /// at its new size, which the checks see); Core Animation shows its
+    /// layer's height going there (the image is drawn from the top and the
+    /// layer clips it, `cardShape`), as the row views move.
+    func animateContentFrame(to frame: CGRect, duration: TimeInterval, timing: CAMediaTimingFunction) {
+        let old = content.frame.height
+        contentFrame = frame
+        guard let layer = content.layer, old != frame.height else { return }
+        let animation = CABasicAnimation(keyPath: "bounds.size.height")
+        animation.fromValue = old
+        animation.toValue = frame.height
+        animation.duration = duration
+        animation.timingFunction = timing
+        layer.add(animation, forKey: "height")
     }
 
     init(_ content: NSView, identifier: NSUserInterfaceItemIdentifier) {

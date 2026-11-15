@@ -416,8 +416,10 @@ final class PerfRunner: NSObject {
         // Hide; Show (the condition of DESIGN.md, "Speed of operation": the
         // rest at the defaults, `Filter` closed) otherwise.
         let muted = ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_MUTED"] != "off"
-        for tab in ListTab.allCases { data.setFilter(ListFilter(muted: muted ? .show : .hide), tab: tab) }
-        data.setFilterOpen(false)
+        for tab in ListTab.allCases {
+            data.setFilter(ListFilter(muted: muted ? .show : .hide), tab: tab)
+            data.setFilterOpen(false, tab: tab)
+        }
         // `SHIIBAR_GH_PERF_SURFACE=popover` measures the popover instead of
         // the window.
         let popover = ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_SURFACE"] == "popover"
@@ -475,6 +477,16 @@ final class PerfRunner: NSObject {
             await snapshots(list: list, window: window, directory: directory)
             return finish()
         }
+        // `SHIIBAR_GH_PERF_DEMOSHOTS=<directory>` (with the demo data,
+        // `make-data.py --demo`) draws searches whose matches are hidden
+        // and the × confirmation into PNG files there, checks that every
+        // card of those searches shows a yellow background and that the
+        // heights after `more`, `less`, "+ N more" and `Show less` animate,
+        // and quits.
+        if let directory = ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_DEMOSHOTS"] {
+            await demoShots(list: list, window: window, directory: directory)
+            return finish()
+        }
         // `SHIIBAR_GH_PERF_SCROLLCOMPARE=1` feeds the same scroll events to
         // the list and to stock scroll views in the same surface, prints how
         // far each moved, and quits.
@@ -519,6 +531,22 @@ final class PerfRunner: NSObject {
             log("profile done; cards drawn \(PerfCounters.cards), cards configured \(PerfCounters.rows), cells made \(PerfCounters.made)")
             return finish()
         }
+        // `SHIIBAR_GH_PERF_ONLY=search` measures typing in the search field
+        // alone (and, with `SHIIBAR_GH_PERF_SHOTS=<directory>`, draws the
+        // window with search text there), and quits.
+        if ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_ONLY"] == "heights" {
+            list.openTab(.all)
+            await pause(1)
+            await heightScenarios(list: list, window: window)
+            return finish()
+        }
+        if ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_ONLY"] == "search" {
+            await searchOperations(list: list, window: window)
+            if let directory = ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_SHOTS"] {
+                await searchSnapshots(list: list, window: window, directory: directory)
+            }
+            return finish()
+        }
         for tab in [ListTab.all, .review] {
             list.openTab(tab)
             await pause(1)
@@ -543,6 +571,7 @@ final class PerfRunner: NSObject {
         await tabSwitches(list)
         await filterOperations(list: list, window: window)
         await compactOperations(list: list, window: window)
+        await searchOperations(list: list, window: window)
         finish()
     }
 
@@ -1200,14 +1229,122 @@ final class PerfRunner: NSObject {
             data.setThenBy(.none)
             data.setGroupBy(.repository)
         }
+        // What the search matched (DESIGN.md, "Showing what matched"): the
+        // same cards with other matches draw again, not their old image.
+        await run("All: search with matches") { list.setSearch("rows rel") }
+        await run("All: search, one more character") { list.setSearch("rows rele") }
+        await run("All: search, scroll down") { scrollBy(1500) }
+        await run("All: search, a word only behind more") { list.setSearch("rows drop") }
+        await run("All: search, matches shown and hidden") { list.setSearch("rows release") }
+        await run("All: search cleared") { list.setSearch("") }
+        await heightScenarios(list: list, window: window)
         log("consistency: \(consistencyChecks - consistencyFailures) of \(consistencyChecks) ok")
         notes.append("consistency: \(consistencyChecks - consistencyFailures) of \(consistencyChecks) ok")
     }
 
+    /// `more`, `less`, "+ N more" and `Show less` with their animation
+    /// (DESIGN.md, "Row body"): the card's new image after it, and the
+    /// pressed row's top edge where it was.
+    private func heightScenarios(list: SurfaceListModel, window: NSWindow) async {
+        let scroll = listScrollView(in: window)
+        if let scroll { scrollTo(scroll, y: 0) }
+        await pause(0.5)
+        let inView = tableController(window)?.cardViews.compactMap(\.line) ?? []
+        // The card's image stays at the card's top edge while the layer is
+        // shorter or taller than it, as it is during the animation: with
+        // the layer 40 points shorter, only the rows at the card's bottom
+        // edge change in the window (the cut part, the border and the
+        // corners), not the rows above them.
+        if let view = tableController(window)?.cardViews.first, let layer = view.layer, let root = window.contentView?.layer {
+            let w = Int(root.bounds.width), h = Int(root.bounds.height)
+            func render() -> [UInt8] {
+                var data = [UInt8](repeating: 0, count: w * h * 4)
+                if let context = CGContext(
+                    data: &data, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                ) {
+                    root.render(in: context)
+                }
+                return data
+            }
+            let full = render()
+            let saved = layer.bounds
+            layer.bounds.size.height = saved.height - 40
+            let cut = render()
+            layer.bounds = saved
+            let changed = (0..<h).filter { full[($0 * w * 4)..<(($0 + 1) * w * 4)] != cut[($0 * w * 4)..<(($0 + 1) * w * 4)] }
+            consistencyChecks += 1
+            if !changed.isEmpty, changed.count <= 52 {
+                log("consistency card image at the top: ok (\(changed.count) rows change for a layer 40 pt shorter)")
+            } else {
+                consistencyFailures += 1
+                log("consistency card image at the top: FAIL (\(changed.count) rows change for a layer 40 pt shorter)")
+            }
+        }
+        // A body long enough to be cut (the mentions of make-data.py).
+        func long(_ row: Row) -> Bool { (row.text?.count ?? 0) > 200 }
+        if let line = inView.first(where: { $0.card.rows.prefix(Listing.rowsShown).contains(where: long) }),
+           let row = line.card.rows.prefix(Listing.rowsShown).first(where: long) {
+            await animated("All: more", row: "card:" + line.card.id, window: window) { list.perform(.toggleBody(row: row.id)) }
+            await animated("All: less", row: "card:" + line.card.id, window: window) { list.perform(.toggleBody(row: row.id)) }
+        }
+        if let line = inView.first(where: { $0.card.rows.count > Listing.rowsShown }) {
+            await animated("All: + N more", row: "card:" + line.card.id, window: window) { list.perform(.expandRows(card: line.card.id)) }
+            await animated("All: Show less", row: "card:" + line.card.id, window: window) { list.perform(.collapseRows(card: line.card.id)) }
+        }
+    }
+
+    /// A card's height changed by `more`, `less`, "+ N more" or `Show less`
+    /// (DESIGN.md, "Row body"): shown as an animation (Core Animation has
+    /// animations on the lines right after), the card's top edge where it
+    /// was on the screen, and the list's consistency check once it is over.
+    private func animated(_ name: String, row id: String, window: NSWindow, _ action: () -> Void) async {
+        func card() -> CardLineView? {
+            tableController(window)?.cardViews.first { "card:" + ($0.line?.card.id ?? "") == id }
+        }
+        func top() -> CGFloat? {
+            card().map { $0.convert($0.bounds, to: nil).maxY }
+        }
+        let before = top()
+        let from = card()?.frame.height
+        action()
+        // Partway: the height the card's layer shows, between the old and
+        // the new one (the frame is the new one at once).
+        await pause(0.02)
+        let mid = card()?.layer?.presentation()?.bounds.height
+        let running = card()?.layer?.animation(forKey: "height")?.duration
+        // The card as Core Animation shows it, in the window, through the
+        // animation: its top edge stays, only its bottom edge moves.
+        var tops: Set<CGFloat> = []
+        for _ in 0..<12 {
+            if let layer = card()?.layer?.presentation(), let root = window.contentView?.layer?.presentation() {
+                tops.insert(layer.convert(layer.bounds, to: root).minY.rounded())
+            }
+            await pause(0.02)
+        }
+        await pause(1.2)
+        let ok = checkList(name)
+        let after = top()
+        let to = card()?.frame.height
+        consistencyChecks += 1
+        let moving = running == ListTableController.heightAnimation
+            || (from.flatMap { from in to.flatMap { to in mid.map { min(from, to) < $0 && $0 < max(from, to) } } } ?? false)
+        if let before, let after, abs(before - after) < 0.5, moving, tops.count == 1 {
+            log("consistency \(name): ok (the card's height went \(from ?? 0) → \(mid ?? 0) → \(to ?? 0); its top stays at \(before))")
+        } else {
+            consistencyFailures += 1
+            log("consistency \(name): FAIL height \(String(describing: from)) → \(String(describing: mid)) → \(String(describing: to)), "
+                + "top \(String(describing: before)) then \(String(describing: after)), shown tops \(tops.sorted())")
+        }
+        log("consistency \(name) list check: \(ok ? "ok" : "FAIL")")
+    }
+
     /// The Filter (DESIGN.md, "Filter"): its settings changed in Review and
     /// All, its options opened and closed (the line at the top of the list
-    /// stays), and a card read under `Unread only` that hides after its
-    /// wait (the selected item stays where it is on the screen).
+    /// stays), the summary appearing in the Filter row and going with
+    /// `Reset` (the line at the top stays), a card read under `Unread only` that hides after
+    /// its wait (the selected item stays where it is on the screen), and
+    /// `Reset` hiding a kept card at once.
     private func filterScenarios(list: SurfaceListModel, window: NSWindow, run: (String, () -> Void) async -> Void) async {
         let controller = { [weak self] in self?.tableController(window) }
         let scroll = listScrollView(in: window)
@@ -1220,6 +1357,16 @@ final class PerfRunner: NSObject {
                 consistencyChecks += 1
                 log("consistency \(label): FAIL the top line was \(before.0) at \(before.1), now \(String(describing: after))")
                 notes.append("\(label): FAIL the line at the top moved")
+            }
+        }
+        func expect(_ label: String, _ ok: Bool, _ detail: @autoclosure () -> String) {
+            if ok {
+                log("consistency \(label): ok")
+            } else {
+                consistencyFailures += 1
+                consistencyChecks += 1
+                log("consistency \(label): FAIL \(detail())")
+                notes.append("\(label): FAIL")
             }
         }
         for tab in [ListTab.review, .all] {
@@ -1251,6 +1398,59 @@ final class PerfRunner: NSObject {
             list.toggleFilterOpen()
             await pause(0.6)
         }
+        // The summary (DESIGN.md, "Filter"): it appears in the Filter row
+        // and goes with `Reset`, the options closed and open.
+        // Review scrolled; Status Closed hides cards of Done only (merged and
+        // closed cards are placed there, at the end), so nothing above the
+        // line at the top changes: that line stays.
+        list.openTab(.review)
+        if let scroll { scrollTo(scroll, y: 0) }
+        list.resetFilter()
+        await pause(0.6)
+        expect("Review Reset from Muted shown", !list.showsFilterSummary && list.filter.isDefault, "\(list.filter)")
+        if let scroll { scrollTo(scroll, y: 600) }
+        await pause(0.6)
+        for open in [false, true] {
+            if list.filterOpen != open {
+                list.toggleFilterOpen()
+                await pause(0.6)
+            }
+            let state = open ? "Filter open" : "Filter closed"
+            var before = controller()?.topLineForMeasurement()
+            await run("Review summary appears, \(state)") { list.toggleStatus(.closed) }
+            expectSame("Review summary appears, \(state)", before, controller()?.topLineForMeasurement())
+            expect("Review summary shown, \(state)", list.filterSummary == "Open · Draft · Merged", String(describing: list.filterSummary))
+            before = controller()?.topLineForMeasurement()
+            await run("Review Reset, \(state)") { list.resetFilter() }
+            expectSame("Review Reset, \(state)", before, controller()?.topLineForMeasurement())
+            expect("Review Reset, \(state): the defaults, no summary", list.filter.isDefault && !list.showsFilterSummary && list.filterOpen == open,
+                   "\(list.filter), open \(list.filterOpen)")
+        }
+        if list.filterOpen { list.toggleFilterOpen() }
+        // The Filter row in All (pictures to look at): the defaults, the
+        // options closed; then a summary and `Grouping…` in the row, the
+        // options open with `Reset` enabled under them.
+        let shots = ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_CONSISTENCY"] ?? "/tmp"
+        let savedAll = list.data.filter(.all)
+        list.openTab(.all)
+        list.data.setFilter(ListFilter(), tab: .all)
+        await pause(0.6)
+        expect("All Filter row, defaults", list.showsFilterRow && list.filterSummary == nil && list.showsGroupingButton && !list.canResetFilter,
+               "\(list.filter)")
+        snapshot(window, shots + "/filter-row-all-default.png")
+        list.toggleStatus(.closed)
+        list.setUnreadOnly(true)
+        list.toggleFilterOpen()
+        await pause(0.6)
+        expect("All Filter row, changed", list.filterSummary == "Open · Draft · Merged · Unread only" && list.showsGroupingButton
+               && list.canResetFilter && list.showsFilterOptions, String(describing: list.filterSummary))
+        snapshot(window, shots + "/filter-row-all-changed.png")
+        list.toggleFilterOpen()
+        list.data.setFilter(savedAll, tab: .all)
+        list.openTab(.review)
+        list.setMuteChoice(.show)
+        await pause(0.6)
+
         // Unread only in Review: a card read and left hides after its wait.
         // Scrolled, so the list can keep the selected card where it is (at
         // the very top the list cannot scroll up past its start).
@@ -1308,6 +1508,26 @@ final class PerfRunner: NSObject {
             log("consistency Unread only: not enough unread cards in view")
         }
         await run("Review Filter: Unread only off") { list.setUnreadOnly(false) }
+
+        // `Reset` under `Unread only`: a card kept after it was read hides
+        // at once (a change of the settings), without waiting.
+        if let scroll { scrollTo(scroll, y: 0) }
+        await run("Review Filter: Unread only on, before Reset") { list.setUnreadOnly(true) }
+        let unread = shownCards(list).map(\.0).filter { $0.rows.contains(where: \.isBlueUnread) }
+        if unread.count >= 2 {
+            let read = unread[0]
+            for row in read.rows where row.isBlueUnread { list.select(.row(id: row.id, card: read.id)) }
+            list.select(.header(card: unread[1].id))
+            await pause(0.3)
+            let kept = list.lingering.contains(read.id)
+            await run("Review Reset under Unread only") { list.resetFilter() }
+            expect("Review Reset under Unread only: the kept card hid at once", kept && list.lingering.isEmpty && list.filter.isDefault,
+                   "kept before \(kept), kept now \(list.lingering), \(list.filter)")
+        } else {
+            log("consistency Reset under Unread only: not enough unread cards")
+        }
+        list.setMuteChoice(.show)
+        await pause(0.6)
     }
 
     /// With the options open in a short window, the list keeps 100 points
@@ -1405,8 +1625,8 @@ final class PerfRunner: NSObject {
             let menu = list.rightClick(.header(card: card.id)).compactMap { $0?.title }
             log("menu of muted \(card.pr): \(menu.joined(separator: " | "))")
         }
-        // The Filter: the summary closed, the options open in All and
-        // in Review, the blue dot, Compact on.
+        // The Filter: the summary with `Reset` (the options closed),
+        // the options open in All and in Review, the blue dot, Compact on.
         let saved = list.filter
         list.setMuteChoice(.hide)
         list.toggleStatus(.merged)
@@ -1417,7 +1637,10 @@ final class PerfRunner: NSObject {
         list.toggleFilterOpen()
         await pause(0.8)
         snapshot(window, directory + "/filter-open-all\(suffix).png")
+        // Open or closed is kept per tab: All closes, Review opens.
+        list.toggleFilterOpen()
         list.openTab(.review)
+        list.toggleFilterOpen()
         list.setMuteChoice(.show)
         list.setUnreadOnly(true)
         await pause(0.8)
@@ -1775,6 +1998,147 @@ final class PerfRunner: NSObject {
             }
             record("\(tab.title) Filter open/close", samples)
         }
+    }
+
+    /// Typing in the search field (DESIGN.md, "Showing what matched",
+    /// "Speed of operation"): one character at a time, the cards it hides
+    /// going and what matched getting its background, in All and Review
+    /// from the top of the list. A first pass (cold), then the measured
+    /// one; the search is cleared between them, not measured.
+    private func searchOperations(list: SurfaceListModel, window: NSWindow) async {
+        // "rows" and "cache" are in every title (scripts/perf/make-data.py),
+        // "re" and "c" in many rows too: every card in view draws matches.
+        let text = "rows cache"
+        for tab in [ListTab.all, .review] {
+            list.openTab(tab)
+            list.setSearch("")
+            if let scroll = listScrollView(in: window) { scrollTo(scroll, y: 0) }
+            await pause(0.5)
+            for cold in [true, false] {
+                var samples: [Sample] = []
+                for i in 1...text.count {
+                    let typed = String(text.prefix(i))
+                    samples.append(await measure("search", "\(tab.title) \"\(typed)\"") { list.setSearch(typed) })
+                }
+                record("\(tab.title) search typing\(cold ? " (cold)" : "")", samples)
+                list.setSearch("")
+                await pause(0.5)
+            }
+        }
+    }
+
+    /// The window with search text (DESIGN.md, "Showing what matched"):
+    /// "drop" is only in the part of the mention bodies that `more` hides,
+    /// "rows" in every title.
+    private func searchSnapshots(list: SurfaceListModel, window: NSWindow, directory: String) async {
+        list.openTab(.all)
+        list.setSearch("drop rows")
+        if let scroll = listScrollView(in: window) { scrollTo(scroll, y: 0) }
+        await pause(1)
+        checkList("search snapshot")
+        snapshot(window, directory + "/search-highlight.png")
+        list.setSearch("")
+    }
+
+    /// The demo data searched for words whose matches are hidden (DESIGN.md,
+    /// "Showing what matched"): `because` and `Follow`, at the top of All.
+    private func demoShots(list: SurfaceListModel, window: NSWindow, directory: String) async {
+        list.openTab(.all)
+        for text in ["because", "Follow"] {
+            if let scroll = listScrollView(in: window) { scrollTo(scroll, y: 0) }
+            // Typed one character at a time, as by hand.
+            for i in 1...text.count {
+                list.setSearch(String(text.prefix(i)))
+                await pause(0.12)
+            }
+            await pause(1)
+            checkList("demo search \(text)")
+            snapshot(window, directory + "/search-\(text.lowercased()).png")
+            await sweepMarks(text, window: window)
+        }
+        list.setSearch("")
+        if let scroll = listScrollView(in: window) { scrollTo(scroll, y: 0) }
+        await pause(0.8)
+        // The animated heights, on a card with more than three rows.
+        let inView = tableController(window)?.cardViews.compactMap(\.line) ?? []
+        if let line = inView.first(where: { $0.card.rows.count > Listing.rowsShown }) {
+            let id = line.card.id
+            if let row = line.card.rows.first(where: { $0.text?.isEmpty == false }) {
+                await animated("demo: more", row: "card:" + id, window: window) { list.perform(.toggleBody(row: row.id)) }
+                snapshot(window, directory + "/more-open.png")
+                await animated("demo: less", row: "card:" + id, window: window) { list.perform(.toggleBody(row: row.id)) }
+            }
+            await animated("demo: + N more", row: "card:" + id, window: window) { list.perform(.expandRows(card: id)) }
+            await animated("demo: Show less", row: "card:" + id, window: window) { list.perform(.collapseRows(card: id)) }
+        }
+        // The × confirmation (DESIGN.md, "Confirming ×").
+        if let card = inView.first?.card {
+            list.perform(.confirmDismiss(card: card.id))
+            await pause(0.8)
+            snapshot(window, directory + "/confirm-dismiss.png")
+            list.answerDismiss(false)
+            await pause(0.3)
+            let kept = list.data.cards.first { $0.id == card.id }?.dismissedAt == nil
+            log("confirm sheet: Cancel keeps the card: \(kept ? "ok" : "FAIL")")
+        }
+    }
+
+    /// Every card of the list scrolled through with search text shows a
+    /// yellow background somewhere (DESIGN.md, "Showing what matched"): its
+    /// image and its controls' images, as Core Animation has them, are
+    /// looked at for the match color.
+    private func sweepMarks(_ text: String, window: NSWindow) async {
+        guard let scroll = listScrollView(in: window) else { return }
+        var seen: Set<String> = []
+        var silent: [String] = []
+        var y: CGFloat = 0
+        while true {
+            scrollTo(scroll, y: y)
+            await pause(0.3)
+            let visible = scroll.documentVisibleRect
+            for view in tableController(window)?.cardViews ?? [] {
+                guard let line = view.line, !seen.contains(line.card.id) else { continue }
+                // Whole cards only.
+                let frame = view.convert(view.bounds, to: scroll.documentView)
+                guard visible.contains(frame.insetBy(dx: 1, dy: 1)) else { continue }
+                seen.insert(line.card.id)
+                let images = ([view.layer?.contents] + view.subviews.filter { !$0.isHidden }.map { $0.layer?.contents })
+                    .compactMap { $0.map { $0 as! CGImage } }
+                if !images.contains(where: Self.hasMatchColor) { silent.append(line.card.pr) }
+            }
+            let maxY = (scroll.documentView?.frame.height ?? 0) - scroll.contentView.bounds.height
+            if y >= maxY { break }
+            y = min(maxY, y + scroll.contentView.bounds.height / 2)
+        }
+        consistencyChecks += 1
+        if silent.isEmpty {
+            log("search \"\(text)\": every card of \(seen.count) has a yellow background")
+        } else {
+            consistencyFailures += 1
+            log("search \"\(text)\": FAIL \(silent.count) of \(seen.count) cards without a yellow background: \(silent.prefix(12).joined(separator: ", "))")
+        }
+    }
+
+    /// Whether an image has a pixel of the search match's color (light:
+    /// rgba(255, 213, 0, 0.45) over white or the selection).
+    private static func hasMatchColor(_ image: CGImage) -> Bool {
+        let width = image.width
+        let height = image.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        guard let context = CGContext(
+            data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return false }
+        context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        var i = 0
+        while i < pixels.count {
+            let r = Int(pixels[i]), g = Int(pixels[i + 1]), b = Int(pixels[i + 2])
+            if r > 235, g > 215, g < 250, b < 170 { return true }
+            i += 4
+        }
+        return false
     }
 
     private func tabSwitches(_ list: SurfaceListModel) async {

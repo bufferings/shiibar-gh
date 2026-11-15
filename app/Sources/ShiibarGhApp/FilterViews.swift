@@ -1,10 +1,12 @@
-// `Filter` in the operation row and its options (docs/design/Main.html, the
-// Filter scenes; DESIGN.md, "Filter"): the word, the chevron, the blue dot
-// and the summary; when open, one option a line between the operation row
-// and the list; `Grouping…` at the right end of All's operation row. The
-// options and `Grouping…` are standard AppKit controls that never take the
-// keyboard focus, so the keys keep working on the list and the search field
-// while the options show.
+// The Filter row and the options (docs/design/Main.html, the Filter scenes;
+// DESIGN.md, "Screens", "Filter"): under the search row, always (not while
+// the Dismissed list shows), `Filter` with its chevron and the blue dot,
+// then, while a setting differs from its default, the summary; in All,
+// `Grouping…` at the right end. Nothing in the row changes a setting. When
+// open, one option a line between the row and the list, and `Reset` under
+// them at the right end. The options, `Reset` and `Grouping…`
+// are standard AppKit controls that never take the keyboard focus, so the
+// keys keep working on the list and the search field while they show.
 //
 // AppKit API used, as declared in the SDK headers (NSControl.h, NSView.h,
 // NSResponder.h, NSSegmentedControl.h, NSButton.h): `refusesFirstResponder`
@@ -15,7 +17,7 @@
 // `NSSegmentedControl(labels:trackingMode:target:action:)` with
 // `.selectOne`; `NSButton(checkboxWithTitle:target:action:)`;
 // `NSButton(title:target:action:)` ("Creates a standard push button with
-// the provided title", NSButton.h) for `Grouping…`. A test
+// the provided title", NSButton.h) for `Grouping…` and `Reset`. A test
 // (ShiibarGhAppTests, FilterControlsTests) checks that none of them becomes
 // the first responder, asked in code or by Tab.
 
@@ -23,16 +25,19 @@ import AppKit
 import ShiibarGhCore
 import SwiftUI
 
-/// Sizes of the Filter's area and the operation row at text size 12
-/// (DESIGN.md, "Constants"; Main.html `.fo`, `.fopts`, `.search`).
+/// Sizes of the Filter's area at text size 12 (DESIGN.md, "Constants";
+/// Main.html `.frow`, `.fo`, `.fopts`).
 enum FilterOptionsLayout {
     /// The list keeps at least this height while the options show.
     static let listMinimum: CGFloat = 100
-    /// The search field's width: the same in every tab, with or without
-    /// the summary, and while the Dismissed list shows.
-    static let searchWidth: CGFloat = 200
+    /// The Filter row, without the space under it.
+    static let filterRowHeight: CGFloat = 24
+    /// Under the Filter row, before the options or the list.
+    static let filterRowBottom: CGFloat = 6
     /// One option line.
     static let rowHeight: CGFloat = 27
+    /// The line of `Reset`, under the options.
+    static let resetHeight: CGFloat = 28
     /// Under the last line, before the border.
     static let bottomPadding: CGFloat = 6
     /// Below the border, before the list.
@@ -44,20 +49,30 @@ struct FilterOptionsState: Equatable {
     var shows: Bool
     var lines: [FilterOption]
     var filter: ListFilter
+    /// `Reset` enabled: a setting differs from its default.
+    var canReset: Bool
 }
 
-/// `Filter`, its chevron (right while closed, down while open), the blue
-/// dot and the summary (Main.html `.flt`). Any press on it opens or closes
-/// the options; the dot and the summary have no action of their own. The
-/// summary takes the room the row leaves and is cut with `…` when it does
-/// not fit; then its tooltip shows all of it.
+/// The Filter row: shown, and its parts.
+struct FilterRowState: Equatable {
+    /// Not while the Dismissed list shows.
+    var shows: Bool
+    var open: Bool
+    var dot: Bool
+    /// The summary; nil while every setting is the default.
+    var summary: String?
+    /// `Grouping…` at the right end (All).
+    var showsGrouping: Bool
+}
+
+/// `Filter`, its chevron (right while closed, down while open) and the blue
+/// dot when there is one (Main.html `.flt`). Any press on it opens or closes
+/// the options; the dot has no action of its own.
 struct FilterButton: View {
     var open: Bool
     var dot: Bool
-    var summary: String?
     var toggle: () -> Void
     @Environment(\.textScale) var k
-    @State private var summaryShown: CGFloat = 0
 
     static let dotTip = FilterText.dotTip
 
@@ -77,18 +92,6 @@ struct FilterButton: View {
                         .contentShape(Rectangle())
                         .quickHelp(Self.dotTip)
                 }
-                if let summary {
-                    Text(summary)
-                        .font(.system(size: 11 * k))
-                        .foregroundColor(Palette.secondary.color)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .background(GeometryReader { geometry in
-                            Color.clear.preference(key: SummaryWidthKey.self, value: geometry.size.width)
-                        })
-                        .onPreferenceChange(SummaryWidthKey.self) { summaryShown = $0 }
-                        .quickHelp(ifAny: cut(summary) ? summary : nil)
-                }
             }
             .padding(.horizontal, 4)
             .frame(height: 24 * k)
@@ -97,13 +100,72 @@ struct FilterButton: View {
         .buttonStyle(.plain)
         .focusable(false)
         .accessibilityLabel(dot ? "Filter, unread pull requests hidden" : "Filter")
-        .accessibilityValue(summary ?? "")
         .accessibilityAddTraits(open ? .isSelected : [])
     }
+}
 
-    /// The summary is shown narrower than it is.
-    private func cut(_ summary: String) -> Bool {
-        Self.isCut(summary, shownWidth: summaryShown, k: k)
+/// The Filter row of the surface, while it shows.
+struct FilterRowSlot: View {
+    var list: SurfaceListModel
+    @ObservedObject var state: Derived<FilterRowState>
+
+    var body: some View {
+        if state.value.shows {
+            FilterRow(value: state.value, toggle: { [list] in list.toggleFilterOpen() }, openGrouping: { [list] in list.openGrouping() })
+        }
+    }
+}
+
+/// The Filter row (DESIGN.md, "Filter"; Main.html `.frow`): from the left
+/// `Filter`, then the summary, and in All `Grouping…` at the right end with
+/// room between. Only the summary gives way when the row is narrow: it is
+/// cut with `…` (then, and only then, its tooltip shows all of it). The
+/// summary has no action.
+struct FilterRow: View {
+    var value: FilterRowState
+    var toggle: () -> Void
+    var openGrouping: () -> Void
+    @Environment(\.textScale) var k
+
+    var body: some View {
+        HStack(spacing: 8) {
+            FilterButton(open: value.open, dot: value.dot, toggle: toggle)
+                .fixedSize()
+                .layoutPriority(1)
+            if let summary = value.summary {
+                FilterSummary(summary: summary)
+            }
+            // With the spacing on both sides: at least 16 points before
+            // `Grouping…`.
+            Spacer(minLength: 0)
+            if value.showsGrouping {
+                PushButton(title: PushButton.grouping, press: openGrouping)
+                    .fixedSize()
+                    .layoutPriority(1)
+            }
+        }
+        .frame(height: FilterOptionsLayout.filterRowHeight * k)
+        .padding(EdgeInsets(top: 0, leading: 12, bottom: FilterOptionsLayout.filterRowBottom, trailing: 12))
+    }
+}
+
+/// The summary, cut with `…` when it does not fit.
+struct FilterSummary: View {
+    var summary: String
+    @Environment(\.textScale) var k
+    @State private var shownWidth: CGFloat = 0
+
+    var body: some View {
+        Text(summary)
+            .font(.system(size: 11 * k))
+            .foregroundColor(Palette.secondary.color)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .background(GeometryReader { geometry in
+                Color.clear.preference(key: SummaryWidthKey.self, value: geometry.size.width)
+            })
+            .onPreferenceChange(SummaryWidthKey.self) { shownWidth = $0 }
+            .quickHelp(ifAny: Self.isCut(summary, shownWidth: shownWidth, k: k) ? summary : nil)
     }
 
     /// Whether a summary laid out `shownWidth` points wide is cut short at
@@ -132,21 +194,29 @@ struct FilterOptionsSlot: View {
 }
 
 /// One option a line, the name at the left and the control at the right
-/// (Main.html `.fopts`, `.fo`): Status, Muted and Unread, in every tab.
-/// Scrolls inside when the surface is short (the list keeps its minimum
-/// height).
+/// (Main.html `.fopts`, `.fo`): Status, Muted and Unread, in every tab;
+/// under them `Reset` at the right end, disabled while every setting is the
+/// default (the area keeps its height). Scrolls inside when the surface is
+/// short (the list keeps its minimum height).
 struct FilterOptions: View {
     var list: SurfaceListModel
     var state: FilterOptionsState
     @Environment(\.textScale) var k
 
     var body: some View {
-        let height = CGFloat(state.lines.count) * FilterOptionsLayout.rowHeight * k + FilterOptionsLayout.bottomPadding
+        let height = (CGFloat(state.lines.count) * FilterOptionsLayout.rowHeight + FilterOptionsLayout.resetHeight) * k
+            + FilterOptionsLayout.bottomPadding
         ScrollView(.vertical) {
             VStack(spacing: 0) {
                 ForEach(state.lines, id: \.self) { option in
                     line(option.title) { control(option) }
                 }
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    PushButton(title: PushButton.reset, enabled: state.canReset) { [list] in list.resetFilter() }
+                        .fixedSize()
+                }
+                .frame(height: FilterOptionsLayout.resetHeight * k)
             }
             .padding(EdgeInsets(top: 0, leading: 16, bottom: FilterOptionsLayout.bottomPadding, trailing: 14))
         }
@@ -227,11 +297,16 @@ final class NoFocusButton: NSButton {
     override func becomeFirstResponder() -> Bool { false }
 }
 
-/// `Grouping…` at the right end of All's operation row (DESIGN.md, "All",
-/// "Grouping settings"): a standard small push button that opens the
-/// Grouping sheet. Mouse only, like the Filter's options.
-struct GroupingButton: NSViewRepresentable {
-    static let title = "Grouping\u{2026}"
+/// A standard small push button, mouse only like the Filter's options:
+/// `Grouping…` at the right end of All's Filter row, which opens the
+/// Grouping sheet (DESIGN.md, "All", "Grouping settings"), and `Reset`
+/// under the Filter's options (DESIGN.md, "Filter"), disabled while there
+/// is nothing to reset.
+struct PushButton: NSViewRepresentable {
+    static let grouping = "Grouping\u{2026}"
+    static let reset = FilterText.reset
+    var title: String
+    var enabled = true
     var press: () -> Void
     @Environment(\.textScale) var k
 
@@ -244,7 +319,7 @@ struct GroupingButton: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> NoFocusButton {
-        let button = NoFocusButton(title: Self.title, target: context.coordinator, action: #selector(Coordinator.pressed(_:)))
+        let button = NoFocusButton(title: title, target: context.coordinator, action: #selector(Coordinator.pressed(_:)))
         button.refusesFirstResponder = true
         button.controlSize = .small
         button.setContentHuggingPriority(.required, for: .horizontal)
@@ -261,6 +336,8 @@ struct GroupingButton: NSViewRepresentable {
         context.coordinator.press = press
         let font = NSFont.systemFont(ofSize: 11 * k)
         if button.font != font { button.font = font }
+        if button.title != title { button.title = title }
+        if button.isEnabled != enabled { button.isEnabled = enabled }
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NoFocusButton, context: Context) -> CGSize? {

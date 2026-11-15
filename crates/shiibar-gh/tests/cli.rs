@@ -210,6 +210,7 @@ fn every_command_has_help_with_exit_0_and_needs_no_daemon() {
         "mute pr|repo|user <name> --account <a>",
         "auto_dismiss_after_days",
         "dismissed_keep_days",
+        "confirm_dismiss",
         "[review:todo]",
         "[muted]",
         "[unmuted]",

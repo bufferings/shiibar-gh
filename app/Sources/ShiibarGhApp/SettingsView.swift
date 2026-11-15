@@ -354,6 +354,13 @@ struct DismissedTab: View {
             SettingRow(title: "Days to keep dismissed PRs", sub: SettingsText.keepDismissedDetail, error: model.errors[DismissedText.keepDaysKey]) {
                 NumberField(key: DismissedText.keepDaysKey, unit: "days", model: model)
             }
+            SettingRow(title: SettingsText.confirmDismissTitle, sub: SettingsText.confirmDismissDetail, error: model.errors[DismissedText.confirmKey]) {
+                Toggle("", isOn: Binding(
+                    get: { model.config[DismissedText.confirmKey]?.boolValue ?? true },
+                    set: { model.set(DismissedText.confirmKey, .bool($0)) }
+                ))
+                .toggleStyle(.switch).labelsHidden().controlSize(.small)
+            }
         }
     }
 }

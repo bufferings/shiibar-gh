@@ -227,7 +227,7 @@ final class SettingsModelTests: XCTestCase {
         settings.show(.addAccount)
         XCTAssertEqual(settings.tab, .accounts)
         XCTAssertEqual(settings.requestedSheet, .addAccount)
-        XCTAssertEqual(SettingsModel.keys.suffix(2), ["auto_dismiss_after_days", "dismissed_keep_days"])
+        XCTAssertEqual(SettingsModel.keys.suffix(3), ["auto_dismiss_after_days", "dismissed_keep_days", "confirm_dismiss"])
     }
 
     func testAddAccountAndRemoveNeedTheKeychain() {

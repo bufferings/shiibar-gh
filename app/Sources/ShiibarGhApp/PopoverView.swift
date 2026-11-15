@@ -1,8 +1,8 @@
 // The popover of one account, also the content of its window
 // (docs/design/Main.html, Keychain.html, MenuBarIcon.html): the header,
-// the banners, the tab row, the operation row (the search field and
-// `Filter`), the Filter's options (FilterViews.swift), the list
-// (CardViews.swift), the key hints and the Grouping sheet.
+// the banners, the tab row, the search row, the Filter row and the
+// Filter's options (FilterViews.swift), the list (CardViews.swift), the key
+// hints and the Grouping sheet.
 //
 // Sizes are the boards' points at text size 12, multiplied by
 // `textScale` (DESIGN.md, "Text size"): the fonts are fixed point sizes
@@ -119,20 +119,10 @@ struct TabRowState: Equatable {
     var dismissedCount: Int
 }
 
-/// The operation row: the search field, `Filter` and, in All, `Grouping…`.
-struct OperationRowState: Equatable {
+/// The search row: the search field only.
+struct SearchRowState: Equatable {
     var search: String
-    var tab: ListTab
-    var showingDismissed: Bool
     var focused: Bool
-    var filterOpen: Bool
-    var summary: String?
-    var dot: Bool
-    /// `Grouping…` shows (All, not the Dismissed list).
-    var showsGrouping: Bool
-
-    /// `Filter` shows (not in the Dismissed list).
-    var showsFilter: Bool { !showingDismissed }
 }
 
 /// The `← Dismissed` heading: shown, and the count.
@@ -146,10 +136,13 @@ struct DismissedHeadingState: Equatable {
 final class SurfaceState {
     let top: Derived<SurfaceTop>
     let tabs: Derived<TabRowState>
-    let search: Derived<OperationRowState>
+    let search: Derived<SearchRowState>
+    let filterRow: Derived<FilterRowState>
     let options: Derived<FilterOptionsState>
     let dismissed: Derived<DismissedHeadingState>
     let grouping: Derived<Bool>
+    /// The card whose × asks for the confirmation, while it shows.
+    let confirming: Derived<String?>
 
     init(app: AppModel, model: AccountViewModel, list: SurfaceListModel) {
         let appChanges = app.objectWillChange.map { _ in () }.eraseToAnyPublisher()
@@ -171,19 +164,25 @@ final class SurfaceState {
             )
         }
         search = Derived([listChanges]) { [unowned list] in
-            OperationRowState(
-                search: list.search, tab: list.tab, showingDismissed: list.showingDismissed, focused: list.searchFocused,
-                filterOpen: list.filterOpen, summary: list.showsFilter ? list.filter.summary : nil,
-                dot: list.showsFilter && list.filterDot, showsGrouping: list.showsGroupingButton
+            SearchRowState(search: list.search, focused: list.searchFocused)
+        }
+        filterRow = Derived([listChanges]) { [unowned list] in
+            let shows = list.showsFilterRow
+            return FilterRowState(
+                shows: shows, open: list.filterOpen, dot: shows && list.filterDot, summary: list.filterSummary,
+                showsGrouping: list.showsGroupingButton
             )
         }
         options = Derived([listChanges]) { [unowned list] in
-            FilterOptionsState(shows: list.showsFilterOptions, lines: list.filterOptions, filter: list.filter)
+            FilterOptionsState(
+                shows: list.showsFilterOptions, lines: list.filterOptions, filter: list.filter, canReset: list.canResetFilter
+            )
         }
         dismissed = Derived([listChanges]) { [unowned list] in
             DismissedHeadingState(showing: list.showingDismissed, count: list.showingDismissed ? list.dismissedCount : 0)
         }
         grouping = Derived([listChanges]) { [unowned list] in list.showsGrouping }
+        confirming = Derived([listChanges]) { [unowned list] in list.confirmingDismiss }
     }
 }
 
@@ -259,7 +258,8 @@ struct PopoverView: View {
                     FailureBand(text: failure)
                 }
                 TabRow(list: list, state: state.tabs)
-                OperationRow(list: list, state: state.search)
+                SearchRow(list: list, state: state.search)
+                FilterRowSlot(list: list, state: state.filterRow)
                 // The options take their height when there is room; the
                 // list keeps its minimum, and the options scroll inside
                 // (DESIGN.md, "Filter").
@@ -282,26 +282,74 @@ struct PopoverView: View {
         let state = SurfaceState(app: app, model: model, list: list)
         return SurfaceRoot(
             content: PopoverView(app: app, model: model, list: list, avatars: avatars, actions: actions, surface: surface, state: state),
-            overlay: GroupingOverlay(top: state.top, grouping: state.grouping, list: list, model: model),
+            overlay: GroupingOverlay(top: state.top, grouping: state.grouping, confirming: state.confirming, list: list, model: model),
             list: CardContext.of(list, avatars: avatars).content
         )
     }
 }
 
-/// The Grouping sheet, over the list too, with the surface's text size.
+/// The Grouping sheet and the × confirmation, over the list too, with the
+/// surface's text size.
 struct GroupingOverlay: View {
     @ObservedObject var top: Derived<SurfaceTop>
     @ObservedObject var grouping: Derived<Bool>
+    @ObservedObject var confirming: Derived<String?>
     var list: SurfaceListModel
     var model: AccountViewModel
 
     var body: some View {
         let k = top.value.k
-        if grouping.value {
-            GroupingSheet(model: model) { list.showsGrouping = false }
-                .foregroundColor(Palette.text.color)
-                .font(.system(size: 13 * k))
-                .environment(\.textScale, k)
+        Group {
+            if confirming.value != nil {
+                DismissConfirmSheet(keepDays: top.value.keepDays, list: list) { list.answerDismiss($0) }
+            } else if grouping.value {
+                GroupingSheet(model: model) { list.showsGrouping = false }
+            }
+        }
+        .foregroundColor(Palette.text.color)
+        .font(.system(size: 13 * k))
+        .environment(\.textScale, k)
+    }
+}
+
+/// The confirmation of a card's × (DESIGN.md, "Confirming ×"; Main.html),
+/// in the Grouping sheet's form. ⏎ and Esc are read by the surface's keys
+/// (`KeyRules`), so the buttons never take the keyboard focus.
+struct DismissConfirmSheet: View {
+    var keepDays: Int64
+    @ObservedObject var list: SurfaceListModel
+    var answer: (Bool) -> Void
+    @Environment(\.textScale) var k
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color.black.opacity(0.12)
+                .contentShape(Rectangle())
+                .onTapGesture {}
+            VStack(alignment: .leading, spacing: 10) {
+                Text(DismissedText.confirmTitle).font(.system(size: 13 * k, weight: .semibold))
+                Text(DismissedText.confirmText(keepDays: keepDays))
+                    .font(.system(size: 12 * k))
+                    .foregroundColor(Palette.secondary.color)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    CheckBox(title: DismissedText.confirmSkip, on: list.skipsNextConfirmations) {
+                        list.skipsNextConfirmations.toggle()
+                        return list.skipsNextConfirmations
+                    }
+                    Spacer()
+                    SettingsButton(title: "Cancel") { answer(false) }
+                    SettingsButton(title: "Dismiss", primary: true) { answer(true) }
+                }
+            }
+            .padding(EdgeInsets(top: 14, leading: 16, bottom: 14, trailing: 16))
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Palette.settingsBackground.color)
+                    .shadow(color: .black.opacity(0.22), radius: 15, y: 12)
+            )
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.settingsTabBarBorder.color, lineWidth: 1))
+            .padding(EdgeInsets(top: 118, leading: 20, bottom: 20, trailing: 20))
         }
     }
 }
@@ -636,65 +684,40 @@ struct TabRow: View {
     }
 }
 
-/// The search field, 200 points wide at text size 12 whatever the tab,
-/// the summary or the Dismissed list, then `Filter` (FilterViews.swift),
-/// which takes the room left, and in All `Grouping…` at the right end; the
-/// search field only while the Dismissed list shows (DESIGN.md, "Screens").
-/// In a window too narrow for 200 points and the parts beside it, the
-/// search field gives way rather than push `Grouping…` out.
-struct OperationRow: View {
+/// The search row: the search field alone, the whole width of the row, the
+/// same in every tab and in the Dismissed list (DESIGN.md, "Screens").
+struct SearchRow: View {
     var list: SurfaceListModel
-    @ObservedObject var state: Derived<OperationRowState>
+    @ObservedObject var state: Derived<SearchRowState>
     @FocusState private var focused: Bool
 
     var body: some View {
-        OperationRowContent(
-            value: state.value, search: Binding(get: { list.search }, set: { list.setSearch($0) }), focused: $focused,
-            toggleFilter: { list.toggleFilterOpen() }, openGrouping: { list.openGrouping() }
-        )
+        SearchRowContent(search: Binding(get: { list.search }, set: { list.setSearch($0) }), focused: $focused)
         .onChange(of: state.value.focused) { _, value in if focused != value { focused = value } }
         .onChange(of: focused) { _, value in if list.searchFocused != value { list.searchFocused = value } }
     }
 }
 
-/// The parts of the operation row, from its values.
-struct OperationRowContent: View {
-    var value: OperationRowState
+/// The search field of the search row.
+struct SearchRowContent: View {
     var search: Binding<String>
     var focused: FocusState<Bool>.Binding
-    var toggleFilter: () -> Void
-    var openGrouping: () -> Void
     @Environment(\.textScale) var k
 
     var body: some View {
-        HStack(spacing: 8) {
-            HStack(spacing: 6) {
-                IconView(icon: BoardIcons.search, size: 13 * k, color: Palette.waiting.color)
-                TextField("Search", text: search)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12 * k))
-                    .focused(focused)
-                    .accessibilityLabel("Search")
-            }
-            .padding(.horizontal, 8)
-            .frame(height: 24 * k)
-            .background(RoundedRectangle(cornerRadius: 6).fill(Palette.surface.color))
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.controlBorder.color, lineWidth: 1))
-            // 200 points whatever the summary: it is laid out before
-            // `Filter`, whose summary takes what is left. Only a window
-            // narrower than the row's other parts makes it give way.
-            .frame(minWidth: 0, maxWidth: FilterOptionsLayout.searchWidth * k)
-            .layoutPriority(1)
-            if value.showsFilter {
-                FilterButton(open: value.filterOpen, dot: value.dot, summary: value.summary, toggle: toggleFilter)
-            }
-            Spacer(minLength: 0)
-            if value.showsGrouping {
-                GroupingButton(press: openGrouping)
-                    .fixedSize()
-                    .layoutPriority(2)
-            }
+        HStack(spacing: 6) {
+            IconView(icon: BoardIcons.search, size: 13 * k, color: Palette.waiting.color)
+            TextField("Search", text: search)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12 * k))
+                .focused(focused)
+                .accessibilityLabel("Search")
         }
+        .padding(.horizontal, 8)
+        .frame(height: 24 * k)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Palette.surface.color))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.controlBorder.color, lineWidth: 1))
+        .frame(minWidth: 0, maxWidth: .infinity)
         .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
     }
 }
@@ -946,7 +969,7 @@ struct FlowLayout: Layout {
 // MARK: - Grouping sheet
 
 /// The Grouping sheet (Main.html `.gsheet`), opened by `Grouping…` in All's
-/// operation row: Group by and Then by, Sort, then the order of each chosen
+/// Filter row: Group by and Then by, Sort, then the order of each chosen
 /// value's groups, changed by dragging a row. A change applies to the list
 /// at once. Shown inside the popover or the window; Done closes it.
 struct GroupingSheet: View {

@@ -198,7 +198,9 @@ final class SurfaceRoot: NSView {
             guard let self, let (now, k) = self.content.environment else { return }
             self.controller.update(now: now, k: k)
         }
-        list.list.$showsGrouping.sink { [weak self] shows in self?.overlay.isHidden = !shows }.store(in: &cancellables)
+        list.list.$showsGrouping.combineLatest(list.list.$confirmingDismiss)
+            .sink { [weak self] shows, confirming in self?.overlay.isHidden = !shows && confirming == nil }
+            .store(in: &cancellables)
     }
 
     @available(*, unavailable)
@@ -470,6 +472,12 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
     let content: ListContent
     let scrollView = NSScrollView()
     let table = ListTableView()
+    /// The animation of a card's height after `more`, `less`, "+ N more"
+    /// and `Show less` (DESIGN.md, "Row body"), in seconds.
+    static let heightAnimation: TimeInterval = 0.2
+    static let heightTiming = CAMediaTimingFunction(name: .easeInEaseOut)
+    /// The line whose height animates, while the change is applied.
+    private var animating: String?
     private let dropLine = DropLineView()
 
     private var lines: [ListEntry] = []
@@ -701,15 +709,41 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
         let redraw = redrawAll
         redrawAll = false
 
+        let animated = content.list.takeAnimatedCard().map { "card:" + $0 }
         if nextIDs == oldIDs {
             var changedHeights = IndexSet()
             lines = next
             heights = nextHeights
-            for i in next.indices where redraw || next[i] != old[i] || nextHeights[i] != oldHeights[i] {
-                if nextHeights[i] != oldHeights[i] { changedHeights.insert(i) }
-                redrawRow(i)
+            let change = {
+                for i in next.indices where redraw || next[i] != old[i] || nextHeights[i] != oldHeights[i] {
+                    if nextHeights[i] != oldHeights[i] { changedHeights.insert(i) }
+                    self.redrawRow(i)
+                }
+                if !changedHeights.isEmpty { self.table.noteHeightOfRows(withIndexesChanged: changedHeights) }
             }
-            if !changedHeights.isEmpty { table.noteHeightOfRows(withIndexesChanged: changedHeights) }
+            // `more`, `less`, "+ N more" or `Show less` pressed here
+            // (DESIGN.md, "Row body"): the height changes over 0.2 seconds.
+            // The rows above and the scroll position stay, so the pressed
+            // row's top edge stays where it is on the screen; the lines below
+            // slide and the card grows or shrinks with them: the row views
+            // and the card take their new frames at once (the consistency
+            // checks see those), Core Animation shows the way there.
+            // With Reduce motion (NSAccessibility.h,
+            // `accessibilityDisplayShouldReduceMotion`) the change shows at
+            // once: the table's own animation of a height change is turned
+            // off too (a group of duration 0).
+            if let animated, let index = next.firstIndex(where: { $0.id == animated }), nextHeights[index] != oldHeights[index] {
+                let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+                animating = reduce ? nil : animated
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = reduce ? 0 : Self.heightAnimation
+                    context.timingFunction = Self.heightTiming
+                    change()
+                }
+                animating = nil
+            } else {
+                change()
+            }
             if rowViewsMisplaced("heights") { reload() }
             placeDropLine()
             return
@@ -882,9 +916,9 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
             // only whether they wrap is part of the geometry (where they are
             // is worked out as the card is drawn).
             let fits = LineLayout.line3Fits(line, width: shapedWidth > 0 ? shapedWidth : width, k: k, now: now)
-            return ShapeInputs(entry: entry, texts: [fits ? "fits" : "wraps"])
-        case .dismissed(let card):
-            return ShapeInputs(entry: entry, texts: [DismissedText.daysLeft(card.dismissExpiresAt, now: now)])
+            return ShapeInputs(entry: entry.withoutSearch, texts: [fits ? "fits" : "wraps"])
+        case .dismissed(let card, _):
+            return ShapeInputs(entry: entry.withoutSearch, texts: [DismissedText.daysLeft(card.dismissExpiresAt, now: now)])
         default:
             return ShapeInputs(entry: entry, texts: [])
         }
@@ -928,7 +962,7 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
         case .fold:
             let (frame, height) = LineLayout.fold(width: w, k: k)
             return .frame(frame, height: height)
-        case .dismissed(let card):
+        case .dismissed(let card, _):
             return .dismissed(LineLayout.dismissed(card, width: w, k: k, now: now))
         case .end:
             return .height(8)
@@ -973,6 +1007,7 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
     private func configure(_ cell: LineCell, row: Int) {
         let entry = lines[row]
         let id = entry.id
+        let previous = cell.lineID
         cell.lineID = id
         if PerfMode.enabled { PerfCounters.frame.configured += 1 }
         let env = environment
@@ -986,7 +1021,12 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
             cell.contentFrame = frame
             (cell.content as? HeadingLineView)?.configure(heading, env: env, state: content.state(id))
         case (.card(let line), .card(let geometry)):
-            cell.contentFrame = CGRect(x: line.indented ? 24 : 12, y: 0, width: geometry.size.width, height: geometry.size.height)
+            let frame = CGRect(x: line.indented ? 24 : 12, y: 0, width: geometry.size.width, height: geometry.size.height)
+            if id == animating, previous == id, cell.content.frame.height > 0 {
+                cell.animateContentFrame(to: frame, duration: Self.heightAnimation, timing: Self.heightTiming)
+            } else {
+                cell.contentFrame = frame
+            }
             (cell.content as? CardLineView)?.configure(line, geometry: geometry, env: env, state: content.state(id))
         case (.empty(let key), .frame(let frame, _)):
             cell.contentFrame = frame
@@ -994,9 +1034,9 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
         case (.fold(let fold), .frame(let frame, _)):
             cell.contentFrame = frame
             (cell.content as? FoldLineView)?.configure(fold, env: env, state: content.state(id))
-        case (.dismissed(let card), .dismissed(let geometry)):
+        case (.dismissed(let card, let search), .dismissed(let geometry)):
             cell.contentFrame = CGRect(x: 12, y: 0, width: geometry.size.width, height: geometry.size.height)
-            (cell.content as? DismissedLineView)?.configure(card, geometry: geometry, env: env, state: content.state(id))
+            (cell.content as? DismissedLineView)?.configure(card, search: search, geometry: geometry, env: env, state: content.state(id))
         default:
             break
         }
@@ -1257,3 +1297,4 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
         if rowViewsMisplaced("reveal") { reload() }
     }
 }
+

@@ -102,7 +102,7 @@ const COMMANDS: [(&str, &str, &str); 33] = [
         "<key> [--json]",
         "Print a setting. Keys: launch_at_login, appearance, text_size,\n      \
          status_interval_minutes, reactions_interval_minutes,\n      \
-         auto_dismiss_after_days, dismissed_keep_days",
+         auto_dismiss_after_days, dismissed_keep_days, confirm_dismiss",
     ),
     (
         "config set",

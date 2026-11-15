@@ -120,4 +120,9 @@ public enum Palette {
     public static let settingsTabSelectedBackground = Shade(0xDCE7F7, 0x1F3A5C)
     public static let groupBorder = Shade(0xE3E3E6, 0x3A3A3F)
     public static let itemDivider = Shade(0xECECEF, 0x343438)
+    /// The background of what the search matched (DESIGN.md, "Showing what
+    /// matched"; the color of shiibar-cc's search matches): #FFD500 at
+    /// 0.45 in light and 0.28 in dark, the same on selected and muted cards.
+    public static let searchMatch = RGB(hex: 0xFFD500)
+    public static let searchMatchAlpha = (light: 0.45, dark: 0.28)
 }

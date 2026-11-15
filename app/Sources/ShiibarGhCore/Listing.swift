@@ -130,6 +130,236 @@ public enum Search {
     public static func matches(_ card: Card, words: [String]) -> Bool {
         matches(words, fields: prFields(card) + card.rows.flatMap(rowFields))
     }
+
+    /// Some word is part of the row's text or actor.
+    static func rowHasMatch(_ row: Row, words: [String]) -> Bool {
+        let lowered = rowFields(row).map { $0.lowercased() }
+        return words.contains { word in lowered.contains { $0.contains(word) } }
+    }
+}
+
+// MARK: - What matched
+
+/// DESIGN.md, "Showing what matched": where the words of the search are
+/// found in the text a card shows, for its yellow background. The words are
+/// those of `Search.words` (split and lowercased the same way), found
+/// case-insensitively, every occurrence of every word, in the displayed
+/// strings of the fields the search looks at. Ranges are UTF-16 offsets of
+/// the displayed string (how AppKit and CoreText index text), in order and
+/// merged where they overlap or touch.
+public enum Highlight {
+    /// Every occurrence of every word in `text`.
+    public static func ranges(_ words: [String], in text: String) -> [Range<Int>] {
+        guard !words.isEmpty, !text.isEmpty else { return [] }
+        // Lowercased character by character, each lowered character with the
+        // UTF-16 range of the character it came from.
+        var lowered: [Character] = []
+        var origins: [Range<Int>] = []
+        var offset = 0
+        for character in text {
+            let width = character.utf16.count
+            for lower in String(character).lowercased() {
+                lowered.append(lower)
+                origins.append(offset..<(offset + width))
+            }
+            offset += width
+        }
+        var found: [Range<Int>] = []
+        for word in words {
+            let pattern = Array(word)
+            guard !pattern.isEmpty, pattern.count <= lowered.count else { continue }
+            for start in 0...(lowered.count - pattern.count) where lowered[start] == pattern[0] {
+                var i = 1
+                while i < pattern.count, lowered[start + i] == pattern[i] { i += 1 }
+                if i == pattern.count {
+                    found.append(origins[start].lowerBound..<origins[start + pattern.count - 1].upperBound)
+                }
+            }
+        }
+        return merged(found)
+    }
+
+    static func merged(_ ranges: [Range<Int>]) -> [Range<Int>] {
+        var out: [Range<Int>] = []
+        for range in ranges.sorted(by: { $0.lowerBound < $1.lowerBound }) where !range.isEmpty {
+            if let last = out.last, range.lowerBound <= last.upperBound {
+                out[out.count - 1] = last.lowerBound..<max(last.upperBound, range.upperBound)
+            } else {
+                out.append(range)
+            }
+        }
+        return out
+    }
+
+    static func shifted(_ ranges: [Range<Int>], by delta: Int) -> [Range<Int>] {
+        ranges.map { ($0.lowerBound + delta)..<($0.upperBound + delta) }
+    }
+
+    /// `owner/repo #123` (`Warnings.prLabel`), found in `owner/repo#123` as
+    /// the search finds it: a match across the `#` (`api#407`) marks the
+    /// displayed characters on both sides of the space.
+    public static func prLabel(_ words: [String], pr: String) -> [Range<Int>] {
+        let found = ranges(words, in: pr)
+        guard let hash = pr.lastIndex(of: "#") else { return found }
+        let at = pr[..<hash].utf16.count
+        var out: [Range<Int>] = []
+        for range in found {
+            if range.upperBound <= at {
+                out.append(range)
+            } else if range.lowerBound >= at {
+                out.append((range.lowerBound + 1)..<(range.upperBound + 1))
+            } else {
+                out.append(range.lowerBound..<at)
+                out.append((at + 1)..<(range.upperBound + 1))
+            }
+        }
+        return out
+    }
+
+    /// `base ← head`, as line 3 of a card shows them.
+    public static func baseHead(_ words: [String], base: String, head: String) -> [Range<Int>] {
+        ranges(words, in: base) + shifted(ranges(words, in: head), by: base.utf16.count + " \u{2190} ".utf16.count)
+    }
+
+    /// The author in line 3's times (`opened 3 days ago by alice · updated
+    /// 2 hr ago`, `CardText.times`): the login only.
+    public static func author(_ words: [String], author: String, times: String) -> [Range<Int>] {
+        guard !author.isEmpty, let at = times.range(of: "by \(author) \u{00B7} ") else { return [] }
+        return shifted(ranges(words, in: author), by: times[..<at.lowerBound].utf16.count + 3)
+    }
+
+    /// The matches in a row's displayed meta (`alice · 9 min ago`: the actor
+    /// only, not the time) and body (the text; `by alice`: the actor only;
+    /// a reaction's quoted text: the text only).
+    public struct RowMatches: Equatable {
+        public var meta: [Range<Int>] = []
+        public var body: [Range<Int>] = []
+    }
+
+    public static func row(_ words: [String], _ row: Row, _ p: RowPresentation) -> RowMatches {
+        var out = RowMatches()
+        guard !words.isEmpty else { return out }
+        let actor = row.actor.flatMap { $0.isEmpty ? nil : $0 }
+        if let actor, p.meta.hasPrefix(actor + " \u{00B7} ") {
+            out.meta = ranges(words, in: actor)
+        }
+        guard let body = p.body else { return out }
+        let text = row.text.map(RowText.normalize).flatMap { $0.isEmpty ? nil : $0 }
+        if let text, body == text {
+            out.body = ranges(words, in: text)
+        } else if let text, body == "\u{201C}\(text)\u{201D}" {
+            out.body = shifted(ranges(words, in: text), by: 1)
+        } else if text == nil, let actor, body == "by \(actor)" {
+            out.body = shifted(ranges(words, in: actor), by: 3)
+        }
+        return out
+    }
+
+    /// Some match is in the part of a text cut off with "…" (`shownEnd`:
+    /// the UTF-16 offset where the shown text ends; nil when all of it
+    /// shows): the "…" gets the background, and a collapsed row body's
+    /// `more` too. Whether a match shows as well does not matter.
+    public static func hidesMatch(_ found: [Range<Int>], shownEnd: Int?) -> Bool {
+        guard let shownEnd else { return false }
+        return found.contains { $0.upperBound > shownEnd }
+    }
+
+    /// Some match shows: its start is before where the shown text ends.
+    public static func showsMatch(_ found: [Range<Int>], shownEnd: Int?) -> Bool {
+        guard let shownEnd else { return !found.isEmpty }
+        return found.contains { $0.lowerBound < shownEnd }
+    }
+
+    /// The card's "+ N more" gets the background: a row folded into it
+    /// matches (its text or actor), whatever the rows shown match.
+    public static func marksMoreRows(_ card: Card, words: [String], expanded: Bool) -> Bool {
+        guard !words.isEmpty, Listing.moreRows(card, expanded: expanded) != nil else { return false }
+        return card.rows.dropFirst(Listing.rowsShown).contains { Search.rowHasMatch($0, words: words) }
+    }
+
+    /// A text the card shows, for `shownEnd` (the app lays the text out).
+    public enum CutText: Hashable {
+        case prLabel, title, baseHead
+        /// A row's body as it shows now (collapsed or expanded).
+        case body(row: String)
+    }
+
+    /// The matches of a text and whether its "…" gets the background.
+    public struct TextMarks: Equatable {
+        public var found: [Range<Int>] = []
+        public var ellipsis = false
+        public var shows = false
+
+        public init(_ found: [Range<Int>], shownEnd: () -> Int?) {
+            self.found = found
+            guard !found.isEmpty else { return }
+            let end = shownEnd()
+            ellipsis = Highlight.hidesMatch(found, shownEnd: end)
+            shows = Highlight.showsMatch(found, shownEnd: end)
+        }
+
+        public init() {}
+
+        var yellow: Bool { shows || ellipsis }
+    }
+
+    public struct RowMarks: Equatable {
+        public var meta: [Range<Int>] = []
+        public var body = TextMarks()
+        /// The row's `more` (collapsed, with a match in the part it hides).
+        public var more = false
+    }
+
+    /// Everything of a card that gets the yellow background (DESIGN.md,
+    /// "Showing what matched").
+    public struct CardMarks: Equatable {
+        public var prLabel = TextMarks()
+        public var title = TextMarks()
+        public var baseHead = TextMarks()
+        public var author: [Range<Int>] = []
+        public var rows: [String: RowMarks] = [:]
+        public var moreRows = false
+
+        /// Some yellow background shows on the card. With search text,
+        /// every card shown has one, except in Compact a card matched only
+        /// by what its heading does not show.
+        public var anyYellow: Bool {
+            prLabel.yellow || title.yellow || baseHead.yellow || !author.isEmpty || moreRows
+                || rows.values.contains { !$0.meta.isEmpty || $0.body.yellow || $0.more }
+        }
+    }
+
+    /// The marks of a card shown with `words`. `shownEnd` gives where the
+    /// shown part of a text ends (nil: all of it shows); it is asked only
+    /// for texts with matches. `expandedBodies`: the rows whose `more` was
+    /// pressed. Compact: the heading only.
+    public static func card(
+        _ card: Card, words: [String], now: Int64, expanded: Bool, expandedBodies: Set<String>, compact: Bool,
+        shownEnd: (CutText, String) -> Int?
+    ) -> CardMarks {
+        var marks = CardMarks()
+        guard !words.isEmpty else { return marks }
+        let label = Warnings.prLabel(card.pr)
+        marks.prLabel = TextMarks(prLabel(words, pr: card.pr)) { shownEnd(.prLabel, label) }
+        marks.title = TextMarks(ranges(words, in: card.title)) { shownEnd(.title, card.title) }
+        let baseHead = "\(card.base) \u{2190} \(card.head)"
+        marks.baseHead = TextMarks(self.baseHead(words, base: card.base, head: card.head)) { shownEnd(.baseHead, baseHead) }
+        marks.author = author(words, author: card.author, times: CardText.times(card, now: now))
+        guard !compact else { return marks }
+        for row in Listing.visibleRows(card, expanded: expanded) {
+            let open = expandedBodies.contains(row.id)
+            let p = RowPresentation(row, now: now, cardMuted: card.isMuted, expanded: open)
+            let found = self.row(words, row, p)
+            var rowMarks = RowMarks(meta: found.meta)
+            if let body = p.body {
+                rowMarks.body = TextMarks(found.body) { shownEnd(.body(row: row.id), body) }
+                rowMarks.more = !open && rowMarks.body.ellipsis
+            }
+            marks.rows[row.id] = rowMarks
+        }
+        marks.moreRows = marksMoreRows(card, words: words, expanded: expanded)
+        return marks
+    }
 }
 
 // MARK: - Tabs

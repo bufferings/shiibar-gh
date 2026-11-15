@@ -81,6 +81,9 @@ public enum PopoverAction: Equatable {
     case copyLink(String)
     case place(PlaceMove)
     case dismiss(card: String)
+    /// The card's ×: Dismiss after the confirmation (DESIGN.md, "Confirming
+    /// ×"). The menu's `Dismiss` and ⌫ are `dismiss`.
+    case confirmDismiss(card: String)
     case restore(card: String)
     case mute(MuteKind, String)
     case unmute(MuteKind, String)

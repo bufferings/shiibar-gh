@@ -224,7 +224,7 @@ final class FakeAPI: DaemonAPI, @unchecked Sendable {
     private let lock = NSLock()
     private var log: [String] = []
     var cards: [Card] = []
-    var config: [String: ConfigValue] = ["launch_at_login": .bool(true)]
+    var config: [String: ConfigValue] = ["launch_at_login": .bool(true), "confirm_dismiss": .bool(true)]
     var failNext: DaemonError?
     var refreshWarnings: [Warning] = []
     var testResults: [TestResult] = []

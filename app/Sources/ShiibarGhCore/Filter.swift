@@ -10,6 +10,35 @@ import Foundation
 public enum FilterText {
     /// The tooltip of the blue dot.
     public static let dotTip = "Unread pull requests are hidden by the filter"
+    /// The button under the options, at the right end.
+    public static let reset = "Reset"
+}
+
+/// Whose search text: a tab's, or the Dismissed list's (DESIGN.md, "Search
+/// field"). Each is kept per account, like the Filter.
+public enum SearchScope: Hashable {
+    case tab(ListTab)
+    case dismissed
+
+    public static let all: [SearchScope] = ListTab.allCases.map(SearchScope.tab) + [.dismissed]
+
+    /// The key it is saved under.
+    public var key: String {
+        switch self {
+        case .tab(let tab): return tab.rawValue
+        case .dismissed: return "dismissed"
+        }
+    }
+
+    public init?(key: String) {
+        if key == "dismissed" {
+            self = .dismissed
+        } else if let tab = ListTab(rawValue: key) {
+            self = .tab(tab)
+        } else {
+            return nil
+        }
+    }
 }
 
 /// One line of the Filter's options, in the order they show: the same three
@@ -119,10 +148,10 @@ public struct ListFilter: Equatable, Codable {
         self == ListFilter()
     }
 
-    /// The summary of the closed Filter: the settings changed from the
+    /// The summary in the Filter row: the settings changed from the
     /// defaults, the statuses first, then Mute, then `Unread only`, joined
-    /// by ` · `; nil when nothing changed. Hide is the default and is not
-    /// shown.
+    /// by ` · `; nil when nothing changed (then no summary). Hide is
+    /// the default and is not shown.
     public var summary: String? {
         var parts: [String] = []
         if statuses != Self.allStatuses {
@@ -206,7 +235,7 @@ public struct Visibility: Equatable {
 ///   selected, it goes after `duration`, counted from the later of the two.
 ///   Selected again, the count starts over.
 /// - A new blue unread row makes it an ordinary card again.
-/// - Opening a tab, changing the Filter, the Dismissed list and closing the
+/// - Opening a tab, changing the Filter (Reset too), the Dismissed list and closing the
 ///   surface `reset` it: nothing is kept, and the cards shown then are the
 ///   ones that may be kept next.
 public struct UnreadLinger: Equatable {

@@ -74,8 +74,6 @@ final class ListContent: ObservableObject {
             data.objectWillChange.map { _ in () }.eraseToAnyPublisher(),
             list.$tab.map { _ in () }.eraseToAnyPublisher(),
             list.$showingDismissed.map { _ in () }.eraseToAnyPublisher(),
-            list.$searches.map { _ in () }.eraseToAnyPublisher(),
-            list.$dismissedSearch.map { _ in () }.eraseToAnyPublisher(),
             list.$expandedRows.map { _ in () }.eraseToAnyPublisher(),
             list.$lingering.map { _ in () }.eraseToAnyPublisher(),
         ]
@@ -97,8 +95,10 @@ final class ListContent: ObservableObject {
     var entries: [ListEntry] {
         var out: [ListEntry] = []
         if let text = list.emptyText { out.append(.message(text)) }
+        // The search of what shows (a tab's, or the Dismissed list's).
+        let words = Search.words(list.search)
         if list.showingDismissed {
-            out += list.dismissedCards.map { .dismissed($0) }
+            out += list.dismissedCards.map { .dismissed($0, search: words) }
             out.append(.end)
             return out
         }
@@ -112,7 +112,7 @@ final class ListContent: ObservableObject {
                     card: card, section: section.key, showsTag: showsTag, indented: section.level == 2,
                     expanded: expanded.contains(card.id), canDrag: section.accepts && card.canDrag,
                     expandedBodies: list.expandedBodies.intersection(card.rows.map(\.id)),
-                    compact: compact, unread: compact ? UnreadMark.of(card.rows) : .none
+                    compact: compact, unread: compact ? UnreadMark.of(card.rows) : .none, search: words
                 )))
             }
             if section.accepts, section.matching.isEmpty, !section.collapsed { out.append(.empty(section.key)) }

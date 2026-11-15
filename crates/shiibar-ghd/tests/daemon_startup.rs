@@ -457,11 +457,16 @@ fn settings_survive_a_restart() {
         ("auto_dismiss_after_days", json!(0)),
         ("dismissed_keep_days", json!(2)),
         ("appearance", json!("dark")),
+        ("confirm_dismiss", json!(false)),
     ] {
         daemon.ok(json!({"cmd":"config_set","key":key,"value":value}));
     }
     daemon.stop();
     let daemon = start(dir.path());
+    assert_eq!(
+        daemon.ok(json!({"cmd":"config_get","key":"confirm_dismiss"}))["value"],
+        false
+    );
     assert_eq!(
         daemon.ok(json!({"cmd":"config_get","key":"launch_at_login"}))["value"],
         false

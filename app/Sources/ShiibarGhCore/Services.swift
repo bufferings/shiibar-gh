@@ -43,19 +43,19 @@ public protocol ImageLoading: AnyObject, Sendable {
 /// group orders, the collapsed sections and the expanded "+ N more PRs" (by
 /// section key), the expanded "+ N more" of the cards (by card id), the
 /// expanded row bodies (by row id), the Filter of each tab and whether it
-/// is open, Compact, the repositories seen, the window frame and Keep on
-/// top.
+/// is open (per tab), the search text of each tab and of the Dismissed list, Compact,
+/// the repositories seen, the window frame and Keep on top.
 /// Keys carry the account id (the GitHub user id, numeric, as a string,
-/// which does not change with the login). The search, the selected text and
-/// whether the Dismissed list is open are not kept.
+/// which does not change with the login). The selection, the scroll
+/// positions and whether the Dismissed list is open are not kept.
 ///
 /// Every key starts with `v4.`: 0.4 reads none of the UI state of 0.3 and
 /// earlier (DESIGN.md, "Updating from 0.3 and 0.2"), whose keys had no
-/// prefix and stay unread. 0.5 reads 0.4's keys as they are and adds six
-/// (`expandedRows.`, `expandedBodies.`, `filters.`, `filterOpen.`,
-/// `compact.`, `popover.height.`), which start from their defaults: nothing
-/// expanded, the default Filter closed, Compact off, the popover's default
-/// height ("Updating from 0.4").
+/// prefix and stay unread. 0.5 reads 0.4's keys as they are and adds seven
+/// (`expandedRows.`, `expandedBodies.`, `filters.`, `filtersOpen.`,
+/// `searches.`, `compact.`, `popover.height.`), which start from their
+/// defaults: nothing expanded, the default Filter closed, no search text,
+/// Compact off, the popover's default height ("Updating from 0.4").
 public final class UIStateStore {
     private let defaults: UserDefaults
     static let prefix = "v4."
@@ -67,7 +67,10 @@ public final class UIStateStore {
     static let expandedRowsKey = prefix + "expandedRows."
     static let expandedBodiesKey = prefix + "expandedBodies."
     static let filtersKey = prefix + "filters."
-    static let filterOpenKey = prefix + "filterOpen."
+    /// The tabs whose `Filter` is open. (`filterOpen.`, one value for the
+    /// tabs, was never released and is not read.)
+    static let filtersOpenKey = prefix + "filtersOpen."
+    static let searchesKey = prefix + "searches."
     static let compactKey = prefix + "compact."
     static let popoverHeightKey = prefix + "popover.height."
     static let tabKey = prefix + "tab."
@@ -169,14 +172,31 @@ public final class UIStateStore {
         defaults.set(try? JSONEncoder().encode(saved), forKey: Self.filtersKey + account)
     }
 
-    /// Whether `Filter` is open: closed unless opened; one value for the
-    /// tabs, the popover and the window.
-    public func filterOpen(account: String) -> Bool {
-        defaults.object(forKey: Self.filterOpenKey + account) as? Bool ?? false
+    /// The tabs whose `Filter` is open (DESIGN.md, "Filter"): each closed
+    /// unless opened; one value per tab for the popover and the window.
+    public func filtersOpen(account: String) -> Set<ListTab> {
+        Set((defaults.stringArray(forKey: Self.filtersOpenKey + account) ?? []).compactMap(ListTab.init(rawValue:)))
     }
 
-    public func setFilterOpen(_ open: Bool, account: String) {
-        defaults.set(open, forKey: Self.filterOpenKey + account)
+    public func setFiltersOpen(_ tabs: Set<ListTab>, account: String) {
+        defaults.set(tabs.map(\.rawValue).sorted(), forKey: Self.filtersOpenKey + account)
+    }
+
+    /// The search text of each tab and of the Dismissed list (DESIGN.md,
+    /// "Search field"): none saved reads as empty.
+    public func searches(account: String) -> [SearchScope: String] {
+        guard let saved = defaults.dictionary(forKey: Self.searchesKey + account) as? [String: String] else { return [:] }
+        var out: [SearchScope: String] = [:]
+        for (key, text) in saved where !text.isEmpty {
+            if let scope = SearchScope(key: key) { out[scope] = text }
+        }
+        return out
+    }
+
+    public func setSearches(_ searches: [SearchScope: String], account: String) {
+        var saved: [String: String] = [:]
+        for (scope, text) in searches where !text.isEmpty { saved[scope.key] = text }
+        defaults.set(saved, forKey: Self.searchesKey + account)
     }
 
     /// Compact: off unless turned on.

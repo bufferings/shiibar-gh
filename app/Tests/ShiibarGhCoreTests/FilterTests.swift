@@ -458,19 +458,134 @@ final class FilterModelTests: XCTestCase {
         XCTAssertEqual(list.filter.summary, "Muted only")
     }
 
-    func testOpenOrClosedIsOneValueForTheTabsAndSurfaces() async {
+    /// DESIGN.md, "Filter", "When open": open or closed is kept per tab,
+    /// per account, shared by the popover and the window, and saved;
+    /// closed by default. A tab switch shows the destination's state.
+    func testOpenOrClosedIsKeptPerTab() async {
         let popover = await loaded(.review, cards: sampleCards())
         let window = popover.data.list(.window)
+        window.openTab(.review)
         XCTAssertFalse(popover.filterOpen, "closed at first")
         popover.toggleFilterOpen()
-        XCTAssertTrue(window.filterOpen)
-        popover.openTab(.all)
         XCTAssertTrue(popover.filterOpen)
-        XCTAssertTrue(UIStateStore(defaults: defaults).filterOpen(account: "3407303"))
+        XCTAssertTrue(window.filterOpen, "the window shows the same tab's state")
+        popover.openTab(.all)
+        XCTAssertFalse(popover.filterOpen, "All keeps its own state")
+        XCTAssertFalse(popover.showsFilterOptions)
+        XCTAssertTrue(window.filterOpen, "Review stays open")
+        popover.toggleFilterOpen()
+        popover.openTab(.mine)
+        XCTAssertFalse(popover.filterOpen, "Mine is closed")
+        popover.openTab(.review)
+        XCTAssertTrue(popover.showsFilterOptions, "back to Review: open")
+        XCTAssertEqual(UIStateStore(defaults: defaults).filtersOpen(account: "3407303"), [.all, .review], "saved per tab")
+        XCTAssertEqual(UIStateStore(defaults: defaults).filtersOpen(account: "1"), [], "per account")
         popover.openDismissedList()
         XCTAssertTrue(popover.filterOpen, "the Dismissed list leaves it as it is")
+        popover.closeDismissedList()
         window.toggleFilterOpen()
-        XCTAssertFalse(popover.filterOpen)
+        XCTAssertFalse(popover.filterOpen, "closed from the window")
+        XCTAssertTrue(popover.data.filterOpen(.all))
+    }
+
+    /// DESIGN.md, "Filter", "Filter row": the row always shows, every
+    /// setting at its default too, but not with the Dismissed list; the
+    /// summary only while a setting of the tab shown differs from its
+    /// default, with `Filter` open or closed. `Reset` under the options is
+    /// enabled exactly then.
+    func testTheSummaryShowsOnlyWhileASettingDiffers() async {
+        let list = await loaded(.review, cards: sampleCards())
+        XCTAssertTrue(list.showsFilterRow, "all defaults: the row still shows")
+        XCTAssertFalse(list.showsFilterSummary, "all defaults: no summary")
+        XCTAssertNil(list.filterSummary)
+        XCTAssertFalse(list.canResetFilter, "all defaults: Reset disabled")
+        list.setMuteChoice(.show)
+        XCTAssertTrue(list.showsFilterSummary)
+        XCTAssertTrue(list.canResetFilter)
+        XCTAssertEqual(list.filterSummary, "Muted shown")
+        list.toggleFilterOpen()
+        XCTAssertTrue(list.showsFilterOptions)
+        XCTAssertEqual(list.filterSummary, "Muted shown", "open too")
+        list.toggleStatus(.closed)
+        list.setUnreadOnly(true)
+        XCTAssertEqual(list.filterSummary, "Open · Draft · Merged · Muted shown · Unread only", "the order of the summary")
+        list.openDismissedList()
+        XCTAssertFalse(list.showsFilterRow, "not with the Dismissed list")
+        XCTAssertFalse(list.showsFilterSummary)
+        XCTAssertNil(list.filterSummary)
+        list.closeDismissedList()
+        XCTAssertTrue(list.showsFilterRow)
+        XCTAssertTrue(list.showsFilterSummary)
+        list.openTab(.all)
+        XCTAssertTrue(list.showsFilterRow)
+        XCTAssertFalse(list.showsFilterSummary, "All's settings are the defaults")
+        list.openTab(.review)
+        list.setMuteChoice(.hide)
+        list.toggleStatus(.closed)
+        XCTAssertTrue(list.showsFilterSummary)
+        list.setUnreadOnly(false)
+        XCTAssertFalse(list.showsFilterSummary, "back to the defaults by hand: the summary goes")
+        XCTAssertFalse(list.canResetFilter)
+        XCTAssertTrue(list.showsFilterRow, "the row stays")
+        list.toggleFilterOpen()
+        XCTAssertFalse(list.showsFilterSummary, "closed with the defaults: no summary")
+        XCTAssertTrue(list.showsFilterRow)
+        XCTAssertEqual(ListFilter(muted: .hide).summary, nil, "Hide is the default")
+    }
+
+    /// `Reset`: the tab's Status, Muted and Unread only go back to the
+    /// defaults. The search text, the other tabs' settings and whether
+    /// `Filter` is open stay.
+    func testResetReturnsTheTabsSettingsOnly() async {
+        let list = await loaded(.review, cards: sampleCards())
+        let window = list.data.list(.window)
+        list.data.setFilter(ListFilter(muted: .only), tab: .all)
+        list.data.setFilter(ListFilter(unreadOnly: true), tab: .mine)
+        list.setMuteChoice(.show)
+        list.toggleStatus(.merged)
+        list.setUnreadOnly(true)
+        list.toggleFilterOpen()
+        list.setSearch("api")
+        list.resetFilter()
+        XCTAssertEqual(list.filter, ListFilter())
+        XCTAssertFalse(list.showsFilterSummary)
+        XCTAssertFalse(list.canResetFilter, "nothing left to reset")
+        XCTAssertEqual(list.search, "api", "the search text stays")
+        XCTAssertTrue(list.filterOpen, "the options stay open")
+        XCTAssertEqual(list.data.filter(.all), ListFilter(muted: .only), "other tabs stay")
+        XCTAssertEqual(list.data.filter(.mine), ListFilter(unreadOnly: true))
+        XCTAssertEqual(UIStateStore(defaults: defaults).filters(account: "3407303")[.review], ListFilter(), "saved")
+        window.openTab(.review)
+        XCTAssertEqual(window.filter, ListFilter(), "the window's too")
+        // With all defaults there is nothing to reset.
+        list.resetFilter()
+        XCTAssertEqual(list.filter, ListFilter())
+        // In the Dismissed list there is no line and no Reset.
+        list.setMuteChoice(.show)
+        list.openDismissedList()
+        list.resetFilter()
+        XCTAssertEqual(list.data.filter(.review), ListFilter(muted: .show), "nothing reset from the Dismissed list")
+    }
+
+    /// `Reset` is a change of the settings: the cards `Unread only` kept
+    /// hide at once, and a hidden card leaves the selection.
+    func testResetDropsTheKeptCardsAtOnce() async {
+        let list = await unreadOnly()
+        list.toggleStatus(.closed)
+        list.select(.row(id: "u1", card: "U1"))
+        await settle()
+        list.select(.header(card: "U2"))
+        await settle()
+        XCTAssertEqual(list.lingering, ["U1"], "read, kept for now")
+        list.resetFilter()
+        XCTAssertEqual(list.lingering, [], "dropped at once")
+        XCTAssertEqual(list.filter, ListFilter())
+        XCTAssertTrue(ids(list).contains("R"), "the read cards show again")
+        XCTAssertEqual(list.selection, .header(card: "U2"), "a card still shown keeps the selection")
+        // Under Unread only again: what shows now is what may be kept next.
+        list.setUnreadOnly(true)
+        XCTAssertFalse(ids(list).contains("U1"))
+        assertSelectionConsistent(list)
     }
 
     /// The blue dot of the tab shown only, whatever the search.
@@ -578,7 +693,11 @@ final class FilterModelTests: XCTestCase {
         defaults.set(true, forKey: "v4.showMuted.1")
         let store = UIStateStore(defaults: defaults)
         XCTAssertEqual(store.filters(account: "1"), [.all: ListFilter(), .review: ListFilter(), .mine: ListFilter()])
-        XCTAssertFalse(store.filterOpen(account: "1"), "closed")
+        XCTAssertEqual(store.filtersOpen(account: "1"), [], "closed")
+        // The single open state of an unreleased development build is not
+        // read.
+        defaults.set(true, forKey: "v4.filterOpen.1")
+        XCTAssertEqual(UIStateStore(defaults: defaults).filtersOpen(account: "1"), [])
         var filters = store.filters(account: "1")
         filters[.mine] = ListFilter(statuses: [.draft])
         store.setFilters(filters, account: "1")
@@ -890,14 +1009,15 @@ final class FilterModelTests: XCTestCase {
         XCTAssertEqual(sent, [["U3"], ["K"]], "at the end of a drag")
     }
 
-    /// While the Dismissed list shows: the search field only, no options.
+    /// While the Dismissed list shows: the search row only, no Filter row,
+    /// no options.
     func testTheDismissedListShowsNoFilter() async {
         let list = await loaded(.review, cards: sampleCards())
         list.toggleFilterOpen()
-        XCTAssertTrue(list.showsFilter)
+        XCTAssertTrue(list.showsFilterRow)
         XCTAssertTrue(list.showsFilterOptions)
         list.openDismissedList()
-        XCTAssertFalse(list.showsFilter, "the operation row: the search field only")
+        XCTAssertFalse(list.showsFilterRow, "the search row only")
         XCTAssertFalse(list.showsFilterOptions)
         XCTAssertTrue(list.filterOpen, "open is kept")
         list.closeDismissedList()
@@ -908,9 +1028,9 @@ final class FilterModelTests: XCTestCase {
     /// the summary: Status, Muted, Unread; no Group by, Then by or Sort.
     func testTheOptionLinesAreTheSameInEveryTab() async {
         let list = await loaded(.all, cards: sampleCards())
-        list.toggleFilterOpen()
         for tab in ListTab.allCases {
             list.openTab(tab)
+            list.toggleFilterOpen()
             XCTAssertTrue(list.showsFilterOptions, "\(tab)")
             XCTAssertEqual(list.filterOptions, [.status, .muted, .unread], "\(tab)")
             XCTAssertEqual(list.filterOptions.map(\.title), ["Status", "Muted", "Unread"], "\(tab)")
@@ -923,8 +1043,8 @@ final class FilterModelTests: XCTestCase {
         XCTAssertEqual(list.filter.summary, "Open · Draft · Merged · Muted only · Unread only")
     }
 
-    /// `Grouping…` shows in All only, not while the Dismissed list shows,
-    /// and opens the Grouping sheet.
+    /// `Grouping…` shows in the Filter row in All only, not while the
+    /// Dismissed list shows, and opens the Grouping sheet.
     func testTheGroupingButtonShowsInAllOnly() async {
         let list = await loaded(.review, cards: sampleCards())
         XCTAssertFalse(list.showsGroupingButton, "Review")
@@ -937,7 +1057,7 @@ final class FilterModelTests: XCTestCase {
         list.toggleFilterOpen()
         XCTAssertTrue(list.showsGroupingButton, "open or closed Filter alike")
         list.openDismissedList()
-        XCTAssertFalse(list.showsGroupingButton, "the Dismissed list: the search field only")
+        XCTAssertFalse(list.showsGroupingButton, "the Dismissed list: no Filter row")
         list.closeDismissedList()
         XCTAssertTrue(list.showsGroupingButton)
         list.openGrouping()

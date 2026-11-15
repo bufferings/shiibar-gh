@@ -63,6 +63,9 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var textSize = TextSize.base
     /// `dismissed_keep_days`: the m of the Dismissed list's note and of a
     /// Dismiss shown before the daemon answers.
+    /// `confirm_dismiss`: the × on a card asks first (DESIGN.md,
+    /// "Confirming ×").
+    @Published public private(set) var confirmDismiss = true
     @Published public private(set) var keepDays = DismissedText.defaultKeepDays
     /// `auto_dismiss_after_days`: the n of the tooltip of `Dismissed in N
     /// days`.
@@ -213,6 +216,8 @@ public final class AppModel: ObservableObject {
         switch key {
         case TextSize.configKey:
             textSize = TextSize.clamp(value?.intValue ?? value?.stringValue.flatMap { Int64($0) })
+        case DismissedText.confirmKey:
+            if let on = value?.boolValue { confirmDismiss = on }
         case DismissedText.keepDaysKey:
             if let days = value?.intValue, days >= 1 { keepDays = days }
         case DismissedText.autoDismissKey:
@@ -224,7 +229,7 @@ public final class AppModel: ObservableObject {
 
     /// The settings the popovers use, at connection.
     public func loadConfig() async {
-        for key in [TextSize.configKey, DismissedText.keepDaysKey, DismissedText.autoDismissKey] {
+        for key in [TextSize.configKey, DismissedText.keepDaysKey, DismissedText.autoDismissKey, DismissedText.confirmKey] {
             if let value = try? await api.configGet(key) { configChanged(key, value) }
         }
     }
@@ -239,6 +244,21 @@ public final class AppModel: ObservableObject {
             do {
                 let value = try await api.configSet(TextSize.configKey, .int(Int64(wanted)))
                 configChanged(TextSize.configKey, value)
+            } catch {
+                lastError = "\(error)"
+            }
+        }
+    }
+
+    /// `Don't ask again` of the × confirmation: the setting goes off, here
+    /// at once and in the daemon (Settings turns it on again).
+    public func stopConfirmingDismiss() {
+        confirmDismiss = false
+        let api = self.api
+        Task {
+            do {
+                let value = try await api.configSet(DismissedText.confirmKey, .bool(false))
+                configChanged(DismissedText.confirmKey, value)
             } catch {
                 lastError = "\(error)"
             }
@@ -268,8 +288,8 @@ public final class AppModel: ObservableObject {
     // MARK: - Surfaces
 
     /// A surface shows the account's list, open or not (the window keeps
-    /// showing while another app has the focus). The window's search and
-    /// Dismissed list go when it closes.
+    /// showing while another app has the focus). The window's Dismissed
+    /// list goes when it closes; the search text stays (the account's).
     /// `opening`: the surface opens right after (`surfaceOpened`), which
     /// reads the lists once `popover_opened` is answered, so nothing is read
     /// here before it.
@@ -328,7 +348,7 @@ public final class AppModel: ObservableObject {
     /// stay unread (DESIGN.md, "How unread clears").
     public func surfaceClosed(_ surface: Surface, account: String) {
         guard surfaces.isOpen(surface, account: account) else { return }
-        viewModels[account]?.list(surface).closed(clearsSearch: surface == .popover)
+        viewModels[account]?.list(surface).closed(ends: surface == .popover)
         if surfaces.closed(surface, account: account), let login = self.account(account)?.login {
             send { try await $0.popoverClosed(login) }
         }
@@ -471,7 +491,8 @@ public final class AppModel: ObservableObject {
 /// cards with the local operations still on their way applied over them,
 /// and what is saved per account (Group by, Then by, the sort order, the
 /// group orders, the collapsed and expanded sections, the expanded rows of
-/// the cards, the expanded row bodies, the Filters, Compact, Keep on top).
+/// the cards, the expanded row bodies, the Filters, the search texts,
+/// Compact, Keep on top).
 /// What each
 /// surface shows is its `SurfaceListModel`.
 @MainActor
@@ -497,8 +518,13 @@ public final class AccountViewModel: ObservableObject {
     /// The Filter of each tab (DESIGN.md, "Filter"): the account's, shared
     /// by the popover and the window.
     @Published public private(set) var filters: [ListTab: ListFilter] { didSet { revision += 1 } }
-    /// `Filter` open: one value for the tabs, the popover and the window.
-    @Published public private(set) var filterOpen: Bool
+    /// The tabs whose `Filter` is open (DESIGN.md, "Filter"): per tab,
+    /// shared by the popover and the window.
+    @Published public private(set) var filtersOpen: Set<ListTab>
+    /// The search text of each tab and of the Dismissed list (DESIGN.md,
+    /// "Search field"): kept like the Filter, shared by the popover and the
+    /// window.
+    @Published public private(set) var searches: [SearchScope: String]
     /// Compact (DESIGN.md, "Compact"): the cards of the tabs show their
     /// heading only. The account's, shared by the popover and the window.
     @Published public private(set) var compact: Bool
@@ -545,7 +571,8 @@ public final class AccountViewModel: ObservableObject {
         collapsed = app.store.collapsed(account: account)
         expanded = app.store.expanded(account: account)
         filters = app.store.filters(account: account)
-        filterOpen = app.store.filterOpen(account: account)
+        filtersOpen = app.store.filtersOpen(account: account)
+        searches = app.store.searches(account: account)
         compact = app.store.compact(account: account)
         expandedRows = app.store.expandedRows(account: account)
         expandedBodies = app.store.expandedBodies(account: account)
@@ -554,8 +581,8 @@ public final class AccountViewModel: ObservableObject {
 
     public var account: Account? { app.account(accountId) }
 
-    /// The popover's or the window's own state: tab, Dismissed list,
-    /// search, selection and expanded rows.
+    /// The popover's or the window's own state: tab, Dismissed list and
+    /// selection.
     public func list(_ surface: Surface) -> SurfaceListModel {
         if let list = lists[surface] { return list }
         let list = SurfaceListModel(data: self, surface: surface)
@@ -645,10 +672,29 @@ public final class AccountViewModel: ObservableObject {
         lists.values.forEach { $0.filterChanged(tab) }
     }
 
-    public func setFilterOpen(_ open: Bool) {
-        guard filterOpen != open else { return }
-        filterOpen = open
-        app.store.setFilterOpen(open, account: accountId)
+    /// Whether a tab's `Filter` is open.
+    public func filterOpen(_ tab: ListTab) -> Bool {
+        filtersOpen.contains(tab)
+    }
+
+    public func setFilterOpen(_ open: Bool, tab: ListTab) {
+        guard filterOpen(tab) != open else { return }
+        if open { filtersOpen.insert(tab) } else { filtersOpen.remove(tab) }
+        app.store.setFiltersOpen(filtersOpen, account: accountId)
+    }
+
+    /// The search text of a tab or of the Dismissed list.
+    public func search(_ scope: SearchScope) -> String {
+        searches[scope] ?? ""
+    }
+
+    /// A change of a search text, typed on either surface or cleared: both
+    /// show it, and keep their selection among what it shows.
+    public func setSearch(_ text: String, _ scope: SearchScope) {
+        guard search(scope) != text else { return }
+        searches[scope] = text.isEmpty ? nil : text
+        app.store.setSearches(searches, account: accountId)
+        surfacesKeepSelection()
     }
 
     /// The Compact toggle. Turning it on moves a selected row, `+ N more`,
