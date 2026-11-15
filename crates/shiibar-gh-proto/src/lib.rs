@@ -1,7 +1,8 @@
 //! Wire format shared by the daemon and its clients: NDJSON over a Unix socket.
 //!
-//! Spec: docs/DESIGN.md, section "Daemon specification / Wire format", and
-//! docs/tasks/M6.md, "Wire format and CLI".
+//! Spec: docs/DESIGN.md, section "Daemon specification / Wire format". The
+//! 0.5 fields (`pr_mute`, `Ingest::team_only`) and meanings come from
+//! docs/tasks/M7.md, "Scope" (wire format).
 //!
 //! Enums a client receives go through [`Lenient`] so a newer daemon's values do
 //! not break an older client. `Request` and everything inside it stays strict.
@@ -335,6 +336,16 @@ pub enum MuteReason {
     Author,
 }
 
+/// A card's own setting (`pr_mute`). DESIGN.md, "Mute": `unmute` keeps the
+/// card out of Mute though its repository or author is muted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrMute {
+    None,
+    Mute,
+    Unmute,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventColumn {
@@ -431,6 +442,12 @@ pub struct Ingest {
     /// state. DESIGN.md, "API usage", the items below the table.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub search: Vec<SearchHit>,
+    /// Ids of open PRs of `prs` found only by a team mention search (in no
+    /// other search of their owner). Like a closed PR the core does not
+    /// know, such a PR is taken only when one of its events makes a return
+    /// trigger row (DESIGN.md, "API usage").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub team_only: Vec<String>,
 }
 
 /// One PR of a search answer.
@@ -838,8 +855,13 @@ pub struct Card {
     /// Review or Mine, with the section and the position the daemon works
     /// out; `null` when the PR is in neither.
     pub placement: Option<Placement>,
-    /// Why the card is muted; empty when it is not.
+    /// Why the card is muted; empty when it is not. DESIGN.md, "Mute": the
+    /// PR's own Unmute and the account's own PR leave out `repo` and
+    /// `author`.
     pub muted: Vec<Lenient<MuteReason>>,
+    /// The PR's own setting: `none`, `mute` or `unmute`.
+    #[serde(default = "no_pr_mute")]
+    pub pr_mute: Lenient<PrMute>,
     pub dismissed_at: Option<i64>,
     /// When the card leaves the Dismissed list.
     pub dismiss_expires_at: Option<i64>,
@@ -854,8 +876,12 @@ pub struct Card {
     pub rows: Vec<Row>,
 }
 
+fn no_pr_mute() -> Lenient<PrMute> {
+    Lenient::Known(PrMute::None)
+}
+
 /// DESIGN.md, "Wire format": `position` counts from 0 in the section's
-/// order, muted cards last.
+/// order, muted cards included where their rank puts them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Placement {
     pub tab: Lenient<PlacedTab>,

@@ -41,14 +41,20 @@ public protocol ImageLoading: AnyObject, Sendable {
 /// The UI state of DESIGN.md, "Saved state", per account: the last tab of
 /// the popover and of the window, Group by, Then by and the sort order, the
 /// group orders, the collapsed sections and the expanded "+ N more PRs" (by
-/// section key), the repositories seen, the window frame and Keep on top.
+/// section key), the expanded "+ N more" of the cards (by card id), the
+/// expanded row bodies (by row id), Show muted, the repositories seen, the
+/// window frame and Keep on top.
 /// Keys carry the account id (the GitHub user id, numeric, as a string,
 /// which does not change with the login). The search, the selected text and
 /// whether the Dismissed list is open are not kept.
 ///
 /// Every key starts with `v4.`: 0.4 reads none of the UI state of 0.3 and
 /// earlier (DESIGN.md, "Updating from 0.3 and 0.2"), whose keys had no
-/// prefix and stay unread.
+/// prefix and stay unread. 0.5 reads 0.4's keys as they are and adds five
+/// (`expandedRows.`, `expandedBodies.`, `showMuted.`, `compact.`,
+/// `popover.height.`), which start from their defaults: nothing expanded,
+/// Show muted and Compact off, the popover's default height ("Updating
+/// from 0.4").
 public final class UIStateStore {
     private let defaults: UserDefaults
     static let prefix = "v4."
@@ -57,6 +63,11 @@ public final class UIStateStore {
     static let repositoriesKey = prefix + "repositories."
     static let collapsedKey = prefix + "collapsed."
     static let expandedKey = prefix + "expanded."
+    static let expandedRowsKey = prefix + "expandedRows."
+    static let expandedBodiesKey = prefix + "expandedBodies."
+    static let showMutedKey = prefix + "showMuted."
+    static let compactKey = prefix + "compact."
+    static let popoverHeightKey = prefix + "popover.height."
     static let tabKey = prefix + "tab."
     static let windowFrameKey = prefix + "window.frame."
     static let keepOnTopKey = prefix + "window.keepOnTop."
@@ -117,6 +128,52 @@ public final class UIStateStore {
 
     public func setExpanded(_ keys: Set<String>, account: String) {
         defaults.set(keys.sorted(), forKey: Self.expandedKey + account)
+    }
+
+    /// Cards whose rows show past the newest three, by card id.
+    public func expandedRows(account: String) -> Set<String> {
+        Set(defaults.stringArray(forKey: Self.expandedRowsKey + account) ?? [])
+    }
+
+    public func setExpandedRows(_ cards: Set<String>, account: String) {
+        defaults.set(cards.sorted(), forKey: Self.expandedRowsKey + account)
+    }
+
+    /// Rows whose body shows up to 5 lines (`more`), by row id.
+    public func expandedBodies(account: String) -> Set<String> {
+        Set(defaults.stringArray(forKey: Self.expandedBodiesKey + account) ?? [])
+    }
+
+    public func setExpandedBodies(_ rows: Set<String>, account: String) {
+        defaults.set(rows.sorted(), forKey: Self.expandedBodiesKey + account)
+    }
+
+    /// Show muted: off unless turned on.
+    public func showMuted(account: String) -> Bool {
+        defaults.object(forKey: Self.showMutedKey + account) as? Bool ?? false
+    }
+
+    public func setShowMuted(_ on: Bool, account: String) {
+        defaults.set(on, forKey: Self.showMutedKey + account)
+    }
+
+    /// Compact: off unless turned on.
+    public func compact(account: String) -> Bool {
+        defaults.object(forKey: Self.compactKey + account) as? Bool ?? false
+    }
+
+    public func setCompact(_ on: Bool, account: String) {
+        defaults.set(on, forKey: Self.compactKey + account)
+    }
+
+    /// The popover's height set by dragging its bottom edge, in points; nil
+    /// until it is dragged.
+    public func popoverHeight(account: String) -> Double? {
+        defaults.object(forKey: Self.popoverHeightKey + account) as? Double
+    }
+
+    public func setPopoverHeight(_ height: Double, account: String) {
+        defaults.set(height, forKey: Self.popoverHeightKey + account)
     }
 
     /// The tab the popover or the window showed last; All at first.
@@ -244,9 +301,16 @@ public final class AvatarStore: ObservableObject {
     private let loader: ImageLoading
     private let clock: () -> Date
     public let retryAfter: TimeInterval
+    /// The URL schemes loaded: https only, except in the measurement mode,
+    /// which reads files.
+    private let schemes: Set<String>
 
-    public init(loader: ImageLoading, retryAfter: TimeInterval = 300, clock: @escaping () -> Date = Date.init) {
+    public init(
+        loader: ImageLoading, schemes: Set<String> = ["https"], retryAfter: TimeInterval = 300,
+        clock: @escaping () -> Date = Date.init
+    ) {
         self.loader = loader
+        self.schemes = schemes
         self.retryAfter = retryAfter
         self.clock = clock
     }
@@ -258,7 +322,7 @@ public final class AvatarStore: ObservableObject {
 
     public func request(_ url: String?) {
         guard let url, images[url] == nil, !loading.contains(url),
-              let parsed = URL(string: url), parsed.scheme == "https"
+              let parsed = URL(string: url), let scheme = parsed.scheme, schemes.contains(scheme)
         else { return }
         if let failed = failedAt[url], clock().timeIntervalSince(failed) < retryAfter { return }
         loading.insert(url)

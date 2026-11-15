@@ -19,13 +19,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var quitting = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // The tooltip comparison (TooltipProbe.swift): no daemon, no state.
+        if TooltipProbe.enabled {
+            let probe = TooltipProbe()
+            tooltipProbe = probe
+            probe.start()
+            return
+        }
         // The Edit menu's key equivalents make ⌘V and the other text
         // shortcuts work in every text field (see MainMenu).
         NSApp.mainMenu = MainMenu.make(MainMenu.Actions(
             about: { [weak self] in self?.about() },
             settings: { [weak self] in self?.showSettings(.general) }
         ))
-        let bundled = Bundle.main.bundleURL.pathExtension == "app"
+        // The measurement mode (Perf.swift) runs only in a sandbox state
+        // directory, never the real one.
+        // The demo mode (scripts/perf/demo.sh) uses the same sandbox.
+        let perf = PerfMode.sandboxed
+        if perf && PerfMode.stateRoot == nil {
+            FileHandle.standardError.write(Data("shiibar-gh: the measurement and demo modes need SHIIBAR_GH_STATE_DIR\n".utf8))
+            exit(2)
+        }
+        if PerfMode.demo { quitOnSignals() }
+        let bundled = Bundle.main.bundleURL.pathExtension == "app" && !perf
         let root = StateDirectory.root() ?? NSTemporaryDirectory()
         let socket = StateDirectory.socket(root: root)
         let api = SocketDaemonAPI(socketPath: socket)
@@ -38,9 +54,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         } else {
             notifier = NoNotifications()
         }
-        let store = UIStateStore(defaults: .standard)
+        if perf { PerfMode.removeLeftoverSuite() }
+        let store = UIStateStore(defaults: perf ? ScratchDefaults() : .standard)
         model = AppModel(api: api, store: store, opener: WorkspaceOpener(), notifier: notifier, copier: PasteboardCopier())
-        let avatars = AvatarStore(loader: URLSessionImageLoader())
+        let avatars = perf
+            ? AvatarStore(loader: FileImageLoader(), schemes: ["file"])
+            : AvatarStore(loader: URLSessionImageLoader())
         surfaces = SurfaceController(app: model, avatars: avatars) { [weak self] account in
             SurfaceActions(
                 openWindow: account.map { id in { self?.surfaces.openWindow(account: id) } },
@@ -98,9 +117,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
         let helpers = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/shiibar-ghd")
-        let launcher: DaemonLauncher? = bundled && FileManager.default.isExecutableFile(atPath: helpers.path)
+        var launcher: DaemonLauncher? = bundled && FileManager.default.isExecutableFile(atPath: helpers.path)
             ? ProcessDaemonLauncher(executable: helpers, stateRoot: root)
             : nil
+        if perf, let daemon = PerfMode.daemon {
+            launcher = ProcessDaemonLauncher(executable: daemon, stateRoot: root)
+        }
         let supervisor = DaemonSupervisor(socketPath: socket, appVersion: version, launcher: launcher)
         supervisor.onEvent = { [weak self] event in self?.model.handle(event) }
         supervisor.onConnectionChange = { [weak self] connected in
@@ -117,11 +139,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         self.supervisor = supervisor
         supervisor.start()
 
+        if PerfMode.demo {
+            // Used by hand: no notification permission is asked for and no
+            // login item is registered (`launch` is nil without a bundle).
+            return
+        }
+        if perf {
+            // No notification permission is asked for and no login item is
+            // registered (`launch` is nil without a bundle).
+            let runner = PerfRunner(app: model, surfaces: surfaces, steps: PerfSteps.current)
+            perfRunner = runner
+            runner.start()
+            return
+        }
         // Asked at launch, before any notification is scheduled (Apple:
         // "Always call this method before scheduling any local
         // notifications"); macOS prompts only the first time.
         notifier.requestAuthorization()
     }
+
+    private var perfRunner: PerfRunner?
+    private var tooltipProbe: TooltipProbe?
 
     private var didApplyLaunch = false
     private let keychainAlerts = KeychainAlerts()
@@ -234,6 +272,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc func copy(_ sender: Any?) {
         _ = surfaces?.copyFromMenu()
     }
+
+    /// Edit › Select All (no target) when nothing before the app in the
+    /// responder chain takes it: in a popover or window, what ⌘A does there.
+    @objc func selectAll(_ sender: Any?) {
+        _ = surfaces?.selectAllFromMenu()
+    }
+
+    /// The demo mode: Ctrl-C in demo.sh (SIGINT) or SIGTERM quits as the
+    /// menu's Quit does, so the daemon stops.
+    /// The signals are read from a dispatch source and ignored otherwise
+    /// (dispatch_source_create(3), DISPATCH_SOURCE_TYPE_SIGNAL: "a dispatch
+    /// source does not install a signal handler or otherwise alter the
+    /// behavior of signal delivery. Therefore, applications must ignore or
+    /// at least catch any signal that terminates a process").
+    private var signalSources: [DispatchSourceSignal] = []
+
+    private func quitOnSignals() {
+        for number in [SIGINT, SIGTERM] {
+            signal(number, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
+            // Not inside the dispatch block: `terminate` waits for the daemon
+            // in a nested run loop, and the reply comes on the main queue,
+            // which does not run again while one of its blocks is running.
+            source.setEventHandler { RunLoop.main.perform { NSApp.terminate(nil) } }
+            source.resume()
+            signalSources.append(source)
+        }
+    }
+
+
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let supervisor, !quitting else { return .terminateNow }

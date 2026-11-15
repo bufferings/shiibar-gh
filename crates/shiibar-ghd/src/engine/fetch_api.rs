@@ -194,6 +194,7 @@ impl Engine {
                 fetched_at: o.fetched_at,
                 watch_started_at: o.watch_started_at,
                 team_requests: o.events.cell(EventKind::TeamReviewRequested).list,
+                team_mentions: o.events.cell(EventKind::TeamMentioned).list,
             })
             .collect();
         let prs = self
@@ -265,6 +266,13 @@ impl Engine {
                 .values()
                 .filter_map(|r| Some((r.pr_id.clone(), r.owner.clone()?)))
                 .collect(),
+            retry_team_only: fetch
+                .retries
+                .values()
+                .filter(|r| r.owner.is_some() && r.team_only)
+                .map(|r| r.pr_id.clone())
+                .collect(),
+            team_windows: fetch.team_windows.clone(),
             pending_signals: fetch.pending_signals.clone(),
             teams: record.teams.clone(),
             status_interval_minutes: self.data.config.status_interval_minutes,
@@ -444,17 +452,28 @@ impl Engine {
         }
         for (id, since) in outcome.retries_failed {
             let owner = outcome.retry_owners.get(&id).cloned();
+            let team_only = outcome.retry_team_only.contains(&id);
             let entry = fetch.retries.entry(id.clone()).or_insert(RetryRec {
                 pr_id: id,
                 since,
                 failures: 0,
                 owner: None,
+                team_only: false,
             });
             entry.since = entry.since.min(since);
             entry.failures += 1;
             if owner.is_some() {
                 entry.owner = owner;
+                entry.team_only = team_only;
             }
+        }
+        for id in &outcome.retry_untagged {
+            if let Some(entry) = fetch.retries.get_mut(id) {
+                entry.team_only = false;
+            }
+        }
+        if let Some(windows) = outcome.team_windows {
+            fetch.team_windows = windows;
         }
         if let Some(pending) = outcome.pending_signals {
             fetch.pending_signals = pending;

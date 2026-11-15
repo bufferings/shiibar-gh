@@ -71,6 +71,10 @@ public enum Palette {
     public static let purpleBackground = Shade(0xEDE6FA, 0x352A4A)
     public static let gray = Shade(0x9A9AA0, 0x7C7C82)
     public static let waiting = Shade(0x6E6E76, 0x9A9AA2)
+    /// The status clock (waiting) and the None dash of a card's status
+    /// icons.
+    public static let statusClock = Shade(0x8A8A92, 0x8E8E96)
+    public static let statusNone = Shade(0xB0B0B8, 0x6A6A72)
     public static let infoIcon = Shade(0x0A5FC2, 0x6AA8FF)
     public static let infoIconBackground = Shade(0xE4EEFB, 0x1F3047)
     public static let botIcon = Shade(0x55555B, 0xB4B4BA)
@@ -96,12 +100,16 @@ public enum Palette {
     public static let mutedTitle = Shade(0x8A8A90, 0x7E7E84)
     public static let mutedText = Shade(0x9A9AA0, 0x74747A)
     public static let mutedIcon = Shade(0xAEAEB4, 0x626268)
-    /// The grip ⋮⋮ (Main.html `.grip`).
+    /// The ≡ handle of a row of the Grouping sheet (Main.html `.gsheet .grow
+    /// .h`). Cards have no grip since 0.5.
     public static let grip = Shade(0xA6A6AC, 0x6E6E74)
-    /// The usage bar (Main.html `.apibar`).
+    /// The usage bar of the header (Main.html `.batt`): the track, the
+    /// fill, and the percentage over them; in the warning colors from 80%.
+    /// The track is also the gray circle of Refresh in progress.
     public static let usageTrack = Shade(0xDCDCE0, 0x3E3F44)
-    public static let usageFill = Shade(0x8A8A90, 0x9A9AA0)
-    public static let usageWarnFill = Shade(0xC98A00, 0xE6B04D)
+    public static let usageFill = Shade(0xA9A9AF, 0x5E5F65)
+    public static let usageWarnFill = Shade(0xE0A526, 0x9A6E10)
+    public static let usageWarnText = Shade(0x6B4E00, 0xF2D37A)
     public static let avatarFill = Shade(0xEBEBEB, 0x3A3A3F)
     public static let avatarBorder = Shade(0xD9D9D9, 0x4A4A50)
     public static let onColor = Shade(0xFFFFFF, 0xFFFFFF)

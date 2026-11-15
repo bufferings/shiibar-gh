@@ -116,7 +116,7 @@ public struct HeaderButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(HoverButtonStyle())
-        .help(label)
+        .quickHelp(label)
         .accessibilityLabel(label)
     }
 }
@@ -203,7 +203,7 @@ public enum IconMenu {
     }
 
     public final class Target: NSObject {
-        let action: () -> Void
+        public var action: () -> Void
 
         public init(_ action: @escaping () -> Void) {
             self.action = action

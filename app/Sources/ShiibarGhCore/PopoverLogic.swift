@@ -16,6 +16,8 @@ public enum SelectionItem: Equatable, Hashable {
     case moreRows(card: String)
     /// `Older activity on GitHub` at the end of a card's expanded rows.
     case olderActivity(card: String)
+    /// `Show less` at the very end of a card's expanded rows.
+    case lessRows(card: String)
     /// "+ N more PRs" or "Show less" of a section.
     case more(String)
 
@@ -26,6 +28,7 @@ public enum SelectionItem: Equatable, Hashable {
         case .row(let id, _): return "row:" + id
         case .moreRows(let card): return "more-rows:" + card
         case .olderActivity(let card): return "older:" + card
+        case .lessRows(let card): return "less-rows:" + card
         case .more(let key): return "more:" + key
         }
     }
@@ -35,14 +38,23 @@ public enum SelectionItem: Equatable, Hashable {
     public var card: String? {
         switch self {
         case .header(let card), .row(_, let card): return card
-        case .section, .moreRows, .olderActivity, .more: return nil
+        case .section, .moreRows, .olderActivity, .lessRows, .more: return nil
+        }
+    }
+
+    /// The card of an item inside a card: its heading, a row, "+ N more",
+    /// `Older activity on GitHub` or `Show less`.
+    public var owningCard: String? {
+        switch self {
+        case .header(let card), .row(_, let card), .moreRows(let card), .olderActivity(let card), .lessRows(let card): return card
+        case .section, .more: return nil
         }
     }
 }
 
 public enum Key: Equatable {
     case up, down, open, markAllRead, find
-    /// ⌘C: the selected text, else the link of the selected item.
+    /// ⌘C: the link of the selected item.
     case copy
     /// ⌫: Dismiss, or Restore in the Dismissed list.
     case delete
@@ -54,6 +66,12 @@ public enum Key: Equatable {
     case tab(ListTab)
     /// Esc in the Dismissed list.
     case back
+    /// ⇧↑ and ⇧↓: the selection grows (or shrinks) by a card.
+    case extend(up: Bool)
+    /// ⌘A: every card shown.
+    case selectAll
+    /// Esc in a tab while something is selected.
+    case clearSelection
 }
 
 /// What a key, a click or a menu item asks for. The app carries it out.
@@ -61,10 +79,6 @@ public enum PopoverAction: Equatable {
     /// Open the URL; `read` is the row opened, which is read too.
     case open(String, read: String?)
     case copyLink(String)
-    /// Copy this text (⌘C over selected text).
-    case copyText(String)
-    /// `Copy` of the right-click menu: the text selected in the surface.
-    case copySelectedText
     case place(PlaceMove)
     case dismiss(card: String)
     case restore(card: String)
@@ -76,18 +90,19 @@ public enum PopoverAction: Equatable {
     case toggleMore(String)
     /// "+ N more" in a card.
     case expandRows(card: String)
+    /// `Show less` in a card: back to the newest three rows.
+    case collapseRows(card: String)
+    /// `more` or `less` of a row's body. The selection and the unread state
+    /// stay.
+    case toggleBody(row: String)
     /// The placement tag: open that tab with the card selected.
     case showInTab(card: String)
     case markAllRead
-}
-
-/// The text selected with the mouse in a surface's cards and rows. The app
-/// keeps it in AppKit text views; the logic only reads and clears it.
-@MainActor
-public protocol TextSelecting: AnyObject {
-    /// The selected text; nil when nothing is selected.
-    var selectedText: String? { get }
-    func clearSelection()
+    /// An item of the multi-card menu, on every selected card.
+    case multi(MultiOperation)
+    /// The links of the selected cards, one a line (the multi-card menu's
+    /// `Copy link`, ⌘C).
+    case copyLinks
 }
 
 public struct KeyHint: Equatable {
@@ -119,20 +134,25 @@ public struct ListView: Equatable {
     public var sections: [SectionLayout]
     /// The Dismissed list's cards after its search.
     public var dismissed: [Card]
-    /// Cards whose rows are expanded.
+    /// Cards whose rows are expanded (the account's, shared by the popover
+    /// and the window).
     public var expandedRows: Set<String>
     /// Every card of the account, before the search: the whole section a
     /// reorder moves in.
     public var cards: [Card]
+    /// Compact (DESIGN.md, "Compact"): the cards show their heading only.
+    public var compact: Bool
 
     public init(
-        tab: ListTab?, sections: [SectionLayout] = [], dismissed: [Card] = [], expandedRows: Set<String> = [], cards: [Card] = []
+        tab: ListTab?, sections: [SectionLayout] = [], dismissed: [Card] = [], expandedRows: Set<String> = [], cards: [Card] = [],
+        compact: Bool = false
     ) {
         self.tab = tab
         self.sections = sections
         self.dismissed = dismissed
         self.expandedRows = expandedRows
         self.cards = cards
+        self.compact = compact
     }
 
     public var isDismissed: Bool { tab == nil }
@@ -168,9 +188,12 @@ public enum PopoverLogic {
             for card in section.cards {
                 let expanded = view.expandedRows.contains(card.id)
                 items.append(.header(card: card.id))
+                // Compact: no rows and no footers in a card.
+                if view.compact { continue }
                 items += Listing.visibleRows(card, expanded: expanded).map { .row(id: $0.id, card: card.id) }
                 if Listing.moreRows(card, expanded: expanded) != nil { items.append(.moreRows(card: card.id)) }
                 if Listing.showsOlderActivity(card, expanded: expanded) { items.append(.olderActivity(card: card.id)) }
+                if Listing.showsLessRows(card, expanded: expanded) { items.append(.lessRows(card: card.id)) }
             }
             if section.foldLine != nil { items.append(.more(section.key)) }
         }
@@ -224,13 +247,15 @@ public enum PopoverLogic {
                 return view.card(id) == nil ? nil : .expandRows(card: id)
             case .olderActivity(let id):
                 return view.card(id).map { .open($0.0.url, read: nil) }
+            case .lessRows(let id):
+                return view.card(id) == nil ? nil : .collapseRows(card: id)
             }
         case .delete:
             guard let id = selection.card, let (card, _) = view.card(id) else { return nil }
             return view.isDismissed ? .restore(card: card.id) : .dismiss(card: card.id)
         case .reorder(let up):
             guard !view.isDismissed, view.tab != .all, let id = selection.card, let (card, section) = view.card(id),
-                  let section, let move = CardDrop.reorder(card, up: up, shown: section.matching, cards: view.cards)
+                  let section, let move = CardDrop.reorder(card, up: up, refs: section.matching)
             else { return nil }
             return .place(move)
         case .moveTo(let target):
@@ -240,6 +265,17 @@ public enum PopoverLogic {
         default:
             return nil
         }
+    }
+
+    /// The hint line while several cards are selected (DESIGN.md,
+    /// "Keyboard"): `⌥↑↓ Reorder` only when it moves them, `D T W Move to`
+    /// in Review only.
+    public static func multipleHints(tab: ListTab, canReorder: Bool) -> [KeyHint] {
+        var hints = [moveHint]
+        if canReorder { hints.append(KeyHint("\u{2325}\u{2191}\u{2193}", "Reorder")) }
+        if tab == .review { hints.append(KeyHint("D T W", "Move to")) }
+        hints += [KeyHint("\u{232B}", "Dismiss"), KeyHint("esc", "Clear"), markAllHint, searchHint]
+        return hints
     }
 
     static let markAllHint = KeyHint("\u{21E7}R", "Mark all read")
@@ -268,20 +304,25 @@ public enum PopoverLogic {
             hints.append(KeyHint("\u{23CE}", less ? "Show less" : "Expand"))
         case .moreRows?:
             hints.append(KeyHint("\u{23CE}", "Expand"))
-        case .olderActivity?, .row?:
+        case .lessRows?:
+            hints.append(KeyHint("\u{23CE}", "Show less"))
+        case .olderActivity?:
+            hints.append(openHint)
+        case .row?:
             hints.append(openHint)
         case .header(let id)?:
             hints.append(openHint)
             if let (card, _) = view.card(id), view.tab != .all, let placement = card.placement {
-                if !card.isMuted, !placement.isDone { hints.append(KeyHint("\u{2325}\u{2191}\u{2193}", "Reorder")) }
+                if !placement.isDone { hints.append(KeyHint("\u{2325}\u{2191}\u{2193}", "Reorder")) }
                 if view.tab == .review { hints.append(KeyHint("D T W", "Move to")) }
             }
             hints.append(KeyHint("\u{232B}", "Dismiss"))
         }
-        return hints + [markAllHint, searchHint]
+        hints += [markAllHint, searchHint]
+        return hints
     }
 
-    /// The link ⌘C copies when no text is selected (DESIGN.md, "Keyboard"):
+    /// The link ⌘C copies (DESIGN.md, "Keyboard"):
     /// the PR of a card header, the place of a row; nothing for the rest.
     public static func link(for selection: SelectionItem?, view: ListView) -> String? {
         switch selection {
@@ -296,15 +337,13 @@ public enum PopoverLogic {
     /// The right-click menu of a card header, a row or a card of the
     /// Dismissed list (DESIGN.md, "Keyboard", the mouse table); items that
     /// do not apply are left out. `login` is the account's, for "your own
-    /// rows"; `mutedUsers` tells Mute from Unmute for a row's actor.
+    /// rows"; `mutes` tell Mute from Unmute for a repository or a user (nil
+    /// before they are read: the cards tell what they can).
     public static func menu(
-        for item: SelectionItem, view: ListView, hasTextSelection: Bool, login: String, mutedUsers: [String] = []
+        for item: SelectionItem, view: ListView, login: String, mutes: Mutes? = nil
     ) -> [MenuEntry?] {
         func head(_ url: String, read: String?) -> [MenuEntry?] {
-            var entries: [MenuEntry?] = [MenuEntry("Open on GitHub", .open(url, read: read))]
-            if hasTextSelection { entries.append(MenuEntry("Copy", .copySelectedText)) }
-            entries.append(MenuEntry("Copy link", .copyLink(url)))
-            return entries
+            [MenuEntry("Open on GitHub", .open(url, read: read)), MenuEntry("Copy link", .copyLink(url))]
         }
         switch item {
         case .header(let id):
@@ -315,19 +354,19 @@ public enum PopoverLogic {
             var entries = head(card.url, read: nil)
             let placing = placementEntries(card)
             if !placing.isEmpty { entries += [nil] + placing }
-            entries += [nil] + muteEntries(card, login: login)
+            entries += [nil] + muteEntries(card, login: login, mutes: mutes ?? Mutes.inferred(from: view.cards))
             entries += [nil, MenuEntry("Dismiss", .dismiss(card: card.id)), nil, MenuEntry("Mark all as read", .markAllRead)]
             return entries
         case .row(let id, _):
             guard let (row, _) = view.row(id) else { return [] }
             var entries = head(row.url, read: row.id)
             if let actor = row.actor, !actor.isEmpty, actor.lowercased() != login.lowercased() {
-                let muted = mutedUsers.contains { $0.lowercased() == actor.lowercased() }
+                let muted = (mutes ?? Mutes.inferred(from: view.cards)).contains(.user, actor)
                 entries += [nil, MenuEntry((muted ? "Unmute @" : "Mute @") + actor, muted ? .unmute(.user, actor) : .mute(.user, actor))]
             }
             entries += [nil, MenuEntry("Mark all as read", .markAllRead)]
             return entries
-        case .section, .moreRows, .olderActivity, .more:
+        case .section, .moreRows, .olderActivity, .lessRows, .more:
             return []
         }
     }
@@ -360,22 +399,25 @@ public enum PopoverLogic {
         }
     }
 
-    /// Mute this pull request, Mute owner/repo, Mute @author; each reads
-    /// Unmute … while that is muted. Your own PR offers no `Mute @<you>`
-    /// (DESIGN.md, the mouse table), only its Unmute if you muted yourself
-    /// elsewhere.
-    static func muteEntries(_ card: Card, login: String = "") -> [MenuEntry?] {
+    /// `Mute this pull request` on a card that is not muted, `Unmute this
+    /// pull request` on a muted one, whatever mutes it (DESIGN.md, "Mute and
+    /// unmute"); `Mute owner/repo` and `Mute @author`, each reading `Unmute
+    /// …` while that name is muted (your own PR is not muted by them, so
+    /// the account's mutes tell, not the card). Your own PR offers no `Mute
+    /// @<you>`, only its Unmute if you muted yourself elsewhere.
+    static func muteEntries(_ card: Card, login: String = "", mutes: Mutes = Mutes()) -> [MenuEntry?] {
         var entries: [MenuEntry?] = []
         let repo = Listing.repository(card.pr)
-        entries.append(card.isMuted(for: .pr)
+        entries.append(card.isMuted
             ? MenuEntry("Unmute this pull request", .unmute(.pr, card.pr))
             : MenuEntry("Mute this pull request", .mute(.pr, card.pr)))
-        entries.append(card.isMuted(for: .repo)
+        entries.append(mutes.contains(.repo, repo)
             ? MenuEntry("Unmute " + repo, .unmute(.repo, repo))
             : MenuEntry("Mute " + repo, .mute(.repo, repo)))
+        let authorMuted = mutes.contains(.user, card.author)
         let mine = card.authoredByMe || (!login.isEmpty && card.author.lowercased() == login.lowercased())
-        if !card.author.isEmpty, !mine || card.isMuted(for: .author) {
-            entries.append(card.isMuted(for: .author)
+        if !card.author.isEmpty, !mine || authorMuted {
+            entries.append(authorMuted
                 ? MenuEntry("Unmute @" + card.author, .unmute(.user, card.author))
                 : MenuEntry("Mute @" + card.author, .mute(.user, card.author)))
         }
@@ -467,6 +509,13 @@ public enum SurfaceRules {
 
     public static func noAccountsContent(dbUnreadable: Bool) -> NoAccountsContent {
         dbUnreadable ? .unreadable : .noAccounts
+    }
+
+    /// What a click on an account's menu bar icon (or on a summary
+    /// notification) shows: the window, brought to the front with the
+    /// focus, while it is open; else the popover (DESIGN.md, "Screens").
+    public static func surfaceToShow(windowOpen: Bool) -> Surface {
+        windowOpen ? .window : .popover
     }
 
     /// The shiibar-gh icon shows when there is no account (DESIGN.md,

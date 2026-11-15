@@ -25,13 +25,13 @@ func row(
 func card(
     _ id: String, pr: String? = nil, owner: String = "o2", author: String = "al", authored: Bool = false, assigned: Bool = false,
     reviewRequested: Bool = false, state: StateLabel = .open, placement: Placement? = nil, muted: [MuteReason] = [],
-    added: Int64 = T0, updated: Int64 = T0, rows: [Row] = [], dismissedAt: Int64? = nil, expires: Int64? = nil, older: Bool = false
+    prMute: PrMute = .none, added: Int64 = T0, updated: Int64 = T0, rows: [Row] = [], dismissedAt: Int64? = nil, expires: Int64? = nil, older: Bool = false
 ) -> Card {
     let key = pr ?? "example-org/api#\(id)"
     return Card(
         id: id, pr: key, owner: owner, title: "Title \(id)", url: "https://github.com/p/\(id)", author: author,
         authoredByMe: authored, assignedToMe: assigned, reviewRequested: reviewRequested, stateLabel: state,
-        addedAt: added, updatedAt: updated, rows: rows, placement: placement, muted: muted,
+        addedAt: added, updatedAt: updated, rows: rows, placement: placement, muted: muted, prMute: prMute,
         dismissedAt: dismissedAt, dismissExpiresAt: expires, olderRows: older
     )
 }
@@ -45,8 +45,9 @@ func mine(_ section: PlacementSection = .main, _ position: Int) -> Placement {
 }
 
 /// The board's Review tab, Mine and All in small:
-/// - Review: Doing R1; Todo T1–T5, then T6 and T7 muted (T7 has an unread
-///   mention); Waiting W1; Done D1 (merged).
+/// - Review: Doing R1; Todo T1–T5, then T6 (muted for its author renovate)
+///   and T7 (muted by itself and for renovate; it has an unread mention);
+///   Waiting W1; Done D1 (merged).
 /// - Mine: M1 (authored, unread blue row), M2 (assigned), Done M3 (closed).
 /// - All only: N1 (acme-corp, gray unread row by a muted user).
 /// - Dismissed: X1 (older), X2 (newer, merged).
@@ -67,7 +68,8 @@ func sampleCards() -> [Card] {
         card("T5", pr: "example-org/web#219", author: "jo", placement: review(.todo, 4), updated: T0 - 5),
         card("T6", pr: "example-org/web#241", author: "renovate", placement: review(.todo, 5), muted: [.author], updated: T0 - 4,
              rows: [row("t6", pr: "example-org/web#241", kind: .teamReviewRequested, text: "for frontend team", unread: true, muted: true)]),
-        card("T7", pr: "example-org/api#402", author: "renovate", placement: review(.todo, 6), muted: [.author, .repo], updated: T0 - 3,
+        card("T7", pr: "example-org/api#402", author: "renovate", placement: review(.todo, 6), muted: [.pr, .author], prMute: .mute,
+             updated: T0 - 3,
              rows: [row("t7", pr: "example-org/api#402", kind: .mentioned, text: "needs a manual step", actor: "renovate", unread: true)]),
         card("W1", pr: "acme-corp/infra#61", owner: "o3", author: "dz", placement: review(.waiting, 0), updated: T0 - 200),
         card("D1", pr: "acme-corp/infra#58", owner: "o3", author: "mk", state: .merged, placement: review(.done, 0), updated: T0 - 300),
@@ -86,16 +88,24 @@ func sampleCards() -> [Card] {
 func layout(
     _ tab: ListTab, options: ListOptions = ListOptions(), cards: [Card] = sampleCards(), orders: GroupOrders = [:],
     repositories: [String]? = nil, collapsed: Set<String> = [], expanded: Set<String> = [], search: String = "",
-    account: Account = sampleAccount()
+    account: Account = sampleAccount(), showMuted: Bool = true
 ) -> [SectionLayout] {
     Listing.sections(
         tab: tab, cards: cards, account: account, options: options, orders: orders,
         repositories: repositories ?? Listing.knownRepositories([], cards: cards),
-        folding: Listing.Folding(collapsed: collapsed, expanded: expanded, search: search)
+        folding: Listing.Folding(collapsed: collapsed, expanded: expanded, search: search, showMuted: showMuted)
     )
 }
 
-func view(_ tab: ListTab?, cards: [Card] = sampleCards(), options: ListOptions = ListOptions(), expandedRows: Set<String> = []) -> ListView {
+/// The tests that do not name Show muted see the muted cards (Show muted
+/// on), as the boards of the muted cards do.
+func view(
+    _ tab: ListTab?, cards: [Card] = sampleCards(), options: ListOptions = ListOptions(), expandedRows: Set<String> = [],
+    showMuted: Bool = true, search: String = ""
+) -> ListView {
     guard let tab else { return ListView(tab: nil, dismissed: Listing.dismissed(cards), expandedRows: expandedRows, cards: cards) }
-    return ListView(tab: tab, sections: layout(tab, options: options, cards: cards), expandedRows: expandedRows, cards: cards)
+    return ListView(
+        tab: tab, sections: layout(tab, options: options, cards: cards, search: search, showMuted: showMuted), expandedRows: expandedRows,
+        cards: cards
+    )
 }

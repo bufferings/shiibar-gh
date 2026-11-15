@@ -47,6 +47,11 @@ pub struct Plan {
     pub retries: BTreeMap<String, i64>,
     /// The owner id of each retry of a PR the core does not know.
     pub retry_owners: BTreeMap<String, String>,
+    /// Those of them found only by a team mention search.
+    pub retry_team_only: BTreeSet<String>,
+    /// The closed window (T) of each team mention search that failed and
+    /// has not succeeded since, by `<owner id> <org>/<team>` (lowercase).
+    pub team_windows: BTreeMap<String, i64>,
     pub pending_signals: BTreeSet<String>,
     pub teams: Vec<TeamRec>,
     pub status_interval_minutes: i64,
@@ -91,6 +96,9 @@ pub struct OwnerPlan {
     /// The List of Review requested to my team: off searches with
     /// `user-review-requested:@me`.
     pub team_requests: bool,
+    /// The List of My team mentioned: on, an organization owner searches
+    /// the mentions of each of the account's teams in it.
+    pub team_mentions: bool,
 }
 
 impl OwnerPlan {
@@ -190,6 +198,13 @@ pub struct Outcome {
     pub retries_failed: Vec<(String, i64)>,
     /// The owner id of each PR of `retries_failed` the core does not know.
     pub retry_owners: BTreeMap<String, String>,
+    /// Those of them found only by a team mention search.
+    pub retry_team_only: BTreeSet<String>,
+    /// PRs fetched again as team-only that another search found: no longer
+    /// team-only.
+    pub retry_untagged: BTreeSet<String>,
+    /// The team windows after the run; `None` keeps them.
+    pub team_windows: Option<BTreeMap<String, i64>>,
     pub pending_signals: Option<BTreeSet<String>>,
     pub notif_last_modified: Option<String>,
     pub notif_since: Option<String>,

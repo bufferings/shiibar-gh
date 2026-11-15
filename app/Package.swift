@@ -31,5 +31,12 @@ let package = Package(
             dependencies: ["ShiibarGhCore"],
             path: "Tests/ShiibarGhCoreTests"
         ),
+        // The list's geometry and accessibility (ShiibarGhApp, ListCells.swift):
+        // no window, no daemon.
+        .testTarget(
+            name: "ShiibarGhAppTests",
+            dependencies: ["ShiibarGhApp", "ShiibarGhCore"],
+            path: "Tests/ShiibarGhAppTests"
+        ),
     ]
 )

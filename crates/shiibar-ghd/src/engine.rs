@@ -113,6 +113,9 @@ pub struct Engine {
     failures: BTreeMap<String, Failures>,
     /// When each kind of fetch is due next, per account. Never saved.
     timers: BTreeMap<String, Timers>,
+    /// The `done_seq` every card the ingest in progress moves to Done
+    /// shares (DESIGN.md, "Review": one fetch keeps the order of the keys).
+    done_batch: Option<i64>,
 }
 
 /// DESIGN.md, "Fetch success and failure": the account's failed runs since
@@ -231,6 +234,7 @@ impl Engine {
             keychain: proto::KeychainState::Ok,
             failures: BTreeMap::new(),
             timers,
+            done_batch: None,
         }
     }
 
@@ -442,16 +446,32 @@ impl Engine {
         self.data.accounts.get(account).map(|a| &a.mutes)
     }
 
-    /// DESIGN.md, "Mute": the PR, its repository or its author is muted.
-    fn mute_reasons(&self, pr: &PrRec) -> Vec<proto::MuteReason> {
-        let Some(mutes) = self.mutes_of(&pr.account) else {
-            return Vec::new();
-        };
-        let mut out = Vec::new();
+    /// The PR's own setting (DESIGN.md, "Mute"): Mute while its name is in
+    /// the account's Mute list, else Unmute when its record says so.
+    pub(crate) fn pr_mute(&self, pr: &PrRec) -> PrMute {
         let key = pr.display_key();
-        if mutes.prs.iter().any(|m| m.eq_ignore_ascii_case(&key)) {
-            out.push(proto::MuteReason::Pr);
+        let listed = self
+            .mutes_of(&pr.account)
+            .is_some_and(|m| m.prs.iter().any(|name| name.eq_ignore_ascii_case(&key)));
+        if listed {
+            PrMute::Mute
+        } else if pr.unmuted {
+            PrMute::Unmute
+        } else {
+            PrMute::None
         }
+    }
+
+    /// The repository or author Mute that applies to the PR when its own
+    /// setting is none: never to the account's own PR (DESIGN.md, "Mute").
+    fn others_mute(&self, pr: &PrRec) -> Vec<proto::MuteReason> {
+        let mut out = Vec::new();
+        if self.authored_by_me(pr) {
+            return out;
+        }
+        let Some(mutes) = self.mutes_of(&pr.account) else {
+            return out;
+        };
         let repo = pr.repo_name();
         if mutes.repos.iter().any(|m| m.eq_ignore_ascii_case(&repo)) {
             out.push(proto::MuteReason::Repo);
@@ -460,6 +480,21 @@ impl Engine {
             out.push(proto::MuteReason::Author);
         }
         out
+    }
+
+    /// DESIGN.md, "Mute", the decision: the PR's own Mute, or, with its own
+    /// setting none, the Mute of its repository or author unless the
+    /// account authored it. The wire `muted` lists these reasons.
+    fn mute_reasons(&self, pr: &PrRec) -> Vec<proto::MuteReason> {
+        match self.pr_mute(pr) {
+            PrMute::Unmute => Vec::new(),
+            PrMute::Mute => {
+                let mut out = vec![proto::MuteReason::Pr];
+                out.extend(self.others_mute(pr));
+                out
+            }
+            PrMute::None => self.others_mute(pr),
+        }
     }
 
     fn card_muted(&self, pr: &PrRec) -> bool {
@@ -473,17 +508,22 @@ impl Engine {
     }
 
     /// DESIGN.md, "Mute": every row of a muted card, and the rows a muted
-    /// user caused, except Mentioned.
+    /// user caused (in the account's own PRs too), except the mentions of
+    /// the account and of its team. A PR whose own setting is Unmute has no
+    /// muted user rows.
     fn row_muted(&self, row: &RowRec, pr: &PrRec) -> bool {
-        if row.kind == RowKind::Mentioned {
+        if row.kind.is_mention() {
             return false;
         }
-        self.card_muted(pr)
-            || (row.kind.has_actor()
-                && row
-                    .actor
-                    .as_deref()
-                    .is_some_and(|a| self.user_muted(&pr.account, a)))
+        if self.card_muted(pr) {
+            return true;
+        }
+        self.pr_mute(pr) != PrMute::Unmute
+            && row.kind.has_actor()
+            && row
+                .actor
+                .as_deref()
+                .is_some_and(|a| self.user_muted(&pr.account, a))
     }
 
     /// A row the card shows: its kind's List is on.
@@ -634,6 +674,11 @@ impl Engine {
                 .into_iter()
                 .map(Lenient::Known)
                 .collect(),
+            pr_mute: Lenient::Known(match self.pr_mute(pr) {
+                PrMute::None => proto::PrMute::None,
+                PrMute::Mute => proto::PrMute::Mute,
+                PrMute::Unmute => proto::PrMute::Unmute,
+            }),
             dismissed_at: pr.dismissed_at,
             dismiss_expires_at: pr.dismissed_at.map(|at| at.saturating_add(keep)),
             auto_dismiss_at: self.auto_dismiss_at(pr),
@@ -879,6 +924,8 @@ impl Engine {
             return Err(not_found(format!("account {account}")));
         }
         self.clock = now.clone();
+        self.done_batch = None;
+        let team_only: BTreeSet<String> = ingest.team_only.iter().cloned().collect();
         let incoming: BTreeSet<&str> = ingest.prs.iter().map(|p| p.id.as_str()).collect();
         let referenced = ingest
             .events
@@ -928,7 +975,8 @@ impl Engine {
         // owner's watch started: the review requests still open become rows.
         let mut first_fetch = BTreeSet::new();
         // PRs that show only through a return trigger: closed ones the core
-        // did not know, and those with a Dismiss record.
+        // did not know, those with a Dismiss record, and open ones only a
+        // team mention search found.
         let mut quiet: BTreeSet<String> = BTreeSet::new();
         let mut prs = ingest.prs;
         // DESIGN.md, "Mine": several new PRs are added oldest first.
@@ -958,8 +1006,12 @@ impl Engine {
                     self.apply_pr(account, incoming, now);
                 }
                 None => {
+                    // DESIGN.md, "API usage": a closed PR, a PR with a
+                    // Dismiss record, and an open PR found only by a team
+                    // mention search show only through a return trigger.
                     let candidate = self.data.records.contains_key(&key)
-                        || incoming.state != proto::PrState::Open;
+                        || incoming.state != proto::PrState::Open
+                        || team_only.contains(&incoming.id);
                     if candidate {
                         let own: Vec<&IngestEvent> =
                             events.iter().filter(|e| e.pr_id == incoming.id).collect();
@@ -1003,6 +1055,37 @@ impl Engine {
             .map(|p| p.key.clone())
             .collect();
         quiet.extend(dismissed_before.iter().cloned());
+        // DESIGN.md, "Dismiss": a dismissed PR's status is not fetched, but
+        // its events tell a merge or close (and a reopen) of this fetch
+        // before any of its rows is made: a mention or reply that brings it
+        // back is then known to come after the close.
+        let mut closed_by_events: BTreeMap<String, bool> = BTreeMap::new();
+        for event in &events {
+            let key = join_key(account, &event.pr_id);
+            if !dismissed_before.contains(&key) {
+                continue;
+            }
+            match event.kind {
+                proto::IngestKind::Merged | proto::IngestKind::Closed => {
+                    closed_by_events.insert(key, true);
+                }
+                proto::IngestKind::Reopened => {
+                    closed_by_events.insert(key, false);
+                }
+                _ => {}
+            }
+        }
+        for (key, closed) in closed_by_events {
+            if self
+                .data
+                .prs
+                .get(&key)
+                .is_some_and(|p| p.seen_closed != closed)
+                && let Some(pr) = self.pr_mut(&key)
+            {
+                pr.seen_closed = closed;
+            }
+        }
         for event in events {
             self.apply_event(account, event, &first_fetch, &quiet, &dismissed_before);
         }
@@ -1031,13 +1114,41 @@ impl Engine {
                 }
             }
         }
+        self.done_batch = None;
         self.settle(now);
         Ok(())
     }
 
-    /// DESIGN.md, "API usage": a closed PR the core does not know, or a PR
-    /// with only a Dismiss record, is taken only when one of its events makes
-    /// a return trigger row (List on, inside the event window).
+    /// The `done_seq` of a card that enters Done now: larger than any so
+    /// far, so it goes before the cards that entered Done in the same
+    /// second (DESIGN.md, "Review").
+    pub(super) fn next_done_seq(&self) -> i64 {
+        self.data
+            .prs
+            .values()
+            .map(|p| p.done_seq)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1)
+    }
+
+    /// The `done_seq` of the cards this ingest moves to Done: one value for
+    /// them all, so the same time keeps the order of their keys.
+    fn batch_done_seq(&mut self) -> i64 {
+        match self.done_batch {
+            Some(seq) => seq,
+            None => {
+                let seq = self.next_done_seq();
+                self.done_batch = Some(seq);
+                seq
+            }
+        }
+    }
+
+    /// DESIGN.md, "API usage": a closed PR the core does not know, a PR with
+    /// only a Dismiss record, or an open PR found only by a team mention
+    /// search, is taken only when one of its events makes a return trigger
+    /// row (List on, inside the event window).
     fn would_return(
         &self,
         account: &str,
@@ -1080,6 +1191,7 @@ impl Engine {
         if closed {
             record.closed_at = Some(now.at);
             record.done_at = Some(now.at);
+            record.done_seq = self.batch_done_seq();
         }
         record.settled = settled_of(record.checks);
         record.settled_head = record.head_oid.clone();
@@ -1107,7 +1219,13 @@ impl Engine {
         };
         let dismissed = existing.dismissed_at.is_some();
         let mut record = pr_from(account, p, Some(&existing));
-        let was_open = existing.state == PrState::Open;
+        // A card that came back from Dismiss known closed (`seen_closed`)
+        // counts as closed: a status saying closed is the detection that
+        // moves it to Done, and one saying open is a reopen.
+        let was_open = existing.state == PrState::Open && (dismissed || !existing.seen_closed);
+        if !dismissed {
+            record.seen_closed = false;
+        }
         let open = record.state == PrState::Open;
         if !open && (was_open || record.closed_at.is_none()) {
             // DESIGN.md, "Review": the detection moves the card to Done
@@ -1116,6 +1234,7 @@ impl Engine {
             // move nothing, so a card the user moved out of Done stays out.
             record.closed_at = Some(now.at);
             record.done_at = Some(now.at);
+            record.done_seq = self.batch_done_seq();
         }
         if open && !was_open {
             // A reopen takes a card in Done back to the section and rank it
@@ -1278,22 +1397,8 @@ impl Engine {
         if while_dismissed {
             return;
         }
-        if quiet_pr {
-            let dismissed = self
-                .data
-                .prs
-                .get(&key)
-                .is_some_and(|p| p.dismissed_at.is_some());
-            if dismissed && let Some(pr) = self.pr_mut(&key) {
-                match kind {
-                    RowKind::Merged | RowKind::Closed => pr.seen_closed = true,
-                    RowKind::Reopened => pr.seen_closed = false,
-                    _ => {}
-                }
-            }
-            if !kind.is_return_trigger() {
-                return;
-            }
+        if quiet_pr && !kind.is_return_trigger() {
+            return;
         }
         let mut making = Making::default();
         if event.occurred_at < watch_started {
@@ -1473,9 +1578,11 @@ impl Engine {
             NotifyState::None
         };
         let blue = row.unread && !muted && self.in_lists(pr);
-        let after_close = pr.closed_at.is_some()
-            && cell.list
-            && matches!(row.kind, RowKind::Mentioned | RowKind::Reply);
+        // DESIGN.md, "Dismiss": known merged or closed when the row is made,
+        // by a status, or by the events of a PR that comes back from Dismiss
+        // before its status is fetched again.
+        let after_close =
+            (pr.closed_at.is_some() || pr.seen_closed) && cell.list && row.kind.keeps_after_close();
         let account = pr.account.clone();
         let key = pr.key.clone();
         if row.notify == NotifyState::Pending {
@@ -1918,6 +2025,8 @@ fn pr_from(account: &str, p: IngestPr, existing: Option<&PrRec>) -> PrRec {
         quiet_from: keep(|p| p.quiet_from),
         quiet_until: keep(|p| p.quiet_until),
         merged_event_at: keep(|p| p.merged_event_at),
+        done_seq: existing.map_or(0, |p| p.done_seq),
+        unmuted: existing.is_some_and(|p| p.unmuted),
         last_request_at: keep(|p| p.last_request_at),
         collected: existing.is_some_and(|p| p.collected),
         state: p.state.into(),

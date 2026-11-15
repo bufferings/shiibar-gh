@@ -319,32 +319,60 @@ final class PresentationTests: XCTestCase {
         XCTAssertNil(url.queryItems?.first { $0.name == "expires_in" }, "GitHub's default expiry")
     }
 
-    /// DESIGN.md, "Rate limits": the bar and the points of the API with the
-    /// higher rate, the warning color from 80%, both on hover.
+    /// DESIGN.md, "Rate limits": one bar with the percentage inside for the
+    /// API with the higher rate, cut down to a whole percent, the warning
+    /// color from 80%; no numbers, no tooltip; `API –` before any value.
     func testApiUsageInTheHeader() {
-        let board = ApiUsage(RateLimit(graphql: Limit(used: 1_240, limit: 5_000), rest: Limit(used: 100, limit: 5_000)))
-        XCTAssertEqual(board.numbers, "1,240 / 5,000")
-        XCTAssertEqual(board.fraction ?? 0, 0.248, accuracy: 0.0001)
-        XCTAssertEqual(board.text, "API 1,240 / 5,000")
+        let board = ApiUsage(RateLimit(graphql: Limit(used: 1_250, limit: 5_000), rest: Limit(used: 100, limit: 5_000)))
+        XCTAssertEqual(board.percent, "25%")
+        XCTAssertEqual(board.fraction ?? 0, 0.25, accuracy: 0.0001)
+        XCTAssertEqual(board.text, "API 25%")
         XCTAssertFalse(board.warn)
-        XCTAssertEqual(board.tooltip, "GraphQL API 1,240 / 5,000 · REST API 100 / 5,000")
+        XCTAssertEqual(ApiUsage(RateLimit(graphql: Limit(used: 1_249, limit: 5_000))).percent, "24%", "24.98% is cut down")
         let high = ApiUsage(RateLimit(graphql: Limit(used: 4_200, limit: 5_000), rest: Limit(used: 100, limit: 5_000)))
-        XCTAssertEqual(high.numbers, "4,200 / 5,000")
+        XCTAssertEqual(high.percent, "84%")
         XCTAssertTrue(high.warn)
         let rest = ApiUsage(RateLimit(graphql: Limit(used: 4_000, limit: 10_000), rest: Limit(used: 4_000, limit: 5_000)))
-        XCTAssertEqual(rest.numbers, "4,000 / 5,000", "REST has the higher rate")
+        XCTAssertEqual(rest.percent, "80%", "REST has the higher rate")
         XCTAssertTrue(rest.warn, "80% is in the warning color")
         XCTAssertFalse(ApiUsage(RateLimit(rest: Limit(used: 3_999, limit: 5_000))).warn, "79.98%")
+        XCTAssertEqual(ApiUsage(RateLimit(rest: Limit(used: 3_999, limit: 5_000))).percent, "79%")
         XCTAssertEqual(ApiUsage(RateLimit(rest: Limit(used: 6_000, limit: 5_000))).fraction, 1, "the bar stops at its end")
-        let one = ApiUsage(RateLimit(graphql: Limit(used: 50, limit: 5_000)))
-        XCTAssertEqual(one.tooltip, "GraphQL API 50 / 5,000 · REST API \u{2013} / \u{2013}")
+        XCTAssertEqual(ApiUsage(RateLimit(graphql: Limit(used: 50, limit: 5_000))).percent, "1%", "GraphQL alone: REST is null")
+        XCTAssertEqual(ApiUsage(RateLimit(rest: Limit(used: 500, limit: 5_000))).percent, "10%", "REST alone: GraphQL is null")
         for none in [ApiUsage(nil), ApiUsage(RateLimit()), ApiUsage(RateLimit(graphql: Limit(used: 0, limit: 0)))] {
             XCTAssertEqual(none.text, "API \u{2013}")
-            XCTAssertNil(none.numbers)
+            XCTAssertNil(none.percent)
             XCTAssertNil(none.fraction, "no bar")
             XCTAssertFalse(none.warn)
-            XCTAssertNil(none.tooltip)
         }
+    }
+
+    /// DESIGN.md, "Settings › Accounts", API usage: GraphQL and REST, each
+    /// with its usage and limit (the warning color from 80%) and the local
+    /// time of its reset; `–` and no description before a value.
+    func testApiUsageInSettings() {
+        let utc = TimeZone(identifier: "UTC")!
+        // 2026-11-14 14:05 UTC.
+        let reset: Int64 = 1_794_665_100
+        let lines = ApiUsageLine.lines(
+            RateLimit(graphql: Limit(used: 1_240, limit: 5_000, resetAt: reset), rest: Limit(used: 4_000, limit: 5_000, resetAt: reset + 420)),
+            timeZone: utc
+        )
+        XCTAssertEqual(lines.map(\.title), ["GraphQL API", "REST API"])
+        XCTAssertEqual(lines[0].value, "1,240 / 5,000")
+        XCTAssertEqual(lines[0].detail, "Resets at 14:05")
+        XCTAssertFalse(lines[0].warn)
+        XCTAssertEqual(lines[1].value, "4,000 / 5,000")
+        XCTAssertEqual(lines[1].detail, "Resets at 14:12")
+        XCTAssertTrue(lines[1].warn, "REST warns from 80% too")
+        let none = ApiUsageLine.lines(RateLimit(graphql: Limit(used: 10, limit: 5_000)), timeZone: utc)
+        XCTAssertEqual(none[0].value, "10 / 5,000")
+        XCTAssertNil(none[0].detail, "no reset time known")
+        XCTAssertEqual(none[1].value, "\u{2013}")
+        XCTAssertNil(none[1].detail)
+        XCTAssertFalse(none[1].warn)
+        XCTAssertEqual(ApiUsageLine.lines(nil).map(\.value), ["\u{2013}", "\u{2013}"])
     }
 
     func testDismissedDaysLeftAndTheNote() {
@@ -525,8 +553,8 @@ final class PresentationTests: XCTestCase {
         XCTAssertEqual(SettingsText.enabledDetail, "Off hides this owner's PRs and stops fetching.")
         XCTAssertEqual(SettingsText.copyNote("example-org"), "Replaces example-org's table. The switches stay as they are.")
         XCTAssertEqual(SettingsText.addOwnerNote("example-org"), "The account's token reads pull requests in example-org's repositories.")
-        XCTAssertEqual(SettingsText.mutedReposDetail, "Muted PRs stay in the list in gray. Only mentions notify.")
-        XCTAssertEqual(SettingsText.mutedUsersDetail, "Their PRs and their events. Bots are users too.")
+        XCTAssertEqual(SettingsText.mutedReposDetail, "Hidden unless Show muted is on. Not applied to your own PRs.")
+        XCTAssertEqual(SettingsText.mutedUsersDetail, "Their PRs (not yours) and their events. Bots are users too.")
         XCTAssertEqual(SettingsText.mutedPullRequestsDetail, "Single pull requests you muted.")
         XCTAssertEqual(SettingsText.autoDismissDetail, "Merged and closed PRs move to Dismissed after this many days")
         XCTAssertEqual(SettingsText.keepDismissedDetail, "Dismissed PRs can be restored for this many days")

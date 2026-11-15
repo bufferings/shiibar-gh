@@ -23,7 +23,8 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
     /// set again only when it changes (`StatusItemUpdate`). Setting the
     /// image on every update redrew the button, which changed its
     /// effective appearance, which called `update()` again: 0.3.0 spent
-    /// about 90% CPU in that loop (docs/tasks/M6.md, "CPU").
+    /// about 90% CPU in that loop (DESIGN.md, "Implementation policy",
+    /// "UI": the image is not set again while it is the same).
     private var looks: [ObjectIdentifier: StatusItemLook] = [:]
     private let popover = NSPopover()
     private var popoverAccount: String?
@@ -61,7 +62,9 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] size in
                 guard let self, self.popover.isShown, self.popoverAccount != nil else { return }
-                self.popover.contentSize = NSSize(width: CGFloat(TextSize.width(size)), height: Self.popoverHeight)
+                // The height stays (DESIGN.md, "Screens": the text size does
+                // not change it).
+                self.popover.contentSize = NSSize(width: CGFloat(TextSize.width(size)), height: self.popover.contentSize.height)
             }
             .store(in: &cancellables)
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -169,6 +172,13 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
 
     @objc private func clicked(_ sender: NSStatusBarButton) {
         guard let id = sender.identifier?.rawValue else { return }
+        // The account's window open: it comes to the front with the focus
+        // instead of the popover (DESIGN.md, "Screens"); the focus sends
+        // `popover_opened` (windowDidBecomeKey).
+        if SurfaceRules.surfaceToShow(windowOpen: panels[id] != nil) == .window {
+            openWindow(account: id)
+            return
+        }
         toggle(account: id, from: sender)
     }
 
@@ -191,18 +201,21 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             if same { return }
         }
         popoverAccount = account
-        let content: AnyView
+        let content: AnyView?
         if let account {
             let model = app.viewModel(account)
-            content = AnyView(PopoverView(app: app, model: model, list: model.list(.popover), avatars: avatars, actions: actions(account), surface: .popover))
-            popover.contentSize = NSSize(width: popoverWidth, height: Self.popoverHeight)
+            let root = PopoverView.root(app: app, model: model, list: model.list(.popover), avatars: avatars, actions: actions(account), surface: .popover)
+            popover.contentViewController = SurfaceViewController(root)
+            popover.contentSize = NSSize(width: popoverWidth, height: popoverHeight(account: account, near: button))
+            root.onBottomEdgeDrag = { [weak self] phase, distance in self?.dragBottomEdge(phase, distance: distance) }
+            content = nil
         } else {
             var none = actions(nil)
             none.openWindow = nil
             content = AnyView(NoAccountsView(app: app, actions: none))
             popover.contentSize = NSSize(width: popoverWidth, height: NoAccountsView.height)
         }
-        popover.contentViewController = NSHostingController(rootView: content)
+        if let content { popover.contentViewController = NSHostingController(rootView: content) }
         popover.appearance = surfaceAppearance
         NSApp.activate(ignoringOtherApps: true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
@@ -215,6 +228,65 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             app.surfaceDisplayed(.popover, account: account, true, opening: true)
             app.surfaceOpened(.popover, account: account)
         }
+    }
+
+    // MARK: - Popover height
+
+    /// The height the popover opens with: the one dragged last for the
+    /// account, else the default, within the screen's visible height.
+    private func popoverHeight(account: String, near button: NSView) -> CGFloat {
+        let saved = app.store.popoverHeight(account: account).map { CGFloat($0) } ?? Self.popoverHeight
+        let visible = button.window?.screen?.visibleFrame.height ?? NSScreen.main?.visibleFrame.height ?? saved
+        return min(max(Self.minPopoverHeight, saved), max(Self.minPopoverHeight, visible))
+    }
+
+    /// The smallest height dragging leaves (DESIGN.md, "Constants").
+    static let minPopoverHeight: CGFloat = 300
+    private var dragStartHeight: CGFloat?
+
+    /// The popover's bottom edge dragged `distance` points down (up when
+    /// negative) since the press: the height follows, between 300 points
+    /// and the room down to the bottom of the screen's visible part; the
+    /// width stays. The height is kept for the account when the drag ends.
+    private func dragBottomEdge(_ phase: BottomEdgeResizer.Phase, distance: CGFloat) {
+        guard popover.isShown, let account = popoverAccount else { return }
+        if phase == .began { dragStartHeight = popover.contentSize.height }
+        guard let start = dragStartHeight else { return }
+        let height = resizePopover(to: start + distance)
+        if phase == .ended {
+            dragStartHeight = nil
+            app.store.setPopoverHeight(Double(height), account: account)
+        }
+    }
+
+    /// Sets the popover's height within its limits; returns the height set.
+    @discardableResult
+    func resizePopover(to wanted: CGFloat) -> CGFloat {
+        let current = popover.contentSize
+        var maximum = wanted
+        if let window = popover.contentViewController?.view.window, let screen = window.screen {
+            // The popover grows downward from the menu bar: the room is down
+            // to the bottom of the visible part, less the popover's own frame
+            // (its arrow) around the content.
+            let chrome = window.frame.height - current.height
+            maximum = window.frame.maxY - screen.visibleFrame.minY - chrome
+        }
+        let height = min(max(Self.minPopoverHeight, wanted.rounded()), max(Self.minPopoverHeight, maximum.rounded(.down)))
+        if height != current.height { popover.contentSize = NSSize(width: current.width, height: height) }
+        return height
+    }
+
+    /// The measurement mode: the popover stays open until closed in code
+    /// (`NSPopoverBehaviorApplicationDefined`, NSPopover.h), not when the
+    /// app stops being active.
+    func showPopoverForMeasurement(account: String) {
+        popover.behavior = .applicationDefined
+        showPopover(account: account)
+    }
+
+    /// The popover's window while it shows (the measurement mode).
+    var popoverWindow: NSWindow? {
+        popover.isShown ? popover.contentViewController?.view.window : nil
     }
 
     func closePopover() {
@@ -234,6 +306,11 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
 
     // MARK: - Window
 
+    /// The account's window while it is open (the measurement mode).
+    func window(account: String) -> NSPanel? {
+        panels[account]
+    }
+
     func openWindow(account: String) {
         popover.performClose(nil)
         if let panel = panels[account] {
@@ -244,7 +321,8 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         var surface = actions(account)
         surface.openWindow = nil
         let model = app.viewModel(account)
-        let view = PopoverView(app: app, model: model, list: model.list(.window), avatars: avatars, actions: surface, surface: .window)
+        let root = PopoverView.root(app: app, model: model, list: model.list(.window), avatars: avatars, actions: surface, surface: .window)
+        root.movesWindowByTitleStrip = true
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: popoverWidth, height: Self.popoverHeight),
             styleMask: [.titled, .closable, .resizable, .utilityWindow, .fullSizeContentView],
@@ -257,8 +335,11 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         panel.becomesKeyOnlyIfNeeded = false
         panel.isReleasedWhenClosed = false
         panel.appearance = surfaceAppearance
-        panel.contentViewController = NSHostingController(rootView: view)
+        panel.contentViewController = SurfaceViewController(root)
         panel.setContentSize(NSSize(width: popoverWidth, height: Self.popoverHeight))
+        // The smallest window (the surface's SwiftUI content no longer sets
+        // it, SurfaceRoot).
+        panel.contentMinSize = NSSize(width: 300, height: 300)
         panel.identifier = NSUserInterfaceItemIdentifier(account)
         panel.delegate = self
         if let saved = app.store.windowFrame(account: account) {
@@ -329,11 +410,9 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
 
     // MARK: - Keys
 
-    /// Whether keys go to a text field: the search field's editor, not the
-    /// selectable text of cards and rows (which takes the focus when pressed
-    /// but types nothing).
+    /// Whether keys go to a text field: the search field's editor.
     static func isTyping(_ responder: NSResponder?) -> Bool {
-        responder is NSText && !(responder is SelectableTextView)
+        responder is NSText
     }
 
     /// The keys while the popover or a window has the focus: what each does
@@ -362,7 +441,8 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         let model = account.map { app.viewModel($0).list(surface) }
         let inSearch = (model?.searchFocused ?? false) || Self.isTyping(key?.firstResponder)
         let decided = KeyRules.decide(
-            press, inSearch: inSearch, hasSearchText: !(model?.search.isEmpty ?? true), inDismissed: model?.showingDismissed ?? false
+            press, inSearch: inSearch, hasSearchText: !(model?.search.isEmpty ?? true), inDismissed: model?.showingDismissed ?? false,
+            hasSelection: model.map { $0.selection != nil || !$0.selectedCards.isEmpty } ?? false
         )
         switch decided {
         case .quit:
@@ -384,10 +464,20 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
     }
 
     /// Edit › Copy chosen with the mouse while a popover or window has the
-    /// focus: the same as ⌘C there (the selected text, else the link of
-    /// the selected card or row). False when another window has the focus,
+    /// focus: the same as ⌘C there (the link of the selected card or row). False when another window has the focus,
     /// or the search field does: the menu's own `copy:` goes on.
     func copyFromMenu() -> Bool {
+        pressFromMenu(.copy)
+    }
+
+    /// Edit › Select All chosen with the mouse: as ⌘A, every card shown
+    /// (DESIGN.md, "Switching to a regular app"); in the search field the
+    /// field's own `selectAll:` goes on.
+    func selectAllFromMenu() -> Bool {
+        pressFromMenu(.selectAll)
+    }
+
+    private func pressFromMenu(_ press: Key) -> Bool {
         let key = NSApp.keyWindow
         let model: SurfaceListModel
         if popover.isShown, key === popover.contentViewController?.view.window, let account = popoverAccount {
@@ -398,7 +488,7 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             return false
         }
         if model.searchFocused || Self.isTyping(key?.firstResponder) { return false }
-        model.press(.copy)
+        model.press(press)
         return true
     }
 }

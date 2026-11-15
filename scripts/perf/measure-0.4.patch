@@ -1,0 +1,721 @@
+diff -ruN a/app/Sources/ShiibarGhApp/AppDelegate.swift b/app/Sources/ShiibarGhApp/AppDelegate.swift
+--- a/app/Sources/ShiibarGhApp/AppDelegate.swift	2026-11-13 09:13:51
++++ b/app/Sources/ShiibarGhApp/AppDelegate.swift	2026-11-14 02:00:01
+@@ -25,7 +25,14 @@
+             about: { [weak self] in self?.about() },
+             settings: { [weak self] in self?.showSettings(.general) }
+         ))
+-        let bundled = Bundle.main.bundleURL.pathExtension == "app"
++        // The measurement mode (Perf.swift) runs only in a sandbox state
++        // directory, never the real one.
++        let perf = PerfMode.enabled
++        if perf && PerfMode.stateRoot == nil {
++            FileHandle.standardError.write(Data("shiibar-gh: the measurement mode needs SHIIBAR_GH_STATE_DIR\n".utf8))
++            exit(2)
++        }
++        let bundled = Bundle.main.bundleURL.pathExtension == "app" && !perf
+         let root = StateDirectory.root() ?? NSTemporaryDirectory()
+         let socket = StateDirectory.socket(root: root)
+         let api = SocketDaemonAPI(socketPath: socket)
+@@ -38,9 +45,11 @@
+         } else {
+             notifier = NoNotifications()
+         }
+-        let store = UIStateStore(defaults: .standard)
++        let store = UIStateStore(defaults: perf ? UserDefaults(suiteName: PerfMode.suiteName) ?? .standard : .standard)
+         model = AppModel(api: api, store: store, opener: WorkspaceOpener(), notifier: notifier, copier: PasteboardCopier())
+-        let avatars = AvatarStore(loader: URLSessionImageLoader())
++        let avatars = perf
++            ? AvatarStore(loader: FileImageLoader(), schemes: ["file"])
++            : AvatarStore(loader: URLSessionImageLoader())
+         surfaces = SurfaceController(app: model, avatars: avatars) { [weak self] account in
+             SurfaceActions(
+                 openWindow: account.map { id in { self?.surfaces.openWindow(account: id) } },
+@@ -98,9 +107,12 @@
+ 
+         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
+         let helpers = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/shiibar-ghd")
+-        let launcher: DaemonLauncher? = bundled && FileManager.default.isExecutableFile(atPath: helpers.path)
++        var launcher: DaemonLauncher? = bundled && FileManager.default.isExecutableFile(atPath: helpers.path)
+             ? ProcessDaemonLauncher(executable: helpers, stateRoot: root)
+             : nil
++        if perf, let daemon = PerfMode.daemon {
++            launcher = ProcessDaemonLauncher(executable: daemon, stateRoot: root)
++        }
+         let supervisor = DaemonSupervisor(socketPath: socket, appVersion: version, launcher: launcher)
+         supervisor.onEvent = { [weak self] event in self?.model.handle(event) }
+         supervisor.onConnectionChange = { [weak self] connected in
+@@ -117,11 +129,21 @@
+         self.supervisor = supervisor
+         supervisor.start()
+ 
++        if perf {
++            // No notification permission is asked for and no login item is
++            // registered (`launch` is nil without a bundle).
++            let runner = PerfRunner(app: model, surfaces: surfaces, steps: PerfSteps.current)
++            perfRunner = runner
++            runner.start()
++            return
++        }
+         // Asked at launch, before any notification is scheduled (Apple:
+         // "Always call this method before scheduling any local
+         // notifications"); macOS prompts only the first time.
+         notifier.requestAuthorization()
+     }
++
++    private var perfRunner: PerfRunner?
+ 
+     private var didApplyLaunch = false
+     private let keychainAlerts = KeychainAlerts()
+diff -ruN a/app/Sources/ShiibarGhApp/CardViews.swift b/app/Sources/ShiibarGhApp/CardViews.swift
+--- a/app/Sources/ShiibarGhApp/CardViews.swift	2026-11-13 09:13:51
++++ b/app/Sources/ShiibarGhApp/CardViews.swift	2026-11-14 02:00:01
+@@ -489,6 +489,7 @@
+     @State private var width: CGFloat = 0
+ 
+     var body: some View {
++        let _ = PerfCounters.card()
+         let item = SelectionItem.header(card: card.id)
+         let selected = model.selection == item
+         let muted = card.isMuted
+@@ -841,6 +842,7 @@
+     @Environment(\.textScale) var k
+ 
+     var body: some View {
++        let _ = PerfCounters.row()
+         let p = RowPresentation(row, now: now, cardMuted: cardMuted)
+         let item = SelectionItem.row(id: row.id, card: card)
+         let selected = model.selection == item
+diff -ruN a/app/Sources/ShiibarGhApp/Perf.swift b/app/Sources/ShiibarGhApp/Perf.swift
+--- a/app/Sources/ShiibarGhApp/Perf.swift	1970-01-01 09:00:00
++++ b/app/Sources/ShiibarGhApp/Perf.swift	2026-11-14 02:00:01
+@@ -0,0 +1,572 @@
++// The measurement mode of docs/tasks/M7.md ("Speed of operation"). Chosen
++// with `SHIIBAR_GH_PERF=1` or the launch argument `--perf`, and only with
++// `SHIIBAR_GH_STATE_DIR` set: the app then uses a scratch UserDefaults
++// suite, registers no login item, asks for no notification permission,
++// starts the daemon given by `SHIIBAR_GH_PERF_DAEMON` (a `dev-ingest`
++// build, which has no Keychain and no GitHub), opens the always-on-top
++// window of the first account, runs the scenarios below, prints the summary
++// and quits. scripts/perf/measure.sh runs the whole procedure.
++//
++// What is measured, on the main thread (where SwiftUI and AppKit lay out
++// and draw):
++// - A frame: one busy period of the main run loop, from waking up
++//   (`afterWaiting`) to going to sleep again (`beforeWaiting`, observed
++//   last, after Core Animation's commit, which runs there). A period over
++//   16 ms is a frame later than 60 Hz.
++// - An operation: from the call the input handler makes (the same model
++//   call a click, key or drop makes) to the end of the busy period that
++//   committed its result, and the longest busy period in the second after
++//   it (the daemon's answer and the list read again).
++// - The scroll: the list's NSScrollView moved by a 60 Hz timer at a fixed
++//   speed from the top to the bottom; every busy period of the pass counts.
++// Every operation and pass is also an OSSignposter interval (subsystem
++// `shiibar.gh.perf`, category PointsOfInterest) for Instruments.
++
++import AppKit
++import os
++import ShiibarGhCore
++
++extension Array {
++    /// `count` elements, going round the array.
++    func cycled(_ count: Int) -> [Element] {
++        isEmpty ? [] : (0..<count).map { self[$0 % self.count] }
++    }
++}
++
++/// Whether the measurement mode is on. Read once.
++enum PerfMode {
++    static let enabled: Bool = {
++        ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF"] == "1" || CommandLine.arguments.contains("--perf")
++    }()
++
++    /// The state directory the mode requires: never the real one.
++    static var stateRoot: String? {
++        ProcessInfo.processInfo.environment[StateDirectory.environmentKey]
++    }
++
++    static var daemon: URL? {
++        ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_DAEMON"].map { URL(fileURLWithPath: $0) }
++    }
++
++    static let suiteName = "shiibar.gh.perf." + UUID().uuidString
++
++    /// Fixes of 0.5 turned back to 0.4's way, one at a time, to measure
++    /// what each one does (`SHIIBAR_GH_PERF_UNDO`, comma-separated):
++    /// `eager` lays every card out (a VStack, not a LazyVStack), `decode`
++    /// decodes the avatar image in every body, `fits` uses ViewThatFits
++    /// for line 3. Only in the measurement mode.
++    static let undo: Set<String> = {
++        guard enabled, let text = ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_UNDO"] else { return [] }
++        return Set(text.split(separator: ",").map { String($0) })
++    }()
++}
++
++/// How many times views computed their body, in the measurement mode only.
++@MainActor
++enum PerfCounters {
++    static var cards = 0
++    static var rows = 0
++
++    static func card() {
++        if PerfMode.enabled { cards += 1 }
++    }
++
++    static func row() {
++        if PerfMode.enabled { rows += 1 }
++    }
++}
++
++/// Avatars from files only: the measurement data uses file:// URLs and the
++/// mode never reaches the network.
++final class FileImageLoader: ImageLoading {
++    func load(_ url: URL) async throws -> Data {
++        guard url.isFileURL else { throw URLError(.unsupportedURL) }
++        let data = try Data(contentsOf: url)
++        guard NSImage(data: data) != nil else { throw URLError(.cannotDecodeContentData) }
++        return data
++    }
++}
++
++/// The end of the main run loop's last busy period, for the watchdog
++/// thread (a plain value: a torn read only delays a report).
++nonisolated(unsafe) private var lastPeriodEnd = CFAbsoluteTimeGetCurrent()
++
++/// The busy periods of the main run loop.
++@MainActor
++final class MainLoopProbe {
++    private var start: CFAbsoluteTime?
++    private var observers: [CFRunLoopObserver] = []
++    /// Called at the end of each busy period with its start and end.
++    var onPeriod: ((CFAbsoluteTime, CFAbsoluteTime) -> Void)?
++
++    /// Reports on the standard error while the main thread has not gone
++    /// to sleep for more than 2 seconds.
++    func startWatchdog() {
++        let thread = Thread {
++            var reported = 0.0
++            while true {
++                Thread.sleep(forTimeInterval: 1)
++                let busy = CFAbsoluteTimeGetCurrent() - lastPeriodEnd
++                if busy > 2, busy - reported >= 5 || reported == 0 {
++                    reported = busy
++                    FileHandle.standardError.write(Data("perf: the main thread has been busy for \(Int(busy)) s\n".utf8))
++                } else if busy <= 2 {
++                    reported = 0
++                }
++            }
++        }
++        thread.start()
++    }
++
++    func install() {
++        let woke = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.afterWaiting.rawValue, true, CFIndex.min) { [weak self] _, _ in
++            MainActor.assumeIsolated { self?.start = CFAbsoluteTimeGetCurrent() }
++        }
++        let sleeps = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, true, CFIndex.max) { [weak self] _, _ in
++            MainActor.assumeIsolated {
++                guard let self else { return }
++                let end = CFAbsoluteTimeGetCurrent()
++                lastPeriodEnd = end
++                let begin = self.start ?? end
++                self.start = nil
++                self.onPeriod?(begin, end)
++            }
++        }
++        for observer in [woke, sleeps].compactMap({ $0 }) {
++            CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
++            observers.append(observer)
++        }
++    }
++}
++
++struct PerfStats: Codable {
++    var name: String
++    var count: Int
++    /// Milliseconds.
++    var max: Double
++    var median: Double
++    /// Frames over 16 ms (scroll passes), or operations over 100 ms.
++    var over: Int
++    /// Operations: the longest busy period in the second after the input.
++    var afterMax: Double?
++    /// Selection and check: card and row bodies computed per operation (max).
++    var cardBodies: Int?
++    var rowBodies: Int?
++
++    static func of(_ name: String, _ values: [Double], limit: Double) -> PerfStats {
++        let sorted = values.sorted()
++        return PerfStats(
++            name: name, count: values.count, max: sorted.last ?? 0,
++            median: sorted.isEmpty ? 0 : sorted[sorted.count / 2], over: values.filter { $0 > limit }.count
++        )
++    }
++}
++
++/// The scenarios, version-specific steps given by the caller.
++@MainActor
++final class PerfRunner: NSObject {
++    struct Steps {
++        /// Check or uncheck a card (0.5). nil: not in this version.
++        var check: ((SurfaceListModel, String) -> Void)?
++        /// A drag hovering in the list's bottom band (0.5's automatic
++        /// scroll): start, and the end. nil: not in this version.
++        var autoScroll: ((SurfaceListModel, NSScrollView) -> Void)?
++        var stopAutoScroll: ((SurfaceListModel) -> Void)?
++        /// Before measuring: the version's view switches (0.5: Show muted).
++        var prepare: ((AccountViewModel) -> Void)?
++        /// Whether a card's heading is in view (a click selects only what
++        /// is in view). nil: the version cannot tell; the first cards are
++        /// used.
++        var inView: ((SurfaceListModel, String) -> Bool)?
++        /// What the list has laid out, for the profile log.
++        var describe: ((SurfaceListModel) -> String)?
++    }
++
++    private let app: AppModel
++    private let surfaces: SurfaceController
++    private let steps: Steps
++    private let probe = MainLoopProbe()
++    private let signposter = OSSignposter(subsystem: "shiibar.gh.perf", category: .pointsOfInterest)
++    private var periods: [(CFAbsoluteTime, CFAbsoluteTime)] = []
++    /// The main thread's CPU time at the end of each period, by its end.
++    private var periodCPU: [CFAbsoluteTime: UInt64] = [:]
++    private var recording = false
++    private var results: [PerfStats] = []
++    private var notes: [String] = []
++    private var tick: (() -> Void)?
++
++    /// Stops the daemon (`shutdown` on its socket) and ends the process,
++    /// without the app's own Quit, which waits for a reply to
++    /// `applicationShouldTerminate` that never came in this mode.
++    var quit: () -> Void = {
++        if let root = PerfMode.stateRoot,
++           let socket = try? UnixSocket.connect(path: StateDirectory.socket(root: root), timeout: 2) {
++            try? socket.write(Data("{\"cmd\":\"shutdown\"}\n".utf8))
++            _ = try? socket.readLine()
++            socket.close()
++        }
++        exit(0)
++    }
++
++    init(app: AppModel, surfaces: SurfaceController, steps: Steps) {
++        self.app = app
++        self.surfaces = surfaces
++        self.steps = steps
++        super.init()
++        probe.onPeriod = { [weak self] start, end in
++            guard let self, self.recording else { return }
++            self.periods.append((start, end))
++            self.periodCPU[end] = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
++        }
++    }
++
++    func start() {
++        probe.install()
++        probe.startWatchdog()
++        Task { await run() }
++    }
++
++    /// Progress on the standard error, at once.
++    private func log(_ text: String) {
++        FileHandle.standardError.write(Data(("perf: " + text + "\n").utf8))
++    }
++
++    private func pause(_ seconds: Double) async {
++        try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
++    }
++
++    private func waitFor(_ what: String, timeout: Double = 30, _ condition: () -> Bool) async -> Bool {
++        let deadline = Date().addingTimeInterval(timeout)
++        while !condition() {
++            if Date() > deadline {
++                notes.append("timed out waiting for \(what)")
++                log("timed out waiting for \(what)")
++                return false
++            }
++            await pause(0.05)
++        }
++        return true
++    }
++
++    private func run() async {
++        guard await waitFor("the account", { !app.accounts.isEmpty }), let account = app.accounts.first else { return finish() }
++        // Group by Repository, Then by None, every "+ N more PRs" expanded:
++        // the keys come from the daemon's list before the window opens.
++        app.store.setOptions(ListOptions(groupBy: .repository, thenBy: .none), account: account.id)
++        app.store.setLastTab(.all, account: account.id, surface: .window)
++        app.store.setWindowFrame(NSStringFromRect(NSRect(x: 120, y: 80, width: 460, height: 760)), account: account.id)
++        if let cards = try? await app.api.list(.app(account.login)) {
++            var keys: Set<String> = []
++            for tab in ListTab.allCases {
++                for section in Listing.sections(
++                    tab: tab, cards: cards, account: account, options: ListOptions(), orders: [:],
++                    repositories: Listing.knownRepositories([], cards: cards), folding: .init()
++                ) {
++                    keys.insert(section.key)
++                }
++            }
++            app.store.setExpanded(keys, account: account.id)
++        }
++        let data = app.viewModel(account.id)
++        steps.prepare?(data)
++        surfaces.openWindow(account: account.id)
++        // The window reads its list when it gets the focus; macOS may keep
++        // the focus with the app in front, so the run opens it as focused.
++        if !app.isOpen(.window, account: account.id) { app.surfaceOpened(.window, account: account.id) }
++        let list = data.list(.window)
++        guard await waitFor("the list", timeout: 1800, { data.loaded }), let window = surfaces.window(account: account.id) else { return finish() }
++        await pause(1.5)
++        log("window open")
++        notes.append(
++            "cards: \(Listing.cards(data.cards, tab: .all).count), window \(Int(window.frame.width))x\(Int(window.frame.height)), "
++                + "visible on screen: \(window.occlusionState.contains(.visible))"
++        )
++
++        // `SHIIBAR_GH_PERF_PROFILE=select|check` repeats one operation on
++        // the cards in view for a profiler (sample(1)) to watch.
++        if let only = ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_PROFILE"] {
++            list.openTab(.all)
++            await pause(3)
++            let inView = steps.inView ?? { _, _ in true }
++            let cards = shownCards(list).map(\.0).filter { inView(list, $0.id) }.prefix(10)
++            log("profile \(only): \(cards.count) cards in view of \(shownCards(list).count); \(steps.describe?(list) ?? "")")
++            log("card bodies so far \(PerfCounters.cards); window on screen \(window.occlusionState.contains(.visible))")
++            for i in 0..<300 {
++                guard !cards.isEmpty else { break }
++                let card = Array(cards)[i % cards.count]
++                if only == "check" { steps.check?(list, card.id) } else { list.select(.header(card: card.id)) }
++                await pause(0.03)
++            }
++            log("profile done")
++            return finish()
++        }
++        for tab in [ListTab.all, .review] {
++            list.openTab(tab)
++            await pause(1)
++            guard let scroll = listScrollView(in: window) else {
++                notes.append("no NSScrollView found for \(tab.title)")
++                continue
++            }
++            notes.append("\(tab.title): scroll view \(type(of: scroll)), document \(Int(scroll.documentView?.frame.height ?? 0)) pt")
++            // `SHIIBAR_GH_PERF_SKIP=scroll` leaves the passes out (to profile
++            // the operations alone).
++            if ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_SKIP"] != "scroll" {
++                await scrollPass("\(tab.title) scroll (cold)", scroll)
++                await scrollPass("\(tab.title) scroll", scroll)
++            }
++            scrollTo(scroll, y: 0)
++            await pause(0.5)
++            await operations(tab: tab, list: list, data: data, scroll: scroll)
++        }
++        await tabSwitches(list)
++        finish()
++    }
++
++    // MARK: Scroll
++
++    private func listScrollView(in window: NSWindow) -> NSScrollView? {
++        var found: [NSScrollView] = []
++        func walk(_ view: NSView) {
++            if let scroll = view as? NSScrollView { found.append(scroll) }
++            view.subviews.forEach(walk)
++        }
++        if let content = window.contentView { walk(content) }
++        return found.max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }
++    }
++
++    private func scrollTo(_ scroll: NSScrollView, y: CGFloat) {
++        let clip = scroll.contentView
++        clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: y))
++        scroll.reflectScrolledClipView(clip)
++    }
++
++    /// Top to bottom at 1,500 points a second, driven by the display.
++    private func scrollPass(_ name: String, _ scroll: NSScrollView, speed: CGFloat = 1500) async {
++        scrollTo(scroll, y: 0)
++        await pause(0.5)
++        log("\(name): start")
++        let state = signposter.beginInterval("scroll", "\(name)")
++        periods = []
++        recording = true
++        let started = CACurrentMediaTime()
++        var done = false
++        var lastY: CGFloat = -1
++        var stuck = 0
++        tick = { [weak self] in
++            guard let self else { return }
++            let maxY = max(0, (scroll.documentView?.frame.height ?? 0) - scroll.contentView.bounds.height)
++            let y = min(maxY, speed * CGFloat(CACurrentMediaTime() - started))
++            self.scrollTo(scroll, y: y)
++            // The end: at the bottom and the height no longer growing.
++            if y >= maxY { stuck += 1 } else { stuck = 0 }
++            if stuck > 30 || y == lastY && y >= maxY && stuck > 5 { done = true }
++            lastY = y
++        }
++        // A 60 Hz timer, not the display's link: the link stops while the
++        // display sleeps.
++        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
++            MainActor.assumeIsolated { self?.step() }
++        }
++        RunLoop.main.add(timer, forMode: .common)
++        _ = await waitFor(name, timeout: 1800) { done }
++        timer.invalidate()
++        tick = nil
++        recording = false
++        signposter.endInterval("scroll", state)
++        let frames = periods.map { ($0.1 - $0.0) * 1000 }
++        var stats = PerfStats.of(name, frames, limit: 16)
++        stats.cardBodies = nil
++        results.append(stats)
++        notes.append("\(name): \(String(format: "%.1f", CACurrentMediaTime() - started)) s, \(frames.count) frames")
++        log("\(name): \(frames.count) frames, max \(String(format: "%.1f", stats.max)) ms, over 16 ms \(stats.over)")
++    }
++
++    private func step() {
++        tick?()
++    }
++
++    // MARK: Operations
++
++    /// Run `body` (the input) and wait for the frame that shows it.
++    private func measure(_ name: StaticString, _ label: String, _ body: () -> Void) async -> (Double, Double, Int, Int) {
++        periods = []
++        let cards = PerfCounters.cards
++        let rows = PerfCounters.rows
++        recording = true
++        let state = signposter.beginInterval(name, "\(label)")
++        let cpu0 = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
++        let t0 = CFAbsoluteTimeGetCurrent()
++        body()
++        // The end of the busy period the input ran in.
++        _ = await waitFor("a frame", timeout: 600) { periods.contains { $0.1 >= t0 } }
++        signposter.endInterval(name, state)
++        let first = periods.first { $0.1 >= t0 }.map { ($0.1 - t0) * 1000 } ?? 0
++        if let end = periods.first(where: { $0.1 >= t0 })?.1, let cpu1 = periodCPU[end] {
++            log(String(format: "%@ %@: %.1f ms to the frame, %.1f ms of it on the main thread's CPU", "\(name)", label, first, Double(cpu1 - cpu0) / 1e6))
++        }
++        let drawnCards = PerfCounters.cards - cards
++        let drawnRows = PerfCounters.rows - rows
++        await pause(1)
++        recording = false
++        let after = periods.filter { $0.0 >= t0 }.map { ($0.1 - $0.0) * 1000 }.max() ?? 0
++        return (first, after, drawnCards, drawnRows)
++    }
++
++    private func record(_ name: String, _ samples: [(Double, Double, Int, Int)]) {
++        log("\(name): \(samples.count) samples")
++        guard !samples.isEmpty else { return }
++        var stats = PerfStats.of(name, samples.map(\.0), limit: 100)
++        stats.afterMax = samples.map(\.1).max()
++        stats.cardBodies = samples.map(\.2).max()
++        stats.rowBodies = samples.map(\.3).max()
++        results.append(stats)
++    }
++
++    private func shownCards(_ list: SurfaceListModel) -> [(Card, SectionLayout)] {
++        list.sections.filter(\.isLeaf).flatMap { section in section.cards.map { ($0, section) } }
++    }
++
++    private func operations(tab: ListTab, list: SurfaceListModel, data: AccountViewModel, scroll: NSScrollView) async {
++        let title = tab.title
++        // Selection: ten card headers near the top.
++        var samples: [(Double, Double, Int, Int)] = []
++        // Cards in view, as a click selects (a click is always in view).
++        let isInView = steps.inView ?? { _, _ in false }
++        let inView = shownCards(list).filter { isInView(list, $0.0.id) }
++        for (card, _) in (inView.isEmpty ? Array(shownCards(list).prefix(10)) : inView).cycled(10) {
++            samples.append(await measure("select", "\(title) \(card.pr)") { list.select(.header(card: card.id)) })
++        }
++        record("\(title) select", samples)
++
++        if let check = steps.check {
++            samples = []
++            for (card, _) in shownCards(list).prefix(10) {
++                samples.append(await measure("check", "\(title) \(card.pr)") { check(list, card.id) })
++            }
++            record("\(title) check", samples)
++            for (card, _) in shownCards(list).prefix(10) { check(list, card.id) }
++            await pause(0.5)
++        } else {
++            notes.append("\(title) check: not in this version")
++        }
++
++        if tab == .all {
++            samples = []
++            for _ in 0..<10 {
++                guard let (card, _) = shownCards(list).first(where: { !$0.0.isDismissed }) else { break }
++                list.select(.header(card: card.id))
++                await pause(0.2)
++                samples.append(await measure("dismiss", "\(card.pr)") { list.press(.delete) })
++            }
++            record("All dismiss (⌫)", samples)
++            return
++        }
++
++        // Review: the moves.
++        func reviewCards(_ section: PlacementSection) -> [Card] {
++            shownCards(list).filter { $0.1.key == SectionKey.placed(.review, section) }.map(\.0)
++        }
++        samples = []
++        for i in 0..<10 {
++            let target: PlacementSection = i % 2 == 0 ? .waiting : .todo
++            let from: PlacementSection = target == .waiting ? .todo : .waiting
++            guard let card = reviewCards(from).first else { break }
++            let move = PlaceMove(card: card.id, target: .review(target), position: .byDefault, verb: .move)
++            samples.append(await measure("move", "Move to \(target.title) \(card.pr)") { list.perform(.place(move)) })
++        }
++        record("Review Move to …", samples)
++
++        samples = []
++        for i in 0..<10 {
++            let target: PlacementSection = i % 2 == 0 ? .doing : .todo
++            let from: PlacementSection = target == .doing ? .todo : .doing
++            guard let card = reviewCards(from).first else { break }
++            list.select(.header(card: card.id))
++            await pause(0.2)
++            samples.append(await measure("move", "\(target.title) key \(card.pr)") { list.press(.moveTo(target)) })
++        }
++        record("Review D/T/W", samples)
++
++        samples = []
++        if let card = reviewCards(.todo).dropFirst(2).first {
++            list.select(.header(card: card.id))
++            await pause(0.2)
++            for i in 0..<10 {
++                samples.append(await measure("move", "reorder \(card.pr)") { list.press(.reorder(up: i % 2 == 0)) })
++            }
++        }
++        record("Review ⌥↑/⌥↓", samples)
++
++        samples = []
++        for i in 0..<10 {
++            let todo = reviewCards(.todo)
++            guard todo.count >= 3 else { break }
++            let card = todo[i % 2 == 0 ? 2 : 0]
++            let over = todo[i % 2 == 0 ? 0 : 2]
++            list.beginDrag(card.id)
++            list.dragOver(.card(over.id, lowerHalf: i % 2 != 0))
++            await pause(0.2)
++            samples.append(await measure("move", "drop \(card.pr)") { list.drop(.card(over.id, lowerHalf: i % 2 != 0)) })
++        }
++        record("Review drag and drop", samples)
++
++        if let autoScroll = steps.autoScroll, let stop = steps.stopAutoScroll {
++            for name in ["Review auto-scroll (cold)", "Review auto-scroll"] {
++                scrollTo(scroll, y: 0)
++                await pause(0.5)
++                let state = signposter.beginInterval("autoscroll", "\(name)")
++                periods = []
++                recording = true
++                autoScroll(list, scroll)
++                await pause(4)
++                stop(list)
++                recording = false
++                signposter.endInterval("autoscroll", state)
++                results.append(PerfStats.of(name, periods.map { ($0.1 - $0.0) * 1000 }, limit: 16))
++            }
++        } else {
++            notes.append("Review auto-scroll: not in this version")
++        }
++    }
++
++    private func tabSwitches(_ list: SurfaceListModel) async {
++        var samples: [(Double, Double, Int, Int)] = []
++        for i in 0..<10 {
++            let next: ListTab = i % 2 == 0 ? .all : .review
++            samples.append(await measure("tab", "\(next.title)") { list.openTab(next) })
++        }
++        record("Tab switch (All ↔ Review)", samples)
++    }
++
++    // MARK: Summary
++
++    private func finish() {
++        var lines = ["", "shiibar-gh measurement (\(PerfMode.buildLabel))", ""]
++        lines.append("name | n | max ms | median ms | over limit | after max ms | card bodies | row bodies")
++        for r in results {
++            let after = r.afterMax.map { String(format: "%.1f", $0) } ?? "-"
++            lines.append(String(
++                format: "%@ | %d | %.1f | %.1f | %d | %@ | %@ | %@", r.name, r.count, r.max, r.median, r.over, after,
++                r.cardBodies.map(String.init) ?? "-", r.rowBodies.map(String.init) ?? "-"
++            ))
++        }
++        lines.append("")
++        lines += notes.map { "note: " + $0 }
++        print(lines.joined(separator: "\n"))
++        if let out = ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_OUT"] {
++            let encoder = JSONEncoder()
++            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
++            try? encoder.encode(results).write(to: URL(fileURLWithPath: out))
++        }
++        fflush(stdout)
++        UserDefaults.standard.removePersistentDomain(forName: PerfMode.suiteName)
++        quit()
++    }
++}
++
++extension PerfMode {
++    /// What the summary says it measured.
++    static var buildLabel: String {
++        ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_LABEL"] ?? "unlabeled build"
++    }
++}
+diff -ruN a/app/Sources/ShiibarGhApp/PerfSteps.swift b/app/Sources/ShiibarGhApp/PerfSteps.swift
+--- a/app/Sources/ShiibarGhApp/PerfSteps.swift	1970-01-01 09:00:00
++++ b/app/Sources/ShiibarGhApp/PerfSteps.swift	2026-11-14 02:00:01
+@@ -0,0 +1,8 @@
++// The version-specific steps of the measurement mode (Perf.swift).
++
++import ShiibarGhCore
++
++enum PerfSteps {
++    /// 0.4.0: no checkboxes, no automatic scroll while dragging.
++    @MainActor static let current = PerfRunner.Steps()
++}
+diff -ruN a/app/Sources/ShiibarGhApp/Surfaces.swift b/app/Sources/ShiibarGhApp/Surfaces.swift
+--- a/app/Sources/ShiibarGhApp/Surfaces.swift	2026-11-13 09:13:51
++++ b/app/Sources/ShiibarGhApp/Surfaces.swift	2026-11-14 02:00:01
+@@ -234,6 +234,11 @@
+ 
+     // MARK: - Window
+ 
++    /// The account's window while it is open (the measurement mode).
++    func window(account: String) -> NSPanel? {
++        panels[account]
++    }
++
+     func openWindow(account: String) {
+         popover.performClose(nil)
+         if let panel = panels[account] {
+diff -ruN a/app/Sources/ShiibarGhCore/Services.swift b/app/Sources/ShiibarGhCore/Services.swift
+--- a/app/Sources/ShiibarGhCore/Services.swift	2026-11-13 09:13:51
++++ b/app/Sources/ShiibarGhCore/Services.swift	2026-11-14 02:00:01
+@@ -244,9 +244,16 @@
+     private let loader: ImageLoading
+     private let clock: () -> Date
+     public let retryAfter: TimeInterval
++    /// The URL schemes loaded: https only, except in the measurement mode,
++    /// which reads files.
++    private let schemes: Set<String>
+ 
+-    public init(loader: ImageLoading, retryAfter: TimeInterval = 300, clock: @escaping () -> Date = Date.init) {
++    public init(
++        loader: ImageLoading, schemes: Set<String> = ["https"], retryAfter: TimeInterval = 300,
++        clock: @escaping () -> Date = Date.init
++    ) {
+         self.loader = loader
++        self.schemes = schemes
+         self.retryAfter = retryAfter
+         self.clock = clock
+     }
+@@ -258,7 +265,7 @@
+ 
+     public func request(_ url: String?) {
+         guard let url, images[url] == nil, !loading.contains(url),
+-              let parsed = URL(string: url), parsed.scheme == "https"
++              let parsed = URL(string: url), let scheme = parsed.scheme, schemes.contains(scheme)
+         else { return }
+         if let failed = failedAt[url], clock().timeIntervalSince(failed) < retryAfter { return }
+         loading.insert(url)

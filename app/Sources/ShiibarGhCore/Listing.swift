@@ -185,11 +185,11 @@ extension Card {
         return SectionKey.placed(tab, section)
     }
 
-    /// The grip and dragging: placed in Review or Mine, Done included, not
-    /// muted (DESIGN.md, "What a press does").
+    /// Dragging: placed in Review or Mine, Done included; a muted card
+    /// shown with Show muted too (DESIGN.md, "What a press does").
     public var canDrag: Bool {
         guard let placement, placement.section.value != nil else { return false }
-        return !isMuted
+        return true
     }
 
     /// ⌥↑↓ and a drop among the cards: as `canDrag`, not in Done, which
@@ -293,15 +293,29 @@ public enum Listing {
 
     // MARK: Cards of a tab
 
-    /// The cards of a tab, not dismissed.
+    /// The cards of a tab, not dismissed, muted ones included.
     public static func cards(_ cards: [Card], tab: ListTab) -> [Card] {
         cards.filter { !$0.isDismissed && (tab == .all || $0.tab == tab) }
     }
 
+    /// The cards a tab shows before the search: without the muted ones
+    /// while Show muted is off (DESIGN.md, "Mute").
+    public static func shown(_ cards: [Card], tab: ListTab, showMuted: Bool) -> [Card] {
+        Self.cards(cards, tab: tab).filter { showMuted || !$0.isMuted }
+    }
+
     /// The unread count of a tab: its cards with a blue unread row; muted
-    /// gray ones do not count (DESIGN.md, "Tabs").
+    /// gray ones do not count, a hidden muted card with an unread mention
+    /// does (DESIGN.md, "Tabs").
     public static func unreadCount(_ cards: [Card], tab: ListTab) -> Int {
         Self.cards(cards, tab: tab).filter(\.hasBlueUnread).count
+    }
+
+    /// The blue dot of Show muted: while it is off, some muted card of the
+    /// account that is not dismissed has a blue unread row (a mention of
+    /// you or your team), whatever the tab (DESIGN.md, "Show muted").
+    public static func showMutedDot(_ cards: [Card], showMuted: Bool) -> Bool {
+        !showMuted && cards.contains { !$0.isDismissed && $0.isMuted && $0.hasBlueUnread }
     }
 
     /// The Dismissed list: newest dismissal first.
@@ -321,10 +335,10 @@ public enum Listing {
 
     /// All's order inside the innermost group (DESIGN.md, "All"): open PRs
     /// (Draft included) first, then Merged and Closed, each newest first by
-    /// the chosen order; muted cards after all of them, in the same way.
+    /// the chosen order; muted cards shown with Show muted are placed by the
+    /// same rule.
     public static func sorted(_ cards: [Card], by order: SortOrder) -> [Card] {
         cards.sorted { a, b in
-            if a.isMuted != b.isMuted { return !a.isMuted }
             if a.isFinished != b.isFinished { return !a.isFinished }
             let (ka, kb): (Int64, Int64) = order == .recentlyUpdated
                 ? (a.updatedAt, b.updatedAt)
@@ -334,10 +348,9 @@ public enum Listing {
         }
     }
 
-    /// Review and Mine: the daemon's rank, muted cards last.
+    /// Review and Mine: the daemon's rank, muted cards included.
     public static func ranked(_ cards: [Card]) -> [Card] {
         cards.sorted { a, b in
-            if a.isMuted != b.isMuted { return !a.isMuted }
             let (pa, pb) = (a.placement?.position ?? 0, b.placement?.position ?? 0)
             if pa != pb { return pa < pb }
             return a.id < b.id
@@ -419,16 +432,18 @@ public enum Listing {
 
     // MARK: Layout
 
-    /// The fold state of the account and the surface's search.
+    /// The fold state of the account, Show muted and the surface's search.
     public struct Folding: Equatable {
         public var collapsed: Set<String>
         public var expanded: Set<String>
         public var search: String
+        public var showMuted: Bool
 
-        public init(collapsed: Set<String> = [], expanded: Set<String> = [], search: String = "") {
+        public init(collapsed: Set<String> = [], expanded: Set<String> = [], search: String = "", showMuted: Bool = false) {
             self.collapsed = collapsed
             self.expanded = expanded
             self.search = search
+            self.showMuted = showMuted
         }
     }
 
@@ -449,16 +464,18 @@ public enum Listing {
     }
 
     /// The sections of a tab. `cards` are every card as the daemon sent
-    /// them (dismissed ones included). Sections without a card after the
-    /// search are left out; the counts ignore the search. Review and Mine
-    /// keep their empty sections (Done and Mine's first list included) while
-    /// the tab has a card and nothing is searched, so that a card can be
-    /// dropped there.
+    /// them (dismissed ones included). While Show muted is off the muted
+    /// cards are left out of everything: the sections, the counts, "+ N
+    /// more PRs" and the groups (DESIGN.md, "Mute"). Sections without a
+    /// card after the search are left out; the counts ignore the search.
+    /// Review and Mine keep their empty sections (Done and Mine's first
+    /// list included) while the tab shows a card and nothing is searched,
+    /// so that a card can be dropped there.
     public static func sections(
         tab: ListTab, cards allCards: [Card], account: Account, options: ListOptions, orders: GroupOrders,
         repositories: [String], folding: Folding
     ) -> [SectionLayout] {
-        let tabCards = cards(allCards, tab: tab)
+        let tabCards = shown(allCards, tab: tab, showMuted: folding.showMuted)
         let searching = !Search.words(folding.search).isEmpty
         let found = Set(search(tabCards, folding.search).map(\.id))
         switch tab {
@@ -519,9 +536,9 @@ public enum Listing {
     /// The text in place of an empty tab or Dismissed list: `Nothing
     /// matches` when the search leaves no card; nil before the first
     /// answer or when something shows.
-    public static func emptyText(loaded: Bool, tab: ListTab?, cards: [Card], search: String) -> String? {
+    public static func emptyText(loaded: Bool, tab: ListTab?, cards: [Card], search: String, showMuted: Bool = true) -> String? {
         guard loaded else { return nil }
-        let list = tab.map { Self.cards(cards, tab: $0) } ?? dismissed(cards)
+        let list = tab.map { shown(cards, tab: $0, showMuted: showMuted) } ?? dismissed(cards)
         if list.isEmpty {
             switch tab {
             case .all?: return EmptyState.all
@@ -535,20 +552,33 @@ public enum Listing {
 
     /// ⇧R and Mark all as read: every unread row of the tab's cards after
     /// the search, in collapsed and folded sections and in "+ N more" too,
-    /// muted rows included (DESIGN.md, "How unread clears").
-    public static func rowsToRead(tab: ListTab, cards: [Card], search: String) -> [String] {
-        Self.search(Self.cards(cards, tab: tab), search).flatMap(\.rows).filter(\.unread).map(\.id)
+    /// muted rows of muted cards shown with Show muted included; not those
+    /// of muted cards Show muted hides (DESIGN.md, "How unread clears").
+    public static func rowsToRead(tab: ListTab, cards: [Card], search: String, showMuted: Bool = true) -> [String] {
+        Self.search(shown(cards, tab: tab, showMuted: showMuted), search).flatMap(\.rows).filter(\.unread).map(\.id)
+    }
+
+    /// Whether a card's rows show past the newest three: it is expanded and
+    /// has more than three.
+    static func rowsExpanded(_ card: Card, _ expanded: Bool) -> Bool {
+        expanded && card.rows.count > rowsShown
     }
 
     /// The rows a card shows: the newest three, or all while expanded.
     public static func visibleRows(_ card: Card, expanded: Bool) -> [Row] {
-        expanded ? card.rows : Array(card.rows.prefix(rowsShown))
+        rowsExpanded(card, expanded) ? card.rows : Array(card.rows.prefix(rowsShown))
     }
 
     /// "+ N more" in a card, nil when all rows show.
     public static func moreRows(_ card: Card, expanded: Bool) -> Int? {
-        guard !expanded, card.rows.count > rowsShown else { return nil }
+        guard !rowsExpanded(card, expanded), card.rows.count > rowsShown else { return nil }
         return card.rows.count - rowsShown
+    }
+
+    /// `Show less` at the end of a card's expanded rows (DESIGN.md, "Rows in
+    /// a card"): it stays until pressed.
+    public static func showsLessRows(_ card: Card, expanded: Bool) -> Bool {
+        rowsExpanded(card, expanded)
     }
 
     public static func moreRowsText(_ count: Int) -> String {
@@ -563,6 +593,6 @@ public enum Listing {
     /// `Older activity on GitHub` ends the expanded rows of a PR that lost
     /// rows past the 20 kept.
     public static func showsOlderActivity(_ card: Card, expanded: Bool) -> Bool {
-        expanded && card.olderRows
+        rowsExpanded(card, expanded) && card.olderRows
     }
 }

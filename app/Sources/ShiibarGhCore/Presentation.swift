@@ -331,17 +331,38 @@ public struct RowPresentation: Equatable {
     public var meta: String
     /// The body under the label line, already normalized.
     public var body: String?
+    /// The lines the body shows now.
     public var bodyLines: Int
+    /// The lines it shows without `more`: 1, or 3 for an unread mention.
+    /// Only a body cut short at these lines shows `more`.
+    public var collapsedLines: Int
+    /// `more` was pressed: `less` shows in its place.
+    public var expanded: Bool
+
+    /// `more` or `less` at the right end of the body, nil for neither:
+    /// `less` while expanded, `more` when the body does not fit
+    /// `collapsedLines` (`cut`, which the view measures).
+    public func toggle(cut: Bool) -> String? {
+        if expanded { return "less" }
+        return cut ? "more" : nil
+    }
     /// Read rows are not dimmed: only the mark goes (DESIGN.md, "How rows
     /// look"). Gray is for muted rows only.
     public var mark: UnreadMark
     /// The text of a muted row is gray.
     public var gray: Bool
 
+    /// The lines of a body: 1, 3 for an unread mention of you or your team,
+    /// 5 once `more` was pressed (DESIGN.md, "Row body", "Constants").
+    public static let bodyLines = 1
+    public static let unreadMentionLines = 3
+    public static let expandedLines = 5
+
     /// `cardMuted`: the row's card is muted. Its rows are gray except a
-    /// mention, which keeps the normal color and the blue dot (DESIGN.md,
-    /// "Card").
-    public init(_ row: Row, now: Int64, cardMuted: Bool = false) {
+    /// mention of you or your team, which keeps the normal color and the
+    /// blue dot (DESIGN.md, "Card"). `expanded`: `more` was pressed on the
+    /// body; it shows up to 5 wrapped lines and `less`.
+    public init(_ row: Row, now: Int64, cardMuted: Bool = false, expanded: Bool = false) {
         let kind = row.kind.value
         label = RowText.label(row.kind)
         let time = RelativeTime.ago(now - row.occurredAt)
@@ -363,9 +384,10 @@ public struct RowPresentation: Equatable {
         }
         counts = kind == .reaction ? row.counts.map(RowText.counts).flatMap { $0.isEmpty ? nil : $0 } : nil
         mark = row.isBlueUnread ? .blue : (row.isGrayUnread ? .ring : .none)
-        let mention = kind == .mentioned
-        gray = !mention && (row.muted || cardMuted)
-        bodyLines = ((kind == .mentioned || kind == .teamMentioned) && row.unread) ? 3 : 1
+        gray = !row.isMention && (row.muted || cardMuted)
+        collapsedLines = row.isMention && row.unread ? Self.unreadMentionLines : Self.bodyLines
+        self.expanded = expanded
+        bodyLines = expanded ? Self.expandedLines : collapsedLines
     }
 }
 
@@ -396,45 +418,48 @@ public enum CardText {
 
 // MARK: - API usage
 
-/// The usage in the header (DESIGN.md, "Rate limits"): `API`, a thin bar and
-/// `1,240 / 5,000` for the API (GraphQL or REST) with the higher rate of
-/// use; the warning color from 80%; both on hover; `API –` with no bar
-/// before any value.
+/// The header's API usage (DESIGN.md, "Rate limits"): `API` and one bar
+/// with the percentage inside, like a battery. The value is the higher
+/// usage rate of GraphQL and REST (the other one while one has no value
+/// yet), cut down to a whole percent; 80% or more is the warning color.
+/// No numbers and no tooltip. `API –` and no bar before any value.
 public struct ApiUsage: Equatable {
-    /// `1,240 / 5,000`; nil before any value.
-    public var numbers: String?
-    /// The bar's length, 0 to 1.
+    /// The bar's length, 0 to 1; nil before any value.
     public var fraction: Double?
+    /// `25%` inside the bar; nil before any value.
+    public var percent: String?
     public var warn: Bool
-    public var tooltip: String?
 
     public init(_ rateLimit: RateLimit?) {
-        let limits = [rateLimit?.graphql, rateLimit?.rest].compactMap { $0 }.filter { $0.limit > 0 }
-        guard let top = limits.max(by: { Self.rate($0) < Self.rate($1) }) else {
-            numbers = nil
+        let rates = [rateLimit?.graphql, rateLimit?.rest].compactMap { $0 }.compactMap(Self.rate)
+        guard let top = rates.max() else {
             fraction = nil
+            percent = nil
             warn = false
-            tooltip = nil
             return
         }
-        let rate = Self.rate(top)
-        numbers = Self.number(top.used) + " / " + Self.number(top.limit)
-        fraction = min(max(rate, 0), 1)
-        warn = rate >= 0.8
-        func pair(_ limit: Limit?) -> String {
-            guard let limit, limit.limit > 0 else { return "\u{2013} / \u{2013}" }
-            return Self.number(limit.used) + " / " + Self.number(limit.limit)
-        }
-        tooltip = "GraphQL API " + pair(rateLimit?.graphql) + " · REST API " + pair(rateLimit?.rest)
+        fraction = min(max(top, 0), 1)
+        percent = "\(Self.wholePercent(top))%"
+        warn = top >= Self.warnAt
     }
 
-    static func rate(_ limit: Limit) -> Double {
-        Double(limit.used) / Double(limit.limit)
+    /// 80% or more warns (DESIGN.md, "Rate limits").
+    static let warnAt = 0.8
+
+    /// `used / limit`, nil without a limit.
+    static func rate(_ limit: Limit) -> Double? {
+        guard limit.limit > 0 else { return nil }
+        return Double(limit.used) / Double(limit.limit)
     }
 
-    /// `API 1,240 / 5,000` or `API –`, for the accessibility text.
+    /// The rate in whole percent, cut down: 24.98% is 24%.
+    static func wholePercent(_ rate: Double) -> Int {
+        Int((max(rate, 0) * 100).rounded(.down))
+    }
+
+    /// `API 25%` or `API –`, for the accessibility text.
     public var text: String {
-        "API " + (numbers ?? "\u{2013}")
+        "API " + (percent ?? "\u{2013}")
     }
 
     static func number(_ value: Int64) -> String {
@@ -443,6 +468,41 @@ public struct ApiUsage: Equatable {
         formatter.locale = Locale(identifier: "en_US")
         return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
     }
+}
+
+/// One line of API usage in Settings › Accounts (DESIGN.md, "Settings ›
+/// Accounts"): `GraphQL API` or `REST API`, the description `Resets at
+/// 14:05` (the local time of the reset), and the value `1,240 / 5,000`
+/// (usage and limit, the warning color at 80% or more). Before any value:
+/// `–` and no description. The last values stay after the reset time
+/// until the next answer.
+public struct ApiUsageLine: Equatable {
+    public var title: String
+    public var value: String
+    public var detail: String?
+    public var warn: Bool
+
+    public init(title: String, _ limit: Limit?, timeZone: TimeZone = .current) {
+        self.title = title
+        guard let limit, limit.limit > 0 else {
+            value = "\u{2013}"
+            detail = nil
+            warn = false
+            return
+        }
+        value = ApiUsage.number(limit.used) + " / " + ApiUsage.number(limit.limit)
+        detail = limit.resetAt.map { "Resets at " + RelativeTime.clock($0, timeZone: timeZone) }
+        warn = (ApiUsage.rate(limit) ?? 0) >= ApiUsage.warnAt
+    }
+
+    /// GraphQL first, then REST.
+    public static func lines(_ rateLimit: RateLimit?, timeZone: TimeZone = .current) -> [ApiUsageLine] {
+        [
+            ApiUsageLine(title: "GraphQL API", rateLimit?.graphql, timeZone: timeZone),
+            ApiUsageLine(title: "REST API", rateLimit?.rest, timeZone: timeZone),
+        ]
+    }
+
 }
 
 // MARK: - Text size
@@ -609,8 +669,8 @@ public enum SettingsText {
     public static let notifyDetail = "Off keeps the table below but sends no notifications for this owner."
     public static let skipDraftsDetail = "Events on draft PRs stay in the list but never notify."
     public static let copyDetail = "Replaces the table above with that owner's."
-    public static let mutedReposDetail = "Muted PRs stay in the list in gray. Only mentions notify."
-    public static let mutedUsersDetail = "Their PRs and their events. Bots are users too."
+    public static let mutedReposDetail = "Hidden unless Show muted is on. Not applied to your own PRs."
+    public static let mutedUsersDetail = "Their PRs (not yours) and their events. Bots are users too."
     public static let mutedPullRequestsDetail = "Single pull requests you muted."
     public static let autoDismissDetail = "Merged and closed PRs move to Dismissed after this many days"
     public static let keepDismissedDetail = "Dismissed PRs can be restored for this many days"

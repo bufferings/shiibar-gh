@@ -84,6 +84,14 @@ public enum BoardIcons {
         [.rect(x: 1.8, y: 2.8, width: 12.4, height: 3.2, radius: 1), .path("M3 6v7h10V6M6.5 8.8h3")],
         lineWidth: 1.4, roundCaps: true, roundJoins: true
     )
+    /// The Compact toggle of the tab row: three lines (Main.html `.smt`,
+    /// the Compact scene).
+    public static let compact = BoardIcon([.path("M2.5 4h11M2.5 8h11M2.5 12h11")], lineWidth: 1.4, roundCaps: true)
+    /// The Show muted toggle of the tab row: an eye (Main.html `.smt`).
+    public static let showMuted = BoardIcon(
+        [.path("M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8s-2.4 4.5-6.5 4.5S1.5 8 1.5 8z"), .circle(cx: 8, cy: 8, r: 2, dash: nil)],
+        lineWidth: 1.4, roundCaps: true, roundJoins: true
+    )
     /// A section header: expanded (down) and collapsed (right).
     public static let sectionOpen = BoardIcon([.path("M4 6l4 4 4-4")], lineWidth: 1.8, roundCaps: true, roundJoins: true)
     public static let sectionClosed = BoardIcon([.path("M6 4l4 4-4 4")], lineWidth: 1.8, roundCaps: true, roundJoins: true)
@@ -100,7 +108,14 @@ public enum BoardIcons {
     // Status icons: drawn filled by the app, with a white mark.
     public static let checkMark = BoardIcon([.path("M4.8 8.3l2.2 2.2 4.4-4.8")], lineWidth: 1.9, roundCaps: true, roundJoins: true)
     public static let crossMark = BoardIcon([.path("M5.5 5.5l5 5M10.5 5.5l-5 5")], lineWidth: 1.9, roundCaps: true)
-    public static let dashedCircle = BoardIcon([.circle(cx: 8, cy: 8, r: 6.5, dash: [2.5, 2.2])], lineWidth: 1.6, roundCaps: true)
+    /// A status still waiting (Review required, In progress, Behind): a
+    /// clock, a gray ring with its hands.
+    public static let statusClock = BoardIcon(
+        [.circle(cx: 8, cy: 8, r: 6.2, dash: nil), .path("M8 4.6V8l2.3 1.5")], lineWidth: 1.5, roundCaps: true, roundJoins: true
+    )
+    /// A status with no value (None): a short light-gray dash, so the slot
+    /// is never empty.
+    public static let statusNone = BoardIcon([.path("M5 8h6")], lineWidth: 1.6, roundCaps: true)
 
     // Row icons, 11 points in an 18 point tile.
     public static let rowCross = BoardIcon([.path("M4.5 4.5l7 7M11.5 4.5l-7 7")], lineWidth: 1.8, roundCaps: true)
@@ -159,10 +174,19 @@ public enum BoardIcons {
         [.path("M9.5 1.5l5 5-1.4 1.4-.7-.7-3 3 .4 2.6-1.2 1.2L5.7 11 2.5 14.2 1.3 13l3.2-3.2L1.6 6.9l1.2-1.2 2.6.4 3-3-.7-.7z")],
         lineWidth: 1.2, roundJoins: true
     )
-    /// The open icon of card headers and rows (Main.html `.op`).
-    public static let open = BoardIcon(
-        [.path("M9 2.5h4.5V7M13.5 2.5L7.5 8.5M11.5 9.5v4h-9v-9h4")], lineWidth: 1.6, roundCaps: true, roundJoins: true
+    /// The chain icon that copies a link (Main.html `.op.ln`). The board's
+    /// SVG arcs (`a`) are drawn as `arc` elements: each arc of the board is
+    /// half a circle of radius 2.7 between its end points.
+    public static let link = BoardIcon(
+        [
+            .path("M6.6 9.4l2.8-2.8"),
+            .path("M7.4 4.8l1.1-1.1"), .arc(cx: 10.4, cy: 5.6, r: 2.7, start: 225, end: 405), .path("M12.3 7.5l-1.1 1.1"),
+            .path("M8.6 11.2l-1.1 1.1"), .arc(cx: 5.6, cy: 10.4, r: 2.7, start: 45, end: 225), .path("M3.7 8.5l1.1-1.1"),
+        ],
+        lineWidth: 1.6, roundCaps: true, roundJoins: true
     )
+    /// The check the chain icon turns into for a second after a copy.
+    public static let copied = BoardIcon([.path("M3.5 8.5l3 3 6-7")], lineWidth: 1.8, roundCaps: true, roundJoins: true)
     /// The × that dismisses a card (Main.html `.iz`).
     public static let dismiss = BoardIcon([.path("M4.5 4.5l7 7M11.5 4.5l-7 7")], lineWidth: 1.7, roundCaps: true)
     /// The search field's magnifier (Main.html `.search`).

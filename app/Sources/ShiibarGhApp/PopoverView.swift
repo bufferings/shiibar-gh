@@ -9,6 +9,7 @@
 // Dynamic Type, which macOS SwiftUI does not apply to fixed sizes.
 
 import AppKit
+import Combine
 import ShiibarGhCore
 import SwiftUI
 
@@ -42,19 +43,169 @@ struct SurfaceActions {
     }
 }
 
+/// A value the surface shows, worked out from the models and published
+/// only when it changes. A change of the models (a dismiss, a new list, the
+/// time of the last update) draws again only the parts whose values changed,
+/// not every view of the surface (DESIGN.md, "Speed of operation").
+@MainActor
+final class Derived<Value: Equatable>: ObservableObject {
+    @Published private(set) var value: Value
+    private let compute: () -> Value
+    private var watch: AnyCancellable?
+
+    init(_ triggers: [AnyPublisher<Void, Never>], _ compute: @escaping () -> Value) {
+        self.compute = compute
+        value = compute()
+        watch = Publishers.MergeMany(triggers).sink { [weak self] in
+            guard let self else { return }
+            DerivedFlush.mark(ObjectIdentifier(self)) { [weak self] in self?.update() }
+        }
+    }
+
+    func update() {
+        let next = compute()
+        if next != value { value = next }
+    }
+}
+
+/// Works the marked values out again once per run loop pass, after the
+/// models changed (they publish before they change) and before SwiftUI
+/// updates its views (a main run loop observer of order -1, below SwiftUI's
+/// and the list's 0; see ListTable.swift).
+@MainActor
+enum DerivedFlush {
+    private static var pending: [ObjectIdentifier: () -> Void] = [:]
+    private static var observer: CFRunLoopObserver?
+
+    static func mark(_ id: ObjectIdentifier, _ update: @escaping () -> Void) {
+        pending[id] = update
+        if observer == nil {
+            observer = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, true, -1) { _, _ in
+                MainActor.assumeIsolated { flush() }
+            }
+            if let observer { CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes) }
+        }
+        CFRunLoopWakeUp(CFRunLoopGetMain())
+    }
+
+    static func flush() {
+        while !pending.isEmpty {
+            let updates = pending.values
+            pending = [:]
+            for update in updates { update() }
+        }
+    }
+}
+
+/// The header, the banners and what the surface shows below them.
+struct SurfaceTop: Equatable {
+    var k: CGFloat
+    var account: Account?
+    var dbUnreadable: Bool
+    var usage: ApiUsage
+    var failure: String?
+    var refreshing: Bool
+    var keepOnTop: Bool
+    var keepDays: Int64
+}
+
+/// The tab row.
+struct TabRowState: Equatable {
+    var tab: ListTab
+    var showingDismissed: Bool
+    var counts: [ListTab: Int]
+    var showMuted: Bool
+    var showMutedDot: Bool
+    var compact: Bool
+    var dismissedCount: Int
+}
+
+/// The search row.
+struct SearchRowState: Equatable {
+    var search: String
+    var tab: ListTab
+    var showingDismissed: Bool
+    var options: ListOptions
+    var focused: Bool
+}
+
+/// The `← Dismissed` heading: shown, and the count.
+struct DismissedHeadingState: Equatable {
+    var showing: Bool
+    var count: Int
+}
+
+/// The derived values of one surface.
+@MainActor
+final class SurfaceState {
+    let top: Derived<SurfaceTop>
+    let tabs: Derived<TabRowState>
+    let search: Derived<SearchRowState>
+    let dismissed: Derived<DismissedHeadingState>
+    let grouping: Derived<Bool>
+
+    init(app: AppModel, model: AccountViewModel, list: SurfaceListModel) {
+        let appChanges = app.objectWillChange.map { _ in () }.eraseToAnyPublisher()
+        let modelChanges = model.objectWillChange.map { _ in () }.eraseToAnyPublisher()
+        let listChanges = list.objectWillChange.map { _ in () }.eraseToAnyPublisher()
+        top = Derived([appChanges, modelChanges]) { [unowned app, unowned model] in
+            SurfaceTop(
+                k: CGFloat(TextSize.ratio(app.textSize)), account: app.account(model.accountId), dbUnreadable: app.dbUnreadable,
+                usage: model.usage, failure: model.failure, refreshing: app.refreshing.contains(model.accountId),
+                keepOnTop: model.keepOnTop, keepDays: app.keepDays
+            )
+        }
+        // The list forwards its account's changes.
+        tabs = Derived([listChanges]) { [unowned list] in
+            TabRowState(
+                tab: list.tab, showingDismissed: list.showingDismissed,
+                counts: Dictionary(uniqueKeysWithValues: ListTab.allCases.map { ($0, list.unreadCount($0)) }),
+                showMuted: list.showMuted, showMutedDot: list.showMutedDot, compact: list.compact,
+                dismissedCount: list.dismissedCount
+            )
+        }
+        search = Derived([listChanges]) { [unowned list, unowned model] in
+            SearchRowState(
+                search: list.search, tab: list.tab, showingDismissed: list.showingDismissed, options: model.options,
+                focused: list.searchFocused
+            )
+        }
+        dismissed = Derived([listChanges]) { [unowned list] in
+            DismissedHeadingState(showing: list.showingDismissed, count: list.showingDismissed ? list.dismissedCount : 0)
+        }
+        grouping = Derived([listChanges]) { [unowned list] in list.showsGrouping }
+    }
+}
+
 struct PopoverView: View {
-    @ObservedObject var app: AppModel
-    @ObservedObject var model: AccountViewModel
-    /// This surface's own tab, search, selection and expanded rows.
-    @ObservedObject var list: SurfaceListModel
-    @ObservedObject var avatars: AvatarStore
+    var app: AppModel
+    var model: AccountViewModel
+    /// This surface's own tab, search, selection and expanded
+    /// rows. Not observed here: the parts that show them follow derived
+    /// values (`SurfaceState`), so a change draws only the parts it changes.
+    var list: SurfaceListModel
+    var avatars: AvatarStore
     var actions: SurfaceActions
     var surface: Surface
+    var state: SurfaceState
+    @ObservedObject var top: Derived<SurfaceTop>
 
-    var account: Account? { app.account(model.accountId) }
+    init(
+        app: AppModel, model: AccountViewModel, list: SurfaceListModel, avatars: AvatarStore, actions: SurfaceActions, surface: Surface,
+        state: SurfaceState
+    ) {
+        self.app = app
+        self.model = model
+        self.list = list
+        self.avatars = avatars
+        self.actions = actions
+        self.surface = surface
+        self.state = state
+        top = state.top
+    }
 
     var body: some View {
-        let k = CGFloat(TextSize.ratio(app.textSize))
+        let k = top.value.k
         TimelineView(.periodic(from: .now, by: 30)) { context in
             content(now: Int64(context.date.timeIntervalSince1970))
         }
@@ -67,14 +218,24 @@ struct PopoverView: View {
 
     @ViewBuilder
     func content(now: Int64) -> some View {
+        let value = top.value
+        let account = value.account
         VStack(spacing: 0) {
             Header(
                 login: account?.login ?? "", color: account?.accountColor ?? .none,
-                updated: app.dbUnreadable ? nil : RelativeTime.updated(account?.updatedAt, now: now),
-                usage: model.usage, model: model, surface: surface, refreshing: app.refreshing.contains(model.accountId),
-                actions: actions, refresh: { app.refresh(model.accountId) }
+                updated: value.dbUnreadable ? nil : RelativeTime.updated(account?.updatedAt, now: now),
+                usage: value.usage, keepOnTop: value.keepOnTop, toggleKeepOnTop: { [model] in model.toggleKeepOnTop() },
+                surface: surface, refreshing: value.refreshing, actions: actions, refresh: { [app, model] in app.refresh(model.accountId) }
             )
-            switch SurfaceRules.content(account: account, dbUnreadable: app.dbUnreadable) {
+            .background {
+                ZStack {
+                    // The window moves by its whole header (DESIGN.md,
+                    // "Open in window"), not only by the thin title strip.
+                    if surface == .window { WindowDragArea() }
+                    SurfaceAnchor(content: CardContext.of(list, avatars: avatars).content, part: .header)
+                }
+            }
+            switch SurfaceRules.content(account: account, dbUnreadable: value.dbUnreadable) {
             case .unreadable:
                 CenteredMessage(title: EmptyState.unreadable, button: "Reset") { app.reset() }
             case .noOwners:
@@ -84,27 +245,81 @@ struct PopoverView: View {
                 }
             case .list:
                 BannerView(lines: Warnings.banner(account?.warnings ?? [], now: now)) { app.bannerButton($0, account: model.accountId) }
-                if let failure = model.failure {
+                if let failure = value.failure {
                     FailureBand(text: failure)
                 }
-                TabRow(list: list)
-                SearchRow(list: list, model: model)
-                if list.showingDismissed {
-                    DismissedHeading(list: list, keepDays: app.keepDays)
-                }
-                ListArea(model: list, avatars: avatars, now: now)
-                KeyHints(hints: list.hints)
+                TabRow(list: list, state: state.tabs)
+                SearchRow(list: list, model: model, state: state.search)
+                DismissedHeadingSlot(list: list, state: state.dismissed, keepDays: value.keepDays)
+                ListSlot(content: CardContext.of(list, avatars: avatars).content, now: now)
+                KeyHintsSlot(chrome: list.chrome)
+                    .background(SurfaceAnchor(content: CardContext.of(list, avatars: avatars).content, part: .hints))
             }
         }
-        .overlay {
-            if list.showsGrouping {
-                GroupingSheet(model: model) { list.showsGrouping = false }
-            }
+    }
+
+    /// The root of the surface: this view, the list (ListTable.swift) and
+    /// the Grouping sheet over both.
+    static func root(
+        app: AppModel, model: AccountViewModel, list: SurfaceListModel, avatars: AvatarStore, actions: SurfaceActions, surface: Surface
+    ) -> SurfaceRoot {
+        let state = SurfaceState(app: app, model: model, list: list)
+        return SurfaceRoot(
+            content: PopoverView(app: app, model: model, list: list, avatars: avatars, actions: actions, surface: surface, state: state),
+            overlay: GroupingOverlay(top: state.top, grouping: state.grouping, list: list, model: model),
+            list: CardContext.of(list, avatars: avatars).content
+        )
+    }
+}
+
+/// The Grouping sheet, over the list too, with the surface's text size.
+struct GroupingOverlay: View {
+    @ObservedObject var top: Derived<SurfaceTop>
+    @ObservedObject var grouping: Derived<Bool>
+    var list: SurfaceListModel
+    var model: AccountViewModel
+
+    var body: some View {
+        let k = top.value.k
+        if grouping.value {
+            GroupingSheet(model: model) { list.showsGrouping = false }
+                .foregroundColor(Palette.text.color)
+                .font(.system(size: 13 * k))
+                .environment(\.textScale, k)
         }
     }
 }
 
 // MARK: - Header
+
+/// Behind the window's header: a press on its empty parts and its texts
+/// (not on its buttons, which are in front) moves the window, as the title
+/// bar does (`performWindowDragWithEvent:`, NSWindow.h, macOS 10.11: "Starts
+/// a window drag based on the specified mouse-down event").
+final class WindowDragView: NSView {
+    override var mouseDownCanMoveWindow: Bool { true }
+
+    /// The press that brings the window forward moves it too: while
+    /// another app or window has the focus, the first press reaches the
+    /// view (NSView.h, `acceptsFirstMouse:`; the hosting view, which took
+    /// the title strip before, does not take a first press, so a window
+    /// out of focus did not move from there: the same in 0.4.0).
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        frame.contains(point) ? self : nil
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.performDrag(with: event)
+    }
+}
+
+struct WindowDragArea: NSViewRepresentable {
+    func makeNSView(context: Context) -> WindowDragView { WindowDragView() }
+
+    func updateNSView(_ view: WindowDragView, context: Context) {}
+}
 
 /// The account color's dot (Main.html `.adot`).
 struct AccountDot: View {
@@ -121,7 +336,8 @@ struct Header: View {
     var color: AccountColor
     var updated: String?
     var usage: ApiUsage
-    @ObservedObject var model: AccountViewModel
+    var keepOnTop: Bool
+    var toggleKeepOnTop: () -> Void
     var surface: Surface
     var refreshing: Bool
     var actions: SurfaceActions
@@ -136,8 +352,8 @@ struct Header: View {
                     Text(login).font(.system(size: 14 * k, weight: .semibold)).lineLimit(1)
                 }
                 if let updated {
-                    // "Updated 1 min ago · API ▬ 1,240 / 5,000" (DESIGN.md,
-                    // "Rate limits").
+                    // "Updated 1 min ago · API [25%]" (DESIGN.md, "Rate
+                    // limits").
                     HStack(spacing: 0) {
                         Text(updated + " · ").foregroundColor(Palette.secondary.color)
                         UsageView(usage: usage)
@@ -146,9 +362,12 @@ struct Header: View {
                     .lineLimit(1)
                 }
             }
+            // A press on the texts goes to what is behind them: in the
+            // window, the drag area that moves it.
+            .allowsHitTesting(false)
             Spacer(minLength: 0)
             if surface == .window {
-                PinButton(on: model.keepOnTop) { model.toggleKeepOnTop() }
+                PinButton(on: keepOnTop, toggle: toggleKeepOnTop)
             }
             if let openWindow = actions.openWindow {
                 HeaderButton(icon: BoardIcons.window, size: 15, label: "Open in window", action: openWindow)
@@ -165,33 +384,37 @@ struct Header: View {
     }
 }
 
-/// `API`, the thin bar and `1,240 / 5,000` (Main.html `.api`); `API –`
-/// before any value. The hover names both APIs.
+/// `API` and one bar with the percentage inside, like a battery (Main.html
+/// `.api` and `.batt`): the higher usage rate of GraphQL and REST. No
+/// numbers and no tooltip; `API –` before any value (DESIGN.md, "Rate
+/// limits").
 struct UsageView: View {
     var usage: ApiUsage
     @Environment(\.textScale) var k
 
     var body: some View {
-        let color = usage.warn ? Palette.caution.color : Palette.secondary.color
         HStack(spacing: 0) {
             Text("API")
-            if let fraction = usage.fraction, let numbers = usage.numbers {
+                .fontWeight(usage.warn ? .semibold : .regular)
+                .foregroundColor(usage.warn ? Palette.caution.color : Palette.secondary.color)
+            if let fraction = usage.fraction, let percent = usage.percent {
                 ZStack(alignment: .leading) {
-                    Capsule().fill(Palette.usageTrack.color)
-                    Capsule()
+                    Rectangle().fill(Palette.usageTrack.color)
+                    Rectangle()
                         .fill(usage.warn ? Palette.usageWarnFill.color : Palette.usageFill.color)
-                        .frame(width: 36 * k * CGFloat(fraction))
+                        .frame(width: 40 * k * CGFloat(fraction))
+                    Text(percent)
+                        .font(.system(size: 9 * k, weight: .bold))
+                        .foregroundColor(usage.warn ? Palette.usageWarnText.color : Palette.text.color)
+                        .frame(width: 40 * k)
                 }
-                .frame(width: 36 * k, height: 4 * k)
-                .padding(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 5))
-                Text(numbers)
+                .frame(width: 40 * k, height: 12 * k)
+                .clipShape(RoundedRectangle(cornerRadius: 3))
+                .padding(.leading, 5)
             } else {
-                Text(" \u{2013}")
+                Text(" \u{2013}").foregroundColor(Palette.secondary.color)
             }
         }
-        .fontWeight(usage.warn ? .semibold : .regular)
-        .foregroundColor(color)
-        .help(usage.tooltip ?? "")
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(usage.text)
     }
@@ -211,7 +434,7 @@ struct RefreshProgress: View {
         }
         .frame(width: 24, height: 24)
         .onAppear { turning = true }
-        .help("Refreshing")
+        .quickHelp("Refreshing")
         .accessibilityLabel("Refreshing")
     }
 }
@@ -236,7 +459,7 @@ struct PinButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Keep on top")
+        .quickHelp("Keep on top")
         .accessibilityLabel("Keep on top")
         .accessibilityValue(on ? "On" : "Off")
     }
@@ -316,10 +539,13 @@ struct CenteredMessage: View {
 
 // MARK: - Tabs and the search row
 
-/// All | Review | Mine with their unread counts, and the Dismissed button
-/// at the right end (Main.html `.ptabs`).
+/// All | Review | Mine with their unread counts, and at the right end the
+/// Compact and Show muted toggles and the Dismissed button (Main.html
+/// `.ptabs`). When the row is narrow, the toggles show their icons only
+/// (their names in the tooltips).
 struct TabRow: View {
-    @ObservedObject var list: SurfaceListModel
+    var list: SurfaceListModel
+    @ObservedObject var state: Derived<TabRowState>
     @Environment(\.textScale) var k
 
     var body: some View {
@@ -328,6 +554,11 @@ struct TabRow: View {
                 tabButton(tab)
             }
             Spacer(minLength: 0)
+            ViewThatFits(in: .horizontal) {
+                toggles(names: true)
+                toggles(names: false)
+            }
+            .padding(.bottom, 3)
             dismissedButton
                 .padding(.bottom, 3)
         }
@@ -337,8 +568,9 @@ struct TabRow: View {
 
     func tabButton(_ tab: ListTab) -> some View {
         // No tab is underlined while the Dismissed list shows.
-        let on = tab == list.tab && !list.showingDismissed
-        let count = list.unreadCount(tab)
+        let value = state.value
+        let on = tab == value.tab && !value.showingDismissed
+        let count = value.counts[tab] ?? 0
         return Button { list.openTab(tab) } label: {
             HStack(spacing: 5 * k) {
                 Text(tab.title)
@@ -361,9 +593,72 @@ struct TabRow: View {
         .accessibilityAddTraits(on ? .isSelected : [])
     }
 
+    func toggles(names: Bool) -> some View {
+        HStack(spacing: 2) {
+            compactButton(names: names)
+            showMutedButton(names: names)
+        }
+        .fixedSize()
+    }
+
+    /// Compact (Main.html `.smt`, the Compact scene; DESIGN.md, "Compact"):
+    /// three lines and the word, filled while on.
+    func compactButton(names: Bool) -> some View {
+        let on = state.value.compact
+        let color = on ? Palette.settingsTabSelected.color : Palette.botIcon.color
+        return Button { list.toggleCompact() } label: {
+            HStack(spacing: 4) {
+                IconView(icon: BoardIcons.compact, size: 14 * k, color: color)
+                if names {
+                    Text("Compact").font(.system(size: 11 * k)).foregroundColor(color).lineLimit(1).fixedSize()
+                }
+            }
+            .padding(.horizontal, 6)
+            .frame(height: 22 * k)
+            .background(RoundedRectangle(cornerRadius: 6).fill(on ? Palette.settingsTabSelectedBackground.color : .clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .quickHelp("Compact")
+        .accessibilityLabel("Compact")
+        .accessibilityValue(on ? "On" : "Off")
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+
+    /// Show muted (Main.html `.smt`): the eye and the words, filled while
+    /// on; a blue dot while off when a hidden muted card has an unread
+    /// mention (DESIGN.md, "Show muted").
+    func showMutedButton(names: Bool) -> some View {
+        let on = state.value.showMuted
+        let dot = state.value.showMutedDot
+        let color = on ? Palette.settingsTabSelected.color : Palette.botIcon.color
+        return Button { list.toggleShowMuted() } label: {
+            HStack(spacing: 4) {
+                IconView(icon: BoardIcons.showMuted, size: 14 * k, color: color)
+                if names {
+                    Text("Show muted").font(.system(size: 11 * k)).foregroundColor(color).lineLimit(1).fixedSize()
+                }
+            }
+            .padding(.horizontal, 6)
+            .frame(height: 22 * k)
+            .background(RoundedRectangle(cornerRadius: 6).fill(on ? Palette.settingsTabSelectedBackground.color : .clear))
+            .overlay(alignment: .topTrailing) {
+                if dot {
+                    Circle().fill(Palette.blueDot.color).frame(width: 6, height: 6).offset(x: -1, y: 2)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .quickHelp("Show muted")
+        .accessibilityLabel(dot ? "Show muted, unread mention" : "Show muted")
+        .accessibilityValue(on ? "On" : "Off")
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+
     var dismissedButton: some View {
-        let open = list.showingDismissed
-        let count = list.dismissedCount
+        let open = state.value.showingDismissed
+        let count = state.value.dismissedCount
         let color = open ? Palette.settingsTabSelected.color : Palette.botIcon.color
         return Button { open ? list.closeDismissedList() : list.openDismissedList() } label: {
             HStack(spacing: 4) {
@@ -378,7 +673,7 @@ struct TabRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Dismissed")
+        .quickHelp("Dismissed")
         .accessibilityLabel(count > 0 ? "Dismissed, \(count)" : "Dismissed")
     }
 }
@@ -386,13 +681,15 @@ struct TabRow: View {
 /// The search field (the only part that grows), then in All the Group by,
 /// Then by and sort pop-up buttons showing their values.
 struct SearchRow: View {
-    @ObservedObject var list: SurfaceListModel
-    @ObservedObject var model: AccountViewModel
+    var list: SurfaceListModel
+    var model: AccountViewModel
+    @ObservedObject var state: Derived<SearchRowState>
     @FocusState private var focused: Bool
     @Environment(\.textScale) var k
 
     var body: some View {
-        HStack(spacing: 8) {
+        let showsChoices = state.value.tab == .all && !state.value.showingDismissed
+        HStack(spacing: 0) {
             HStack(spacing: 6) {
                 IconView(icon: BoardIcons.search, size: 13 * k, color: Palette.waiting.color)
                 TextField("Search", text: Binding(get: { list.search }, set: { list.setSearch($0) }))
@@ -406,17 +703,28 @@ struct SearchRow: View {
             .background(RoundedRectangle(cornerRadius: 6).fill(Palette.surface.color))
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.controlBorder.color, lineWidth: 1))
             .frame(maxWidth: .infinity)
-            if list.tab == .all && !list.showingDismissed {
-                let options = model.options
+            // In All only. Kept out of sight in the other tabs rather than
+            // made again on each tab switch (three pop-up buttons).
+            let options = state.value.options
+            HStack(spacing: 8) {
                 PullDown(title: options.groupBy.title, toolTip: "Group by", items: groupByItems(options))
                 PullDown(title: options.thenByTitle, toolTip: "Then by", enabled: options.groupBy != .none, items: thenByItems(options))
                 PullDown(title: options.sort.title, toolTip: "Sort", items: SortOrder.allCases.map { order in
                     IconMenuItem(order.title, checked: order == options.sort) { model.setSort(order) }
                 })
             }
+            .padding(.leading, 8)
+            .fixedSize()
+            .frame(width: showsChoices ? nil : 0, alignment: .leading)
+            // Clipped only while out of sight (the bezels reach past the
+            // frame by a point or two).
+            .clipShape(Rectangle().inset(by: showsChoices ? -4 : 0))
+            .opacity(showsChoices ? 1 : 0)
+            .allowsHitTesting(showsChoices)
+            .accessibilityHidden(!showsChoices)
         }
         .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
-        .onChange(of: list.searchFocused) { _, value in if focused != value { focused = value } }
+        .onChange(of: state.value.focused) { _, value in if focused != value { focused = value } }
         .onChange(of: focused) { _, value in if list.searchFocused != value { list.searchFocused = value } }
     }
 
@@ -451,12 +759,14 @@ struct PullDown: NSViewRepresentable {
 
     final class Coordinator {
         var targets: [IconMenu.Target] = []
+        /// What the menu shows: it is made again only when this changes.
+        var shown: [String] = []
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    func makeNSView(context: Context) -> NSPopUpButton {
-        let button = NSPopUpButton(frame: .zero, pullsDown: true)
+    func makeNSView(context: Context) -> TipPopUpButton {
+        let button = TipPopUpButton(frame: .zero, pullsDown: true)
         button.controlSize = .small
         button.setContentHuggingPriority(.required, for: .horizontal)
         button.setContentCompressionResistancePriority(.required, for: .horizontal)
@@ -464,11 +774,21 @@ struct PullDown: NSViewRepresentable {
         return button
     }
 
-    func updateNSView(_ button: NSPopUpButton, context: Context) {
+    func updateNSView(_ button: TipPopUpButton, context: Context) {
         update(button, context: context)
     }
 
-    private func update(_ button: NSPopUpButton, context: Context) {
+    private func update(_ button: TipPopUpButton, context: Context) {
+        let coordinator = context.coordinator
+        let shown = [title, "\(enabled)", "\(k)"] + items.map { item in
+            item.map { "\($0.title)|\($0.checked)|\($0.enabled)" } ?? "-"
+        }
+        if shown == coordinator.shown {
+            // The same menu: only the actions are new.
+            for (target, item) in zip(coordinator.targets, items.compactMap { $0 }) { target.action = item.action }
+            return
+        }
+        coordinator.shown = shown
         let menu = NSMenu()
         menu.autoenablesItems = false
         menu.addItem(NSMenuItem(title: title, action: nil, keyEquivalent: ""))
@@ -486,22 +806,60 @@ struct PullDown: NSViewRepresentable {
             targets.append(target)
             menu.addItem(entry)
         }
-        context.coordinator.targets = targets
+        coordinator.targets = targets
         button.menu = menu
         button.font = .systemFont(ofSize: 11 * k)
         button.isEnabled = enabled
-        button.toolTip = toolTip
+        button.help = toolTip
         button.setAccessibilityLabel(toolTip)
     }
 
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSPopUpButton, context: Context) -> CGSize? {
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: TipPopUpButton, context: Context) -> CGSize? {
         nsView.intrinsicContentSize
+    }
+}
+
+/// A pop-up button whose tooltip `QuickTip` shows (DESIGN.md, "Screens":
+/// every tooltip after about 0.4 s; AppKit's `toolTip` has no setting for
+/// its delay).
+final class TipPopUpButton: NSPopUpButton {
+    var help: String?
+    private let tipOwner = QuickTip.Owner()
+    private var area: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let area { removeTrackingArea(area) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        addTrackingArea(area)
+        self.area = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        if let help { QuickTip.schedule(help, owner: tipOwner, appearance: effectiveAppearance) }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        QuickTip.cancel(owner: tipOwner)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        QuickTip.cancel(owner: tipOwner)
+        super.mouseDown(with: event)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil { QuickTip.cancel(owner: tipOwner) }
     }
 }
 
 /// `← Dismissed`, the PR count and the note (Main.html `.dhead`).
 struct DismissedHeading: View {
-    @ObservedObject var list: SurfaceListModel
+    var list: SurfaceListModel
+    var count: Int
     var keepDays: Int64
     @Environment(\.textScale) var k
 
@@ -516,7 +874,7 @@ struct DismissedHeading: View {
                 .buttonStyle(HoverButtonStyle())
                 .accessibilityLabel("Back")
                 Text("Dismissed").font(.system(size: 12 * k, weight: .semibold))
-                Text(list.dismissedCount == 1 ? "1 PR" : "\(list.dismissedCount) PRs")
+                Text(count == 1 ? "1 PR" : "\(count) PRs")
                     .font(.system(size: 11 * k)).foregroundColor(Palette.secondary.color)
                 Spacer(minLength: 0)
             }
@@ -526,6 +884,27 @@ struct DismissedHeading: View {
                 .foregroundColor(Palette.waiting.color)
                 .padding(EdgeInsets(top: 2, leading: 16, bottom: 8, trailing: 16))
         }
+    }
+}
+
+/// The parts below observe the surface themselves.
+struct DismissedHeadingSlot: View {
+    var list: SurfaceListModel
+    @ObservedObject var state: Derived<DismissedHeadingState>
+    var keepDays: Int64
+
+    var body: some View {
+        if state.value.showing {
+            DismissedHeading(list: list, count: state.value.count, keepDays: keepDays)
+        }
+    }
+}
+
+struct KeyHintsSlot: View {
+    @ObservedObject var chrome: SurfaceChrome
+
+    var body: some View {
+        KeyHints(hints: chrome.hints)
     }
 }
 
