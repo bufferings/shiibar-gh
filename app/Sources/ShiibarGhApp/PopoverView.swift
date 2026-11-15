@@ -119,7 +119,7 @@ struct TabRowState: Equatable {
     var dismissedCount: Int
 }
 
-/// The operation row: the search field and `Filter`.
+/// The operation row: the search field, `Filter` and, in All, `Grouping…`.
 struct OperationRowState: Equatable {
     var search: String
     var tab: ListTab
@@ -128,6 +128,8 @@ struct OperationRowState: Equatable {
     var filterOpen: Bool
     var summary: String?
     var dot: Bool
+    /// `Grouping…` shows (All, not the Dismissed list).
+    var showsGrouping: Bool
 
     /// `Filter` shows (not in the Dismissed list).
     var showsFilter: Bool { !showingDismissed }
@@ -172,13 +174,11 @@ final class SurfaceState {
             OperationRowState(
                 search: list.search, tab: list.tab, showingDismissed: list.showingDismissed, focused: list.searchFocused,
                 filterOpen: list.filterOpen, summary: list.showsFilter ? list.filter.summary : nil,
-                dot: list.showsFilter && list.filterDot
+                dot: list.showsFilter && list.filterDot, showsGrouping: list.showsGroupingButton
             )
         }
-        options = Derived([listChanges]) { [unowned list, unowned model] in
-            FilterOptionsState(
-                shows: list.showsFilterOptions, tab: list.tab, filter: list.filter, options: model.options
-            )
+        options = Derived([listChanges]) { [unowned list] in
+            FilterOptionsState(shows: list.showsFilterOptions, lines: list.filterOptions, filter: list.filter)
         }
         dismissed = Derived([listChanges]) { [unowned list] in
             DismissedHeadingState(showing: list.showingDismissed, count: list.showingDismissed ? list.dismissedCount : 0)
@@ -263,7 +263,7 @@ struct PopoverView: View {
                 // The options take their height when there is room; the
                 // list keeps its minimum, and the options scroll inside
                 // (DESIGN.md, "Filter").
-                FilterOptionsSlot(list: list, model: model, state: state.options)
+                FilterOptionsSlot(list: list, state: state.options)
                     .layoutPriority(1)
                 DismissedHeadingSlot(list: list, state: state.dismissed, keepDays: value.keepDays)
                 ListSlot(content: CardContext.of(list, avatars: avatars).content, now: now)
@@ -636,70 +636,87 @@ struct TabRow: View {
     }
 }
 
-/// The search field, which takes the room left (at least 140 points at
-/// text size 12), then `Filter` (FilterViews.swift); the search field only
-/// while the Dismissed list shows (DESIGN.md, "Screens").
+/// The search field, 200 points wide at text size 12 whatever the tab,
+/// the summary or the Dismissed list, then `Filter` (FilterViews.swift),
+/// which takes the room left, and in All `Grouping…` at the right end; the
+/// search field only while the Dismissed list shows (DESIGN.md, "Screens").
+/// In a window too narrow for 200 points and the parts beside it, the
+/// search field gives way rather than push `Grouping…` out.
 struct OperationRow: View {
     var list: SurfaceListModel
     @ObservedObject var state: Derived<OperationRowState>
     @FocusState private var focused: Bool
+
+    var body: some View {
+        OperationRowContent(
+            value: state.value, search: Binding(get: { list.search }, set: { list.setSearch($0) }), focused: $focused,
+            toggleFilter: { list.toggleFilterOpen() }, openGrouping: { list.openGrouping() }
+        )
+        .onChange(of: state.value.focused) { _, value in if focused != value { focused = value } }
+        .onChange(of: focused) { _, value in if list.searchFocused != value { list.searchFocused = value } }
+    }
+}
+
+/// The parts of the operation row, from its values.
+struct OperationRowContent: View {
+    var value: OperationRowState
+    var search: Binding<String>
+    var focused: FocusState<Bool>.Binding
+    var toggleFilter: () -> Void
+    var openGrouping: () -> Void
     @Environment(\.textScale) var k
 
     var body: some View {
-        let value = state.value
         HStack(spacing: 8) {
             HStack(spacing: 6) {
                 IconView(icon: BoardIcons.search, size: 13 * k, color: Palette.waiting.color)
-                TextField("Search", text: Binding(get: { list.search }, set: { list.setSearch($0) }))
+                TextField("Search", text: search)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12 * k))
-                    .focused($focused)
+                    .focused(focused)
                     .accessibilityLabel("Search")
             }
             .padding(.horizontal, 8)
             .frame(height: 24 * k)
             .background(RoundedRectangle(cornerRadius: 6).fill(Palette.surface.color))
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.controlBorder.color, lineWidth: 1))
-            .frame(minWidth: FilterOptionsLayout.searchMinimum * k, maxWidth: .infinity)
+            // 200 points whatever the summary: it is laid out before
+            // `Filter`, whose summary takes what is left. Only a window
+            // narrower than the row's other parts makes it give way.
+            .frame(minWidth: 0, maxWidth: FilterOptionsLayout.searchWidth * k)
+            .layoutPriority(1)
             if value.showsFilter {
-                FilterButton(open: value.filterOpen, dot: value.dot, summary: value.summary) { list.toggleFilterOpen() }
-                    .layoutPriority(1)
+                FilterButton(open: value.filterOpen, dot: value.dot, summary: value.summary, toggle: toggleFilter)
+            }
+            Spacer(minLength: 0)
+            if value.showsGrouping {
+                GroupingButton(press: openGrouping)
+                    .fixedSize()
+                    .layoutPriority(2)
             }
         }
         .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
-        .onChange(of: state.value.focused) { _, value in if focused != value { focused = value } }
-        .onChange(of: focused) { _, value in if list.searchFocused != value { list.searchFocused = value } }
     }
 }
 
 /// A standard pull-down pop-up button whose title is the current value
 /// (NSPopUpButton with `pullsDown`: the first item is the title and the rest
-/// are the menu). A pull-down, so that Group by can end with `Grouping…`.
-/// In the Filter's options it never takes the keyboard focus
-/// (`refusesFocus`); in the Grouping sheet it does, as in 0.5 (DESIGN.md,
+/// are the menu, the current value checked). Used in the Grouping sheet,
+/// where it takes the keyboard focus as a standard control (DESIGN.md,
 /// "Filter").
 struct PullDown: NSViewRepresentable {
     var title: String
-    /// nil: no tooltip (the Filter's rows have names).
+    /// nil: no tooltip (the sheet's rows have names).
     var toolTip: String?
     var accessibilityName: String
     var enabled = true
-    /// The narrowest it gets, at text size 12.
-    var minWidth: CGFloat = 0
-    /// Mouse only (the Filter's options).
-    var refusesFocus: Bool
     var items: [IconMenuItem?]
 
-    init(
-        title: String, toolTip: String?, accessibilityName: String? = nil, enabled: Bool = true, minWidth: CGFloat = 0,
-        refusesFocus: Bool = false, items: [IconMenuItem?]
-    ) {
+    init(title: String, toolTip: String?, accessibilityName: String? = nil, enabled: Bool = true, items: [IconMenuItem?]) {
         self.title = title
         self.toolTip = toolTip
         self.accessibilityName = accessibilityName ?? toolTip ?? title
         self.enabled = enabled
-        self.minWidth = minWidth
-        self.refusesFocus = refusesFocus
         self.items = items
     }
     @Environment(\.textScale) var k
@@ -715,7 +732,6 @@ struct PullDown: NSViewRepresentable {
     func makeNSView(context: Context) -> TipPopUpButton {
         let button = TipPopUpButton(frame: .zero, pullsDown: true)
         button.controlSize = .small
-        button.refusesFocus = refusesFocus
         button.setContentHuggingPriority(.required, for: .horizontal)
         button.setContentCompressionResistancePriority(.required, for: .horizontal)
         update(button, context: context)
@@ -763,8 +779,7 @@ struct PullDown: NSViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: TipPopUpButton, context: Context) -> CGSize? {
-        let size = nsView.intrinsicContentSize
-        return CGSize(width: max(size.width, minWidth * k), height: size.height)
+        nsView.intrinsicContentSize
     }
 }
 
@@ -773,17 +788,6 @@ struct PullDown: NSViewRepresentable {
 /// its delay).
 final class TipPopUpButton: NSPopUpButton {
     var help: String?
-
-    /// Mouse only (the Filter's options): the keys stay with the list and
-    /// the search field (DESIGN.md, "Filter"), Full Keyboard Access or not.
-    /// Off, the standard pop-up button (the Grouping sheet).
-    var refusesFocus = false {
-        didSet { refusesFirstResponder = refusesFocus }
-    }
-
-    override var acceptsFirstResponder: Bool { refusesFocus ? false : super.acceptsFirstResponder }
-    override var canBecomeKeyView: Bool { refusesFocus ? false : super.canBecomeKeyView }
-    override func becomeFirstResponder() -> Bool { refusesFocus ? false : super.becomeFirstResponder() }
     private let tipOwner = QuickTip.Owner()
     private var area: NSTrackingArea?
 
@@ -941,9 +945,10 @@ struct FlowLayout: Layout {
 
 // MARK: - Grouping sheet
 
-/// The Grouping sheet (Main.html `.gsheet`): Group by and Then by, then the
-/// order of each chosen value's groups, changed by dragging a row. Shown
-/// inside the popover or the window; Done closes it.
+/// The Grouping sheet (Main.html `.gsheet`), opened by `Grouping…` in All's
+/// operation row: Group by and Then by, Sort, then the order of each chosen
+/// value's groups, changed by dragging a row. A change applies to the list
+/// at once. Shown inside the popover or the window; Done closes it.
 struct GroupingSheet: View {
     @ObservedObject var model: AccountViewModel
     var done: () -> Void
@@ -971,6 +976,11 @@ struct GroupingSheet: View {
                     )
                     Spacer(minLength: 0)
                 }
+                HStack(spacing: 8) {
+                    Text("Sort").font(.system(size: 11 * k, weight: .semibold)).foregroundColor(Palette.strongText.color)
+                    PullDown(title: options.sort.title, toolTip: "Sort", items: Self.sortItems(options) { model.setSort($0) })
+                    Spacer(minLength: 0)
+                }
                 ForEach([options.groupBy, options.thenBy].filter { $0 != .none }, id: \.self) { by in
                     Text("Order of " + by.title).font(.system(size: 11 * k, weight: .semibold)).foregroundColor(Palette.strongText.color)
                     GroupOrderList(model: model, by: by)
@@ -988,6 +998,13 @@ struct GroupingSheet: View {
             )
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.settingsTabBarBorder.color, lineWidth: 1))
             .padding(EdgeInsets(top: 118, leading: 20, bottom: 20, trailing: 20))
+        }
+    }
+
+    /// The menu of Sort: the two orders, the current one checked.
+    static func sortItems(_ options: ListOptions, choose: @escaping (ShiibarGhCore.SortOrder) -> Void) -> [IconMenuItem?] {
+        ShiibarGhCore.SortOrder.allCases.map { order in
+            IconMenuItem(order.title, checked: order == options.sort) { choose(order) }
         }
     }
 }

@@ -904,6 +904,68 @@ final class FilterModelTests: XCTestCase {
         XCTAssertTrue(list.showsFilterOptions)
     }
 
+    /// The options are the same three lines in every tab, in the order of
+    /// the summary: Status, Muted, Unread; no Group by, Then by or Sort.
+    func testTheOptionLinesAreTheSameInEveryTab() async {
+        let list = await loaded(.all, cards: sampleCards())
+        list.toggleFilterOpen()
+        for tab in ListTab.allCases {
+            list.openTab(tab)
+            XCTAssertTrue(list.showsFilterOptions, "\(tab)")
+            XCTAssertEqual(list.filterOptions, [.status, .muted, .unread], "\(tab)")
+            XCTAssertEqual(list.filterOptions.map(\.title), ["Status", "Muted", "Unread"], "\(tab)")
+        }
+        // The summary lists them in the same order.
+        list.openTab(.review)
+        list.setMuteChoice(.only)
+        list.setUnreadOnly(true)
+        list.toggleStatus(.closed)
+        XCTAssertEqual(list.filter.summary, "Open · Draft · Merged · Muted only · Unread only")
+    }
+
+    /// `Grouping…` shows in All only, not while the Dismissed list shows,
+    /// and opens the Grouping sheet.
+    func testTheGroupingButtonShowsInAllOnly() async {
+        let list = await loaded(.review, cards: sampleCards())
+        XCTAssertFalse(list.showsGroupingButton, "Review")
+        list.openGrouping()
+        XCTAssertFalse(list.showsGrouping, "no button, no sheet")
+        list.openTab(.mine)
+        XCTAssertFalse(list.showsGroupingButton, "Mine")
+        list.openTab(.all)
+        XCTAssertTrue(list.showsGroupingButton, "All")
+        list.toggleFilterOpen()
+        XCTAssertTrue(list.showsGroupingButton, "open or closed Filter alike")
+        list.openDismissedList()
+        XCTAssertFalse(list.showsGroupingButton, "the Dismissed list: the search field only")
+        list.closeDismissedList()
+        XCTAssertTrue(list.showsGroupingButton)
+        list.openGrouping()
+        XCTAssertTrue(list.showsGrouping, "the button opens the sheet")
+        list.showsGrouping = false
+    }
+
+    /// Sort, now in the Grouping sheet, orders All at once and is kept per
+    /// account.
+    func testSortFromTheGroupingSheetOrdersAll() async {
+        let cards = [
+            card("A", pr: "example-org/api#1", added: T0 + 30, updated: T0 + 10),
+            card("B", pr: "example-org/api#2", added: T0 + 20, updated: T0 + 30),
+            card("C", pr: "example-org/api#3", added: T0 + 10, updated: T0 + 20),
+        ]
+        let list = await loaded(.all, cards: cards)
+        list.data.setGroupBy(.none)
+        XCTAssertEqual(list.shownCards, ["B", "C", "A"], "Recently updated: the default")
+        list.openGrouping()
+        list.data.setSort(.recentlyAdded)
+        XCTAssertEqual(list.shownCards, ["A", "B", "C"], "applied at once, the sheet still open")
+        XCTAssertTrue(list.showsGrouping)
+        XCTAssertEqual(UIStateStore(defaults: defaults).options(account: "3407303").sort, .recentlyAdded)
+        XCTAssertNil(list.filter.summary, "not in the Filter's summary")
+        list.data.setSort(.recentlyUpdated)
+        XCTAssertEqual(list.shownCards, ["B", "C", "A"])
+    }
+
     /// A card folded into "+ N more PRs" is kept too.
     func testAFoldedCardIsKept() async {
         let cards = (0..<7).map { i in

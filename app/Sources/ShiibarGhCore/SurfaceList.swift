@@ -173,6 +173,21 @@ public final class SurfaceListModel: ObservableObject {
     /// opening leaves the open state as it is).
     public var showsFilterOptions: Bool { data.filterOpen && !showingDismissed }
 
+    /// The lines of the options: the same in every tab (DESIGN.md,
+    /// "Filter").
+    public var filterOptions: [FilterOption] { FilterOption.allCases }
+
+    /// The `Grouping…` button at the right end of the operation row: All
+    /// only, not while the Dismissed list shows (DESIGN.md, "All",
+    /// "Grouping settings").
+    public var showsGroupingButton: Bool { tab == .all && !showingDismissed }
+
+    /// The `Grouping…` button pressed: the Grouping sheet shows.
+    public func openGrouping() {
+        guard showsGroupingButton else { return }
+        showsGrouping = true
+    }
+
     /// A press on the word, the chevron, the dot or the summary.
     public func toggleFilterOpen() {
         data.setFilterOpen(!data.filterOpen)

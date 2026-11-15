@@ -12,6 +12,22 @@ public enum FilterText {
     public static let dotTip = "Unread pull requests are hidden by the filter"
 }
 
+/// One line of the Filter's options, in the order they show: the same three
+/// in every tab, in the order of the summary (DESIGN.md, "Filter"). Group
+/// by, Then by and Sort are not here: they are in the Grouping sheet.
+public enum FilterOption: CaseIterable {
+    case status, muted, unread
+
+    /// The name at the left of the line.
+    public var title: String {
+        switch self {
+        case .status: return "Status"
+        case .muted: return "Muted"
+        case .unread: return "Unread"
+        }
+    }
+}
+
 /// Filter › Muted: hide the muted cards (the default), show them in gray at
 /// their places, or show them only.
 public enum MuteChoice: String, Equatable, Codable, CaseIterable {

@@ -1,6 +1,6 @@
-// The controls of the Filter's options never take the keyboard focus
-// (DESIGN.md, "Filter": they are for the mouse, so the keys keep working on
-// the list and the search field). A window that is never shown: a control
+// The controls of the Filter's options and `Grouping…` never take the
+// keyboard focus (DESIGN.md, "Filter", "All": they are for the mouse, so the
+// keys keep working on the list and the search field). A window that is never shown: a control
 // asked to become the first responder refuses, and Tab (the key view loop,
 // which Full Keyboard Access walks) never reaches one. A text field in the
 // same window does take the focus, so the window does pass it on.
@@ -8,6 +8,7 @@
 import AppKit
 @testable import ShiibarGhApp
 import ShiibarGhCore
+import SwiftUI
 import XCTest
 
 @MainActor
@@ -17,10 +18,9 @@ final class FilterControlsTests: XCTestCase {
         checkbox.refusesFirstResponder = true
         let segmented = NoFocusSegmentedControl(labels: ["Hide", "Show", "Only"], trackingMode: .selectOne, target: nil, action: nil)
         segmented.refusesFirstResponder = true
-        let popUp = TipPopUpButton(frame: .zero, pullsDown: true)
-        popUp.refusesFocus = true
-        popUp.addItem(withTitle: "Repository")
-        return [checkbox, segmented, popUp]
+        let grouping = NoFocusButton(title: GroupingButton.title, target: nil, action: nil)
+        grouping.refusesFirstResponder = true
+        return [checkbox, segmented, grouping]
     }
 
     func testTheOptionsNeverBecomeTheFirstResponder() {
@@ -51,25 +51,73 @@ final class FilterControlsTests: XCTestCase {
         }
     }
 
-    /// The Grouping sheet's pop-ups take the focus as in 0.5; the same
-    /// button in the Filter's options does not (DESIGN.md, "Filter").
+    /// The Grouping sheet's pop-ups take the focus as in 0.5 (DESIGN.md,
+    /// "Filter"): the standard pop-up button, nothing refused.
     func testTheGroupingSheetPopUpsTakeTheFocus() {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 120), styleMask: [.titled], backing: .buffered, defer: true)
         let sheet = TipPopUpButton(frame: NSRect(x: 10, y: 10, width: 150, height: 24), pullsDown: true)
         sheet.addItem(withTitle: "Repository")
-        let options = TipPopUpButton(frame: NSRect(x: 10, y: 50, width: 150, height: 24), pullsDown: true)
-        options.addItem(withTitle: "Repository")
-        options.refusesFocus = true
         window.contentView?.addSubview(sheet)
-        window.contentView?.addSubview(options)
-        XCTAssertFalse(sheet.refusesFocus, "the default: the sheet's")
         XCTAssertFalse(sheet.refusesFirstResponder)
         window.makeFirstResponder(sheet)
         XCTAssertTrue(window.firstResponder === sheet, "the sheet's pop-up takes the focus")
-        window.makeFirstResponder(options)
-        XCTAssertFalse(window.firstResponder === options, "the options' pop-up does not")
-        XCTAssertFalse(options.acceptsFirstResponder)
-        XCTAssertFalse(options.canBecomeKeyView)
+    }
+
+    /// Sort in the Grouping sheet: the two orders, the current one checked;
+    /// choosing one sets it.
+    func testTheGroupingSheetSortMenu() {
+        var chosen: [ShiibarGhCore.SortOrder] = []
+        let items = GroupingSheet.sortItems(ListOptions(sort: .recentlyUpdated)) { chosen.append($0) }.compactMap { $0 }
+        XCTAssertEqual(items.map(\.title), ["Recently updated", "Recently added"])
+        XCTAssertEqual(items.map(\.checked), [true, false])
+        items[1].action()
+        XCTAssertEqual(chosen, [.recentlyAdded])
+        let added = GroupingSheet.sortItems(ListOptions(sort: .recentlyAdded)) { _ in }.compactMap { $0 }
+        XCTAssertEqual(added.map(\.checked), [false, true])
+    }
+
+    /// The search field is 200 points wide at text size 12 (and scales with
+    /// it): the same in every tab, with no summary or a long one, with
+    /// `Grouping…` or without, and while the Dismissed list shows (only the
+    /// search field then). `Filter` and `Grouping…` sit to its right;
+    /// `Grouping…` at the right end.
+    func testTheSearchFieldWidthIsFixed() {
+        let long = "Open · Draft · Merged · Muted only · Unread only"
+        func state(_ tab: ListTab, summary: String?, dismissed: Bool = false) -> OperationRowState {
+            OperationRowState(
+                search: "", tab: tab, showingDismissed: dismissed, focused: false, filterOpen: false, summary: dismissed ? nil : summary,
+                dot: false, showsGrouping: tab == .all && !dismissed
+            )
+        }
+        let states = [
+            state(.all, summary: nil), state(.all, summary: long), state(.all, summary: "Unread only"),
+            state(.review, summary: nil), state(.review, summary: long), state(.mine, summary: "Muted shown"),
+            state(.review, summary: long, dismissed: true),
+        ]
+        for k: CGFloat in [1, 1.5] {
+            var widths: [CGFloat] = []
+            for value in states {
+                let frames = OperationRowProbe.frames(value, k: k)
+                guard let field = frames.field else { return XCTFail("no search field") }
+                widths.append(field.width)
+                XCTAssertLessThan(field.maxX, 12 + 200 * k + 0.5, "inside its 200 points")
+                if let grouping = frames.grouping {
+                    XCTAssertTrue(value.showsGrouping)
+                    XCTAssertEqual(grouping.maxX, 460 * k - 12, accuracy: 1, "at the right end")
+                    XCTAssertGreaterThan(grouping.minX, field.maxX)
+                } else {
+                    XCTAssertFalse(value.showsGrouping)
+                }
+            }
+            XCTAssertGreaterThan(widths[0], 150 * k, "most of the 200 points")
+            XCTAssertTrue(widths.allSatisfy { abs($0 - widths[0]) < 0.5 }, "k \(k): \(widths)")
+        }
+        // The narrowest window (300 points): everything stays inside, the
+        // search field gives way.
+        let narrow = OperationRowProbe.frames(state(.all, summary: long), k: 1, width: 300)
+        XCTAssertEqual(narrow.grouping?.maxX ?? 0, 300 - 12, accuracy: 1)
+        XCTAssertGreaterThan(narrow.field?.width ?? 0, 40)
+        XCTAssertGreaterThanOrEqual(narrow.field?.minX ?? -1, 12)
     }
 
     /// The summary's tooltip only while it is cut short.
@@ -121,5 +169,44 @@ final class FilterControlsTests: XCTestCase {
         XCTAssertFalse(control.acceptsFirstResponder)
         window.makeFirstResponder(control)
         XCTAssertFalse(window.firstResponder === control)
+    }
+}
+
+/// Lays the operation row out at the popover's width (460 points at text
+/// size 12, scaled with it), in a window that is
+/// never shown, and finds the search field (an NSTextField) and
+/// `Grouping…` (a NoFocusButton) in it.
+@MainActor
+enum OperationRowProbe {
+    struct Host: View {
+        var value: OperationRowState
+        var k: CGFloat
+        var width: CGFloat
+        @FocusState var focused: Bool
+        @State var text = ""
+
+        var body: some View {
+            OperationRowContent(value: value, search: $text, focused: $focused, toggleFilter: {}, openGrouping: {})
+                .environment(\.textScale, k)
+                .frame(width: width)
+        }
+    }
+
+    static func frames(_ value: OperationRowState, k: CGFloat, width: CGFloat? = nil) -> (field: NSRect?, grouping: NSRect?) {
+        let width = width ?? 460 * k
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 80), styleMask: [.borderless], backing: .buffered, defer: true)
+        let hosting = NSHostingView(rootView: Host(value: value, k: k, width: width))
+        hosting.frame = NSRect(x: 0, y: 0, width: width, height: 80)
+        window.contentView = hosting
+        hosting.layoutSubtreeIfNeeded()
+        var field: NSRect?
+        var grouping: NSRect?
+        func walk(_ view: NSView) {
+            if let text = view as? NSTextField, text.isEditable { field = text.convert(text.bounds, to: hosting) }
+            if let button = view as? NoFocusButton { grouping = button.convert(button.bounds, to: hosting) }
+            view.subviews.forEach(walk)
+        }
+        walk(hosting)
+        return (field, grouping)
     }
 }

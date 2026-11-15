@@ -1,9 +1,10 @@
 // `Filter` in the operation row and its options (docs/design/Main.html, the
 // Filter scenes; DESIGN.md, "Filter"): the word, the chevron, the blue dot
 // and the summary; when open, one option a line between the operation row
-// and the list. The options are standard AppKit controls that never take
-// the keyboard focus, so the keys keep working on the list and the search
-// field while the options show.
+// and the list; `Grouping…` at the right end of All's operation row. The
+// options and `Grouping…` are standard AppKit controls that never take the
+// keyboard focus, so the keys keep working on the list and the search field
+// while the options show.
 //
 // AppKit API used, as declared in the SDK headers (NSControl.h, NSView.h,
 // NSResponder.h, NSSegmentedControl.h, NSButton.h): `refusesFirstResponder`
@@ -12,7 +13,9 @@
 // too: `makeFirstResponder:` does not ask `acceptsFirstResponder` before it
 // (the test below saw a control take the focus that way);
 // `NSSegmentedControl(labels:trackingMode:target:action:)` with
-// `.selectOne`; `NSButton(checkboxWithTitle:target:action:)`. A test
+// `.selectOne`; `NSButton(checkboxWithTitle:target:action:)`;
+// `NSButton(title:target:action:)` ("Creates a standard push button with
+// the provided title", NSButton.h) for `Grouping…`. A test
 // (ShiibarGhAppTests, FilterControlsTests) checks that none of them becomes
 // the first responder, asked in code or by Tab.
 
@@ -20,36 +23,34 @@ import AppKit
 import ShiibarGhCore
 import SwiftUI
 
-/// Sizes of the Filter's area at text size 12 (DESIGN.md, "Constants";
-/// Main.html `.fo`, `.fopts`).
+/// Sizes of the Filter's area and the operation row at text size 12
+/// (DESIGN.md, "Constants"; Main.html `.fo`, `.fopts`, `.search`).
 enum FilterOptionsLayout {
     /// The list keeps at least this height while the options show.
     static let listMinimum: CGFloat = 100
-    /// The search field gives way down to this width.
-    static let searchMinimum: CGFloat = 140
+    /// The search field's width: the same in every tab, with or without
+    /// the summary, and while the Dismissed list shows.
+    static let searchWidth: CGFloat = 200
     /// One option line.
     static let rowHeight: CGFloat = 27
     /// Under the last line, before the border.
     static let bottomPadding: CGFloat = 6
     /// Below the border, before the list.
     static let gap: CGFloat = 6
-    /// The pop-up buttons of All's lines.
-    static let popUpWidth: CGFloat = 150
 }
 
 /// The options area.
 struct FilterOptionsState: Equatable {
     var shows: Bool
-    var tab: ListTab
+    var lines: [FilterOption]
     var filter: ListFilter
-    var options: ListOptions
 }
 
 /// `Filter`, its chevron (right while closed, down while open), the blue
 /// dot and the summary (Main.html `.flt`). Any press on it opens or closes
 /// the options; the dot and the summary have no action of their own. The
-/// summary takes its own width and is cut with `…` when the row runs out;
-/// then its tooltip shows all of it.
+/// summary takes the room the row leaves and is cut with `…` when it does
+/// not fit; then its tooltip shows all of it.
 struct FilterButton: View {
     var open: Bool
     var dot: Bool
@@ -121,62 +122,30 @@ private struct SummaryWidthKey: PreferenceKey {
 /// The options while `Filter` is open and the Dismissed list does not show.
 struct FilterOptionsSlot: View {
     var list: SurfaceListModel
-    var model: AccountViewModel
     @ObservedObject var state: Derived<FilterOptionsState>
-    @Environment(\.textScale) var k
 
     var body: some View {
         if state.value.shows {
-            FilterOptions(list: list, model: model, state: state.value)
+            FilterOptions(list: list, state: state.value)
         }
     }
 }
 
 /// One option a line, the name at the left and the control at the right
-/// (Main.html `.fopts`, `.fo`): Muted, Status and Unread in every tab, then
-/// Group by, Then by and Sort in All. Scrolls inside when the surface is
-/// short (the list keeps its minimum height).
+/// (Main.html `.fopts`, `.fo`): Status, Muted and Unread, in every tab.
+/// Scrolls inside when the surface is short (the list keeps its minimum
+/// height).
 struct FilterOptions: View {
     var list: SurfaceListModel
-    var model: AccountViewModel
     var state: FilterOptionsState
     @Environment(\.textScale) var k
 
     var body: some View {
-        let lines = state.tab == .all ? 6 : 3
-        let height = CGFloat(lines) * FilterOptionsLayout.rowHeight * k + FilterOptionsLayout.bottomPadding
+        let height = CGFloat(state.lines.count) * FilterOptionsLayout.rowHeight * k + FilterOptionsLayout.bottomPadding
         ScrollView(.vertical) {
             VStack(spacing: 0) {
-                line("Muted") { mutedControl }
-                line("Status") { statusControl }
-                line("Unread") {
-                    CheckBox(title: "Unread only", on: state.filter.unreadOnly) { [list] in
-                        list.setUnreadOnly(!list.filter.unreadOnly)
-                        return list.filter.unreadOnly
-                    }
-                }
-                if state.tab == .all {
-                    let options = state.options
-                    line("Group by") {
-                        PullDown(
-                            title: options.groupBy.title, toolTip: nil, accessibilityName: "Group by",
-                            minWidth: FilterOptionsLayout.popUpWidth, refusesFocus: true, items: groupByItems(options)
-                        )
-                    }
-                    line("Then by") {
-                        PullDown(
-                            title: options.thenByTitle, toolTip: nil, accessibilityName: "Then by", enabled: options.groupBy != .none,
-                            minWidth: FilterOptionsLayout.popUpWidth, refusesFocus: true, items: thenByItems(options)
-                        )
-                    }
-                    line("Sort") {
-                        PullDown(
-                            title: options.sort.title, toolTip: nil, accessibilityName: "Sort", minWidth: FilterOptionsLayout.popUpWidth, refusesFocus: true,
-                            items: SortOrder.allCases.map { order in
-                                IconMenuItem(order.title, checked: order == options.sort) { [model] in model.setSort(order) }
-                            }
-                        )
-                    }
+                ForEach(state.lines, id: \.self) { option in
+                    line(option.title) { control(option) }
                 }
             }
             .padding(EdgeInsets(top: 0, leading: 16, bottom: FilterOptionsLayout.bottomPadding, trailing: 14))
@@ -200,6 +169,19 @@ struct FilterOptions: View {
         .frame(height: FilterOptionsLayout.rowHeight * k)
     }
 
+    @ViewBuilder
+    private func control(_ option: FilterOption) -> some View {
+        switch option {
+        case .status: statusControl
+        case .muted: mutedControl
+        case .unread:
+            CheckBox(title: "Unread only", on: state.filter.unreadOnly) { [list] in
+                list.setUnreadOnly(!list.filter.unreadOnly)
+                return list.filter.unreadOnly
+            }
+        }
+    }
+
     private var mutedControl: some View {
         let choices = MuteChoice.allCases
         return Segmented(
@@ -220,23 +202,6 @@ struct FilterOptions: View {
             }
         }
     }
-
-    /// The five values, the current one checked, then `Grouping…`.
-    private func groupByItems(_ options: ListOptions) -> [IconMenuItem?] {
-        var items: [IconMenuItem?] = GroupBy.allCases.map { value in
-            IconMenuItem(value.title, checked: value == options.groupBy) { [model] in model.setGroupBy(value) }
-        }
-        items.append(nil)
-        items.append(IconMenuItem("Grouping…") { [list] in list.showsGrouping = true })
-        return items
-    }
-
-    /// The same values without Group by's.
-    private func thenByItems(_ options: ListOptions) -> [IconMenuItem?] {
-        options.thenByChoices.map { value in
-            IconMenuItem(value.title, checked: value == options.thenBy) { [model] in model.setThenBy(value) }
-        }
-    }
 }
 
 // MARK: - Controls that never take the keyboard focus
@@ -253,6 +218,54 @@ final class NoFocusSegmentedControl: NSSegmentedControl {
     override var acceptsFirstResponder: Bool { false }
     override var canBecomeKeyView: Bool { false }
     override func becomeFirstResponder() -> Bool { false }
+}
+
+/// A push button (NSButton) for the mouse only.
+final class NoFocusButton: NSButton {
+    override var acceptsFirstResponder: Bool { false }
+    override var canBecomeKeyView: Bool { false }
+    override func becomeFirstResponder() -> Bool { false }
+}
+
+/// `Grouping…` at the right end of All's operation row (DESIGN.md, "All",
+/// "Grouping settings"): a standard small push button that opens the
+/// Grouping sheet. Mouse only, like the Filter's options.
+struct GroupingButton: NSViewRepresentable {
+    static let title = "Grouping\u{2026}"
+    var press: () -> Void
+    @Environment(\.textScale) var k
+
+    final class Coordinator: NSObject {
+        var press: () -> Void = {}
+
+        @objc func pressed(_ sender: NSButton) { press() }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NoFocusButton {
+        let button = NoFocusButton(title: Self.title, target: context.coordinator, action: #selector(Coordinator.pressed(_:)))
+        button.refusesFirstResponder = true
+        button.controlSize = .small
+        button.setContentHuggingPriority(.required, for: .horizontal)
+        button.setContentCompressionResistancePriority(.required, for: .horizontal)
+        update(button, context: context)
+        return button
+    }
+
+    func updateNSView(_ button: NoFocusButton, context: Context) {
+        update(button, context: context)
+    }
+
+    private func update(_ button: NoFocusButton, context: Context) {
+        context.coordinator.press = press
+        let font = NSFont.systemFont(ofSize: 11 * k)
+        if button.font != font { button.font = font }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NoFocusButton, context: Context) -> CGSize? {
+        nsView.intrinsicContentSize
+    }
 }
 
 /// A standard checkbox. `press` makes the change and returns the value the

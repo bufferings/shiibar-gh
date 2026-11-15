@@ -127,7 +127,12 @@ fn run_with_input(state_dir: &Path, args: &[&str], input: &str) -> Run {
         .spawn()
         .unwrap();
     let mut stdin = child.stdin.take().unwrap();
-    stdin.write_all(input.as_bytes()).unwrap();
+    // A command that fails on its arguments exits without reading: writing
+    // to it then fails with a broken pipe, which is not this test's subject.
+    match stdin.write_all(input.as_bytes()) {
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+        other => other.unwrap(),
+    }
     drop(stdin);
     let stdout = read_all(child.stdout.take().unwrap());
     let stderr = read_all(child.stderr.take().unwrap());

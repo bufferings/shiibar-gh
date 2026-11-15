@@ -1167,6 +1167,15 @@ final class PerfRunner: NSObject {
         await run("All Compact: Group by Repository") { data.setGroupBy(.repository) }
         await run("All Compact: sort by added") { data.setSort(.recentlyAdded) }
         await run("All Compact: sort by updated") { data.setSort(.recentlyUpdated) }
+        // Sort from the Grouping sheet (opened by `Grouping…`): the list
+        // behind it changes at once.
+        list.openGrouping()
+        await pause(0.6)
+        await run("All Compact: Grouping sheet, sort by added") { data.setSort(.recentlyAdded) }
+        await run("All Compact: Grouping sheet, sort by updated") { data.setSort(.recentlyUpdated) }
+        await run("All Compact: Grouping sheet, Group by Owner") { data.setGroupBy(.owner) }
+        await run("All Compact: Grouping sheet, Group by Repository") { data.setGroupBy(.repository) }
+        await run("All Compact: Grouping sheet closed") { list.showsGrouping = false }
         await run("All Compact: Filter Muted Hide") { list.setMuteChoice(.hide) }
         await run("All Compact: Filter Muted Show") { list.setMuteChoice(.show) }
         await run("All Compact: search") { list.setSearch("repo-01") }
@@ -1303,11 +1312,12 @@ final class PerfRunner: NSObject {
 
     /// With the options open in a short window, the list keeps 100 points
     /// (at text size 12) and the options scroll inside (DESIGN.md,
-    /// "Filter").
+    /// "Filter"). 330 points: short enough that the three option lines do
+    /// not fit beside the list's 100.
     private func checkShortSurface(list: SurfaceListModel, window: NSWindow) async {
         let frame = window.frame
         defer { window.setFrame(frame, display: true) }
-        window.setFrame(NSRect(x: frame.minX, y: frame.maxY - 420, width: frame.width, height: 420), display: true)
+        window.setFrame(NSRect(x: frame.minX, y: frame.maxY - 330, width: frame.width, height: 330), display: true)
         await pause(0.8)
         consistencyChecks += 1
         let root = window.contentView.flatMap { view -> SurfaceRoot? in
