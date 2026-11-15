@@ -8,6 +8,16 @@ extension RGB {
     public var nsColor: NSColor { NSColor(srgbRed: red, green: green, blue: blue, alpha: 1) }
 }
 
+extension Palette {
+    /// `searchMatch` with its alpha for the appearance it is drawn in.
+    public static let searchMatchColor: NSColor = {
+        let rgb = searchMatch
+        let light = NSColor(srgbRed: rgb.red, green: rgb.green, blue: rgb.blue, alpha: searchMatchAlpha.light)
+        let dark = NSColor(srgbRed: rgb.red, green: rgb.green, blue: rgb.blue, alpha: searchMatchAlpha.dark)
+        return NSColor(name: nil) { appearance in appearance.isDark ? dark : light }
+    }()
+}
+
 extension NSAppearance {
     public var isDark: Bool { bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
 }

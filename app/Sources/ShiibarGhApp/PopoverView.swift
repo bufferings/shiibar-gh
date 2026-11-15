@@ -1,7 +1,8 @@
 // The popover of one account, also the content of its window
 // (docs/design/Main.html, Keychain.html, MenuBarIcon.html): the header,
-// the banners, the tab row, the search row, the list (CardViews.swift), the
-// key hints and the Grouping sheet.
+// the banners, the tab row, the search row, the Filter row and the
+// Filter's options (FilterViews.swift), the list (CardViews.swift), the key
+// hints and the Grouping sheet.
 //
 // Sizes are the boards' points at text size 12, multiplied by
 // `textScale` (DESIGN.md, "Text size"): the fonts are fixed point sizes
@@ -114,18 +115,13 @@ struct TabRowState: Equatable {
     var tab: ListTab
     var showingDismissed: Bool
     var counts: [ListTab: Int]
-    var showMuted: Bool
-    var showMutedDot: Bool
     var compact: Bool
     var dismissedCount: Int
 }
 
-/// The search row.
+/// The search row: the search field only.
 struct SearchRowState: Equatable {
     var search: String
-    var tab: ListTab
-    var showingDismissed: Bool
-    var options: ListOptions
     var focused: Bool
 }
 
@@ -141,8 +137,12 @@ final class SurfaceState {
     let top: Derived<SurfaceTop>
     let tabs: Derived<TabRowState>
     let search: Derived<SearchRowState>
+    let filterRow: Derived<FilterRowState>
+    let options: Derived<FilterOptionsState>
     let dismissed: Derived<DismissedHeadingState>
     let grouping: Derived<Bool>
+    /// The card whose × asks for the confirmation, while it shows.
+    let confirming: Derived<String?>
 
     init(app: AppModel, model: AccountViewModel, list: SurfaceListModel) {
         let appChanges = app.objectWillChange.map { _ in () }.eraseToAnyPublisher()
@@ -160,20 +160,29 @@ final class SurfaceState {
             TabRowState(
                 tab: list.tab, showingDismissed: list.showingDismissed,
                 counts: Dictionary(uniqueKeysWithValues: ListTab.allCases.map { ($0, list.unreadCount($0)) }),
-                showMuted: list.showMuted, showMutedDot: list.showMutedDot, compact: list.compact,
-                dismissedCount: list.dismissedCount
+                compact: list.compact, dismissedCount: list.dismissedCount
             )
         }
-        search = Derived([listChanges]) { [unowned list, unowned model] in
-            SearchRowState(
-                search: list.search, tab: list.tab, showingDismissed: list.showingDismissed, options: model.options,
-                focused: list.searchFocused
+        search = Derived([listChanges]) { [unowned list] in
+            SearchRowState(search: list.search, focused: list.searchFocused)
+        }
+        filterRow = Derived([listChanges]) { [unowned list] in
+            let shows = list.showsFilterRow
+            return FilterRowState(
+                shows: shows, open: list.filterOpen, dot: shows && list.filterDot, summary: list.filterSummary,
+                showsGrouping: list.showsGroupingButton
+            )
+        }
+        options = Derived([listChanges]) { [unowned list] in
+            FilterOptionsState(
+                shows: list.showsFilterOptions, lines: list.filterOptions, filter: list.filter, canReset: list.canResetFilter
             )
         }
         dismissed = Derived([listChanges]) { [unowned list] in
             DismissedHeadingState(showing: list.showingDismissed, count: list.showingDismissed ? list.dismissedCount : 0)
         }
         grouping = Derived([listChanges]) { [unowned list] in list.showsGrouping }
+        confirming = Derived([listChanges]) { [unowned list] in list.confirmingDismiss }
     }
 }
 
@@ -249,9 +258,16 @@ struct PopoverView: View {
                     FailureBand(text: failure)
                 }
                 TabRow(list: list, state: state.tabs)
-                SearchRow(list: list, model: model, state: state.search)
+                SearchRow(list: list, state: state.search)
+                FilterRowSlot(list: list, state: state.filterRow)
+                // The options take their height when there is room; the
+                // list keeps its minimum, and the options scroll inside
+                // (DESIGN.md, "Filter").
+                FilterOptionsSlot(list: list, state: state.options)
+                    .layoutPriority(1)
                 DismissedHeadingSlot(list: list, state: state.dismissed, keepDays: value.keepDays)
                 ListSlot(content: CardContext.of(list, avatars: avatars).content, now: now)
+                    .frame(minHeight: FilterOptionsLayout.listMinimum * value.k)
                 KeyHintsSlot(chrome: list.chrome)
                     .background(SurfaceAnchor(content: CardContext.of(list, avatars: avatars).content, part: .hints))
             }
@@ -266,26 +282,74 @@ struct PopoverView: View {
         let state = SurfaceState(app: app, model: model, list: list)
         return SurfaceRoot(
             content: PopoverView(app: app, model: model, list: list, avatars: avatars, actions: actions, surface: surface, state: state),
-            overlay: GroupingOverlay(top: state.top, grouping: state.grouping, list: list, model: model),
+            overlay: GroupingOverlay(top: state.top, grouping: state.grouping, confirming: state.confirming, list: list, model: model),
             list: CardContext.of(list, avatars: avatars).content
         )
     }
 }
 
-/// The Grouping sheet, over the list too, with the surface's text size.
+/// The Grouping sheet and the × confirmation, over the list too, with the
+/// surface's text size.
 struct GroupingOverlay: View {
     @ObservedObject var top: Derived<SurfaceTop>
     @ObservedObject var grouping: Derived<Bool>
+    @ObservedObject var confirming: Derived<String?>
     var list: SurfaceListModel
     var model: AccountViewModel
 
     var body: some View {
         let k = top.value.k
-        if grouping.value {
-            GroupingSheet(model: model) { list.showsGrouping = false }
-                .foregroundColor(Palette.text.color)
-                .font(.system(size: 13 * k))
-                .environment(\.textScale, k)
+        Group {
+            if confirming.value != nil {
+                DismissConfirmSheet(keepDays: top.value.keepDays, list: list) { list.answerDismiss($0) }
+            } else if grouping.value {
+                GroupingSheet(model: model) { list.showsGrouping = false }
+            }
+        }
+        .foregroundColor(Palette.text.color)
+        .font(.system(size: 13 * k))
+        .environment(\.textScale, k)
+    }
+}
+
+/// The confirmation of a card's × (DESIGN.md, "Confirming ×"; Main.html),
+/// in the Grouping sheet's form. ⏎ and Esc are read by the surface's keys
+/// (`KeyRules`), so the buttons never take the keyboard focus.
+struct DismissConfirmSheet: View {
+    var keepDays: Int64
+    @ObservedObject var list: SurfaceListModel
+    var answer: (Bool) -> Void
+    @Environment(\.textScale) var k
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color.black.opacity(0.12)
+                .contentShape(Rectangle())
+                .onTapGesture {}
+            VStack(alignment: .leading, spacing: 10) {
+                Text(DismissedText.confirmTitle).font(.system(size: 13 * k, weight: .semibold))
+                Text(DismissedText.confirmText(keepDays: keepDays))
+                    .font(.system(size: 12 * k))
+                    .foregroundColor(Palette.secondary.color)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    CheckBox(title: DismissedText.confirmSkip, on: list.skipsNextConfirmations) {
+                        list.skipsNextConfirmations.toggle()
+                        return list.skipsNextConfirmations
+                    }
+                    Spacer()
+                    SettingsButton(title: "Cancel") { answer(false) }
+                    SettingsButton(title: "Dismiss", primary: true) { answer(true) }
+                }
+            }
+            .padding(EdgeInsets(top: 14, leading: 16, bottom: 14, trailing: 16))
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Palette.settingsBackground.color)
+                    .shadow(color: .black.opacity(0.22), radius: 15, y: 12)
+            )
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.settingsTabBarBorder.color, lineWidth: 1))
+            .padding(EdgeInsets(top: 118, leading: 20, bottom: 20, trailing: 20))
         }
     }
 }
@@ -540,9 +604,9 @@ struct CenteredMessage: View {
 // MARK: - Tabs and the search row
 
 /// All | Review | Mine with their unread counts, and at the right end the
-/// Compact and Show muted toggles and the Dismissed button (Main.html
-/// `.ptabs`). When the row is narrow, the toggles show their icons only
-/// (their names in the tooltips).
+/// display mode switch (`Detailed` and `Compact`, icons, their names in the
+/// tooltips) and the Dismissed button (Main.html `.ptabs`; DESIGN.md,
+/// "Screens", "Compact").
 struct TabRow: View {
     var list: SurfaceListModel
     @ObservedObject var state: Derived<TabRowState>
@@ -554,11 +618,8 @@ struct TabRow: View {
                 tabButton(tab)
             }
             Spacer(minLength: 0)
-            ViewThatFits(in: .horizontal) {
-                toggles(names: true)
-                toggles(names: false)
-            }
-            .padding(.bottom, 3)
+            compactButton
+                .padding(.bottom, 3)
             dismissedButton
                 .padding(.bottom, 3)
         }
@@ -593,67 +654,12 @@ struct TabRow: View {
         .accessibilityAddTraits(on ? .isSelected : [])
     }
 
-    func toggles(names: Bool) -> some View {
-        HStack(spacing: 2) {
-            compactButton(names: names)
-            showMutedButton(names: names)
+    /// Detailed and Compact (DESIGN.md, "Compact"): the display mode as a
+    /// two-segment switch (FilterViews.swift, `DisplayModeSwitch`).
+    var compactButton: some View {
+        DisplayModeSwitch(mode: state.value.compact ? .compact : .detailed) { [list] mode in
+            if (mode == .compact) != list.compact { list.toggleCompact() }
         }
-        .fixedSize()
-    }
-
-    /// Compact (Main.html `.smt`, the Compact scene; DESIGN.md, "Compact"):
-    /// three lines and the word, filled while on.
-    func compactButton(names: Bool) -> some View {
-        let on = state.value.compact
-        let color = on ? Palette.settingsTabSelected.color : Palette.botIcon.color
-        return Button { list.toggleCompact() } label: {
-            HStack(spacing: 4) {
-                IconView(icon: BoardIcons.compact, size: 14 * k, color: color)
-                if names {
-                    Text("Compact").font(.system(size: 11 * k)).foregroundColor(color).lineLimit(1).fixedSize()
-                }
-            }
-            .padding(.horizontal, 6)
-            .frame(height: 22 * k)
-            .background(RoundedRectangle(cornerRadius: 6).fill(on ? Palette.settingsTabSelectedBackground.color : .clear))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .quickHelp("Compact")
-        .accessibilityLabel("Compact")
-        .accessibilityValue(on ? "On" : "Off")
-        .accessibilityAddTraits(on ? .isSelected : [])
-    }
-
-    /// Show muted (Main.html `.smt`): the eye and the words, filled while
-    /// on; a blue dot while off when a hidden muted card has an unread
-    /// mention (DESIGN.md, "Show muted").
-    func showMutedButton(names: Bool) -> some View {
-        let on = state.value.showMuted
-        let dot = state.value.showMutedDot
-        let color = on ? Palette.settingsTabSelected.color : Palette.botIcon.color
-        return Button { list.toggleShowMuted() } label: {
-            HStack(spacing: 4) {
-                IconView(icon: BoardIcons.showMuted, size: 14 * k, color: color)
-                if names {
-                    Text("Show muted").font(.system(size: 11 * k)).foregroundColor(color).lineLimit(1).fixedSize()
-                }
-            }
-            .padding(.horizontal, 6)
-            .frame(height: 22 * k)
-            .background(RoundedRectangle(cornerRadius: 6).fill(on ? Palette.settingsTabSelectedBackground.color : .clear))
-            .overlay(alignment: .topTrailing) {
-                if dot {
-                    Circle().fill(Palette.blueDot.color).frame(width: 6, height: 6).offset(x: -1, y: 2)
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .quickHelp("Show muted")
-        .accessibilityLabel(dot ? "Show muted, unread mention" : "Show muted")
-        .accessibilityValue(on ? "On" : "Off")
-        .accessibilityAddTraits(on ? .isSelected : [])
     }
 
     var dismissedButton: some View {
@@ -678,83 +684,64 @@ struct TabRow: View {
     }
 }
 
-/// The search field (the only part that grows), then in All the Group by,
-/// Then by and sort pop-up buttons showing their values.
+/// The search row: the search field alone, the whole width of the row, the
+/// same in every tab and in the Dismissed list (DESIGN.md, "Screens").
 struct SearchRow: View {
     var list: SurfaceListModel
-    var model: AccountViewModel
     @ObservedObject var state: Derived<SearchRowState>
     @FocusState private var focused: Bool
-    @Environment(\.textScale) var k
 
     var body: some View {
-        let showsChoices = state.value.tab == .all && !state.value.showingDismissed
-        HStack(spacing: 0) {
-            HStack(spacing: 6) {
-                IconView(icon: BoardIcons.search, size: 13 * k, color: Palette.waiting.color)
-                TextField("Search", text: Binding(get: { list.search }, set: { list.setSearch($0) }))
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12 * k))
-                    .focused($focused)
-                    .accessibilityLabel("Search")
-            }
-            .padding(.horizontal, 8)
-            .frame(height: 24 * k)
-            .background(RoundedRectangle(cornerRadius: 6).fill(Palette.surface.color))
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.controlBorder.color, lineWidth: 1))
-            .frame(maxWidth: .infinity)
-            // In All only. Kept out of sight in the other tabs rather than
-            // made again on each tab switch (three pop-up buttons).
-            let options = state.value.options
-            HStack(spacing: 8) {
-                PullDown(title: options.groupBy.title, toolTip: "Group by", items: groupByItems(options))
-                PullDown(title: options.thenByTitle, toolTip: "Then by", enabled: options.groupBy != .none, items: thenByItems(options))
-                PullDown(title: options.sort.title, toolTip: "Sort", items: SortOrder.allCases.map { order in
-                    IconMenuItem(order.title, checked: order == options.sort) { model.setSort(order) }
-                })
-            }
-            .padding(.leading, 8)
-            .fixedSize()
-            .frame(width: showsChoices ? nil : 0, alignment: .leading)
-            // Clipped only while out of sight (the bezels reach past the
-            // frame by a point or two).
-            .clipShape(Rectangle().inset(by: showsChoices ? -4 : 0))
-            .opacity(showsChoices ? 1 : 0)
-            .allowsHitTesting(showsChoices)
-            .accessibilityHidden(!showsChoices)
-        }
-        .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+        SearchRowContent(search: Binding(get: { list.search }, set: { list.setSearch($0) }), focused: $focused)
         .onChange(of: state.value.focused) { _, value in if focused != value { focused = value } }
         .onChange(of: focused) { _, value in if list.searchFocused != value { list.searchFocused = value } }
     }
+}
 
-    /// The five values, the current one checked, then `Grouping…`.
-    func groupByItems(_ options: ListOptions) -> [IconMenuItem?] {
-        var items: [IconMenuItem?] = GroupBy.allCases.map { value in
-            IconMenuItem(value.title, checked: value == options.groupBy) { model.setGroupBy(value) }
-        }
-        items.append(nil)
-        items.append(IconMenuItem("Grouping…") { list.showsGrouping = true })
-        return items
-    }
+/// The search field of the search row.
+struct SearchRowContent: View {
+    var search: Binding<String>
+    var focused: FocusState<Bool>.Binding
+    @Environment(\.textScale) var k
 
-    /// The same values without Group by's.
-    func thenByItems(_ options: ListOptions) -> [IconMenuItem?] {
-        options.thenByChoices.map { value in
-            IconMenuItem(value.title, checked: value == options.thenBy) { model.setThenBy(value) }
+    var body: some View {
+        HStack(spacing: 6) {
+            IconView(icon: BoardIcons.search, size: 13 * k, color: Palette.waiting.color)
+            TextField("Search", text: search)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12 * k))
+                .focused(focused)
+                .accessibilityLabel("Search")
         }
+        .padding(.horizontal, 8)
+        .frame(height: 24 * k)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Palette.surface.color))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.controlBorder.color, lineWidth: 1))
+        .frame(minWidth: 0, maxWidth: .infinity)
+        .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
     }
 }
 
 /// A standard pull-down pop-up button whose title is the current value
 /// (NSPopUpButton with `pullsDown`: the first item is the title and the rest
-/// are the menu). A pull-down, so that Group by can end with `Grouping…`
-/// and Then by can read `Then by` while it is None.
+/// are the menu, the current value checked). Used in the Grouping sheet,
+/// where it takes the keyboard focus as a standard control (DESIGN.md,
+/// "Filter").
 struct PullDown: NSViewRepresentable {
     var title: String
-    var toolTip: String
+    /// nil: no tooltip (the sheet's rows have names).
+    var toolTip: String?
+    var accessibilityName: String
     var enabled = true
     var items: [IconMenuItem?]
+
+    init(title: String, toolTip: String?, accessibilityName: String? = nil, enabled: Bool = true, items: [IconMenuItem?]) {
+        self.title = title
+        self.toolTip = toolTip
+        self.accessibilityName = accessibilityName ?? toolTip ?? title
+        self.enabled = enabled
+        self.items = items
+    }
     @Environment(\.textScale) var k
 
     final class Coordinator {
@@ -811,7 +798,7 @@ struct PullDown: NSViewRepresentable {
         button.font = .systemFont(ofSize: 11 * k)
         button.isEnabled = enabled
         button.help = toolTip
-        button.setAccessibilityLabel(toolTip)
+        button.setAccessibilityLabel(accessibilityName)
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: TipPopUpButton, context: Context) -> CGSize? {
@@ -981,9 +968,10 @@ struct FlowLayout: Layout {
 
 // MARK: - Grouping sheet
 
-/// The Grouping sheet (Main.html `.gsheet`): Group by and Then by, then the
-/// order of each chosen value's groups, changed by dragging a row. Shown
-/// inside the popover or the window; Done closes it.
+/// The Grouping sheet (Main.html `.gsheet`), opened by `Grouping…` in All's
+/// Filter row: Group by and Then by, Sort, then the order of each chosen
+/// value's groups, changed by dragging a row. A change applies to the list
+/// at once. Shown inside the popover or the window; Done closes it.
 struct GroupingSheet: View {
     @ObservedObject var model: AccountViewModel
     var done: () -> Void
@@ -1011,6 +999,11 @@ struct GroupingSheet: View {
                     )
                     Spacer(minLength: 0)
                 }
+                HStack(spacing: 8) {
+                    Text("Sort").font(.system(size: 11 * k, weight: .semibold)).foregroundColor(Palette.strongText.color)
+                    PullDown(title: options.sort.title, toolTip: "Sort", items: Self.sortItems(options) { model.setSort($0) })
+                    Spacer(minLength: 0)
+                }
                 ForEach([options.groupBy, options.thenBy].filter { $0 != .none }, id: \.self) { by in
                     Text("Order of " + by.title).font(.system(size: 11 * k, weight: .semibold)).foregroundColor(Palette.strongText.color)
                     GroupOrderList(model: model, by: by)
@@ -1028,6 +1021,13 @@ struct GroupingSheet: View {
             )
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.settingsTabBarBorder.color, lineWidth: 1))
             .padding(EdgeInsets(top: 118, leading: 20, bottom: 20, trailing: 20))
+        }
+    }
+
+    /// The menu of Sort: the two orders, the current one checked.
+    static func sortItems(_ options: ListOptions, choose: @escaping (ShiibarGhCore.SortOrder) -> Void) -> [IconMenuItem?] {
+        ShiibarGhCore.SortOrder.allCases.map { order in
+            IconMenuItem(order.title, checked: order == options.sort) { choose(order) }
         }
     }
 }

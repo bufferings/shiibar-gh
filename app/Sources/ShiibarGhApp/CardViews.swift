@@ -33,6 +33,10 @@ struct CardLine: Equatable {
     /// unread mark at the left of line 1.
     var compact = false
     var unread: UnreadMark = .none
+    /// The words of the search (`Search.words`): what matched gets a yellow
+    /// background (DESIGN.md, "Showing what matched"). Part of what the
+    /// card's image is drawn from, not of its geometry.
+    var search: [String] = []
 }
 
 /// The values of a section heading.
@@ -70,7 +74,8 @@ enum ListEntry: Equatable {
     /// The room under the heading of an empty Review or Mine section.
     case empty(String)
     case fold(FoldValues)
-    case dismissed(Card)
+    /// A card of the Dismissed list, with the words of its search.
+    case dismissed(Card, search: [String])
     /// The space under the last line.
     case end
 
@@ -79,10 +84,22 @@ enum ListEntry: Equatable {
         case .message: return "message"
         case .heading(let heading): return "section:" + heading.key
         case .card(let line): return "card:" + line.card.id
-        case .dismissed(let card): return "card:" + card.id
+        case .dismissed(let card, _): return "card:" + card.id
         case .empty(let key): return "empty:" + key
         case .fold(let fold): return "more:" + fold.key
         case .end: return "end"
+        }
+    }
+
+    /// The entry without its search words: the geometry does not depend
+    /// on them, so typing in the search field works none out again.
+    var withoutSearch: ListEntry {
+        switch self {
+        case .card(var line):
+            line.search = []
+            return .card(line)
+        case .dismissed(let card, _): return .dismissed(card, search: [])
+        default: return self
         }
     }
 

@@ -6,8 +6,10 @@ The data: one account `me` (id 1001, no token) with the owner `org` and
 Public; 200 PRs that are not dismissed, 3 rows each (a mention with a body
 long enough for 3 lines on a third of them), spread over 20 repositories so
 every All group (Group by Repository) folds into "+ N more PRs"; Review with
-Doing, Todo, Waiting and Done, Mine, and the cards of one muted user. The
-avatars are PNG files in the state directory, referenced by file:// URLs.
+Doing, Todo, Waiting and Done, Mine, and the cards of one muted user. For
+the Filter the PRs have the four statuses (open, draft, merged,
+closed), and a quarter of the cards are read (the rest have unread rows).
+The avatars are PNG files in the state directory, referenced by file:// URLs.
 
 No token is ever passed (a dev-ingest daemon without SHIIBAR_GH_DEV_KEYCHAIN
 has no Keychain at all) and nothing reaches GitHub (no
@@ -18,12 +20,14 @@ Usage: make-data.py <shiibar-ghd built with --features dev-ingest> <empty dir> [
 
 --demo loads the data of the demo mode (scripts/perf/demo.sh) instead: about
 200 cards over All, Review (Doing, Todo, Waiting, Done) and Mine, many
-repositories, a muted repository and a muted user, merged cards in Done, and
+repositories, a muted repository and a muted user, merged and closed cards
+(in Done when placed), drafts, read cards and cards with unread rows (blue,
+and gray on the muted cards: what the Filter sorts out), and
 rows with bodies of every length (unread mentions of 1, 3, 6 and 12 and more
 lines, read rows, long single lines, team mentions, cards with more than
 three rows), an own PR in the muted repository, a PR of it taken out of Mute
 by itself (Unmute), and team mentions on the muted user's cards. It needs a
-0.5 daemon (the working tree's).
+0.5 daemon or later (the working tree's).
 """
 
 import json
@@ -149,6 +153,7 @@ def demo(daemon, colors, start):
         author = ME if n % 6 == 0 or n == 41 else MUTED_USER if n % 17 == 4 else USERS[n % len(USERS)]
         requested = author != ME and n % 3 == 1
         merged = n % 19 == 0
+        closed = not merged and n % 23 == 0
         pr_id = f"PR_{n}"
         updated = start + 60 + n * 15
         prs.append({
@@ -158,7 +163,7 @@ def demo(daemon, colors, start):
                       f"Add a setting for the {repo} sync interval"][n % 3],
             "author": author, "author_avatar_url": colors[author],
             "base": "main", "head": f"topic/change-{n}" if n % 5 else f"feature/a-much-longer-branch-name-for-change-{n}",
-            "state": "merged" if merged else "open", "is_draft": n % 11 == 0,
+            "state": "merged" if merged else "closed" if closed else "open", "is_draft": n % 11 == 0,
             "review": ["approved", "review_required", "changes_requested", "none"][n % 4],
             "checks": ["passed", "in_progress", "failed", "none"][n % 4],
             "base_status": ["up_to_date", "behind", "conflicts", "none"][n % 4],
@@ -197,9 +202,9 @@ def demo(daemon, colors, start):
         key = f"{OWNER}/{repo}#{n}"
         if requested:
             review.append(key)
-        if merged and author == ME:
+        if (merged or closed) and author == ME:
             mine_done.append(key)
-        elif merged and requested:
+        elif (merged or closed) and requested:
             done.append(key)
 
     for i in range(0, len(prs), 40):
@@ -222,9 +227,11 @@ def demo(daemon, colors, start):
     # A PR of the muted repository taken out of Mute by itself (its own
     # setting becomes Unmute).
     daemon.ok({"cmd": "unmute", "account": ME, "kind": "pr", "name": f"{OWNER}/{muted_repo}#65"})
-    # Read rows: every other card's first two rows.
+    # Read rows: every other card's first two rows, and every row of every
+    # fifth card (read cards for the Filter's `Unread only`).
     cards = daemon.ok({"cmd": "list", "account": ME})["cards"]
-    read = [row["id"] for index, card in enumerate(cards) if index % 2 == 0 for row in card["rows"][:2]]
+    read = [row["id"] for index, card in enumerate(cards) if index % 2 == 0 or index % 5 == 1
+            for row in (card["rows"] if index % 5 == 1 else card["rows"][:2])]
     for i in range(0, len(read), 200):
         daemon.ok({"cmd": "read", "row_ids": read[i:i + 200]})
 
@@ -281,7 +288,8 @@ def main():
             "title": f"Change {n}: update the {repo} handling of rows, events and the cache",
             "author": author, "author_avatar_url": colors[author],
             "base": "main", "head": f"topic/change-{n}",
-            "state": "open", "is_draft": n % 11 == 0,
+            # The four statuses for the Filter: merged and closed ones too.
+            "state": "merged" if n % 17 == 0 else "closed" if n % 29 == 0 else "open", "is_draft": n % 11 == 0,
             "review": ["approved", "review_required", "changes_requested", "none"][n % 4],
             "checks": ["passed", "in_progress", "failed", "none"][n % 4],
             "base_status": ["up_to_date", "behind", "conflicts", "none"][n % 4],
@@ -302,6 +310,10 @@ def main():
         )
         kinds = [first, ("comment_other", f"Rebased on main; the failing check in {repo} is unrelated."),
                  ("reply", "Agreed, let us keep the old column for one more release.")]
+        if prs[-1]["state"] != "open":
+            # The daemon keeps no `comment_other` row on a merged or closed
+            # PR: replies instead, so every card still has 3 rows.
+            kinds = [("reply", text) if kind == "comment_other" else (kind, text) for kind, text in kinds]
         for j, (kind, text) in enumerate(kinds):
             events.append({
                 "id": f"E_{n}_{j}", "pr_id": pr_id, "kind": kind, "occurred_at": updated - j * 5,
@@ -327,6 +339,11 @@ def main():
         if section != "todo":
             daemon.ok({"cmd": "place", "account": ME, "pr": pr, "tab": "review", "section": section})
     daemon.ok({"cmd": "mute", "account": ME, "kind": "user", "name": MUTED_USER})
+    # A quarter of the cards read (for the Filter's `Unread only`).
+    cards = daemon.ok({"cmd": "list", "account": ME})["cards"]
+    read = [row["id"] for index, card in enumerate(cards) if index % 4 == 0 for row in card["rows"]]
+    for i in range(0, len(read), 200):
+        daemon.ok({"cmd": "read", "row_ids": read[i:i + 200]})
 
     cards = daemon.ok({"cmd": "list", "account": ME})["cards"]
     daemon.stop()

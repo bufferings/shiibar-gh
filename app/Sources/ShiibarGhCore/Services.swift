@@ -42,19 +42,20 @@ public protocol ImageLoading: AnyObject, Sendable {
 /// the popover and of the window, Group by, Then by and the sort order, the
 /// group orders, the collapsed sections and the expanded "+ N more PRs" (by
 /// section key), the expanded "+ N more" of the cards (by card id), the
-/// expanded row bodies (by row id), Show muted, the repositories seen, the
-/// window frame and Keep on top.
+/// expanded row bodies (by row id), the Filter of each tab and whether it
+/// is open (per tab), the search text of each tab and of the Dismissed list, Compact,
+/// the repositories seen, the window frame and Keep on top.
 /// Keys carry the account id (the GitHub user id, numeric, as a string,
-/// which does not change with the login). The search, the selected text and
-/// whether the Dismissed list is open are not kept.
+/// which does not change with the login). The selection, the scroll
+/// positions and whether the Dismissed list is open are not kept.
 ///
 /// Every key starts with `v4.`: 0.4 reads none of the UI state of 0.3 and
 /// earlier (DESIGN.md, "Updating from 0.3 and 0.2"), whose keys had no
-/// prefix and stay unread. 0.5 reads 0.4's keys as they are and adds five
-/// (`expandedRows.`, `expandedBodies.`, `showMuted.`, `compact.`,
-/// `popover.height.`), which start from their defaults: nothing expanded,
-/// Show muted and Compact off, the popover's default height ("Updating
-/// from 0.4").
+/// prefix and stay unread. 0.5 reads 0.4's keys as they are and adds seven
+/// (`expandedRows.`, `expandedBodies.`, `filters.`, `filtersOpen.`,
+/// `searches.`, `compact.`, `popover.height.`), which start from their
+/// defaults: nothing expanded, the default Filter closed, no search text,
+/// Compact off, the popover's default height ("Updating from 0.4").
 public final class UIStateStore {
     private let defaults: UserDefaults
     static let prefix = "v4."
@@ -65,7 +66,11 @@ public final class UIStateStore {
     static let expandedKey = prefix + "expanded."
     static let expandedRowsKey = prefix + "expandedRows."
     static let expandedBodiesKey = prefix + "expandedBodies."
-    static let showMutedKey = prefix + "showMuted."
+    static let filtersKey = prefix + "filters."
+    /// The tabs whose `Filter` is open. (`filterOpen.`, one value for the
+    /// tabs, was never released and is not read.)
+    static let filtersOpenKey = prefix + "filtersOpen."
+    static let searchesKey = prefix + "searches."
     static let compactKey = prefix + "compact."
     static let popoverHeightKey = prefix + "popover.height."
     static let tabKey = prefix + "tab."
@@ -148,13 +153,50 @@ public final class UIStateStore {
         defaults.set(rows.sorted(), forKey: Self.expandedBodiesKey + account)
     }
 
-    /// Show muted: off unless turned on.
-    public func showMuted(account: String) -> Bool {
-        defaults.object(forKey: Self.showMutedKey + account) as? Bool ?? false
+    /// The Filter of All, Review and Mine (DESIGN.md, "Filter"): the
+    /// defaults for an account with none saved.
+    public func filters(account: String) -> [ListTab: ListFilter] {
+        var saved: [String: ListFilter] = [:]
+        if let data = defaults.data(forKey: Self.filtersKey + account),
+           let decoded = try? JSONDecoder().decode([String: ListFilter].self, from: data) {
+            saved = decoded
+        }
+        var out: [ListTab: ListFilter] = [:]
+        for tab in ListTab.allCases { out[tab] = saved[tab.rawValue] ?? ListFilter() }
+        return out
     }
 
-    public func setShowMuted(_ on: Bool, account: String) {
-        defaults.set(on, forKey: Self.showMutedKey + account)
+    public func setFilters(_ filters: [ListTab: ListFilter], account: String) {
+        var saved: [String: ListFilter] = [:]
+        for (tab, filter) in filters { saved[tab.rawValue] = filter }
+        defaults.set(try? JSONEncoder().encode(saved), forKey: Self.filtersKey + account)
+    }
+
+    /// The tabs whose `Filter` is open (DESIGN.md, "Filter"): each closed
+    /// unless opened; one value per tab for the popover and the window.
+    public func filtersOpen(account: String) -> Set<ListTab> {
+        Set((defaults.stringArray(forKey: Self.filtersOpenKey + account) ?? []).compactMap(ListTab.init(rawValue:)))
+    }
+
+    public func setFiltersOpen(_ tabs: Set<ListTab>, account: String) {
+        defaults.set(tabs.map(\.rawValue).sorted(), forKey: Self.filtersOpenKey + account)
+    }
+
+    /// The search text of each tab and of the Dismissed list (DESIGN.md,
+    /// "Search field"): none saved reads as empty.
+    public func searches(account: String) -> [SearchScope: String] {
+        guard let saved = defaults.dictionary(forKey: Self.searchesKey + account) as? [String: String] else { return [:] }
+        var out: [SearchScope: String] = [:]
+        for (key, text) in saved where !text.isEmpty {
+            if let scope = SearchScope(key: key) { out[scope] = text }
+        }
+        return out
+    }
+
+    public func setSearches(_ searches: [SearchScope: String], account: String) {
+        var saved: [String: String] = [:]
+        for (scope, text) in searches where !text.isEmpty { saved[scope.key] = text }
+        defaults.set(saved, forKey: Self.searchesKey + account)
     }
 
     /// Compact: off unless turned on.

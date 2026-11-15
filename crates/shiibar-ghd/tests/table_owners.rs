@@ -425,6 +425,7 @@ fn config_table() {
         ("auto_dismiss_after_days", json!(3), json!(0), json!(-1)),
         ("dismissed_keep_days", json!(7), json!(1), json!(0)),
         ("appearance", json!("system"), json!("dark"), json!("blue")),
+        ("confirm_dismiss", json!(true), json!(false), json!(1)),
     ];
     for (key, default, good, bad) in cases {
         let mut h = H::new();

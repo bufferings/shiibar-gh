@@ -442,13 +442,18 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         let inSearch = (model?.searchFocused ?? false) || Self.isTyping(key?.firstResponder)
         let decided = KeyRules.decide(
             press, inSearch: inSearch, hasSearchText: !(model?.search.isEmpty ?? true), inDismissed: model?.showingDismissed ?? false,
-            hasSelection: model.map { $0.selection != nil || !$0.selectedCards.isEmpty } ?? false
+            hasSelection: model.map { $0.selection != nil || !$0.selectedCards.isEmpty } ?? false,
+            confirming: model?.confirmingDismiss != nil
         )
         switch decided {
         case .quit:
             onQuit?()
         case .pass:
             return false
+        case .ignore:
+            break
+        case .answerDismiss(let confirmed):
+            model?.answerDismiss(confirmed)
         case .textSize(let change):
             guard model != nil else { return false }
             app.changeTextSize(change)

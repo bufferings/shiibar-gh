@@ -2187,7 +2187,7 @@ fn reaction_summary(counts: &BTreeMap<String, u32>) -> String {
     known.chain(unknown).collect::<Vec<_>>().join(" ")
 }
 
-pub const CONFIG_KEYS: [&str; 7] = [
+pub const CONFIG_KEYS: [&str; 8] = [
     "launch_at_login",
     "appearance",
     "text_size",
@@ -2195,6 +2195,7 @@ pub const CONFIG_KEYS: [&str; 7] = [
     "reactions_interval_minutes",
     "auto_dismiss_after_days",
     "dismissed_keep_days",
+    "confirm_dismiss",
 ];
 
 pub fn read_config(config: &Config, key: &str) -> Option<Value> {
@@ -2206,6 +2207,7 @@ pub fn read_config(config: &Config, key: &str) -> Option<Value> {
         "text_size" => json!(config.text_size),
         "auto_dismiss_after_days" => json!(config.auto_dismiss_after_days),
         "dismissed_keep_days" => json!(config.dismissed_keep_days),
+        "confirm_dismiss" => json!(config.confirm_dismiss),
         _ => return None,
     })
 }
@@ -2237,6 +2239,7 @@ pub fn write_config(
         }
         "auto_dismiss_after_days" => config.auto_dismiss_after_days = integer(key, value, 0)?,
         "dismissed_keep_days" => config.dismissed_keep_days = integer(key, value, 1)?,
+        "confirm_dismiss" => config.confirm_dismiss = boolean(key, value)?,
         _ => return Err(format!("unknown setting: {key}")),
     }
     Ok(())

@@ -39,6 +39,10 @@ public enum KeyInput: Equatable {
     case leaveSearch(clearing: Bool)
     case textSize(TextSize.Change)
     case quit
+    /// The × confirmation's answer: ⏎ `Dismiss`, Esc `Cancel`.
+    case answerDismiss(Bool)
+    /// Taken and dropped: the confirmation sheet shows.
+    case ignore
     /// Not ours: the field types it, or the system handles it (Esc in a tab
     /// closes the popover).
     case pass
@@ -47,13 +51,23 @@ public enum KeyInput: Equatable {
 public enum KeyRules {
     /// `inDismissed`: the Dismissed list shows, where Esc goes back to the
     /// tab. `hasSelection`: something is selected, which Esc clears in a
-    /// tab.
+    /// tab. `confirming`: the × confirmation sheet shows, which takes ⏎
+    /// and Esc; the list takes no other key.
     public static func decide(
-        _ press: KeyPress, inSearch: Bool, hasSearchText: Bool, inDismissed: Bool = false, hasSelection: Bool = false
+        _ press: KeyPress, inSearch: Bool, hasSearchText: Bool, inDismissed: Bool = false, hasSelection: Bool = false,
+        confirming: Bool = false
     ) -> KeyInput {
         let mods = press.modifiers
         let chars = press.characters
         if mods == [.command] && chars == "q" { return .quit }
+        if confirming {
+            guard mods.isEmpty else { return .ignore }
+            switch press.keyCode {
+            case KeyPress.returnKey, KeyPress.enter: return .answerDismiss(true)
+            case KeyPress.escape: return .answerDismiss(false)
+            default: return .ignore
+            }
+        }
         // ⌘C copies the field's own text in the search field.
         if mods == [.command] && chars == "c" { return inSearch ? .pass : .key(.copy) }
         // ⌘ keys work in the search field too.

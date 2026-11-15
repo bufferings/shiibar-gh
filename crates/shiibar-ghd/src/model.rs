@@ -862,6 +862,9 @@ pub struct Config {
     pub appearance: Appearance,
     /// The body text size of the popover and its window, in points.
     pub text_size: i64,
+    /// Whether the × on a card asks before it dismisses (the app's
+    /// confirmation; the daemon only keeps the setting).
+    pub confirm_dismiss: bool,
 }
 
 impl Default for Config {
@@ -874,6 +877,7 @@ impl Default for Config {
             dismissed_keep_days: DISMISSED_KEEP_DAYS_DEFAULT,
             appearance: Appearance::System,
             text_size: TEXT_SIZE_DEFAULT,
+            confirm_dismiss: true,
         }
     }
 }

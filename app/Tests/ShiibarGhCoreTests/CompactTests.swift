@@ -53,7 +53,7 @@ final class CompactTests: XCTestCase {
 
     func testTheStopsAreHeadingsAndTheLinesThatAreNotRows() async {
         let list = await loaded(.review)
-        list.data.setShowMuted(true)
+        list.data.setFilter(ListFilter(muted: .show), tab: .review)
         // Off: T1's rows, its "+ N more" and the rest are stops.
         XCTAssertTrue(list.items.contains(.row(id: "A", card: "T1")))
         XCTAssertTrue(list.items.contains(.moreRows(card: "T1")))

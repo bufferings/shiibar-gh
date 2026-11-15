@@ -7,8 +7,9 @@ popover has the tabs All, Review (Doing, Todo, Waiting, Done) and Mine.
 Dismiss a PR when you are done with it; it comes back when someone mentions
 you or your team, replies in a thread you take part in, requests your
 review, or reopens it. Mute a repository, a user or a single PR to hide its
-cards (Show muted brings them back in gray) and silence them, except for
-mentions of you or your team.
+cards and silence them, except for mentions of you or your team. The Filter
+of each tab narrows the list: show muted cards in gray or only them, pick
+the statuses, or keep only the unread cards.
 It only reads from GitHub. See `docs/DESIGN.md` and `CLAUDE.md`.
 
 **Several GitHub accounts.** Each account has its own menu bar icon and one

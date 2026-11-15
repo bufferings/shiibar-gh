@@ -84,14 +84,23 @@ public enum BoardIcons {
         [.rect(x: 1.8, y: 2.8, width: 12.4, height: 3.2, radius: 1), .path("M3 6v7h10V6M6.5 8.8h3")],
         lineWidth: 1.4, roundCaps: true, roundJoins: true
     )
-    /// The Compact toggle of the tab row: three lines (Main.html `.smt`,
-    /// the Compact scene).
-    public static let compact = BoardIcon([.path("M2.5 4h11M2.5 8h11M2.5 12h11")], lineWidth: 1.4, roundCaps: true)
-    /// The Show muted toggle of the tab row: an eye (Main.html `.smt`).
-    public static let showMuted = BoardIcon(
-        [.path("M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8s-2.4 4.5-6.5 4.5S1.5 8 1.5 8z"), .circle(cx: 8, cy: 8, r: 2, dash: nil)],
+    /// The display mode switch of the tab row (DESIGN.md, "Compact";
+    /// Main.html, candidate A of the Compact icons, chosen by the owner).
+    /// `Detailed` (`compactOff`): a card frame with a heading line and two
+    /// shorter rows; `Compact` (`compactOn`): two slim cards stacked,
+    /// headings only. Swap the paths here to change the glyphs.
+    public static let compactOff = BoardIcon(
+        [.rect(x: 2, y: 2, width: 12, height: 12, radius: 2), .path("M4.6 5h6.8M6.6 8.2h4.8M6.6 11h4.8")],
         lineWidth: 1.4, roundCaps: true, roundJoins: true
     )
+    public static let compactOn = BoardIcon(
+        [.rect(x: 2, y: 2.6, width: 12, height: 4.4, radius: 1.6), .rect(x: 2, y: 9, width: 12, height: 4.4, radius: 1.6)],
+        lineWidth: 1.4, roundCaps: true, roundJoins: true
+    )
+    /// The chevron of `Filter` (Main.html `.fchev`): right while closed,
+    /// down while open.
+    public static let filterClosed = BoardIcon([.path("M6 4l4 4-4 4")], lineWidth: 2, roundCaps: true, roundJoins: true)
+    public static let filterOpen = BoardIcon([.path("M4 6l4 4 4-4")], lineWidth: 2, roundCaps: true, roundJoins: true)
     /// A section header: expanded (down) and collapsed (right).
     public static let sectionOpen = BoardIcon([.path("M4 6l4 4 4-4")], lineWidth: 1.8, roundCaps: true, roundJoins: true)
     public static let sectionClosed = BoardIcon([.path("M6 4l4 4-4 4")], lineWidth: 1.8, roundCaps: true, roundJoins: true)

@@ -80,9 +80,10 @@ public struct ListOptions: Equatable, Codable {
         GroupBy.allCases.filter { $0 != groupBy }
     }
 
-    /// The Then by button reads `Then by` while it is None.
+    /// The Then by button shows its value, `None` included (DESIGN.md,
+    /// "All").
     public var thenByTitle: String {
-        thenBy == .none ? "Then by" : thenBy.title
+        thenBy.title
     }
 }
 
@@ -128,6 +129,236 @@ public enum Search {
     /// A PR matches with its own fields or the text and actor of any row.
     public static func matches(_ card: Card, words: [String]) -> Bool {
         matches(words, fields: prFields(card) + card.rows.flatMap(rowFields))
+    }
+
+    /// Some word is part of the row's text or actor.
+    static func rowHasMatch(_ row: Row, words: [String]) -> Bool {
+        let lowered = rowFields(row).map { $0.lowercased() }
+        return words.contains { word in lowered.contains { $0.contains(word) } }
+    }
+}
+
+// MARK: - What matched
+
+/// DESIGN.md, "Showing what matched": where the words of the search are
+/// found in the text a card shows, for its yellow background. The words are
+/// those of `Search.words` (split and lowercased the same way), found
+/// case-insensitively, every occurrence of every word, in the displayed
+/// strings of the fields the search looks at. Ranges are UTF-16 offsets of
+/// the displayed string (how AppKit and CoreText index text), in order and
+/// merged where they overlap or touch.
+public enum Highlight {
+    /// Every occurrence of every word in `text`.
+    public static func ranges(_ words: [String], in text: String) -> [Range<Int>] {
+        guard !words.isEmpty, !text.isEmpty else { return [] }
+        // Lowercased character by character, each lowered character with the
+        // UTF-16 range of the character it came from.
+        var lowered: [Character] = []
+        var origins: [Range<Int>] = []
+        var offset = 0
+        for character in text {
+            let width = character.utf16.count
+            for lower in String(character).lowercased() {
+                lowered.append(lower)
+                origins.append(offset..<(offset + width))
+            }
+            offset += width
+        }
+        var found: [Range<Int>] = []
+        for word in words {
+            let pattern = Array(word)
+            guard !pattern.isEmpty, pattern.count <= lowered.count else { continue }
+            for start in 0...(lowered.count - pattern.count) where lowered[start] == pattern[0] {
+                var i = 1
+                while i < pattern.count, lowered[start + i] == pattern[i] { i += 1 }
+                if i == pattern.count {
+                    found.append(origins[start].lowerBound..<origins[start + pattern.count - 1].upperBound)
+                }
+            }
+        }
+        return merged(found)
+    }
+
+    static func merged(_ ranges: [Range<Int>]) -> [Range<Int>] {
+        var out: [Range<Int>] = []
+        for range in ranges.sorted(by: { $0.lowerBound < $1.lowerBound }) where !range.isEmpty {
+            if let last = out.last, range.lowerBound <= last.upperBound {
+                out[out.count - 1] = last.lowerBound..<max(last.upperBound, range.upperBound)
+            } else {
+                out.append(range)
+            }
+        }
+        return out
+    }
+
+    static func shifted(_ ranges: [Range<Int>], by delta: Int) -> [Range<Int>] {
+        ranges.map { ($0.lowerBound + delta)..<($0.upperBound + delta) }
+    }
+
+    /// `owner/repo #123` (`Warnings.prLabel`), found in `owner/repo#123` as
+    /// the search finds it: a match across the `#` (`api#407`) marks the
+    /// displayed characters on both sides of the space.
+    public static func prLabel(_ words: [String], pr: String) -> [Range<Int>] {
+        let found = ranges(words, in: pr)
+        guard let hash = pr.lastIndex(of: "#") else { return found }
+        let at = pr[..<hash].utf16.count
+        var out: [Range<Int>] = []
+        for range in found {
+            if range.upperBound <= at {
+                out.append(range)
+            } else if range.lowerBound >= at {
+                out.append((range.lowerBound + 1)..<(range.upperBound + 1))
+            } else {
+                out.append(range.lowerBound..<at)
+                out.append((at + 1)..<(range.upperBound + 1))
+            }
+        }
+        return out
+    }
+
+    /// `base ← head`, as line 3 of a card shows them.
+    public static func baseHead(_ words: [String], base: String, head: String) -> [Range<Int>] {
+        ranges(words, in: base) + shifted(ranges(words, in: head), by: base.utf16.count + " \u{2190} ".utf16.count)
+    }
+
+    /// The author in line 3's times (`opened 3 days ago by alice · updated
+    /// 2 hr ago`, `CardText.times`): the login only.
+    public static func author(_ words: [String], author: String, times: String) -> [Range<Int>] {
+        guard !author.isEmpty, let at = times.range(of: "by \(author) \u{00B7} ") else { return [] }
+        return shifted(ranges(words, in: author), by: times[..<at.lowerBound].utf16.count + 3)
+    }
+
+    /// The matches in a row's displayed meta (`alice · 9 min ago`: the actor
+    /// only, not the time) and body (the text; `by alice`: the actor only;
+    /// a reaction's quoted text: the text only).
+    public struct RowMatches: Equatable {
+        public var meta: [Range<Int>] = []
+        public var body: [Range<Int>] = []
+    }
+
+    public static func row(_ words: [String], _ row: Row, _ p: RowPresentation) -> RowMatches {
+        var out = RowMatches()
+        guard !words.isEmpty else { return out }
+        let actor = row.actor.flatMap { $0.isEmpty ? nil : $0 }
+        if let actor, p.meta.hasPrefix(actor + " \u{00B7} ") {
+            out.meta = ranges(words, in: actor)
+        }
+        guard let body = p.body else { return out }
+        let text = row.text.map(RowText.normalize).flatMap { $0.isEmpty ? nil : $0 }
+        if let text, body == text {
+            out.body = ranges(words, in: text)
+        } else if let text, body == "\u{201C}\(text)\u{201D}" {
+            out.body = shifted(ranges(words, in: text), by: 1)
+        } else if text == nil, let actor, body == "by \(actor)" {
+            out.body = shifted(ranges(words, in: actor), by: 3)
+        }
+        return out
+    }
+
+    /// Some match is in the part of a text cut off with "…" (`shownEnd`:
+    /// the UTF-16 offset where the shown text ends; nil when all of it
+    /// shows): the "…" gets the background, and a collapsed row body's
+    /// `more` too. Whether a match shows as well does not matter.
+    public static func hidesMatch(_ found: [Range<Int>], shownEnd: Int?) -> Bool {
+        guard let shownEnd else { return false }
+        return found.contains { $0.upperBound > shownEnd }
+    }
+
+    /// Some match shows: its start is before where the shown text ends.
+    public static func showsMatch(_ found: [Range<Int>], shownEnd: Int?) -> Bool {
+        guard let shownEnd else { return !found.isEmpty }
+        return found.contains { $0.lowerBound < shownEnd }
+    }
+
+    /// The card's "+ N more" gets the background: a row folded into it
+    /// matches (its text or actor), whatever the rows shown match.
+    public static func marksMoreRows(_ card: Card, words: [String], expanded: Bool) -> Bool {
+        guard !words.isEmpty, Listing.moreRows(card, expanded: expanded) != nil else { return false }
+        return card.rows.dropFirst(Listing.rowsShown).contains { Search.rowHasMatch($0, words: words) }
+    }
+
+    /// A text the card shows, for `shownEnd` (the app lays the text out).
+    public enum CutText: Hashable {
+        case prLabel, title, baseHead
+        /// A row's body as it shows now (collapsed or expanded).
+        case body(row: String)
+    }
+
+    /// The matches of a text and whether its "…" gets the background.
+    public struct TextMarks: Equatable {
+        public var found: [Range<Int>] = []
+        public var ellipsis = false
+        public var shows = false
+
+        public init(_ found: [Range<Int>], shownEnd: () -> Int?) {
+            self.found = found
+            guard !found.isEmpty else { return }
+            let end = shownEnd()
+            ellipsis = Highlight.hidesMatch(found, shownEnd: end)
+            shows = Highlight.showsMatch(found, shownEnd: end)
+        }
+
+        public init() {}
+
+        var yellow: Bool { shows || ellipsis }
+    }
+
+    public struct RowMarks: Equatable {
+        public var meta: [Range<Int>] = []
+        public var body = TextMarks()
+        /// The row's `more` (collapsed, with a match in the part it hides).
+        public var more = false
+    }
+
+    /// Everything of a card that gets the yellow background (DESIGN.md,
+    /// "Showing what matched").
+    public struct CardMarks: Equatable {
+        public var prLabel = TextMarks()
+        public var title = TextMarks()
+        public var baseHead = TextMarks()
+        public var author: [Range<Int>] = []
+        public var rows: [String: RowMarks] = [:]
+        public var moreRows = false
+
+        /// Some yellow background shows on the card. With search text,
+        /// every card shown has one, except in Compact a card matched only
+        /// by what its heading does not show.
+        public var anyYellow: Bool {
+            prLabel.yellow || title.yellow || baseHead.yellow || !author.isEmpty || moreRows
+                || rows.values.contains { !$0.meta.isEmpty || $0.body.yellow || $0.more }
+        }
+    }
+
+    /// The marks of a card shown with `words`. `shownEnd` gives where the
+    /// shown part of a text ends (nil: all of it shows); it is asked only
+    /// for texts with matches. `expandedBodies`: the rows whose `more` was
+    /// pressed. Compact: the heading only.
+    public static func card(
+        _ card: Card, words: [String], now: Int64, expanded: Bool, expandedBodies: Set<String>, compact: Bool,
+        shownEnd: (CutText, String) -> Int?
+    ) -> CardMarks {
+        var marks = CardMarks()
+        guard !words.isEmpty else { return marks }
+        let label = Warnings.prLabel(card.pr)
+        marks.prLabel = TextMarks(prLabel(words, pr: card.pr)) { shownEnd(.prLabel, label) }
+        marks.title = TextMarks(ranges(words, in: card.title)) { shownEnd(.title, card.title) }
+        let baseHead = "\(card.base) \u{2190} \(card.head)"
+        marks.baseHead = TextMarks(self.baseHead(words, base: card.base, head: card.head)) { shownEnd(.baseHead, baseHead) }
+        marks.author = author(words, author: card.author, times: CardText.times(card, now: now))
+        guard !compact else { return marks }
+        for row in Listing.visibleRows(card, expanded: expanded) {
+            let open = expandedBodies.contains(row.id)
+            let p = RowPresentation(row, now: now, cardMuted: card.isMuted, expanded: open)
+            let found = self.row(words, row, p)
+            var rowMarks = RowMarks(meta: found.meta)
+            if let body = p.body {
+                rowMarks.body = TextMarks(found.body) { shownEnd(.body(row: row.id), body) }
+                rowMarks.more = !open && rowMarks.body.ellipsis
+            }
+            marks.rows[row.id] = rowMarks
+        }
+        marks.moreRows = marksMoreRows(card, words: words, expanded: expanded)
+        return marks
     }
 }
 
@@ -186,7 +417,7 @@ extension Card {
     }
 
     /// Dragging: placed in Review or Mine, Done included; a muted card
-    /// shown with Show muted too (DESIGN.md, "What a press does").
+    /// the Filter shows too (DESIGN.md, "What a press does").
     public var canDrag: Bool {
         guard let placement, placement.section.value != nil else { return false }
         return true
@@ -298,24 +529,34 @@ public enum Listing {
         cards.filter { !$0.isDismissed && (tab == .all || $0.tab == tab) }
     }
 
-    /// The cards a tab shows before the search: without the muted ones
-    /// while Show muted is off (DESIGN.md, "Mute").
-    public static func shown(_ cards: [Card], tab: ListTab, showMuted: Bool) -> [Card] {
-        Self.cards(cards, tab: tab).filter { showMuted || !$0.isMuted }
+    /// The cards a tab shows before the search: those its Filter does not
+    /// hide (DESIGN.md, "Filter").
+    public static func shown(_ cards: [Card], tab: ListTab, visibility: Visibility) -> [Card] {
+        Self.cards(cards, tab: tab).filter(visibility.shows)
     }
 
-    /// The unread count of a tab: its cards with a blue unread row; muted
-    /// gray ones do not count, a hidden muted card with an unread mention
-    /// does (DESIGN.md, "Tabs").
+    /// The unread count of a tab: its cards with a blue unread row, whatever
+    /// the Filter and the search; muted gray ones do not count, a hidden
+    /// muted card with an unread mention does (DESIGN.md, "Tabs").
     public static func unreadCount(_ cards: [Card], tab: ListTab) -> Int {
         Self.cards(cards, tab: tab).filter(\.hasBlueUnread).count
     }
 
-    /// The blue dot of Show muted: while it is off, some muted card of the
-    /// account that is not dismissed has a blue unread row (a mention of
-    /// you or your team), whatever the tab (DESIGN.md, "Show muted").
-    public static func showMutedDot(_ cards: [Card], showMuted: Bool) -> Bool {
-        !showMuted && cards.contains { !$0.isDismissed && $0.isMuted && $0.hasBlueUnread }
+    /// The blue dot of `Filter`: a card of this tab that the Filter hides
+    /// has a blue unread row. The search does not count (DESIGN.md,
+    /// "Filter", "Blue dot"); `Unread only` never hides such a card.
+    public static func filterDot(_ cards: [Card], tab: ListTab, filter: ListFilter) -> Bool {
+        Self.cards(cards, tab: tab).contains { $0.hasBlueUnread && !filter.shows($0, kept: false) }
+    }
+
+    /// The status of a PR: Group by Status and the Filter's statuses.
+    public static func status(_ card: Card) -> PRStatus {
+        switch card.stateLabel.value {
+        case .draft: return .draft
+        case .merged: return .merged
+        case .closed: return .closed
+        case .open, .mergeable, nil: return .open
+        }
     }
 
     /// The Dismissed list: newest dismissal first.
@@ -335,7 +576,7 @@ public enum Listing {
 
     /// All's order inside the innermost group (DESIGN.md, "All"): open PRs
     /// (Draft included) first, then Merged and Closed, each newest first by
-    /// the chosen order; muted cards shown with Show muted are placed by the
+    /// the chosen order; muted cards the Filter shows are placed by the
     /// same rule.
     public static func sorted(_ cards: [Card], by order: SortOrder) -> [Card] {
         cards.sorted { a, b in
@@ -359,7 +600,7 @@ public enum Listing {
 
     // MARK: Groups
 
-    static let statusGroups = [("open", "Open"), ("draft", "Draft"), ("merged", "Merged"), ("closed", "Closed")]
+    static let statusGroups = PRStatus.allCases.map { ($0.rawValue, $0.title) }
     static let involvementGroups = [
         ("review_requested", "Review requested"), ("authored", "Authored by me"),
         ("assigned", "Assigned to me"), ("others", "Others"),
@@ -371,12 +612,7 @@ public enum Listing {
         case .owner: return card.owner
         case .repository: return repository(card.pr)
         case .status:
-            switch card.stateLabel.value {
-            case .draft: return "draft"
-            case .merged: return "merged"
-            case .closed: return "closed"
-            case .open, .mergeable, nil: return "open"
-            }
+            return status(card).rawValue
         case .involvement:
             // A PR you authored is Authored by me even with a team asked
             // for its review; otherwise the first that applies.
@@ -432,18 +668,19 @@ public enum Listing {
 
     // MARK: Layout
 
-    /// The fold state of the account, Show muted and the surface's search.
+    /// The fold state of the account, the surface's search and what the
+    /// tab's Filter shows.
     public struct Folding: Equatable {
         public var collapsed: Set<String>
         public var expanded: Set<String>
         public var search: String
-        public var showMuted: Bool
+        public var visibility: Visibility
 
-        public init(collapsed: Set<String> = [], expanded: Set<String> = [], search: String = "", showMuted: Bool = false) {
+        public init(collapsed: Set<String> = [], expanded: Set<String> = [], search: String = "", visibility: Visibility) {
             self.collapsed = collapsed
             self.expanded = expanded
             self.search = search
-            self.showMuted = showMuted
+            self.visibility = visibility
         }
     }
 
@@ -464,9 +701,9 @@ public enum Listing {
     }
 
     /// The sections of a tab. `cards` are every card as the daemon sent
-    /// them (dismissed ones included). While Show muted is off the muted
-    /// cards are left out of everything: the sections, the counts, "+ N
-    /// more PRs" and the groups (DESIGN.md, "Mute"). Sections without a
+    /// them (dismissed ones included). The cards the Filter hides are left
+    /// out of everything: the sections, the counts, "+ N more PRs" and the
+    /// groups (DESIGN.md, "Filter"). Sections without a
     /// card after the search are left out; the counts ignore the search.
     /// Review and Mine keep their empty sections (Done and Mine's first
     /// list included) while the tab shows a card and nothing is searched,
@@ -475,7 +712,7 @@ public enum Listing {
         tab: ListTab, cards allCards: [Card], account: Account, options: ListOptions, orders: GroupOrders,
         repositories: [String], folding: Folding
     ) -> [SectionLayout] {
-        let tabCards = shown(allCards, tab: tab, showMuted: folding.showMuted)
+        let tabCards = shown(allCards, tab: tab, visibility: folding.visibility)
         let searching = !Search.words(folding.search).isEmpty
         let found = Set(search(tabCards, folding.search).map(\.id))
         switch tab {
@@ -533,29 +770,36 @@ public enum Listing {
         }
     }
 
-    /// The text in place of an empty tab or Dismissed list: `Nothing
-    /// matches` when the search leaves no card; nil before the first
-    /// answer or when something shows.
-    public static func emptyText(loaded: Bool, tab: ListTab?, cards: [Card], search: String, showMuted: Bool = true) -> String? {
+    /// The text in place of an empty tab: when no card shows, `Nothing
+    /// matches` if there is search text or the Filter is not at its
+    /// defaults, else the tab's own text (DESIGN.md, "First run, failure
+    /// and empty"); nil before the first answer or when something shows.
+    public static func emptyText(loaded: Bool, tab: ListTab, cards: [Card], search: String, visibility: Visibility) -> String? {
         guard loaded else { return nil }
-        let list = tab.map { shown(cards, tab: $0, showMuted: showMuted) } ?? dismissed(cards)
-        if list.isEmpty {
-            switch tab {
-            case .all?: return EmptyState.all
-            case .review?: return EmptyState.review
-            case .mine?: return EmptyState.mine
-            case nil: return EmptyState.dismissed
-            }
+        guard Self.search(shown(cards, tab: tab, visibility: visibility), search).isEmpty else { return nil }
+        if !Search.words(search).isEmpty || !visibility.filter.isDefault { return EmptyState.nothingMatches }
+        switch tab {
+        case .all: return EmptyState.all
+        case .review: return EmptyState.review
+        case .mine: return EmptyState.mine
         }
+    }
+
+    /// The text in place of an empty Dismissed list (no Filter there):
+    /// `Nothing matches` when its search leaves no card.
+    public static func dismissedEmptyText(loaded: Bool, cards: [Card], search: String) -> String? {
+        guard loaded else { return nil }
+        let list = dismissed(cards)
+        if list.isEmpty { return EmptyState.dismissed }
         return Self.search(list, search).isEmpty ? EmptyState.nothingMatches : nil
     }
 
     /// ⇧R and Mark all as read: every unread row of the tab's cards after
     /// the search, in collapsed and folded sections and in "+ N more" too,
-    /// muted rows of muted cards shown with Show muted included; not those
-    /// of muted cards Show muted hides (DESIGN.md, "How unread clears").
-    public static func rowsToRead(tab: ListTab, cards: [Card], search: String, showMuted: Bool = true) -> [String] {
-        Self.search(shown(cards, tab: tab, showMuted: showMuted), search).flatMap(\.rows).filter(\.unread).map(\.id)
+    /// muted rows of muted cards the Filter shows included; not those of
+    /// the cards the Filter hides (DESIGN.md, "How unread clears").
+    public static func rowsToRead(tab: ListTab, cards: [Card], search: String, visibility: Visibility) -> [String] {
+        Self.search(shown(cards, tab: tab, visibility: visibility), search).flatMap(\.rows).filter(\.unread).map(\.id)
     }
 
     /// Whether a card's rows show past the newest three: it is expanded and

@@ -669,11 +669,13 @@ public enum SettingsText {
     public static let notifyDetail = "Off keeps the table below but sends no notifications for this owner."
     public static let skipDraftsDetail = "Events on draft PRs stay in the list but never notify."
     public static let copyDetail = "Replaces the table above with that owner's."
-    public static let mutedReposDetail = "Hidden unless Show muted is on. Not applied to your own PRs."
+    public static let mutedReposDetail = "Hidden unless Filter shows muted pull requests. Not applied to your own PRs."
     public static let mutedUsersDetail = "Their PRs (not yours) and their events. Bots are users too."
     public static let mutedPullRequestsDetail = "Single pull requests you muted."
     public static let autoDismissDetail = "Merged and closed PRs move to Dismissed after this many days"
     public static let keepDismissedDetail = "Dismissed PRs can be restored for this many days"
+    public static let confirmDismissTitle = "Confirm before dismissing"
+    public static let confirmDismissDetail = "Asks when you press × on a card"
     public static let ssoNote =
         "If an organization enforces SAML SSO, authorize the token for it after creating it (Configure SSO on the token page)."
     public static let textSizeDetail = "Text in the popover and its window"
@@ -771,6 +773,14 @@ public enum DismissedText {
         "Dismissed pull requests are removed after " + RelativeTime.days(keepDays) + "."
     }
 
+    /// The confirmation of a card's × (DESIGN.md, "Confirming ×"); `days`
+    /// is `dismissed_keep_days`, as in `note(keepDays:)`.
+    public static let confirmTitle = "Dismiss this pull request?"
+
+    public static func confirmText(keepDays: Int64) -> String {
+        "It moves to the Dismissed list and is removed after " + RelativeTime.days(keepDays) + ". You can restore it from there."
+    }
+
     /// `Dismissed in 2 days` on a card whose automatic Dismiss is due
     /// (`auto_dismiss_at`): whole days to it, rounded up as `daysLeft`, at
     /// least 1 day (DESIGN.md, "Card header"). Nil when none is scheduled.
@@ -787,6 +797,10 @@ public enum DismissedText {
         return inDone ? first + " Move it out of Done to keep it." : first
     }
 
+    /// The checkbox of the confirmation and its setting, `confirm_dismiss`
+    /// (DESIGN.md, "Confirming ×").
+    public static let confirmSkip = "Don't ask again"
+    public static let confirmKey = "confirm_dismiss"
     public static let keepDaysKey = "dismissed_keep_days"
     public static let autoDismissKey = "auto_dismiss_after_days"
     public static let defaultKeepDays: Int64 = 7

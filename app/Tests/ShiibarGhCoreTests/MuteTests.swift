@@ -1,4 +1,4 @@
-// 0.5's Mute in the app (DESIGN.md, "Mute", "Show muted", "What a press
+// 0.5's Mute in the app (DESIGN.md, "Mute", "Filter", "What a press
 // does": "Hidden cards and places"), the menu bar icon with the window open,
 // row bodies and the UI state 0.5 adds.
 
@@ -6,52 +6,35 @@ import Foundation
 @testable import ShiibarGhCore
 import XCTest
 
-final class ShowMutedTests: XCTestCase {
-    /// Off: muted cards are not shown, not counted, not folded; groups and
-    /// sections they alone filled are gone (DESIGN.md, "Mute", "Section
-    /// size").
-    func testMutedCardsHideWhileShowMutedIsOff() {
-        let review = layout(.review, showMuted: false)
+final class MutedFilterTests: XCTestCase {
+    /// Muted Hide (the default): muted cards are not shown, not counted,
+    /// not folded; groups and sections they alone filled are gone
+    /// (DESIGN.md, "Mute", "Filter", "Section size").
+    func testMutedCardsHideWithMutedHide() {
+        let review = layout(.review, filter: mutedHidden)
         let todo = review[1]
         XCTAssertEqual(todo.matching.map(\.id), ["T1", "T2", "T3", "T4", "T5"])
         XCTAssertEqual(todo.detail, "5 PRs", "the muted cards are not counted")
         XCTAssertNil(todo.foldLine, "5 cards do not fold")
-        let on = layout(.review, showMuted: true)[1]
+        let on = layout(.review, filter: mutedShown)[1]
         XCTAssertEqual(on.detail, "7 PRs")
         XCTAssertEqual(on.foldLine, "+ 2 more PRs")
         // A section whose cards are all muted is an empty section.
         let onlyMuted = sampleCards().filter { ["T6", "T7", "R1"].contains($0.id) }
-        XCTAssertEqual(layout(.review, cards: onlyMuted, showMuted: false).map(\.detail), ["1 PR", "0 PRs", "0 PRs", "0 PRs"])
+        XCTAssertEqual(layout(.review, cards: onlyMuted, filter: mutedHidden).map(\.detail), ["1 PR", "0 PRs", "0 PRs", "0 PRs"])
         // A tab whose cards are all muted shows none, and its empty text.
         let mutedOnly = sampleCards().filter { ["T6", "T7"].contains($0.id) }
-        XCTAssertEqual(layout(.review, cards: mutedOnly, showMuted: false).map(\.key), [])
-        XCTAssertEqual(Listing.emptyText(loaded: true, tab: .review, cards: mutedOnly, search: "", showMuted: false), "No pull requests to review")
-        XCTAssertNil(Listing.emptyText(loaded: true, tab: .review, cards: mutedOnly, search: "", showMuted: true))
+        XCTAssertEqual(layout(.review, cards: mutedOnly, filter: mutedHidden).map(\.key), [])
+        XCTAssertEqual(
+            Listing.emptyText(loaded: true, tab: .review, cards: mutedOnly, search: "", visibility: shows(mutedHidden)),
+            "No pull requests to review"
+        )
+        XCTAssertNil(Listing.emptyText(loaded: true, tab: .review, cards: mutedOnly, search: "", visibility: shows(mutedShown)))
         // All: a group of muted cards only is not there.
-        let all = layout(.all, cards: mutedOnly + [sampleCards()[1]], showMuted: false)
+        let all = layout(.all, cards: mutedOnly + [sampleCards()[1]], filter: mutedHidden)
         XCTAssertEqual(all.map(\.title), ["example-org/api"])
         XCTAssertEqual(all[0].cards.map(\.id), ["T1"])
-        XCTAssertEqual(layout(.all, cards: mutedOnly, showMuted: true).map(\.title), ["example-org/api", "example-org/web"])
-    }
-
-    /// The unread count of a tab counts a hidden muted card with a blue
-    /// row (a mention); the blue dot of Show muted is the account's, not
-    /// the tab's.
-    func testTheCountAndTheDotOfShowMuted() {
-        let cards = sampleCards()
-        XCTAssertEqual(Listing.unreadCount(cards, tab: .review), 2, "T1 and hidden T7")
-        XCTAssertTrue(Listing.showMutedDot(cards, showMuted: false), "T7 has an unread mention")
-        XCTAssertFalse(Listing.showMutedDot(cards, showMuted: true), "no dot while on")
-        var read = cards
-        read[7].rows[0].unread = false
-        XCTAssertFalse(Listing.showMutedDot(read, showMuted: false), "a gray unread row does not light it")
-        // A team mention on a muted card in All only lights it too.
-        var team = read
-        team[13].muted = [.known(.pr)]
-        team[13].rows = [row("tm", pr: "acme-corp/web#80", owner: "o3", kind: .teamMentioned, text: "@org/team", unread: true)]
-        XCTAssertTrue(Listing.showMutedDot(team, showMuted: false), "any tab")
-        team[13].dismissedAt = T0
-        XCTAssertFalse(Listing.showMutedDot(team, showMuted: false), "not a dismissed card")
+        XCTAssertEqual(layout(.all, cards: mutedOnly, filter: mutedShown).map(\.title), ["example-org/api", "example-org/web"])
     }
 }
 
@@ -69,7 +52,7 @@ final class HiddenPlaceTests: XCTestCase {
     }
 
     func sections(search: String = "") -> [SectionLayout] {
-        layout(.review, cards: todo(), search: search, showMuted: false)
+        layout(.review, cards: todo(), search: search, filter: mutedHidden)
     }
 
     /// DESIGN.md, "Hidden cards and places": one rule for drops and ⌥↑↓
@@ -109,13 +92,13 @@ final class HiddenPlaceTests: XCTestCase {
     /// Folded and collapsed cards are reference cards, not hidden ones.
     func testFoldedCardsAreReferenceCards() {
         let cards = (0..<7).map { card("F\($0)", placement: review(.todo, $0)) }
-        let s = layout(.review, cards: cards, showMuted: false)
+        let s = layout(.review, cards: cards, filter: mutedHidden)
         XCTAssertEqual(s[1].cards.count, 5)
         XCTAssertEqual(CardDrop.target(.card("F4", lowerHalf: true), sections: s)?.position, .before("F5"),
                        "the last shown card's lower half: before the first folded one")
         XCTAssertEqual(CardDrop.target(.more("review|todo"), sections: s)?.position, .before("F5"),
                        "+ N more PRs: right after the last card shown")
-        let collapsed = layout(.review, cards: cards, collapsed: ["review|todo"], showMuted: false)
+        let collapsed = layout(.review, cards: cards, collapsed: ["review|todo"], filter: mutedHidden)
         XCTAssertEqual(CardDrop.target(.header("review|todo"), sections: collapsed)?.position, .top)
     }
 
@@ -242,53 +225,6 @@ final class MuteRuleTests: XCTestCase {
     }
 }
 
-@MainActor
-final class ShowMutedModelTests: XCTestCase {
-    var defaults: UserDefaults!
-    var suite = ""
-    var api: FakeAPI!
-    var model: AppModel!
-
-    override func setUp() async throws {
-        (defaults, suite) = testDefaults()
-        api = FakeAPI()
-        model = AppModel(api: api, store: UIStateStore(defaults: defaults), opener: FakeOpener(), notifier: FakeNotifier(), clock: { T0 })
-        model.handle(.snapshot(accounts: [sampleAccount()], keychain: .known(.ok), dbUnreadable: false))
-    }
-
-    override func tearDown() async throws {
-        defaults.removePersistentDomain(forName: suite)
-    }
-
-    func testShowMutedIsTheAccountsAndUnchecksWhatItHides() async {
-        api.cards = sampleCards()
-        let data = model.viewModel("3407303")
-        data.reload()
-        await settle()
-        let popover = data.list(.popover)
-        let window = data.list(.window)
-        popover.openTab(.review)
-        XCTAssertFalse(popover.showMuted, "off at first")
-        XCTAssertTrue(popover.showMutedDot)
-        popover.toggleShowMuted()
-        XCTAssertTrue(window.showMuted, "shared by the window")
-        XCTAssertFalse(popover.showMutedDot)
-        XCTAssertEqual(UIStateStore(defaults: defaults).showMuted(account: "3407303"), true)
-        popover.data.setExpanded("review|todo", true)
-        popover.select(.header(card: "T6"))
-        popover.click(card: "T1", extent: .toggle)
-        XCTAssertEqual(popover.selectedInOrder.map(\.id), ["T1", "T6"])
-        popover.toggleShowMuted()
-        XCTAssertEqual(popover.selectedInOrder.map(\.id), ["T1"], "turning it off deselects the muted card")
-        // A mute while Show muted is off deselects the card it hides.
-        popover.click(card: "T2", extent: .toggle)
-        popover.perform(.mute(.pr, "example-org/web#230"))
-        XCTAssertFalse(popover.selectedCards.contains("T2"))
-        XCTAssertTrue(popover.selectedCards.contains("T1"))
-        XCTAssertFalse(AccountViewModel(account: "583231", app: model).showMuted)
-    }
-}
-
 final class SmallRulesTests: XCTestCase {
     /// DESIGN.md, "Screens": the icon of an account brings its open window
     /// to the front instead of the popover.
@@ -321,15 +257,10 @@ final class SmallRulesTests: XCTestCase {
         let (defaults, suite) = testDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = UIStateStore(defaults: defaults)
-        XCTAssertFalse(store.showMuted(account: "1"))
         XCTAssertEqual(store.expandedRows(account: "1"), [])
         XCTAssertEqual(store.expandedBodies(account: "1"), [])
-        store.setShowMuted(true, account: "1")
         store.setExpandedRows(["c"], account: "1")
         store.setExpandedBodies(["r"], account: "1")
-        XCTAssertTrue(store.showMuted(account: "1"))
-        XCTAssertFalse(store.showMuted(account: "2"), "per account")
-        XCTAssertEqual(defaults.object(forKey: "v4.showMuted.1") as? Bool, true)
         XCTAssertEqual(defaults.stringArray(forKey: "v4.expandedRows.1"), ["c"])
         XCTAssertEqual(defaults.stringArray(forKey: "v4.expandedBodies.1"), ["r"])
     }

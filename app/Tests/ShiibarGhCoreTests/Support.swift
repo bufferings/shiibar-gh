@@ -224,7 +224,7 @@ final class FakeAPI: DaemonAPI, @unchecked Sendable {
     private let lock = NSLock()
     private var log: [String] = []
     var cards: [Card] = []
-    var config: [String: ConfigValue] = ["launch_at_login": .bool(true)]
+    var config: [String: ConfigValue] = ["launch_at_login": .bool(true), "confirm_dismiss": .bool(true)]
     var failNext: DaemonError?
     var refreshWarnings: [Warning] = []
     var testResults: [TestResult] = []
@@ -277,7 +277,24 @@ final class FakeAPI: DaemonAPI, @unchecked Sendable {
         if let error = refuse[name] { throw error }
         if let error = refuseContaining.first(where: { call.contains($0.key) })?.value { throw error }
     }
-    func read(_ rowIds: [String]) async throws { try await operation("read \(rowIds.joined(separator: ","))", "read") }
+    /// `read` marks the rows read in `cards` too, as the daemon does (the
+    /// Filter's `Unread only` tests).
+    var appliesReads = false
+    func read(_ rowIds: [String]) async throws {
+        try await operation("read \(rowIds.joined(separator: ","))", "read")
+        if appliesReads {
+            let ids = Set(rowIds)
+            cards = cards.map { card in
+                var card = card
+                card.rows = card.rows.map { row in
+                    var row = row
+                    if ids.contains(row.id) { row.unread = false }
+                    return row
+                }
+                return card
+            }
+        }
+    }
     func readAll(account: String) async throws { try record("read_all \(account)") }
     /// How long `popover_opened` takes to answer, in nanoseconds.
     var popoverOpenedDelay: UInt64 = 0

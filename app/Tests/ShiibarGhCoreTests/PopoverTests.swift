@@ -173,6 +173,61 @@ final class AppModelTests: XCTestCase {
         XCTAssertNil(view.data.failure, "gone after its time")
     }
 
+    /// DESIGN.md, "Confirming ×": the × asks first and concerns its own
+    /// card only; ⌫ and the menu's `Dismiss` do not ask.
+    func testTheCrossAsksBeforeDismissing() async {
+        let view = await loaded()
+        view.openTab(.review)
+        view.select(.header(card: "T1"))
+        view.perform(.confirmDismiss(card: "N1"))
+        XCTAssertEqual(view.confirmingDismiss, "N1")
+        XCTAssertNil(view.data.cards.first { $0.id == "N1" }?.dismissedAt, "nothing dismissed yet")
+        view.press(.delete)
+        XCTAssertNil(view.data.cards.first { $0.id == "T1" }?.dismissedAt, "the list takes no key meanwhile")
+        XCTAssertEqual(
+            KeyRules.decide(KeyPress(keyCode: KeyPress.delete), inSearch: false, hasSearchText: false, confirming: true), .ignore
+        )
+        XCTAssertEqual(KeyRules.decide(KeyPress(keyCode: KeyPress.returnKey), inSearch: false, hasSearchText: false, confirming: true), .answerDismiss(true))
+        XCTAssertEqual(KeyRules.decide(KeyPress(keyCode: KeyPress.escape), inSearch: true, hasSearchText: true, confirming: true), .answerDismiss(false))
+        view.answerDismiss(false)
+        XCTAssertNil(view.confirmingDismiss)
+        XCTAssertNil(view.data.cards.first { $0.id == "N1" }?.dismissedAt, "Cancel changes nothing")
+        view.perform(.confirmDismiss(card: "N1"))
+        view.answerDismiss(true)
+        XCTAssertNotNil(view.data.cards.first { $0.id == "N1" }?.dismissedAt, "Dismiss: the card pressed")
+        XCTAssertNil(view.data.cards.first { $0.id == "T1" }?.dismissedAt, "not the selected one")
+        XCTAssertEqual(DismissedText.confirmText(keepDays: 7), "It moves to the Dismissed list and is removed after 7 days. You can restore it from there.")
+        // ⌫ and the menu's `Dismiss` dismiss at once.
+        view.press(.delete)
+        XCTAssertNotNil(view.data.cards.first { $0.id == "T1" }?.dismissedAt)
+        XCTAssertNil(view.confirmingDismiss)
+        view.perform(.dismiss(card: "M2"))
+        XCTAssertNotNil(view.data.cards.first { $0.id == "M2" }?.dismissedAt)
+    }
+
+    /// DESIGN.md, "Confirming ×": `Don't ask again` counts with `Dismiss`
+    /// only; then the × dismisses at once.
+    func testDontAskAgainStopsTheConfirmation() async throws {
+        let view = await loaded()
+        view.openTab(.review)
+        view.perform(.confirmDismiss(card: "N1"))
+        view.skipsNextConfirmations = true
+        view.answerDismiss(false)
+        XCTAssertTrue(view.data.app.confirmDismiss, "Cancel leaves the setting")
+        view.perform(.confirmDismiss(card: "N1"))
+        XCTAssertFalse(view.skipsNextConfirmations, "off each time the sheet opens")
+        view.skipsNextConfirmations = true
+        view.answerDismiss(true)
+        XCTAssertFalse(view.data.app.confirmDismiss)
+        XCTAssertNotNil(view.data.cards.first { $0.id == "N1" }?.dismissedAt)
+        view.perform(.confirmDismiss(card: "T1"))
+        XCTAssertNil(view.confirmingDismiss, "no sheet")
+        XCTAssertNotNil(view.data.cards.first { $0.id == "T1" }?.dismissedAt)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let saved = try await view.data.app.api.configGet(DismissedText.confirmKey)
+        XCTAssertEqual(saved.boolValue, false, "saved as the setting")
+    }
+
     /// Main.html: "Couldn't dismiss: daemon not running".
     func testADismissShowsAtOnceAndComesBackWhenTheDaemonIsAway() async {
         let view = await loaded()
@@ -341,8 +396,8 @@ final class AppModelTests: XCTestCase {
         view.setSearch("renovate")
         view.perform(.markAllRead)
         await settle()
-        XCTAssertEqual(calls("read"), ["read m1"], "the muted cards Show muted hides are left out")
-        view.toggleShowMuted()
+        XCTAssertEqual(calls("read"), ["read m1"], "the muted cards the Filter hides are left out")
+        view.setMuteChoice(.show)
         view.perform(.markAllRead)
         await settle()
         XCTAssertEqual(calls("read"), ["read m1", "read t6,t7"], "after the search, folded and muted rows shown too")
@@ -369,7 +424,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(window.tab, .mine)
     }
 
-    func testTheDismissedListHasItsOwnSearchAndGoesWhenThePopoverCloses() async {
+    func testTheDismissedListHasItsOwnSearchAndKeepsIt() async {
         let view = await loaded()
         model.surfaceOpened(.popover, account: "3407303")
         view.openTab(.review)
@@ -391,18 +446,21 @@ final class AppModelTests: XCTestCase {
         XCTAssertFalse(view.showingDismissed)
         XCTAssertEqual(view.search, "retry", "the tab's search stays")
         view.openDismissedList()
-        XCTAssertEqual(view.search, "", "the list's search went when it closed")
-        view.setSearch("x")
+        XCTAssertEqual(view.search, "infra", "closing the list keeps its search (DESIGN.md, \"Dismissed list\")")
+        view.setSearch("zzz-none")
         view.press(.tab(.all))
         XCTAssertFalse(view.showingDismissed, "⌘1 opens the tab")
         view.openDismissedList()
         model.surfaceClosed(.popover, account: "3407303")
         XCTAssertFalse(view.showingDismissed, "the next opening shows the tab")
-        XCTAssertEqual(view.searches, [:])
-        XCTAssertEqual(view.dismissedSearch, "")
+        XCTAssertEqual(view.data.search(.dismissed), "zzz-none", "closing the popover keeps it")
+        XCTAssertEqual(view.data.search(.tab(.review)), "retry")
+        view.openDismissedList()
+        XCTAssertEqual(view.search, "zzz-none")
+        XCTAssertEqual(view.dismissedCards.map(\.id), [], "and it still applies")
     }
 
-    func testSearchIsPerTabAndClearedWhenThePopoverCloses() async {
+    func testSearchIsPerTabAndKeptWhenThePopoverCloses() async {
         let view = await loaded()
         model.surfaceOpened(.popover, account: "3407303")
         view.press(.find)
@@ -420,25 +478,77 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(view.search, "", "Esc clears it")
         view.setSearch("x")
         model.surfaceClosed(.popover, account: "3407303")
-        XCTAssertEqual(view.search, "")
+        XCTAssertEqual(view.search, "x", "closing the popover keeps it")
+        XCTAssertFalse(view.searchFocused)
+        model.surfaceOpened(.popover, account: "3407303")
+        XCTAssertEqual(view.search, "x", "the next opening shows it")
+        XCTAssertFalse(view.searchFocused, "the field does not take the keyboard")
+        view.setSearch("")
+        XCTAssertEqual(view.search, "", "the clear button empties it")
+        XCTAssertEqual(UIStateStore(defaults: defaults).searches(account: "3407303"), [:], "nothing left saved")
     }
 
-    func testTheWindowKeepsItsSearchUntilItCloses() async {
-        let view = await loaded().data.list(.window)
+    /// DESIGN.md, "Search field": the search text is kept like the Filter:
+    /// per tab and for the Dismissed list, per account, shared by the
+    /// popover and the window, kept when they close and after a restart.
+    func testTheSearchTextIsTheAccountsSharedAndKept() async {
+        let popover = await loaded()
+        let window = popover.data.list(.window)
         model.surfaceDisplayed(.window, account: "3407303", true)
         model.surfaceOpened(.window, account: "3407303")
-        view.setSearch("retry")
-        view.perform(.expandRows(card: "T1"))
+        popover.openTab(.review)
+        window.openTab(.review)
+        window.setSearch("retry")
+        XCTAssertEqual(popover.search, "retry", "the window's text is the popover's")
+        XCTAssertEqual(popover.sections.flatMap { $0.matching.map(\.id) }, window.sections.flatMap { $0.matching.map(\.id) })
+        popover.openTab(.mine)
+        popover.setSearch("api")
+        XCTAssertEqual(window.search, "retry", "per tab")
+        window.openTab(.mine)
+        XCTAssertEqual(window.search, "api")
+        window.openDismissedList()
+        window.setSearch("infra")
+        XCTAssertEqual(popover.search, "api", "the Dismissed list has its own")
+        popover.openDismissedList()
+        XCTAssertEqual(popover.search, "infra", "shared too")
+        popover.closeDismissedList()
         model.surfaceClosed(.window, account: "3407303")
-        XCTAssertEqual(view.search, "retry", "losing the focus keeps it")
-        XCTAssertEqual(view.expandedRows, ["T1"], "the rows stay expanded until Show less")
+        XCTAssertEqual(window.search, "infra", "losing the focus keeps it")
         model.surfaceDisplayed(.window, account: "3407303", false)
-        XCTAssertEqual(view.search, "")
+        XCTAssertFalse(window.showingDismissed, "closing the window closes its Dismissed list")
+        XCTAssertEqual(window.search, "api", "closing the window keeps the texts")
+        XCTAssertEqual(popover.data.search(.dismissed), "infra")
+        model.surfaceClosed(.popover, account: "3407303")
+
+        // Another account has its own.
+        let other = model.viewModel("583231")
+        XCTAssertEqual(other.search(.tab(.review)), "")
+        other.setSearch("dark", .tab(.review))
+        XCTAssertEqual(popover.data.search(.tab(.review)), "retry")
+
+        // A restart: a new store over the same UserDefaults.
+        let store = UIStateStore(defaults: defaults)
+        XCTAssertEqual(
+            store.searches(account: "3407303"), [.tab(.review): "retry", .tab(.mine): "api", .dismissed: "infra"]
+        )
+        XCTAssertEqual(store.searches(account: "583231"), [.tab(.review): "dark"])
+        let again = AppModel(
+            api: api, store: UIStateStore(defaults: defaults), opener: opener, notifier: notifier, copier: copier, clock: { T0 }
+        )
+        let data = AccountViewModel(account: "3407303", app: again)
+        let restarted = data.list(.popover)
+        restarted.openTab(.review)
+        XCTAssertEqual(restarted.search, "retry")
+        restarted.openTab(.all)
+        XCTAssertEqual(restarted.search, "")
+        restarted.openDismissedList()
+        XCTAssertEqual(restarted.search, "infra")
+        withExtendedLifetime((again, data)) {}
     }
 
     func testFoldsAndExpansionsAreKeptPerSectionAndShared() async {
         let popover = await loaded()
-        popover.data.setShowMuted(true)
+        popover.data.setFilter(ListFilter(muted: .show), tab: .review)
         popover.openTab(.review)
         popover.perform(.toggleMore("review|todo"))
         XCTAssertEqual(popover.sections[1].foldLine, "Show less")
@@ -568,6 +678,7 @@ final class AppModelTests: XCTestCase {
         model.onShowAccount = { shown.append("\($0) \($1)") }
         model.onOpenPopover = { popovers.append($0) }
         view.openTab(.mine)
+        view.setSearch("keep")
         view.openTab(.review)
         view.setSearch("nothing")
         view.perform(.toggleSection("review|todo"))
@@ -576,9 +687,13 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(notifier.shown, [note])
         model.notificationClicked(type: .single, account: "3407303", url: "https://github.com/x", pr: "example-org/api#402")
         XCTAssertEqual(shown, ["3407303 popover"])
-        XCTAssertTrue(view.data.showMuted, "T7 is muted: Show muted turns on to show it")
+        XCTAssertEqual(view.data.filter(.review).muted, .show, "T7 is muted: Review's Muted goes to Show to show it")
+        XCTAssertEqual(view.data.filter(.all), ListFilter(), "the other tabs' Filters stay")
         XCTAssertEqual(view.tab, .review)
         XCTAssertEqual(view.search, "")
+        XCTAssertEqual(view.data.list(.window).data.search(.tab(.review)), "", "the account's text: the window's too")
+        XCTAssertEqual(UIStateStore(defaults: defaults).searches(account: "3407303"), [.tab(.mine): "keep"], "and the saved one")
+        XCTAssertEqual(view.data.search(.tab(.mine)), "keep", "the other tabs' texts stay")
         XCTAssertEqual(view.selection, .header(card: "T7"))
         XCTAssertTrue(view.sections[1].cards.contains { $0.id == "T7" }, "unfolded and expanded")
         XCTAssertEqual(opener.opened, [], "no browser, no read")

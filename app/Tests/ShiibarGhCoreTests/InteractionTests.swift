@@ -394,7 +394,7 @@ final class SelectedCardsTests: XCTestCase {
 
     func testADropOnMorePRsLandsAfterTheLastShownCardAndOpensTheSection() async {
         let list = await loaded(.review)
-        list.data.setShowMuted(true)
+        list.data.setFilter(ListFilter(muted: .show), tab: .review)
         // Todo shows T1–T5; T6 and T7 (muted) are folded.
         list.beginDrag("W1")
         XCTAssertEqual(list.dragOver(.more("review|todo")), DropTarget(section: "review|todo", position: .before("T6")))
@@ -409,7 +409,7 @@ final class SelectedCardsTests: XCTestCase {
     func testHoveringOverMorePRsWhileDraggingLeavesTheSectionFolded() async {
         // No spring-loading (DESIGN.md, "Selection"): only a drop opens it.
         let list = await loaded(.review)
-        list.data.setShowMuted(true)
+        list.data.setFilter(ListFilter(muted: .show), tab: .review)
         list.beginDrag("W1")
         list.dragOver(.more("review|todo"))
         list.dragOver(.more("review|todo"))
