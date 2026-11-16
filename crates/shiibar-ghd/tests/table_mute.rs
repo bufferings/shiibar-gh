@@ -179,10 +179,10 @@ fn mute_table() {
         (
             "a REST bot login does not name the GraphQL login",
             MuteKind::User,
-            "renovate[bot]",
+            "example-bot[bot]",
             "carol",
             IngestKind::Comment,
-            "renovate",
+            "example-bot",
             &[],
             false,
             true,
@@ -291,18 +291,18 @@ fn mute_names_are_checked_and_compared_without_case() {
     let again = h.engine.mute(ME, MuteKind::Repo, "org/app").unwrap();
     assert_eq!(again.repos, ["Org/App"], "already there: no change");
     h.engine.mute(ME, MuteKind::Pr, "ORG/app#1").unwrap();
-    h.engine.mute(ME, MuteKind::User, "Renovate").unwrap();
+    h.engine.mute(ME, MuteKind::User, "Example-Bot").unwrap();
     assert_eq!(
         h.engine.mutes_get(ME).unwrap(),
         Mutes {
             repos: vec!["Org/App".into()],
-            users: vec!["Renovate".into()],
+            users: vec!["Example-Bot".into()],
             prs: vec!["org/app#1".into()],
         }
     );
     assert!(not_found(h.engine.unmute(ME, MuteKind::User, "nobody")));
     h.engine.unmute(ME, MuteKind::Repo, "ORG/APP").unwrap();
-    h.engine.unmute(ME, MuteKind::User, "renovate").unwrap();
+    h.engine.unmute(ME, MuteKind::User, "example-bot").unwrap();
     assert_eq!(h.engine.mutes_get(ME).unwrap().prs, ["org/app#1"]);
 }
 

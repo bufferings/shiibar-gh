@@ -888,7 +888,7 @@ fn conversation_comments_on_other_prs_are_comment_other() {
     pr.record("T_1", Some(T0), None);
     pr.timeline = vec![
         comment("C_1", user("alice"), T0 + 10, ""),
-        comment("C_2", bot("renovate"), T0 + 20, ""),
+        comment("C_2", bot("example-bot"), T0 + 20, ""),
         comment("C_3", user(ME), T0 + 30, ""),
         comment("C_4", user("bob"), T0 + 40, &mention_link(ME)),
         review("R_1", user("bob"), T0 + 50, "COMMENTED", "a review body"),

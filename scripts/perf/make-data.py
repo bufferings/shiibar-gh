@@ -44,7 +44,7 @@ ME = "me"
 OWNER = "org"
 REPOS = [f"repo-{i:02d}" for i in range(1, 21)]
 USERS = [f"user{i:02d}" for i in range(1, 12)]
-MUTED_USER = "renovate-bot"
+MUTED_USER = "example-bot"
 # 200 for the measurement of docs/tasks/M7.md; SHIIBAR_GH_PERF_CARDS for a
 # smaller run.
 CARDS = int(os.environ.get("SHIIBAR_GH_PERF_CARDS", "200"))

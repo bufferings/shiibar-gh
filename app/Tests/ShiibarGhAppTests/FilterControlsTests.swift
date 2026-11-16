@@ -138,7 +138,7 @@ final class FilterControlsTests: XCTestCase {
 
     /// The display mode switch (DESIGN.md, "Compact"): two segments,
     /// `Detailed` at the left and `Compact` at the right with the board's
-    /// glyphs (candidate A), their names as tooltips; the current mode is
+    /// glyphs (Main.html), their names as tooltips; the current mode is
     /// the selected segment; pressing the other switches, the current one
     /// does nothing. Never the first responder.
     func testTheDisplayModeSwitch() {

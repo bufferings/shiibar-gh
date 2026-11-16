@@ -30,7 +30,7 @@ final class FilterValueTests: XCTestCase {
                     } else if muted {
                         rows.append(row(id + "-row", pr: pr, unread: true, muted: true))
                     }
-                    out.append(card(id, pr: pr, author: muted ? "renovate" : "al", state: state, muted: muted ? [.author] : [], rows: rows))
+                    out.append(card(id, pr: pr, author: muted ? "example-bot" : "al", state: state, muted: muted ? [.author] : [], rows: rows))
                 }
             }
         }

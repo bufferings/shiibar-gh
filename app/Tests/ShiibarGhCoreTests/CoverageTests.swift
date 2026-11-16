@@ -115,7 +115,7 @@ final class SettingsModelTests: XCTestCase {
         settings.setEvent(org, of: account, .teamReviewRequested, .list, false)
         XCTAssertTrue(settings.addMute(.repo, " example-org/legacy ", of: account))
         XCTAssertFalse(settings.addMute(.user, "  ", of: account), "an empty name is not taken")
-        settings.removeMute(.user, "renovate", of: account)
+        settings.removeMute(.user, "example-bot", of: account)
         settings.removeOwner(pub, of: account)
         settings.removeAccount(account)
         await settle()
@@ -124,7 +124,7 @@ final class SettingsModelTests: XCTestCase {
             "owner_notify bufferings-work example-org false", "owner_skip_drafts bufferings-work example-org true",
             "owner_events_set bufferings-work example-org team_review_requested list false",
             "mute bufferings-work repo example-org/legacy",
-            "unmute bufferings-work user renovate",
+            "unmute bufferings-work user example-bot",
             "owner_remove bufferings-work public", "account_remove bufferings-work",
         ] {
             XCTAssertTrue(api.calls.contains(call), call)
@@ -182,7 +182,7 @@ final class SettingsModelTests: XCTestCase {
     func testTheMutedLists() async {
         let settings = SettingsModel(app: app, launch: nil)
         let account = sampleAccount()
-        api.mutes = Mutes(repos: ["example-org/legacy"], users: ["renovate"], prs: [])
+        api.mutes = Mutes(repos: ["example-org/legacy"], users: ["example-bot"], prs: [])
         settings.windowOpened()
         settings.show(.account("3407303"))
         await settle()

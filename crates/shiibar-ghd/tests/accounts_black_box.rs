@@ -338,16 +338,16 @@ fn owner_settings_send_account_changed() {
     assert_eq!(copied, events);
     // The Mute lists answer with their new values (DESIGN.md, "Wire
     // format": `mutes`).
-    let mutes =
-        daemon.ok(json!({"cmd":"mute","account":"me","kind":"user","name":"renovate"}))["mutes"]
-            .clone();
-    assert_eq!(mutes, json!({"repos":[],"users":["renovate"],"prs":[]}));
-    let mutes =
-        daemon.ok(json!({"cmd":"mute","account":"me","kind":"user","name":"Renovate"}))["mutes"]
-            .clone();
+    let mutes = daemon.ok(json!({"cmd":"mute","account":"me","kind":"user","name":"example-bot"}))
+        ["mutes"]
+        .clone();
+    assert_eq!(mutes, json!({"repos":[],"users":["example-bot"],"prs":[]}));
+    let mutes = daemon.ok(json!({"cmd":"mute","account":"me","kind":"user","name":"Example-Bot"}))
+        ["mutes"]
+        .clone();
     assert_eq!(
         mutes["users"],
-        json!(["renovate"]),
+        json!(["example-bot"]),
         "the same user without case"
     );
     daemon.stop();

@@ -626,16 +626,16 @@ fn account_and_owner_commands_work_from_the_command_line() {
 
     // The Mute lists (DESIGN.md, "CLI (AI integration)").
     for args in [
-        &["mute", "user", "renovate", "--account", "me"][..],
+        &["mute", "user", "example-bot", "--account", "me"][..],
         &["mute", "repo", "org/legacy", "--account", "me"][..],
-        &["mute", "user", "Renovate", "--account", "me"][..],
+        &["mute", "user", "Example-Bot", "--account", "me"][..],
     ] {
         let result = daemon.cli(args);
         assert_eq!(result.code, 0, "{args:?}: {}", result.stderr);
     }
     assert_eq!(
         daemon.cli(&["mutes", "--account", "me"]).stdout,
-        "repo org/legacy\nuser renovate\n"
+        "repo org/legacy\nuser example-bot\n"
     );
     assert_eq!(
         daemon
@@ -652,7 +652,7 @@ fn account_and_owner_commands_work_from_the_command_line() {
     );
     assert_eq!(
         daemon
-            .cli(&["unmute", "user", "RENOVATE", "--account", "me"])
+            .cli(&["unmute", "user", "EXAMPLE-BOT", "--account", "me"])
             .code,
         0
     );

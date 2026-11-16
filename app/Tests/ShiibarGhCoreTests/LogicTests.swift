@@ -418,9 +418,9 @@ final class PresentationTests: XCTestCase {
         for bad in ["example-org", "a/b/c", "/repo", "owner/", "a b/c", "a/b#1"] {
             XCTAssertFalse(MuteInput.canAdd(.repo, bad, existing: []), bad)
         }
-        XCTAssertTrue(MuteInput.canAdd(.user, "renovate", existing: []))
+        XCTAssertTrue(MuteInput.canAdd(.user, "example-bot", existing: []))
         XCTAssertFalse(MuteInput.canAdd(.user, "re novate", existing: []))
-        XCTAssertFalse(MuteInput.canAdd(.user, "RENOVATE", existing: ["renovate"]))
+        XCTAssertFalse(MuteInput.canAdd(.user, "EXAMPLE-BOT", existing: ["example-bot"]))
         XCTAssertTrue(MuteInput.canAdd(.pr, "example-org/api#402", existing: []))
         for bad in ["example-org/api", "example-org/api#", "example-org/api#x", "example-org/api#0", "api#402", "example-org/api#-1"] {
             XCTAssertFalse(MuteInput.canAdd(.pr, bad, existing: []), bad)

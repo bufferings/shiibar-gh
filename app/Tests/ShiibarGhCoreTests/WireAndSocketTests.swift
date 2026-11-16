@@ -137,9 +137,9 @@ final class WireTests: XCTestCase {
     func testTablesAndMutesDecode() throws {
         let events = try JSONDecoder().decode(EventsResponse.self, from: Data(#"{"ok":true,"events":{"review_requested":{"list":true,"notify":false}}}"#.utf8))
         XCTAssertEqual(events.events["review_requested"], EventCell(list: true, notify: false))
-        let mutes = try JSONDecoder().decode(MutesResponse.self, from: Data(#"{"ok":true,"mutes":{"repos":["o/r"],"users":["renovate"],"prs":["o/r#2"]}}"#.utf8)).mutes
-        XCTAssertEqual(mutes, Mutes(repos: ["o/r"], users: ["renovate"], prs: ["o/r#2"]))
-        XCTAssertTrue(mutes.contains(.user, "Renovate"))
+        let mutes = try JSONDecoder().decode(MutesResponse.self, from: Data(#"{"ok":true,"mutes":{"repos":["o/r"],"users":["example-bot"],"prs":["o/r#2"]}}"#.utf8)).mutes
+        XCTAssertEqual(mutes, Mutes(repos: ["o/r"], users: ["example-bot"], prs: ["o/r#2"]))
+        XCTAssertTrue(mutes.contains(.user, "Example-Bot"))
         XCTAssertEqual(mutes.list(.pr), ["o/r#2"])
         XCTAssertEqual(EventKind.allCases.map(\.rawValue), [
             "review_requested", "team_review_requested", "mentioned", "team_mentioned", "comment", "comment_other", "reply",
@@ -239,7 +239,7 @@ final class SocketClientTests: XCTestCase {
         try await api.restore(account: "me", pr: "o/r#1")
         let muted = try await api.mute(account: "me", kind: .repo, name: "o/r")
         XCTAssertEqual(muted.repos, ["o/r"])
-        _ = try await api.unmute(account: "me", kind: .user, name: "renovate")
+        _ = try await api.unmute(account: "me", kind: .user, name: "example-bot")
         _ = try await api.mutes(account: "me")
         let sent = try fake.requests.map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]).mapValues { "\($0)" } }
         XCTAssertEqual(sent, [
@@ -252,7 +252,7 @@ final class SocketClientTests: XCTestCase {
             ["cmd": "dismiss", "account": "me", "pr": "o/r#1"],
             ["cmd": "restore", "account": "me", "pr": "o/r#1"],
             ["cmd": "mute", "account": "me", "kind": "repo", "name": "o/r"],
-            ["cmd": "unmute", "account": "me", "kind": "user", "name": "renovate"],
+            ["cmd": "unmute", "account": "me", "kind": "user", "name": "example-bot"],
             ["cmd": "mutes_get", "account": "me"],
         ])
     }

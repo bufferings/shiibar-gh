@@ -2,7 +2,7 @@
 // app follows the macOS light and dark appearance, and the boards are light
 // only (DESIGN.md, "UI"). The dark values keep the boards' roles (text,
 // secondary text, status colors) on dark surfaces and are
-// checked by the owner on the device.
+// checked on the device.
 //
 // Account colors are macOS system colors (Colors.swift), not listed here.
 

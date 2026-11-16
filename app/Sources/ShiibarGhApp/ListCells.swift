@@ -1178,7 +1178,7 @@ class LineView: PressView {
     /// missed the changes made while the table reuses a line, outside the
     /// window: a heading configured from Todo to Waiting there recorded no
     /// `needsDisplay`, and its Todo image was kept (the measurement mode's
-    /// trace; the owner saw cards of another repository under a heading).
+    /// trace; cards of another repository appeared under a heading).
     private(set) var drawnKey: DrawKey?
 
     /// What the drawing of this line reads, besides the item state, the

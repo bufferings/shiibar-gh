@@ -39,7 +39,7 @@ INSERT INTO owners (id, account, name, kind, github_id, seq, enabled, notify, sk
 INSERT INTO owner_events (owner, event, list, notify) VALUES
     ('o2', 'comment', 1, 0), ('o2', 'mentioned', 0, 0);
 INSERT INTO exclusions (owner, kind, position, name, state) VALUES
-    ('o2', 'user', 0, 'renovate', 'list_only'), ('o2', 'repo', 0, 'org/legacy', 'hidden');
+    ('o2', 'user', 0, 'example-bot', 'list_only'), ('o2', 'repo', 0, 'org/legacy', 'hidden');
 INSERT INTO prs (key, account, id, owner, repo, number, url, title, author, author_avatar_url,
     base, head, state, is_draft, review, checks, base_status, mergeable, failed_check,
     changes_requested_by, updated_at, is_private, requested_me, requested_team, assignees,
@@ -79,7 +79,7 @@ INSERT INTO prs (key, account, id, owner, repo, number, url, title, author, auth
     link_review, link_checks, link_base, unreadable, snoozed, added_at, prev_review,
     prev_checks, prev_base_status, prev_mergeable, gone_at, collected) VALUES
     ('1001:PR_N', '1001', 'PR_N', 'someone', 'lib', 7, 'https://github.com/someone/lib/pull/7',
-     'Bump', 'renovate', NULL, 'main', 'renovate/x', 'open', 0, 'none', 'passed',
+     'Bump', 'example-bot', NULL, 'main', 'example-bot/x', 'open', 0, 'none', 'passed',
      'up_to_date', 1, NULL, NULL, 1799999600, 0, 0, 0, '[]', 'r', 'c', 'b', 0, 1, 1799000200,
      'none', 'passed', 'up_to_date', 1, NULL, 0);
 INSERT INTO pr_rows (id, account, pr, kind, text, counts, actor, url, occurred_at, comment_id,
@@ -108,7 +108,7 @@ INSERT INTO accounts (id, login, color, seq, token, updated_at, dot, teams, grap
     '{"limit":5000,"remaining":4900,"reset_at":1800003000}', NULL,
     '{"own":{},"threads":{},"retries":{"PR_C":{"pr_id":"PR_C","since":1799990000,"failures":1,"owner":"o2"}},"pending_signals":["org/app#1"],"notif_last_modified":"Fri, 15 Jan 2027 08:00:00 GMT","notif_since":"2027-01-15T08:00:00Z","poll_interval":60,"notif_checked_at":1799999000,"status_failures":[],"failed_requests":[],"full_run_started_at":1799999000}');
 INSERT INTO mutes (account, kind, position, name) VALUES
-    ('1001', 'repo', 0, 'org/legacy'), ('1001', 'user', 0, 'renovate'),
+    ('1001', 'repo', 0, 'org/legacy'), ('1001', 'user', 0, 'example-bot'),
     ('1001', 'pr', 0, 'org/app#2');
 INSERT INTO owners (id, account, name, kind, github_id, seq, enabled, notify, skip_drafts,
     watch_started_at, fetched_at) VALUES
@@ -157,7 +157,7 @@ INSERT INTO prs (key, account, id, owner, repo, number, url, title, author, auth
      0, 1799000000, 1799000100, NULL, 0);
 INSERT INTO pr_rows (id, account, pr, kind, text, counts, actor, url, occurred_at, comment_id,
     unread, listed, made_at, notify) VALUES
-    ('1001:R_1', '1001', '1001:PR_1', 'comment', 'hello', NULL, 'renovate', 'u1', 1799999100,
+    ('1001:R_1', '1001', '1001:PR_1', 'comment', 'hello', NULL, 'example-bot', 'u1', 1799999100,
      'C_9', 1, 1, 1799999101, 'pending'),
     ('1001:R_2', '1001', '1001:PR_1', 'team_mentioned', 'hi @org/core', NULL, 'bob', 'u2',
      1799999000, NULL, 0, 0, 1799999001, 'delivered'),
@@ -522,7 +522,7 @@ fn a_0_4_database_moves_to_version_7_keeping_everything() {
         account.mutes,
         MuteRec {
             repos: vec!["org/legacy".into()],
-            users: vec!["renovate".into()],
+            users: vec!["example-bot".into()],
             prs: vec!["org/app#2".into()],
         }
     );

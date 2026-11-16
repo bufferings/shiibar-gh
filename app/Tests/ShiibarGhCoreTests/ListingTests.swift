@@ -288,8 +288,8 @@ final class SectionTests: XCTestCase {
         let searched = layout(.review, expanded: [], search: "Title")[1]
         XCTAssertEqual(searched.cards.count, 7, "no fold with a search")
         XCTAssertNil(searched.foldLine)
-        XCTAssertEqual(layout(.review, search: "renovate").map(\.title), ["Todo"], "sections without a match go")
-        XCTAssertEqual(layout(.review, search: "renovate")[0].detail, "7 PRs", "counts ignore the search")
+        XCTAssertEqual(layout(.review, search: "example-bot").map(\.title), ["Todo"], "sections without a match go")
+        XCTAssertEqual(layout(.review, search: "example-bot")[0].detail, "7 PRs", "counts ignore the search")
         let collapsed = layout(.review, collapsed: ["review|todo"])[1]
         XCTAssertTrue(collapsed.collapsed)
         XCTAssertEqual(collapsed.cards, [])
@@ -371,11 +371,11 @@ final class SectionTests: XCTestCase {
         let cards = sampleCards()
         let all = shows(mutedShown)
         XCTAssertEqual(Listing.rowsToRead(tab: .review, cards: cards, search: "", visibility: all), ["A", "D", "t6", "t7"])
-        XCTAssertEqual(Listing.rowsToRead(tab: .review, cards: cards, search: "renovate", visibility: all), ["t6", "t7"])
+        XCTAssertEqual(Listing.rowsToRead(tab: .review, cards: cards, search: "example-bot", visibility: all), ["t6", "t7"])
         XCTAssertEqual(Listing.rowsToRead(tab: .all, cards: cards, search: "", visibility: all).count, 6, "N1's gray row and M1's too")
         let hide = shows(mutedHidden)
         XCTAssertEqual(Listing.rowsToRead(tab: .review, cards: cards, search: "", visibility: hide), ["A", "D"], "hidden muted cards")
-        XCTAssertEqual(Listing.rowsToRead(tab: .review, cards: cards, search: "renovate", visibility: hide), [])
+        XCTAssertEqual(Listing.rowsToRead(tab: .review, cards: cards, search: "example-bot", visibility: hide), [])
     }
 
     func testTheRowsOfACard() {
@@ -564,7 +564,7 @@ final class MenuTests: XCTestCase {
         let t7 = titles(PopoverLogic.menu(for: .header(card: "T7"), view: view(.review), login: "x"))
         XCTAssertTrue(t7.contains("Unmute this pull request"))
         XCTAssertTrue(t7.contains("Mute example-org/api"))
-        XCTAssertTrue(t7.contains("Unmute @renovate"))
+        XCTAssertTrue(t7.contains("Unmute @example-bot"))
     }
 
     /// Main.html, "Right-click on a row".
@@ -731,7 +731,7 @@ final class CardMoveTests: XCTestCase {
         let other = LocalChange.mute(.user, "rk").apply(mixed)
         XCTAssertEqual(other[1].muted, [], "rk did not write T1")
         XCTAssertEqual(other[1].rows.map(\.muted), [false, false, false, true, false, false], "only rk's reply")
-        let unmuted = LocalChange.unmute(.user, "renovate").apply(cards)
+        let unmuted = LocalChange.unmute(.user, "example-bot").apply(cards)
         XCTAssertEqual(unmuted[6].muted, [])
         XCTAssertEqual(unmuted[6].rows[0].muted, false)
         XCTAssertEqual(unmuted[7].muted, [.known(.pr)], "still muted by itself")

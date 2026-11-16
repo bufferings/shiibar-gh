@@ -26,7 +26,7 @@ pub fn init_from_env() {
 fn write(level: u8, label: &str, args: Arguments<'_>) {
     if level <= LEVEL.load(Ordering::Relaxed) {
         // `2027-01-15 08:00:00+09:00`, so a line can be matched with what
-        // the owner saw on screen.
+        // was on screen at that time.
         let at = jiff::Zoned::now().strftime("%Y-%m-%d %H:%M:%S%:z");
         eprintln!("{at} shiibar-ghd {label}: {args}");
     }

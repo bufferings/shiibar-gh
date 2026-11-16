@@ -45,8 +45,8 @@ func mine(_ section: PlacementSection = .main, _ position: Int) -> Placement {
 }
 
 /// The board's Review tab, Mine and All in small:
-/// - Review: Doing R1; Todo T1–T5, then T6 (muted for its author renovate)
-///   and T7 (muted by itself and for renovate; it has an unread mention);
+/// - Review: Doing R1; Todo T1–T5, then T6 (muted for its author example-bot)
+///   and T7 (muted by itself and for example-bot; it has an unread mention);
 ///   Waiting W1; Done D1 (merged).
 /// - Mine: M1 (authored, unread blue row), M2 (assigned), Done M3 (closed).
 /// - All only: N1 (acme-corp, gray unread row by a muted user).
@@ -66,11 +66,11 @@ func sampleCards() -> [Card] {
         card("T3", pr: "example-org/docs#88", author: "jo", placement: review(.todo, 2), updated: T0 - 20),
         card("T4", pr: "example-org/api#415", author: "rk", placement: review(.todo, 3), updated: T0 - 10),
         card("T5", pr: "example-org/web#219", author: "jo", placement: review(.todo, 4), updated: T0 - 5),
-        card("T6", pr: "example-org/web#241", author: "renovate", placement: review(.todo, 5), muted: [.author], updated: T0 - 4,
+        card("T6", pr: "example-org/web#241", author: "example-bot", placement: review(.todo, 5), muted: [.author], updated: T0 - 4,
              rows: [row("t6", pr: "example-org/web#241", kind: .teamReviewRequested, text: "for frontend team", unread: true, muted: true)]),
-        card("T7", pr: "example-org/api#402", author: "renovate", placement: review(.todo, 6), muted: [.pr, .author], prMute: .mute,
+        card("T7", pr: "example-org/api#402", author: "example-bot", placement: review(.todo, 6), muted: [.pr, .author], prMute: .mute,
              updated: T0 - 3,
-             rows: [row("t7", pr: "example-org/api#402", kind: .mentioned, text: "needs a manual step", actor: "renovate", unread: true)]),
+             rows: [row("t7", pr: "example-org/api#402", kind: .mentioned, text: "needs a manual step", actor: "example-bot", unread: true)]),
         card("W1", pr: "acme-corp/infra#61", owner: "o3", author: "dz", placement: review(.waiting, 0), updated: T0 - 200),
         card("D1", pr: "acme-corp/infra#58", owner: "o3", author: "mk", state: .merged, placement: review(.done, 0), updated: T0 - 300),
         card("M1", pr: "example-org/api#421", author: "bufferings-work", authored: true, placement: mine(.main, 0), updated: T0 - 60,

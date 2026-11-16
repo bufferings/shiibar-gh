@@ -440,7 +440,7 @@ PR 単体の設定が Unmute の PR は、リポジトリと作者を Mute し�
 
 **Filter の Mute**。Mute の対象のカードを表示するかどうかは、タブごとの Filter の Mute の指定（`Hide`、`Show`、`Only`。既定は `Hide`）で決める（「Filter」）。未読のメンションがあるカードだけを一時的に表示する動作はしない（既読にするとカードが消えるため）。隠している Mute の対象のカードに未読のメンションがあることは、`Filter` の青い点で示す。Mute の対象のカードの通知を押したときに、開いたタブの Filter の Mute が `Hide` なら、`Show` にしてそのカードを表示する（「Filter」の「タブを開いてカードを選択する操作」）。
 
-- 名前は GitHub に問い合わせずに保存し、大文字と小文字を区別せずに比較する。リポジトリは `owner/repo` の形で指定する。Bot は利用者として扱う。Bot のログイン名は GraphQL の `Bot.login` の表記（`renovate`。`[bot]` の接尾辞なし）で比較する（公開スキーマと実データで確認、2026-11-09）。
+- 名前は GitHub に問い合わせずに保存し、大文字と小文字を区別せずに比較する。リポジトリは `owner/repo` の形で指定する。Bot は利用者として扱う。Bot のログイン名は GraphQL の `Bot.login` の表記（`example-bot`。`[bot]` の接尾辞なし）で比較する（公開スキーマと実データで確認、2026-11-09）。
 - Mute している間に記録した行は、解除すると、未読のものは青い未読の行になる。さかのぼって通知はしない。
 
 Mute と Dismiss の違い：
@@ -746,7 +746,7 @@ owner の取得の成功は、その owner の `Search`、`Status`、`Compare`�
 | Reopened | REOPENED_EVENT（GraphQL の `PullRequestTimelineItemsItemType` にあり、`ReopenedEvent` は `actor` と `createdAt` を持つ。スキーマを照会して確認、2026-11-12） |
 | Added to／Removed from merge queue | ADDED_TO_MERGE_QUEUE_EVENT／REMOVED_FROM_MERGE_QUEUE_EVENT |
 
-同じ出来事が Mentioned と Comment の両方に該当するときは Mentioned の行だけを生成する。Mentioned の行の投稿者、本文、移動先は、リンクを含むコメント、レビュー、または PR の本文から求める。MENTIONED_EVENT は使用しない。GitHub はレビューコメントでのメンションに MENTIONED_EVENT を生成せず、会話のコメントでもコメントより数秒遅れて生成するためである（所有者の確認、2026-11-05）。引用の返信の中のメンションは user-mention のリンクにならないので、Mentioned にしない。本文の文字列から `@login` や `@org/team` を検索する方法は使用しない。メンションの検知は、取得の契機に関係なく、取得したすべてのタイムラインで行う。
+同じ出来事が Mentioned と Comment の両方に該当するときは Mentioned の行だけを生成する。Mentioned の行の投稿者、本文、移動先は、リンクを含むコメント、レビュー、または PR の本文から求める。MENTIONED_EVENT は使用しない。GitHub はレビューコメントでのメンションに MENTIONED_EVENT を生成せず、会話のコメントでもコメントより数秒遅れて生成するためである（実際の応答で確認、2026-11-05）。引用の返信の中のメンションは user-mention のリンクにならないので、Mentioned にしない。本文の文字列から `@login` や `@org/team` を検索する方法は使用しない。メンションの検知は、取得の契機に関係なく、取得したすべてのタイムラインで行う。
 
 **行のラベル**。行の種類のラベルは表の名前である。ただし長い名前は短くする：Comment on my PR と Comment on other PRs は `Comment`、Reply in a thread I commented in と Reply in a thread I was mentioned in は `Reply`、Review requested to my team は `Review requested`（本文の `for <チームの slug> team` で区別する）、Reaction to my comment は `Reaction`。Merged / Closed は `Merged` と `Closed` に区別する。
 
@@ -1018,7 +1018,7 @@ PR ごとの状態は、配置（なし、Review の区画と順位、Mine の�
 - [ ] Removed from merge queue（`failed_checks`）の行の移動先の規則は、公開リポジトリで GitHub Actions を使用する 1 つずつのマージキュー（bevyengine/bevy）でだけ確認した。非公開リポジトリのマージキュー、複数の PR をまとめて試すマージキュー、GitHub Actions 以外の CI では確認していない
 - [ ] メンションの判定は、bodyHTML の `user-mention` のリンク（`class="user-mention"` と、ユーザーのページへの `href`）と `team-mention` のリンク（`class="team-mention"` と、チームの databaseId を表す `data-id`）に依存する。この HTML の形は API の仕様ではないので、GitHub が変更すると判定できなくなる
 - [ ] 1 つの PR が同時にマージキューに 2 回追加されることがあるか、取り除きが追加の順と異なる順に起きることがあるか（Removed from merge queue の行の、キューに追加した人の対応に影響する。ドキュメントに記載がなく、確認していない）
-- [ ] `GET /notifications` の応答に、SSO を承認していない organization の分が含まれず `X-GitHub-SSO` が付くか（ドキュメントは REST の応答一般について記載している。所有者は SSO の organization に属していないので確認できない）
+- [ ] `GET /notifications` の応答に、SSO を承認していない organization の分が含まれず `X-GitHub-SSO` が付くか（ドキュメントは REST の応答一般について記載している。SSO を有効にした organization では確認していない）
 - [ ] SSO の承認が必要という警告の動作全体（SSO を有効にした organization で確認できていない）
 - [ ] Public の要求と、複数の owner にまたがる要求（通知、チームの所属）で、1 つの organization への 403（`X-GitHub-SSO` が承認の URL だけの形）を受けたとき、その 403 を owner に結び付けられない。今はその要求の失敗として扱い、`sso_required` の警告は付けない（「トークン」）
 - [ ] `nodes(ids:)` で、トークンに権限のない PR（アクセスを失った非公開リポジトリなど）が、`null` と FORBIDDEN のエラーで返るか、`null` と NOT_FOUND のエラーで返るか（実際の応答で確認していない。実装は、NOT_FOUND のエラーを付けた `null` だけを読めなくなった PR とし、ほかの `null` は状況の取得の失敗として扱う。「カードの表示と監視」）
