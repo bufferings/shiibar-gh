@@ -95,7 +95,7 @@ struct Sidebar: View {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(app.accounts) { account in
                         row(selected: model.selection == .account(account.id), indent: false) {
-                            AccountDot(color: account.accountColor)
+                            if account.accountColor.showsDot { AccountDot(color: account.accountColor) }
                             Text(account.login).lineLimit(1)
                         } action: { model.select(.account(account.id)) }
                         ForEach(account.owners) { owner in

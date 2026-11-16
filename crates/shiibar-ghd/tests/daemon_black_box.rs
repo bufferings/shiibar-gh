@@ -683,8 +683,15 @@ fn error_codes_table() {
         vec![
             with(pr("PR_1", "alice"), json!({"is_draft":true})),
             pr("PR_2", "alice"),
+            pr("PR_3", "alice"),
         ],
         vec![event("E_1", "PR_2", "merged", T0 + 1)],
+        vec![],
+    );
+    // An unplaced PR merged later.
+    daemon.ingest(
+        vec![with(pr("PR_3", "alice"), json!({"state":"merged"}))],
+        vec![],
         vec![],
     );
     let cases = [
@@ -699,8 +706,30 @@ fn error_codes_table() {
             "not_found",
         ),
         (
-            json!({"cmd":"place","account":"me","pr":"a/b#1","tab":"mine"}),
+            json!({"cmd":"place","account":"me","pr":"a/b#1","tab":"mine","section":"todo"}),
             "not_found",
+        ),
+        // DESIGN.md, "Wire format": Review and Mine need a section in every
+        // case, and `main` (0.5) is no section.
+        (
+            json!({"cmd":"place","account":"me","pr":"org/app#2","tab":"mine"}),
+            "invalid",
+        ),
+        (
+            json!({"cmd":"place","account":"me","pr":"org/app#2","tab":"mine","section":"main"}),
+            "invalid",
+        ),
+        (
+            json!({"cmd":"place","account":"me","pr":"org/app#2","tab":"review","section":"main"}),
+            "invalid",
+        ),
+        (
+            json!({"cmd":"place","account":"me","pr":"org/app#3","tab":"mine"}),
+            "invalid",
+        ),
+        (
+            json!({"cmd":"place","account":"me","pr":"org/app#3","tab":"review"}),
+            "invalid",
         ),
         (
             json!({"cmd":"restore","account":"me","pr":"org/app#2"}),
@@ -1198,7 +1227,7 @@ fn dismiss_and_its_clocks_over_the_socket() {
     assert_eq!(card["rows"][0]["muted"], false);
     assert_eq!(
         daemon.card("PR_2").unwrap()["placement"],
-        json!({"tab":"mine","section":"main","position":0})
+        json!({"tab":"mine","section":"todo","position":0})
     );
     let tab = |tab: &str| {
         daemon.ok(json!({"cmd":"list","tab":tab}))["cards"]
@@ -1320,5 +1349,88 @@ fn a_dev_ingest_takes_a_team_only_pr_through_a_return_trigger_only() {
     ingest(vec![event("M_1", "PR_1", "team_mentioned", T0 + 2)]);
     let card = daemon.card("PR_1").expect("taken");
     assert_eq!(row_ids(&card["rows"]), ["1001:M_1"]);
+    daemon.stop();
+}
+
+/// DESIGN.md, "Mine" and "Wire format": Mine's four sections over the
+/// socket, `placement.section`, the default positions and a merged unplaced
+/// PR going to Done whatever section is given.
+#[test]
+fn mine_sections_over_the_socket() {
+    let (_dir, daemon) = setup();
+    daemon.ingest(
+        vec![
+            pr("PR_1", "me"),
+            pr("PR_2", "me"),
+            pr("PR_3", "alice"),
+            pr("PR_4", "alice"),
+        ],
+        vec![],
+        vec![],
+    );
+    daemon.ingest(
+        vec![with(pr("PR_4", "alice"), json!({"state":"merged"}))],
+        vec![],
+        vec![],
+    );
+    let place = |pr: &str, section: &str| {
+        daemon.ok(json!({"cmd":"place","account":"me","pr":pr,"tab":"mine","section":section}))
+            ["card"]["placement"]
+            .clone()
+    };
+    assert_eq!(
+        daemon.card("PR_2").unwrap()["placement"],
+        json!({"tab":"mine","section":"todo","position":1})
+    );
+    // `Add to Mine`: the end of Todo.
+    assert_eq!(
+        place("org/app#3", "todo"),
+        json!({"tab":"mine","section":"todo","position":2})
+    );
+    assert_eq!(
+        place("org/app#2", "doing"),
+        json!({"tab":"mine","section":"doing","position":0})
+    );
+    assert_eq!(
+        place("org/app#1", "waiting"),
+        json!({"tab":"mine","section":"waiting","position":0})
+    );
+    // From Waiting to Todo: the top.
+    assert_eq!(
+        place("org/app#1", "todo"),
+        json!({"tab":"mine","section":"todo","position":0})
+    );
+    assert_eq!(
+        place("org/app#1", "done"),
+        json!({"tab":"mine","section":"done","position":0})
+    );
+    // A merged unplaced PR: Mine's Done, the section given aside. It keeps
+    // the time of its detection, so the card moved to Done later stays
+    // first.
+    assert_eq!(
+        place("org/app#4", "doing"),
+        json!({"tab":"mine","section":"done","position":1})
+    );
+    let mine: Vec<(String, String)> = daemon.ok(json!({"cmd":"list","tab":"mine"}))["cards"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            (
+                c["pr"].as_str().unwrap().to_string(),
+                c["placement"]["section"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    let want: Vec<(String, String)> = [
+        ("org/app#2", "doing"),
+        ("org/app#3", "todo"),
+        ("org/app#1", "done"),
+        ("org/app#4", "done"),
+    ]
+    .iter()
+    .map(|(p, s)| (p.to_string(), s.to_string()))
+    .collect();
+    assert_eq!(mine, want);
     daemon.stop();
 }

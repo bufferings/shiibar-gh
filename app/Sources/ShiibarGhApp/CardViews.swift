@@ -39,7 +39,8 @@ struct CardLine: Equatable {
     var search: [String] = []
 }
 
-/// The values of a section heading.
+/// The values of a section heading, or of a repository of the Dismissed
+/// list.
 struct HeadingLine: Equatable {
     var key: String
     var title: String
@@ -47,6 +48,16 @@ struct HeadingLine: Equatable {
     var level: Int
     var collapsed: Bool
     var showLess: Bool
+    /// `Dismiss all` shows (the Done of Review and Mine, with cards to
+    /// dismiss, not collapsed). Part of the heading's image.
+    var dismissAll = false
+    /// A section heading: it folds, has its chevron and takes the
+    /// selection. A repository of the Dismissed list does none of these
+    /// (DESIGN.md, "Dismissed list").
+    var folds = true
+    /// The room above the band: less under the Dismissed list's note
+    /// (Main.html `.dhead + .dnote + .band`).
+    var gap: CGFloat = 8
 
     init(_ section: SectionLayout) {
         key = section.key
@@ -55,6 +66,20 @@ struct HeadingLine: Equatable {
         level = section.level
         collapsed = section.collapsed
         showLess = section.showLess
+        dismissAll = section.dismissAllCards != nil
+    }
+
+    /// The band of a repository of the Dismissed list; `first` right under
+    /// the list's note.
+    init(_ group: DismissedGroup, first: Bool) {
+        key = "dismissed|" + group.repository
+        title = group.repository
+        detail = group.detail
+        level = 1
+        collapsed = false
+        showLess = false
+        folds = false
+        gap = first ? 2 : 8
     }
 }
 

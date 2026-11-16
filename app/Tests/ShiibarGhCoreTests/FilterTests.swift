@@ -179,10 +179,10 @@ final class FilterListTests: XCTestCase {
         XCTAssertEqual(merged.map(\.detail), ["0 PRs", "0 PRs", "0 PRs", "1 PR"], "the empty sections stay for a drop")
         XCTAssertEqual(merged.map(\.key), ["review|doing", "review|todo", "review|waiting", "review|done"])
         XCTAssertNil(merged[1].foldLine)
-        // Mine: the first list and Done.
+        // Mine: Review's four sections, the empty ones kept.
         let mine = layout(.mine, filter: ListFilter(statuses: [.closed]))
-        XCTAssertEqual(mine.map(\.key), ["mine|main", "mine|done"])
-        XCTAssertEqual(mine.map(\.matching.count), [0, 1])
+        XCTAssertEqual(mine.map(\.key), ["mine|doing", "mine|todo", "mine|waiting", "mine|done"])
+        XCTAssertEqual(mine.map(\.matching.count), [0, 0, 0, 1])
         // Unread only: Todo holds T1 alone; the other sections empty.
         let unread = layout(.review, filter: ListFilter(unreadOnly: true))
         XCTAssertEqual(unread.map(\.detail), ["0 PRs", "1 PR", "0 PRs", "0 PRs"])

@@ -160,20 +160,18 @@ public enum CardDrop {
         return PlaceMove(card: card.id, target: target, position: position(index + 1, lowerHalf: true, in: ids), verb: .move)
     }
 
-    /// D, T or W in Review: to that section at its default place, from
-    /// Done too; nothing for Mine or the section the card is in.
+    /// D, T or W in Review or Mine: to that section of the card's tab at
+    /// its default place, from Done too; nothing for the section the card
+    /// is in, nor without a placement (All).
     public static func moveTo(_ section: PlacementSection, _ card: Card) -> PlaceMove? {
-        guard let placement = card.placement, placement.tab.value == .review,
+        guard let placement = card.placement, let tab = placement.tab.value,
               placement.section.value != section, section != .done else { return nil }
-        return PlaceMove(card: card.id, target: .review(section), position: .byDefault, verb: .move)
+        return PlaceMove(card: card.id, target: PlaceTarget(tab, section), position: .byDefault, verb: .move)
     }
 
     /// The `place` target of a section of Review or Mine.
     public static func target(_ tab: PlacementTab, _ section: PlacementSection) -> PlaceTarget {
-        switch tab {
-        case .review: return .review(section)
-        case .mine: return section == .done ? .mineDone : .mine
-        }
+        PlaceTarget(tab, section)
     }
 }
 
@@ -255,17 +253,11 @@ public enum LocalChange: Equatable {
         guard let card = cards.first(where: { $0.id == move.card }) else { return cards }
         let from = card.placement
         var newPlacement: Placement?
-        switch move.target {
-        case .none:
-            newPlacement = nil
-        case .review(let section):
+        if let (tab, section) = move.target.placed {
+            // A merged or closed PR without a placement goes to Done,
+            // whatever the section asked (DESIGN.md, "Wire format").
             let finishedUnplaced = card.isFinished && from == nil
-            newPlacement = Placement(tab: .review, section: finishedUnplaced ? .done : section)
-        case .mine:
-            let finishedUnplaced = card.isFinished && from == nil
-            newPlacement = Placement(tab: .mine, section: finishedUnplaced ? .done : .main)
-        case .mineDone:
-            newPlacement = Placement(tab: .mine, section: .done)
+            newPlacement = Placement(tab: tab, section: finishedUnplaced ? .done : section)
         }
         var out = cards.map { other -> Card in
             guard other.id == card.id else { return other }
@@ -289,7 +281,9 @@ public enum LocalChange: Equatable {
                 case .top: index = 0
                 case .bottom: index = order.count
                 case .byDefault:
-                    let fromDoingOrWaiting = from?.tab.value == .review
+                    // Todo: at the top from Doing or Waiting of the same tab,
+                    // else at the bottom (DESIGN.md, "Review", "Mine").
+                    let fromDoingOrWaiting = from?.tab.value == tab
                         && (from?.section.value == .doing || from?.section.value == .waiting)
                     index = section == .todo && fromDoingOrWaiting ? 0 : order.count
                 }

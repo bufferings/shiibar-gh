@@ -12,6 +12,10 @@ public enum FilterText {
     public static let dotTip = "Unread pull requests are hidden by the filter"
     /// The button under the options, at the right end.
     public static let reset = "Reset"
+    /// The search field's clear button: its tooltip and its name for
+    /// assistive apps.
+    public static let clearSearch = "Clear"
+    public static let clearSearchLabel = "Clear search"
 }
 
 /// Whose search text: a tab's, or the Dismissed list's (DESIGN.md, "Search

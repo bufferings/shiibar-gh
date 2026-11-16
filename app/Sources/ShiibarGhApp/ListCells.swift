@@ -1038,7 +1038,7 @@ enum LineLayout {
     static func heading(_ heading: HeadingLine, width: CGFloat, k: CGFloat) -> (frame: CGRect, height: CGFloat) {
         if heading.level == 1 {
             let inner = max(Ink.lineHeight(Ink.font(12 * k, .semibold)), Ink.lineHeight(Ink.font(11 * k)), 14 * k)
-            let band = CGRect(x: 12, y: 8, width: max(0, width - 24), height: 4 * k + inner + 4 * k)
+            let band = CGRect(x: 12, y: heading.gap, width: max(0, width - 24), height: 4 * k + inner + 4 * k)
             return (band, band.maxY + 6)
         }
         let inner = max(Ink.lineHeight(Ink.font(11 * k, .semibold)), Ink.lineHeight(Ink.font(11 * k)), 14 * k)
@@ -1410,7 +1410,10 @@ class LineView: PressView {
 }
 
 /// A section heading: a band (Main.html `.band`) or a small indented
-/// heading (`.grp2`). Pressing it folds the section.
+/// heading (`.grp2`). Pressing it folds the section. The Done of Review and
+/// Mine has `Dismiss all` between the count and the chevron. A repository
+/// of the Dismissed list is a band without the chevron, which a press does
+/// nothing to.
 final class HeadingLineView: LineView {
     var heading: HeadingLine?
 
@@ -1427,13 +1430,13 @@ final class HeadingLineView: LineView {
         let changed = self.heading != heading
         self.heading = heading
         self.env = env
-        kind = .heading(heading.key)
+        kind = heading.folds ? .heading(heading.key) : .label(heading.key)
         context = env.context
         bind(state)
         setAccessibilityElement(true)
-        setAccessibilityRole(.button)
+        setAccessibilityRole(heading.folds ? .button : .staticText)
         setAccessibilityLabel("\(heading.title), \(heading.detail)")
-        setAccessibilityValue(heading.collapsed ? "Collapsed" : "Expanded")
+        setAccessibilityValue(heading.folds ? (heading.collapsed ? "Collapsed" : "Expanded") : nil)
         layoutControls()
         if changed { needsDisplay = true }
     }
@@ -1445,10 +1448,11 @@ final class HeadingLineView: LineView {
     }
 
     private struct Parts {
-        var chevron: CGRect
+        var chevron: CGRect?
         var title: CGRect
         var showLess: CGRect?
         var detail: CGRect
+        var dismissAll: CGRect?
     }
 
     private func parts() -> Parts? {
@@ -1464,8 +1468,22 @@ final class HeadingLineView: LineView {
         let detailWidth = Ink.width(heading.detail, detailFont)
         let lessSize = heading.showLess ? ListButton.textSize("Show less", size: 11 * k) : nil
         if level1 {
-            let chevron = CGRect(x: right - chevronSize, y: LineLayout.center(chevronSize, in: line), width: chevronSize, height: chevronSize)
-            let detail = CGRect(x: chevron.minX - spacing - detailWidth, y: LineLayout.center(Ink.lineHeight(detailFont), in: line), width: detailWidth, height: Ink.lineHeight(detailFont))
+            // From the right: the chevron, `Dismiss all`, the count
+            // (DESIGN.md, "Section size").
+            var end = right
+            var chevron: CGRect?
+            if heading.folds {
+                chevron = CGRect(x: right - chevronSize, y: LineLayout.center(chevronSize, in: line), width: chevronSize, height: chevronSize)
+                end = chevron!.minX - spacing
+            }
+            var dismissAll: CGRect?
+            if heading.dismissAll {
+                // The board's `.dall`: 2 points of room on either side.
+                let size = ListButton.textSize(DismissedText.dismissAll, size: 11 * k)
+                dismissAll = CGRect(x: end - 2 - size.width, y: LineLayout.center(size.height, in: line), width: size.width, height: size.height)
+                end = dismissAll!.minX - 2 - spacing
+            }
+            let detail = CGRect(x: end - detailWidth, y: LineLayout.center(Ink.lineHeight(detailFont), in: line), width: detailWidth, height: Ink.lineHeight(detailFont))
             var titleRight = detail.minX - spacing
             var less: CGRect?
             if let lessSize {
@@ -1473,7 +1491,7 @@ final class HeadingLineView: LineView {
                 titleRight = less!.minX - spacing
             }
             let title = CGRect(x: left, y: LineLayout.center(Ink.lineHeight(titleFont), in: line), width: max(0, titleRight - left), height: Ink.lineHeight(titleFont))
-            return Parts(chevron: chevron, title: title, showLess: less, detail: detail)
+            return Parts(chevron: chevron, title: title, showLess: less, detail: detail, dismissAll: dismissAll)
         }
         let chevron = CGRect(x: left, y: LineLayout.center(chevronSize, in: line), width: chevronSize, height: chevronSize)
         let detail = CGRect(x: right - detailWidth, y: LineLayout.center(Ink.lineHeight(detailFont), in: line), width: detailWidth, height: Ink.lineHeight(detailFont))
@@ -1490,10 +1508,18 @@ final class HeadingLineView: LineView {
 
     private func layoutControls() {
         beginControls()
-        if let heading, let less = parts()?.showLess {
+        if let heading, let parts = parts() {
             let key = heading.key
-            control("show-less", .text("Show less", size: 11 * k), frame: less, help: nil, label: "Show less") { [weak self] in
-                self?.context?.list.perform(.toggleMore(key))
+            if let less = parts.showLess {
+                control("show-less", .text("Show less", size: 11 * k), frame: less, help: nil, label: "Show less") { [weak self] in
+                    self?.context?.list.perform(.toggleMore(key))
+                }
+            }
+            if let frame = parts.dismissAll {
+                control("dismiss-all", .text(DismissedText.dismissAll, size: 11 * k), frame: frame, help: nil, label: DismissedText.dismissAll) {
+                    [weak self] in
+                    self?.context?.list.perform(.dismissAll(section: key))
+                }
             }
         }
         endControls()
@@ -1518,7 +1544,8 @@ final class HeadingLineView: LineView {
             Ink.draw(heading.title, Ink.font(11 * k, .semibold), Palette.strongText.nsColor, in: parts.title)
             Ink.draw(heading.detail, Ink.font(11 * k), Palette.waiting.nsColor, in: parts.detail)
         }
-        let icon = CGRect(x: parts.chevron.midX - 6 * k, y: parts.chevron.midY - 6 * k, width: 12 * k, height: 12 * k)
+        guard let chevron = parts.chevron else { return }
+        let icon = CGRect(x: chevron.midX - 6 * k, y: chevron.midY - 6 * k, width: 12 * k, height: 12 * k)
         Shapes.icon(chevronIcon, in: icon, color: Palette.faded.nsColor)
     }
 }
@@ -1992,7 +2019,7 @@ final class CardLineView: LineView {
 /// #number, the chain icon; the avatar and the title; the days left and
 /// Restore. No rows, no status icons, no ×.
 final class DismissedLineView: LineView {
-    private var card: Card?
+    private(set) var card: Card?
     private var search: [String] = []
     private var geometry: DismissedGeometry?
 

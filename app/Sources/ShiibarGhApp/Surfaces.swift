@@ -206,12 +206,15 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             let model = app.viewModel(account)
             let root = PopoverView.root(app: app, model: model, list: model.list(.popover), avatars: avatars, actions: actions(account), surface: .popover)
             popover.contentViewController = SurfaceViewController(root)
+            popoverHeights = SurfaceHeight(user: popoverHeight(account: account, near: button))
             popover.contentSize = NSSize(width: popoverWidth, height: popoverHeight(account: account, near: button))
             root.onBottomEdgeDrag = { [weak self] phase, distance in self?.dragBottomEdge(phase, distance: distance) }
+            root.onMinimumHeight = { [weak self] minimum in self?.popoverNeeds(minimum) }
             content = nil
         } else {
             var none = actions(nil)
             none.openWindow = nil
+            none.menuHasSettings = true
             content = AnyView(NoAccountsView(app: app, actions: none))
             popover.contentSize = NSSize(width: popoverWidth, height: NoAccountsView.height)
         }
@@ -241,8 +244,19 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
     }
 
     /// The smallest height dragging leaves (DESIGN.md, "Constants").
-    static let minPopoverHeight: CGFloat = 300
+    static let minPopoverHeight: CGFloat = SurfaceHeight.floor
     private var dragStartHeight: CGFloat?
+    /// The open popover's height: the user's, raised while the content
+    /// needs more (the open Filter options, the list's minimum).
+    private var popoverHeights = SurfaceHeight(user: SurfaceController.popoverHeight)
+
+    /// The least height for the text size (the open options included,
+    /// whether they are open or not): the popover is raised to it (within
+    /// the screen), and goes back to the user's height when it is less.
+    private func popoverNeeds(_ minimum: CGFloat) {
+        guard popover.isShown, popoverAccount != nil, popoverHeights.setMinimum(minimum) else { return }
+        resizePopover(to: popoverHeights.shown())
+    }
 
     /// The popover's bottom edge dragged `distance` points down (up when
     /// negative) since the press: the height follows, between 300 points
@@ -255,6 +269,7 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         let height = resizePopover(to: start + distance)
         if phase == .ended {
             dragStartHeight = nil
+            popoverHeights.setByUser(height)
             app.store.setPopoverHeight(Double(height), account: account)
         }
     }
@@ -271,7 +286,10 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             let chrome = window.frame.height - current.height
             maximum = window.frame.maxY - screen.visibleFrame.minY - chrome
         }
-        let height = min(max(Self.minPopoverHeight, wanted.rounded()), max(Self.minPopoverHeight, maximum.rounded(.down)))
+        // Not under what the content needs (the open options, the list's
+        // minimum), unless the screen has less room.
+        let least = max(Self.minPopoverHeight, popoverHeights.minimum)
+        let height = min(max(least, wanted.rounded()), max(Self.minPopoverHeight, maximum.rounded(.down)))
         if height != current.height { popover.contentSize = NSSize(width: current.width, height: height) }
         return height
     }
@@ -348,6 +366,12 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             panel.center()
         }
         panels[account] = panel
+        // Never under the least height for the text size (the open
+        // options and the list's minimum): raised when it is less.
+        root.onMinimumHeight = { [weak self, weak panel] minimum in
+            guard let self, let panel else { return }
+            self.window(panel, needs: minimum)
+        }
         // Keep on top: the panel floats above normal windows while on
         // (NSWindow.level; .floating is in front of every normal-level
         // window). Applied now and whenever the pin is pressed.
@@ -362,6 +386,22 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         DispatchQueue.main.async { [weak panel] in panel?.makeFirstResponder(nil) }
+    }
+
+    /// The window's least content height: its minimum size, and its
+    /// height raised to it (the top edge stays; within the screen's room).
+    private func window(_ panel: NSPanel, needs minimum: CGFloat) {
+        panel.contentMinSize = NSSize(width: 300, height: minimum)
+        let content = panel.contentRect(forFrameRect: panel.frame).height
+        guard content < minimum - 0.5 else { return }
+        let chrome = panel.frame.height - content
+        let room = (panel.screen ?? NSScreen.main).map { panel.frame.maxY - $0.visibleFrame.minY - chrome } ?? minimum
+        let height = SurfaceHeight(user: content).raised(to: minimum, room: room)
+        guard height > content + 0.5 else { return }
+        var frame = panel.frame
+        frame.origin.y -= height - content
+        frame.size.height += height - content
+        panel.setFrame(frame, display: true)
     }
 
     private func account(of notification: Notification) -> String? {

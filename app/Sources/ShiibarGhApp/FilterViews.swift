@@ -28,7 +28,9 @@ import SwiftUI
 /// Sizes of the Filter's area at text size 12 (DESIGN.md, "Constants";
 /// Main.html `.frow`, `.fo`, `.fopts`).
 enum FilterOptionsLayout {
-    /// The list keeps at least this height while the options show.
+    /// The list keeps at least this height (times the text scale): the
+    /// popover and the window are at least as high as that needs
+    /// (`SurfaceHeight`).
     static let listMinimum: CGFloat = 100
     /// The Filter row, without the space under it.
     static let filterRowHeight: CGFloat = 24
@@ -38,10 +40,48 @@ enum FilterOptionsLayout {
     static let rowHeight: CGFloat = 27
     /// The line of `Reset`, under the options.
     static let resetHeight: CGFloat = 28
-    /// Under the last line, before the border.
-    static let bottomPadding: CGFloat = 6
-    /// Below the border, before the list.
-    static let gap: CGFloat = 6
+    /// The box the options sit in (Main.html `.fopts`; DESIGN.md,
+    /// "Filter"): the cards' background and border, rounded, with the
+    /// cards' side inset. Points at text size 12. The heights grow with the
+    /// text (`scaled`); the sides and the corners stay as the cards' do,
+    /// so the box lines up with the cards and the search field at every
+    /// text size, as the options' sides always did.
+    static let boxRadius: CGFloat = 8
+    /// Outside the box: above (under the Filter row), at the sides, below
+    /// (before the list). Below it 6, the closed Filter row's own room
+    /// under it: the list starts as far below the fixed part whether the
+    /// options are open or closed, and a scrolled list never comes up to
+    /// the box (the list is clipped at its own top).
+    static let boxMargin = EdgeInsets(top: 2, leading: 12, bottom: 6, trailing: 12)
+    /// Inside the box, around the option lines and `Reset`.
+    static let boxPadding = EdgeInsets(top: 5, leading: 12, bottom: 5, trailing: 10)
+
+    /// The lines' height inside the box (without its padding) for `lines`
+    /// option lines at the text scale `k`.
+    static func contentHeight(lines: Int, k: CGFloat) -> CGFloat {
+        (CGFloat(lines) * rowHeight + resetHeight) * k
+    }
+
+    /// The whole area: the box with its padding, its 1-point border and
+    /// its margins. It never shrinks.
+    static func areaHeight(lines: Int, k: CGFloat) -> CGFloat {
+        contentHeight(lines: lines, k: k) + (boxPadding.top + boxPadding.bottom + boxMargin.top + boxMargin.bottom) * k + 2
+    }
+
+    /// The least height of the popover or window (`SurfaceHeight`): the
+    /// list's top as laid out (`listTop`) without the options as drawn
+    /// (`shownOptions`, 0 while closed) and without the bands (`bands`),
+    /// plus the options' full area; the list's minimum; the part under the
+    /// list (`below`). The same open or closed, with or without bands: only
+    /// the text size changes it.
+    static func surfaceMinimum(listTop: CGFloat, shownOptions: CGFloat, bands: CGFloat, below: CGFloat, lines: Int, k: CGFloat) -> CGFloat {
+        SurfaceHeight.minimum(above: listTop - shownOptions - bands + areaHeight(lines: lines, k: k), below: below, k: k)
+    }
+
+    /// The top and the bottom multiplied by `k`, the sides as they are.
+    static func scaled(_ insets: EdgeInsets, _ k: CGFloat) -> EdgeInsets {
+        EdgeInsets(top: insets.top * k, leading: insets.leading, bottom: insets.bottom * k, trailing: insets.trailing)
+    }
 }
 
 /// The options area.
@@ -196,34 +236,39 @@ struct FilterOptionsSlot: View {
 /// One option a line, the name at the left and the control at the right
 /// (Main.html `.fopts`, `.fo`): Status, Muted and Unread, in every tab;
 /// under them `Reset` at the right end, disabled while every setting is the
-/// default (the area keeps its height). Scrolls inside when the surface is
-/// short (the list keeps its minimum height).
+/// default (the area keeps its height). All of it sits in a rounded box with
+/// the cards' background and border, so it reads as one region apart from
+/// the list; no line is drawn under it. Always at its full height: the
+/// popover or the window grows instead (`SurfaceHeight`).
 struct FilterOptions: View {
     var list: SurfaceListModel
     var state: FilterOptionsState
     @Environment(\.textScale) var k
 
     var body: some View {
-        let height = (CGFloat(state.lines.count) * FilterOptionsLayout.rowHeight + FilterOptionsLayout.resetHeight) * k
-            + FilterOptionsLayout.bottomPadding
-        ScrollView(.vertical) {
-            VStack(spacing: 0) {
-                ForEach(state.lines, id: \.self) { option in
-                    line(option.title) { control(option) }
-                }
-                HStack(spacing: 0) {
-                    Spacer(minLength: 0)
-                    PushButton(title: PushButton.reset, enabled: state.canReset) { [list] in list.resetFilter() }
-                        .fixedSize()
-                }
-                .frame(height: FilterOptionsLayout.resetHeight * k)
+        let height = FilterOptionsLayout.contentHeight(lines: state.lines.count, k: k)
+        let padding = FilterOptionsLayout.scaled(FilterOptionsLayout.boxPadding, k)
+        let box = RoundedRectangle(cornerRadius: FilterOptionsLayout.boxRadius)
+        VStack(spacing: 0) {
+            ForEach(state.lines, id: \.self) { option in
+                line(option.title) { control(option) }
             }
-            .padding(EdgeInsets(top: 0, leading: 16, bottom: FilterOptionsLayout.bottomPadding, trailing: 14))
+            HStack(spacing: 0) {
+                Spacer(minLength: 0)
+                PushButton(title: PushButton.reset, enabled: state.canReset) { [list] in list.resetFilter() }
+                    .fixedSize()
+            }
+            .frame(height: FilterOptionsLayout.resetHeight * k)
         }
-        .scrollIndicators(.automatic)
-        .frame(maxHeight: height)
-        .overlay(alignment: .bottom) { Rectangle().fill(Palette.border.color).frame(height: 1) }
-        .padding(.bottom, FilterOptionsLayout.gap)
+        .padding(EdgeInsets(top: 0, leading: padding.leading, bottom: 0, trailing: padding.trailing))
+        .frame(height: height)
+        .padding(EdgeInsets(top: padding.top, leading: 0, bottom: padding.bottom, trailing: 0))
+        // The 1-point border inside the box's frame.
+        .padding(1)
+        .background(box.fill(Palette.surface.color))
+        .overlay(box.strokeBorder(Palette.border.color, lineWidth: 1))
+        .padding(FilterOptionsLayout.scaled(FilterOptionsLayout.boxMargin, k))
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func line<Control: View>(_ name: String, @ViewBuilder control: () -> Control) -> some View {
@@ -441,46 +486,147 @@ struct Segmented: NSViewRepresentable {
 // MARK: - Detailed and Compact
 
 /// The display mode of the cards (DESIGN.md, "Compact"): `Detailed` at the
-/// left, `Compact` at the right, a standard segmented control with one icon
-/// each (BoardIcons `compactOff`, `compactOn`). The current mode is the
-/// selected segment; the other one switches; the current one does nothing.
-/// The names are the segments' tooltips, shown after 0.4 seconds
-/// (QuickTip). Mouse only, like the Filter's options.
+/// left, `Compact` at the right, a two-segment switch with one icon each
+/// (BoardIcons `compactOff`, `compactOn`). The current mode is the selected
+/// segment; the other one switches; the current one does nothing. The
+/// names are the segments' tooltips, shown after 0.4 seconds (QuickTip).
+/// Mouse only, like the Filter's options.
 enum DisplayMode: Int, CaseIterable {
     case detailed = 0, compact = 1
 
     var title: String { self == .detailed ? "Detailed" : "Compact" }
     var icon: BoardIcon { self == .detailed ? BoardIcons.compactOff : BoardIcons.compactOn }
+}
 
-    /// The template image of the segment: the board's strokes, which the
-    /// control colors as it colors its own images.
-    func image(size: CGFloat) -> NSImage {
-        let icon = self.icon
-        let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
-            guard let context = NSGraphicsContext.current?.cgContext else { return false }
-            context.addPath(IconPath.cgPath(icon, in: rect, flipY: true))
-            context.setLineWidth(icon.lineWidth * size / 16)
-            context.setLineCap(icon.roundCaps ? .round : .butt)
-            context.setLineJoin(icon.roundJoins ? .round : .miter)
-            context.setStrokeColor(NSColor.black.cgColor)
-            context.strokePath()
-            return true
-        }
-        image.isTemplate = true
-        image.accessibilityDescription = title
-        return image
+/// The switch's size at a text scale `k` (text size / 12): the board's
+/// `.dmode .dseg` (26 × 20 points, a 1-point border, 6-point corners, the
+/// 14-point icon) multiplied by `k` as a whole, so the icons keep their
+/// proportion to the bezel at every text size (DESIGN.md, "Screens",
+/// "Constants"). The two segments share the border between them.
+struct ModeSwitchLayout: Equatable {
+    var k: CGFloat
+
+    var segment: CGSize { CGSize(width: 26 * k, height: 20 * k) }
+    var size: CGSize { CGSize(width: segment.width * 2 - 1, height: segment.height) }
+    var icon: CGFloat { 14 * k }
+    var radius: CGFloat { 6 * k }
+
+    /// The frame of a segment in the switch's (flipped) bounds.
+    func frame(_ mode: DisplayMode) -> CGRect {
+        CGRect(x: CGFloat(mode.rawValue) * (segment.width - 1), y: 0, width: segment.width, height: segment.height)
+    }
+
+    /// The icon's square, centered in its segment.
+    func iconFrame(_ mode: DisplayMode) -> CGRect {
+        let box = frame(mode)
+        return CGRect(x: box.midX - icon / 2, y: box.midY - icon / 2, width: icon, height: icon)
+    }
+
+    /// The segment under a point, nil outside.
+    func mode(at point: CGPoint) -> DisplayMode? {
+        guard CGRect(origin: .zero, size: size).contains(point) else { return nil }
+        return point.x < size.width / 2 ? .detailed : .compact
     }
 }
 
-/// The segmented control, with a tooltip for the segment under the pointer.
-final class ModeSegmentedControl: NSSegmentedControl {
-    override var acceptsFirstResponder: Bool { false }
-    override var canBecomeKeyView: Bool { false }
-    override func becomeFirstResponder() -> Bool { false }
+/// The switch, drawn by the app (Main.html `.dmode`): a standard
+/// segmented control keeps its height whatever the text size, so its icons
+/// would crowd its bezel at large sizes. It never takes the keyboard focus
+/// (DESIGN.md, "Filter"); assistive apps see a radio group of two radio
+/// buttons named after the modes.
+final class ModeSwitchView: NSView {
+    var mode: DisplayMode = .detailed {
+        didSet { if mode != oldValue { needsDisplay = true; updateAccessibility() } }
+    }
+    var layout = ModeSwitchLayout(k: 1) {
+        didSet { if layout != oldValue { invalidateIntrinsicContentSize(); needsDisplay = true; updateAccessibility() } }
+    }
+    /// The other segment was pressed: the mode to switch to.
+    var choose: (DisplayMode) -> Void = { _ in }
 
     private let tipOwner = QuickTip.Owner()
     private var tipArea: NSTrackingArea?
-    private var tipSegment: Int?
+    private var tipMode: DisplayMode?
+    private var pressed: DisplayMode?
+    private lazy var segments: [ModeSegmentElement] = DisplayMode.allCases.map { ModeSegmentElement(mode: $0, owner: self) }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.radioGroup)
+        setAccessibilityLabel("Display mode")
+        updateAccessibility()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override var isFlipped: Bool { true }
+    override var acceptsFirstResponder: Bool { false }
+    override var canBecomeKeyView: Bool { false }
+    override func becomeFirstResponder() -> Bool { false }
+    override var intrinsicContentSize: NSSize { layout.size }
+
+    /// The other segment switches; the current one does nothing.
+    func press(_ next: DisplayMode) {
+        if next != mode { choose(next) }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        // The selected segment last: its border covers the shared one.
+        for mode in DisplayMode.allCases.sorted(by: { a, _ in a != self.mode }) {
+            draw(mode, on: mode == self.mode)
+        }
+    }
+
+    private func draw(_ mode: DisplayMode, on: Bool) {
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        let box = layout.frame(mode).insetBy(dx: 0.5, dy: 0.5)
+        let r = layout.radius
+        let path = CGMutablePath()
+        let left = mode == .detailed
+        // Rounded at the outer corners only.
+        path.move(to: CGPoint(x: box.midX, y: box.minY))
+        if left {
+            path.addLine(to: CGPoint(x: box.maxX, y: box.minY))
+            path.addLine(to: CGPoint(x: box.maxX, y: box.maxY))
+            path.addArc(tangent1End: CGPoint(x: box.minX, y: box.maxY), tangent2End: CGPoint(x: box.minX, y: box.minY), radius: r)
+            path.addArc(tangent1End: CGPoint(x: box.minX, y: box.minY), tangent2End: CGPoint(x: box.maxX, y: box.minY), radius: r)
+        } else {
+            path.addArc(tangent1End: CGPoint(x: box.maxX, y: box.minY), tangent2End: CGPoint(x: box.maxX, y: box.maxY), radius: r)
+            path.addArc(tangent1End: CGPoint(x: box.maxX, y: box.maxY), tangent2End: CGPoint(x: box.minX, y: box.maxY), radius: r)
+            path.addLine(to: CGPoint(x: box.minX, y: box.maxY))
+            path.addLine(to: CGPoint(x: box.minX, y: box.minY))
+        }
+        path.closeSubpath()
+        let fill = on ? Palette.settingsTabSelectedBackground.nsColor : Palette.surface.nsColor
+        let stroke = on ? Palette.tagBorder.nsColor : Palette.controlBorder.nsColor
+        let ink = on ? Palette.settingsTabSelected.nsColor : Palette.botIcon.nsColor
+        context.addPath(path)
+        context.setFillColor(fill.cgColor)
+        context.fillPath()
+        context.addPath(path)
+        context.setStrokeColor(stroke.cgColor)
+        context.setLineWidth(1)
+        context.strokePath()
+        Shapes.icon(mode.icon, in: layout.iconFrame(mode), color: ink)
+    }
+
+    // MARK: Mouse
+
+    override func mouseDown(with event: NSEvent) {
+        tipMode = nil
+        QuickTip.cancel(owner: tipOwner)
+        pressed = layout.mode(at: convert(event.locationInWindow, from: nil))
+    }
+
+    /// As a segmented control: the segment pressed acts when the button is
+    /// released over it.
+    override func mouseUp(with event: NSEvent) {
+        defer { pressed = nil }
+        guard let pressed, layout.mode(at: convert(event.locationInWindow, from: nil)) == pressed else { return }
+        press(pressed)
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -490,48 +636,68 @@ final class ModeSegmentedControl: NSSegmentedControl {
         tipArea = area
     }
 
-    /// The segment at a point: the segments share the width equally.
-    func segment(at point: NSPoint) -> Int? {
-        guard segmentCount > 0, bounds.contains(point) else { return nil }
-        return min(segmentCount - 1, max(0, Int(point.x / (bounds.width / CGFloat(segmentCount)))))
-    }
-
     private func followTip(_ event: NSEvent) {
-        let segment = segment(at: convert(event.locationInWindow, from: nil))
-        guard segment != tipSegment else { return }
-        tipSegment = segment
-        if let segment, let mode = DisplayMode(rawValue: segment) {
+        let mode = layout.mode(at: convert(event.locationInWindow, from: nil))
+        guard mode != tipMode else { return }
+        tipMode = mode
+        if let mode {
             QuickTip.schedule(mode.title, owner: tipOwner, appearance: effectiveAppearance)
         } else {
             QuickTip.cancel(owner: tipOwner)
         }
     }
 
-    override func mouseEntered(with event: NSEvent) {
-        super.mouseEntered(with: event)
-        followTip(event)
-    }
-
-    override func mouseMoved(with event: NSEvent) {
-        super.mouseMoved(with: event)
-        followTip(event)
-    }
+    override func mouseEntered(with event: NSEvent) { followTip(event) }
+    override func mouseMoved(with event: NSEvent) { followTip(event) }
 
     override func mouseExited(with event: NSEvent) {
-        super.mouseExited(with: event)
-        tipSegment = nil
+        tipMode = nil
         QuickTip.cancel(owner: tipOwner)
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        tipSegment = nil
-        QuickTip.cancel(owner: tipOwner)
-        super.mouseDown(with: event)
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window == nil { QuickTip.cancel(owner: tipOwner) }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
+    // MARK: Accessibility
+
+    private func updateAccessibility() {
+        setAccessibilityValue(mode.title)
+        setAccessibilityChildren(segments)
+        for element in segments { element.update() }
+    }
+}
+
+/// One segment of `ModeSwitchView` for assistive apps: a radio button named
+/// after its mode, on while it is the current one; pressing it switches.
+final class ModeSegmentElement: NSAccessibilityElement {
+    let mode: DisplayMode
+    private weak var owner: ModeSwitchView?
+
+    init(mode: DisplayMode, owner: ModeSwitchView) {
+        self.mode = mode
+        self.owner = owner
+        super.init()
+        setAccessibilityRole(.radioButton)
+        setAccessibilityLabel(mode.title)
+        setAccessibilityParent(owner)
+    }
+
+    func update() {
+        guard let owner else { return }
+        setAccessibilityValue(owner.mode == mode ? 1 : 0)
+        setAccessibilityFrameInParentSpace(owner.layout.frame(mode))
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        owner?.press(mode)
+        return true
     }
 }
 
@@ -541,56 +707,25 @@ struct DisplayModeSwitch: NSViewRepresentable {
     var choose: (DisplayMode) -> Void
     @Environment(\.textScale) var k
 
-    final class Coordinator: NSObject {
-        var choose: (DisplayMode) -> Void = { _ in }
-        var mode: DisplayMode = .detailed
-
-        @objc func pressed(_ sender: NSSegmentedControl) {
-            if let next = DisplayMode(rawValue: sender.selectedSegment), next != mode { choose(next) }
-            // The model decides; until it does, the current mode shows.
-            sender.selectedSegment = mode.rawValue
-        }
+    func makeNSView(context: Context) -> ModeSwitchView {
+        let view = ModeSwitchView(frame: .zero)
+        view.setContentHuggingPriority(.required, for: .horizontal)
+        view.setContentHuggingPriority(.required, for: .vertical)
+        update(view)
+        return view
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeNSView(context: Context) -> ModeSegmentedControl {
-        let control = ModeSegmentedControl()
-        control.segmentCount = DisplayMode.allCases.count
-        control.trackingMode = .selectOne
-        control.controlSize = .small
-        control.refusesFirstResponder = true
-        control.target = context.coordinator
-        control.action = #selector(Coordinator.pressed(_:))
-        control.setAccessibilityLabel("Display mode")
-        for mode in DisplayMode.allCases {
-            control.setLabel("", forSegment: mode.rawValue)
-            control.setToolTip(nil, forSegment: mode.rawValue)
-        }
-        control.setContentHuggingPriority(.required, for: .horizontal)
-        update(control, context: context)
-        return control
+    func updateNSView(_ view: ModeSwitchView, context: Context) {
+        update(view)
     }
 
-    func updateNSView(_ control: ModeSegmentedControl, context: Context) {
-        update(control, context: context)
+    private func update(_ view: ModeSwitchView) {
+        view.choose = choose
+        view.layout = ModeSwitchLayout(k: k)
+        view.mode = mode
     }
 
-    private func update(_ control: ModeSegmentedControl, context: Context) {
-        context.coordinator.choose = choose
-        context.coordinator.mode = mode
-        let size = (14 * k).rounded()
-        if control.image(forSegment: 0)?.size.width != size {
-            for mode in DisplayMode.allCases {
-                control.setImage(mode.image(size: size), forSegment: mode.rawValue)
-                control.setImageScaling(.scaleNone, forSegment: mode.rawValue)
-                control.setWidth(size + 12, forSegment: mode.rawValue)
-            }
-        }
-        if control.selectedSegment != mode.rawValue { control.selectedSegment = mode.rawValue }
-    }
-
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView: ModeSegmentedControl, context: Context) -> CGSize? {
-        nsView.intrinsicContentSize
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: ModeSwitchView, context: Context) -> CGSize? {
+        ModeSwitchLayout(k: k).size
     }
 }

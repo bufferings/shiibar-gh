@@ -337,3 +337,18 @@ fn the_defaults_of_the_new_kinds() {
         assert!(events[kind].list && events[kind].notify, "{kind}");
     }
 }
+
+#[test]
+fn the_accounts_own_addition_to_the_merge_queue_makes_an_unread_row() {
+    // DESIGN.md, "Row kinds": the row is made whoever added the PR; only the
+    // account's own reopen is made read.
+    let mut h = H::new();
+    h.prs(vec![pr("PR_1")]);
+    let mut added = h.ev("MQ_1", "PR_1", IngestKind::MergeQueueAdded);
+    added.actor = Some(ME.into());
+    h.events(vec![added]);
+    assert!(h.has_row("MQ_1"));
+    assert!(h.row("MQ_1").unread);
+    let card = h.card(&key("PR_1")).unwrap();
+    assert_eq!(card.rows[0].kind, Lenient::Known(RowKind::MergeQueueAdded));
+}

@@ -417,7 +417,6 @@ stored_enum!(Section {
     Doing = "doing",
     Todo = "todo",
     Waiting = "waiting",
-    Main = "main",
 });
 
 stored_enum!(Appearance {

@@ -128,7 +128,7 @@ final class FrameAnchor: NSView {
 }
 
 struct SurfaceAnchor: NSViewRepresentable {
-    enum Part { case list, header, hints }
+    enum Part { case list, header, hints, options, bands }
     var content: ListContent
     var part: Part
 
@@ -140,6 +140,8 @@ struct SurfaceAnchor: NSViewRepresentable {
             anchor.onChange = { [weak content] in content?.onSlot?() }
         case .header: content.headerAnchor = anchor
         case .hints: content.hintsAnchor = anchor
+        case .options: content.optionsAnchor = anchor
+        case .bands: content.bandsAnchor = anchor
         }
         return anchor
     }
@@ -155,7 +157,7 @@ struct SurfaceAnchor: NSViewRepresentable {
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: FrameAnchor, context: Context) -> CGSize? {
         switch part {
         case .list: return CGSize(width: proposal.width ?? 300, height: proposal.height ?? 300)
-        case .header, .hints: return CGSize(width: proposal.width ?? 0, height: proposal.height ?? 0)
+        case .header, .hints, .options, .bands: return CGSize(width: proposal.width ?? 0, height: proposal.height ?? 0)
         }
     }
 }
@@ -222,6 +224,47 @@ final class SurfaceRoot: NSView {
         )
         if container.frame != inside { container.frame = inside }
         if container.isHidden { container.isHidden = false }
+        scheduleMinimumHeight()
+    }
+
+    /// Told the least height of the surface (`SurfaceHeight`): what is
+    /// above the list with the Filter's options open at their full height
+    /// and without the warning and failure bands, the list's minimum and the
+    /// key hints under it. The same whether the options are open or closed
+    /// and whether a band shows, so only the text size changes it (a band
+    /// takes its room from the list). Not worked out while the Dismissed
+    /// list shows (it has no Filter row). Set by the popover's or the
+    /// window's owner.
+    var onMinimumHeight: ((CGFloat) -> Void)?
+    private var reportedMinimum: CGFloat?
+    private var minimumScheduled = false
+
+    /// Worked out once the layout of this pass is over (the anchors are
+    /// where the content put them), then given to the owner, which may
+    /// resize the surface.
+    private func scheduleMinimumHeight() {
+        guard onMinimumHeight != nil, !minimumScheduled else { return }
+        minimumScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.minimumScheduled = false
+            self.reportMinimumHeight()
+        }
+    }
+
+    private func reportMinimumHeight() {
+        guard let onMinimumHeight, let k = content.environment?.1, !content.list.showingDismissed,
+              let listTop = content.listAnchor?.frameInRoot?.minY, let hints = content.hintsAnchor?.frameInRoot else { return }
+        // The options' area as laid out now (none while closed): taken off
+        // the list's top, and their full area added back.
+        let shown = content.optionsAnchor.flatMap { $0.rootView === self ? $0.frameInRoot?.height : nil } ?? 0
+        let bands = content.bandsAnchor.flatMap { $0.rootView === self ? $0.frameInRoot?.height : nil } ?? 0
+        let minimum = FilterOptionsLayout.surfaceMinimum(
+            listTop: listTop, shownOptions: shown, bands: bands, below: hints.height, lines: content.list.filterOptions.count, k: k
+        )
+        if let reportedMinimum, abs(reportedMinimum - minimum) < 0.5 { return }
+        reportedMinimum = minimum
+        onMinimumHeight(minimum)
     }
 
     /// The list's frame, its anchor's and the frames of the header and the
@@ -769,6 +812,22 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
             case .insert(let offset, _, _): inserted.insert(offset)
             }
         }
+        // A kept line whose height changed in the same change as lines
+        // inserted or removed is taken out and put back: told by
+        // `noteHeightOfRows` after such an update, the table gave the row
+        // view its new height but left the cell at the old one (the
+        // measurement mode's consistency check: a Dismissed list's band that
+        // became the first with the search, a card of Done that lost
+        // `Dismissed in N days` as it moved to an empty section).
+        do {
+            var oldIndex: [String: Int] = [:]
+            for (j, id) in oldIDs.enumerated() where !removed.contains(j) { oldIndex[id] = j }
+            for i in next.indices where !inserted.contains(i) {
+                guard let j = oldIndex[next[i].id], nextHeights[i] != oldHeights[j] else { continue }
+                removed.insert(j)
+                inserted.insert(i)
+            }
+        }
         // Lines inserted above or among the lines in view: the table is
         // reloaded (only the lines in view are configured again). Inserted
         // there by `insertRows`, the table left the row views in view at
@@ -1146,6 +1205,13 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
                 problems.append(String(format: "row %d (%@) shows another image than it draws now (%.1f%% of its pixels differ)",
                                        row, model[row].id, difference * 100))
             }
+            // A card of the Dismissed list sits under its repository.
+            if let card = (line as? DismissedLineView)?.card {
+                let heading = model[..<row].last { if case .heading = $0 { return true } else { return false } }
+                if case .heading(let values)? = heading, values.title != Listing.repository(card.pr) {
+                    problems.append("row \(row): \(Warnings.prLabel(card.pr)) under the repository \(values.title)")
+                }
+            }
             if let card = (line as? CardLineView)?.line?.card {
                 let heading = model[..<row].last { if case .heading = $0 { return true } else { return false } }
                 if case .heading(let values)? = heading,
@@ -1163,6 +1229,17 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
             }
         }
         return problems
+    }
+
+    /// The measurement mode: the width the lines are laid out in.
+    var widthForMeasurement: CGFloat { width }
+
+    /// The measurement mode: the height of the line `id`, nil when it is
+    /// not in the list.
+    func heightForMeasurement(line id: String) -> CGFloat? {
+        applyIfNeeded()
+        guard let row = rowOf[id] else { return nil }
+        return table.rect(ofRow: row).height
     }
 
     /// The measurement mode: scrolls so the line `id` is `offset` points
@@ -1236,9 +1313,9 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
         // card and starts 3 points left of it.
         let rect = table.rect(ofRow: row)
         let left = (line.indented ? 24 : 12) - 3.0
-        // Over the first line of the list (Mine's first card has no heading
-        // above it) the gap above is not in the list: the line goes just
-        // inside its top edge, where it can be seen.
+        // Over the first line of the list (a card with no heading above
+        // it) the gap above is not in the list: the line goes just inside
+        // its top edge, where it can be seen.
         let center = edge == .top ? max(4, rect.minY - 4) : rect.maxY - 4
         dropLine.frame = NSRect(x: left, y: center - 4, width: rect.width - left - 12, height: 8)
         dropLine.isHidden = false

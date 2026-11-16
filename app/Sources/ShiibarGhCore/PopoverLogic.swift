@@ -84,6 +84,10 @@ public enum PopoverAction: Equatable {
     /// The card's ×: Dismiss after the confirmation (DESIGN.md, "Confirming
     /// ×"). The menu's `Dismiss` and ⌫ are `dismiss`.
     case confirmDismiss(card: String)
+    /// `Dismiss all` on the heading of Done (the section key): its cards,
+    /// after the confirmation when `confirm_dismiss` is on (DESIGN.md,
+    /// "`Dismiss all`").
+    case dismissAll(section: String)
     case restore(card: String)
     case mute(MuteKind, String)
     case unmute(MuteKind, String)
@@ -106,6 +110,29 @@ public enum PopoverAction: Equatable {
     /// The links of the selected cards, one a line (the multi-card menu's
     /// `Copy link`, ⌘C).
     case copyLinks
+}
+
+/// What the Dismiss confirmation sheet asks about: the card whose × was
+/// pressed, or the cards `Dismiss all` took when it was pressed (they stay
+/// the same while the sheet shows, whatever the list does meanwhile).
+public enum DismissConfirmation: Equatable {
+    case card(String)
+    /// `section`: the key of the Done whose heading it was.
+    case all(section: String, cards: [String])
+
+    public var title: String {
+        switch self {
+        case .card: return DismissedText.confirmTitle
+        case .all(_, let cards): return DismissedText.confirmAllTitle(count: cards.count)
+        }
+    }
+
+    public func text(keepDays: Int64) -> String {
+        switch self {
+        case .card: return DismissedText.confirmText(keepDays: keepDays)
+        case .all: return DismissedText.confirmAllText(keepDays: keepDays)
+        }
+    }
 }
 
 public struct KeyHint: Equatable {
@@ -262,7 +289,8 @@ public enum PopoverLogic {
             else { return nil }
             return .place(move)
         case .moveTo(let target):
-            guard view.tab == .review, let id = selection.card, let (card, _) = view.card(id),
+            // Review and Mine only: in All, D / T / W do nothing.
+            guard view.tab == .review || view.tab == .mine, let id = selection.card, let (card, _) = view.card(id),
                   let move = CardDrop.moveTo(target, card) else { return nil }
             return .place(move)
         default:
@@ -272,11 +300,11 @@ public enum PopoverLogic {
 
     /// The hint line while several cards are selected (DESIGN.md,
     /// "Keyboard"): `⌥↑↓ Reorder` only when it moves them, `D T W Move to`
-    /// in Review only.
+    /// in Review and Mine only.
     public static func multipleHints(tab: ListTab, canReorder: Bool) -> [KeyHint] {
         var hints = [moveHint]
         if canReorder { hints.append(KeyHint("\u{2325}\u{2191}\u{2193}", "Reorder")) }
-        if tab == .review { hints.append(KeyHint("D T W", "Move to")) }
+        if tab != .all { hints.append(KeyHint("D T W", "Move to")) }
         hints += [KeyHint("\u{232B}", "Dismiss"), KeyHint("esc", "Clear"), markAllHint, searchHint]
         return hints
     }
@@ -317,7 +345,7 @@ public enum PopoverLogic {
             hints.append(openHint)
             if let (card, _) = view.card(id), view.tab != .all, let placement = card.placement {
                 if !placement.isDone { hints.append(KeyHint("\u{2325}\u{2191}\u{2193}", "Reorder")) }
-                if view.tab == .review { hints.append(KeyHint("D T W", "Move to")) }
+                hints.append(KeyHint("D T W", "Move to"))
             }
             hints.append(KeyHint("\u{232B}", "Dismiss"))
         }
@@ -382,7 +410,7 @@ public enum PopoverLogic {
             if !card.authoredByMe {
                 entries.append(MenuEntry("Add to Review", .place(PlaceMove(card: card.id, target: .review(.todo), position: .byDefault, verb: .add))))
             }
-            entries.append(MenuEntry("Add to Mine", .place(PlaceMove(card: card.id, target: .mine, position: .byDefault, verb: .add))))
+            entries.append(MenuEntry("Add to Mine", .place(PlaceMove(card: card.id, target: .mine(.todo), position: .byDefault, verb: .add))))
             return entries
         }
         guard let tab = placement.tab.value else { return [] }
@@ -390,16 +418,14 @@ public enum PopoverLogic {
             MenuEntry("Move to " + title, .place(PlaceMove(card: card.id, target: target, position: .byDefault, verb: .move)))
         }
         let remove = PlaceMove(card: card.id, target: .none, position: .byDefault, verb: .remove)
+        var entries = PlacementSection.order.filter { $0 != placement.section.value }.map { move($0.title, PlaceTarget(tab, $0)) }
         switch tab {
         case .review:
-            var entries = PlacementSection.review.filter { $0 != placement.section.value }.map { move($0.title, .review($0)) }
             entries.append(MenuEntry("Remove from Review", .place(remove)))
-            return entries
         case .mine:
-            var entries = [placement.isDone ? move(PlacementSection.main.title, .mine) : move(PlacementSection.done.title, .mineDone)]
             if !card.authoredByMe { entries.append(MenuEntry("Remove from Mine", .place(remove))) }
-            return entries
         }
+        return entries
     }
 
     /// `Mute this pull request` on a card that is not muted, `Unmute this

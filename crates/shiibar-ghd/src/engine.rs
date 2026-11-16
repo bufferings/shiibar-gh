@@ -158,7 +158,6 @@ fn view_of(pr: &PrRec) -> Option<(PlacedTab, proto::Section)> {
             Section::Doing => proto::Section::Doing,
             Section::Todo => proto::Section::Todo,
             Section::Waiting => proto::Section::Waiting,
-            Section::Main => proto::Section::Main,
         }
     };
     Some((place.tab, section))
@@ -167,7 +166,7 @@ fn view_of(pr: &PrRec) -> Option<(PlacedTab, proto::Section)> {
 /// The order of sections in `list` of a tab.
 fn section_index(section: proto::Section) -> u8 {
     match section {
-        proto::Section::Doing | proto::Section::Main => 0,
+        proto::Section::Doing => 0,
         proto::Section::Todo => 1,
         proto::Section::Waiting => 2,
         proto::Section::Done => 3,
@@ -1175,7 +1174,8 @@ impl Engine {
     }
 
     /// A PR the core did not know: its card, placed by DESIGN.md, "Card
-    /// states" (the account's own PR in Mine; a closed one in its Done).
+    /// states" (the account's own PR at the end of Mine's Todo; a closed one
+    /// in Mine's Done, keeping the end of Todo as its place before Done).
     fn new_pr(&mut self, account: &str, p: IngestPr, now: &Now) {
         let key = join_key(account, &p.id);
         let closed = p.state != proto::PrState::Open;
@@ -1199,7 +1199,7 @@ impl Engine {
         self.dirty.prs.insert(key.clone());
         self.data.prs.insert(key.clone(), record);
         if authored {
-            self.place_at_end(&key, PlacedTab::Mine, Section::Main);
+            self.place_at_end(&key, PlacedTab::Mine, Section::Todo);
         }
     }
 

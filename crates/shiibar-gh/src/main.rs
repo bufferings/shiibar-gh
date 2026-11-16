@@ -24,10 +24,10 @@ const COMMANDS: [(&str, &str, &str); 33] = [
         "list",
         "[--account <a>] [--tab all|review|mine] [--owner <o>] [--authored|--assigned|--review-requested] [--search <text>] [--dismissed] [--json]",
         "Print the PR cards of a tab (default all). all: by owner, open PRs first,\n      \
-         then the most recently updated; review: Doing, Todo, Waiting, Done in\n      \
-         order; mine: in order, then Done. --dismissed prints the Dismissed list\n      \
-         instead, newest first (--tab is ignored). Marks: [review:todo] or [mine]\n      \
-         for the place, [review requested] for a PR awaiting your review, [muted],\n      \
+         then the most recently updated; review and mine: Doing, Todo, Waiting,\n      \
+         Done in order. --dismissed prints the Dismissed list instead, newest\n      \
+         first (--tab is ignored). Marks: [review:todo] or [mine:doing] for the\n      \
+         place, [review requested] for a PR awaiting your review, [muted],\n      \
          [unmuted] for a PR whose own setting is Unmute, and the days left of a\n      \
          dismissed card. Muted PRs are listed too. --search keeps the PRs where\n      \
          every word of <text> matches",
@@ -50,12 +50,13 @@ const COMMANDS: [(&str, &str, &str); 33] = [
     ),
     (
         "place",
-        "<pr> review doing|todo|waiting [--top|--bottom|--before <pr>] --account <a> | <pr> review done --account <a> | <pr> mine [--top|--bottom|--before <pr>] --account <a> | <pr> mine done --account <a> | <pr> none --account <a>",
-        "Put a PR in a section of Review, in Mine, in the Done of either, or in\n      \
-         neither. Without a position it goes to the end, or to the top of todo\n      \
-         from doing or waiting. Done takes no position: newest first by the time\n      \
-         a card entered it. A merged or closed PR not in Review or Mine goes\n      \
-         straight to Done",
+        "<pr> review|mine doing|todo|waiting [--top|--bottom|--before <pr>] --account <a> | <pr> review|mine done --account <a> | <pr> none --account <a>",
+        "Put a PR in a section of Review or Mine, in the Done of either, or in\n      \
+         neither. Both tabs take the same sections, and the section is needed.\n      \
+         Without a position it goes to the end, or to the top of todo from doing\n      \
+         or waiting of the same tab. Done takes no position: newest first by the\n      \
+         time a card entered it. A merged or closed PR not in Review or Mine\n      \
+         goes straight to Done",
     ),
     (
         "dismiss",
@@ -736,8 +737,8 @@ fn command(name: &str, rest: &[String]) -> Result<Command, UsageError> {
     })
 }
 
-/// `place <pr> review <section> | mine [done] | none` with an optional
-/// position.
+/// `place <pr> review|mine <section> | none` with an optional position.
+/// Review and Mine take the same sections, and the section is needed.
 fn place_command(rest: &[String]) -> Result<Command, UsageError> {
     let p = parse(
         rest,
@@ -746,31 +747,20 @@ fn place_command(rest: &[String]) -> Result<Command, UsageError> {
     let account = p.account()?;
     let (pr, tab, section) = match p.positional.as_slice() {
         [pr, tab, section] if tab == "review" => (pr.clone(), PlaceTab::Review, Some(section)),
-        [pr, tab, section] if tab == "mine" && section == "done" => {
-            (pr.clone(), PlaceTab::Mine, Some(section))
-        }
-        [pr, tab] if tab == "mine" => (pr.clone(), PlaceTab::Mine, None),
+        [pr, tab, section] if tab == "mine" => (pr.clone(), PlaceTab::Mine, Some(section)),
         [pr, tab] if tab == "none" => (pr.clone(), PlaceTab::None, None),
         _ => {
             return Err(UsageError(
-                "expected <pr> review doing|todo|waiting|done, <pr> mine [done] or <pr> none"
-                    .into(),
+                "expected <pr> review|mine doing|todo|waiting|done or <pr> none".into(),
             ));
         }
     };
     let section = match section {
-        Some(text) => {
-            let section: Section = wire(text, "section")?;
-            if !matches!(
-                section,
-                Section::Doing | Section::Todo | Section::Waiting | Section::Done
-            ) {
-                return Err(UsageError(format!(
-                    "review takes doing, todo, waiting or done, not {text}"
-                )));
-            }
-            Some(section)
-        }
+        Some(text) => Some(wire::<Section>(text, "section").map_err(|_| {
+            UsageError(format!(
+                "review and mine take doing, todo, waiting or done, not {text}"
+            ))
+        })?),
         None => None,
     };
     let before = p.values.get("--before").cloned();
@@ -812,19 +802,11 @@ fn row_line(row: &Row) -> String {
     format!("{unread} {} {}{muted} {text}", row.id, row.kind.as_text())
 }
 
-/// `[review:todo]`, `[mine]` or `[mine:done]`.
+/// `[review:todo]` or `[mine:doing]`: the tab and the section.
 fn place_mark(card: &Card) -> String {
     match &card.placement {
         None => String::new(),
-        Some(p) => {
-            let tab = p.tab.as_text();
-            let section = p.section.as_text();
-            if tab == "mine" && section == "main" {
-                " [mine]".into()
-            } else {
-                format!(" [{tab}:{section}]")
-            }
-        }
+        Some(p) => format!(" [{}:{}]", p.tab.as_text(), p.section.as_text()),
     }
 }
 
@@ -1337,7 +1319,7 @@ mod tests {
         ));
         let top = command(
             "place",
-            &args(&["o/r#1", "mine", "--top", "--account", "me"]),
+            &args(&["o/r#1", "mine", "doing", "--top", "--account", "me"]),
         )
         .ok()
         .unwrap();
@@ -1345,11 +1327,25 @@ mod tests {
             top.request,
             Request::Place {
                 tab: PlaceTab::Mine,
-                section: None,
+                section: Some(Section::Doing),
                 at: Some(At::Top),
                 ..
             }
         ));
+        for (word, section) in [
+            ("doing", Section::Doing),
+            ("todo", Section::Todo),
+            ("waiting", Section::Waiting),
+            ("done", Section::Done),
+        ] {
+            let mine = command("place", &args(&["o/r#1", "mine", word, "--account", "me"]))
+                .ok()
+                .unwrap();
+            assert!(
+                matches!(mine.request, Request::Place { tab: PlaceTab::Mine, section: Some(s), before: None, at: None, .. } if s == section),
+                "{word}"
+            );
+        }
         for (words, tab) in [
             (
                 &["o/r#1", "review", "done", "--account", "me"][..],
@@ -1380,11 +1376,22 @@ mod tests {
             &["o/r#1", "mine", "main", "--account", "me"],
             &["o/r#1", "review", "main", "--account", "me"],
             &["o/r#1", "review", "--account", "me"],
-            &["o/r#1", "mine", "--top", "--bottom", "--account", "me"],
+            &["o/r#1", "mine", "--account", "me"],
+            &["o/r#1", "mine", "--top", "--account", "me"],
+            &[
+                "o/r#1",
+                "mine",
+                "todo",
+                "--top",
+                "--bottom",
+                "--account",
+                "me",
+            ],
             &["o/r#1", "none", "--top", "--account", "me"],
             &[
                 "o/r#1",
                 "mine",
+                "todo",
                 "--top",
                 "--before",
                 "o/r#2",

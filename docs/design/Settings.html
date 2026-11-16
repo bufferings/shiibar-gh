@@ -242,7 +242,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
   </section>
 <section class="scene">
     <div class="cap">Settings › Dismissed</div>
-    <div class="desc" style="width: 600px">Two whole numbers in days. Days before closed PRs are dismissed (n): 0 or more, default 3. Days to keep dismissed PRs (m): 1 or more, default 7. <b>Confirm before dismissing</b> (default on): the × on a card asks first; <b>Don't ask again</b> on that sheet turns it off. Changes apply at once. Below, a value that is not a whole number was typed in the second field.</div>
+    <div class="desc" style="width: 600px">Two whole numbers in days. Days before closed PRs are dismissed (n): 0 or more, default 3. Days to keep dismissed PRs (m): 1 or more, default 7. <b>Confirm before dismissing</b> (default on): the × on a card and <b>Dismiss all</b> on a Done heading ask first; <b>Don't ask again</b> on either sheet turns it off for both. Changes apply at once. Below, a value that is not a whole number was typed in the second field.</div>
     <div class="win" style="width: 600px">
       <div class="titlebar">
         <div class="tl"><div class="dots" aria-hidden="true"><span style="background: #EC6A5E"></span><span style="background: #F4BF4F"></span><span style="background: #61C554"></span></div><div class="wt">Dismissed</div><div style="width: 50px"></div></div>
@@ -256,14 +256,14 @@ body{margin:0;padding:24px;background:#e9e9ee}
         <div><div class="gh">Dismissed</div><div class="group">
             <div class="item"><div class="lbl"><span style="font-weight: 600">Days before closed PRs are dismissed</span><span class="sub">Merged and closed PRs move to Dismissed after this many days</span></div><div class="ctl"><span class="nf">3</span><span class="sub">days</span></div></div>
             <div class="item"><div class="lbl"><span style="font-weight: 600">Days to keep dismissed PRs</span><span class="sub">Dismissed PRs can be restored for this many days</span><span class="errt">Enter a whole number</span></div><div class="ctl"><span class="nf" style="border-color: #E3A98F">7.5</span><span class="sub">days</span></div></div>
-            <div class="item"><div class="lbl"><span style="font-weight: 600">Confirm before dismissing</span><span class="sub">Asks when you press × on a card</span></div><div class="ctl"><span class="tgl on"><span></span></span></div></div>
+            <div class="item"><div class="lbl"><span style="font-weight: 600">Confirm before dismissing</span><span class="sub">Asks when you press × on a card or Dismiss all</span></div><div class="ctl"><span class="tgl on"><span></span></span></div></div>
         </div></div>
       </div>
     </div>
   </section>
 <section class="scene">
     <div class="cap">Settings › Accounts: an account selected</div>
-    <div class="desc" style="width: 760px">Muted: a framed list, below it a field with <b>Add</b> and − (removes the selected row). Enter in the field also adds. <b>Add</b> stays off for an empty value, a name already in the list, and (Repositories) a value that is not <b>owner/repo</b>; above, example-org/sandbox is typed and example-bot is selected. Names are compared without case. <b>Pull requests</b> lists single PRs muted from a card (<b>owner/repo#number</b>); removing one there unmutes it, as does <b>Unmute this pull request</b> in the card’s menu (on a PR whose repository or author is muted, that keeps the PR unmuted; such a PR is not listed). Muted PRs are hidden in the popover unless the Filter shows muted pull requests (Muted: <b>Show</b> or <b>Only</b>). <b>API usage</b>: GraphQL and REST, each with the usage and limit of the last response (warning color at 80% or more) and the reset time; <b>–</b> before the first value. The popover header shows only the higher rate as a percentage.</div>
+    <div class="desc" style="width: 760px">Account list: an account whose color is <b>None</b> (here example-user) has no dot before its name and no room kept for one. Muted: a framed list, below it a field with <b>Add</b> and − (removes the selected row). Enter in the field also adds. <b>Add</b> stays off for an empty value, a name already in the list, and (Repositories) a value that is not <b>owner/repo</b>; above, example-org/sandbox is typed and example-bot is selected. Names are compared without case. <b>Pull requests</b> lists single PRs muted from a card (<b>owner/repo#number</b>); removing one there unmutes it, as does <b>Unmute this pull request</b> in the card’s menu (on a PR whose repository or author is muted, that keeps the PR unmuted; such a PR is not listed). Muted PRs are hidden in the popover unless the Filter shows muted pull requests (Muted: <b>Show</b> or <b>Only</b>). <b>API usage</b>: GraphQL and REST, each with the usage and limit of the last response (warning color at 80% or more) and the reset time; <b>–</b> before the first value. The popover header shows only the higher rate as a percentage.</div>
     <div class="win" style="width: 760px">
       <div class="titlebar">
         <div class="tl"><div class="dots" aria-hidden="true"><span style="background: #EC6A5E"></span><span style="background: #F4BF4F"></span><span style="background: #61C554"></span></div><div class="wt">Accounts</div><div style="width: 50px"></div></div>
@@ -275,7 +275,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
       </div>
       <div style="display: flex; min-height: 0">
         <div class="side">
-          <div class="srow on"><span class="adot" style="background: #C7420D"></span>bufferings-work</div><div class="srow sub ">example-org</div><div class="srow sub">acme-corp</div><div class="srow sub">Public</div><div class="srow"><span class="adot" style="background: #0A66D6"></span>bufferings</div><div class="srow sub">example-person</div><div class="srow sub">Public</div>
+          <div class="srow on"><span class="adot" style="background: #C7420D"></span>bufferings-work</div><div class="srow sub ">example-org</div><div class="srow sub">acme-corp</div><div class="srow sub">Public</div><div class="srow"><span class="adot" style="background: #0A66D6"></span>bufferings</div><div class="srow sub">example-person</div><div class="srow sub">Public</div><div class="srow">example-user</div><div class="srow sub">Public</div>
           <div style="flex: 1"></div>
           <button class="btn" style="width: 100%">Add account…</button>
         </div>

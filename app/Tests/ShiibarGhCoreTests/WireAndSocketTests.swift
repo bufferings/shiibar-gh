@@ -119,6 +119,14 @@ final class WireTests: XCTestCase {
         let due = try JSONDecoder().decode(Card.self, from: Data(line.replacingOccurrences(of: #""rows":[]"#, with: #""rows":[],"auto_dismiss_at":259200"#).utf8))
         XCTAssertEqual(due.autoDismissAt, 259_200)
         XCTAssertEqual(dismissed.tab, .mine)
+        // Mine has Review's sections; 0.5's `main` is not a section.
+        let doing = try JSONDecoder().decode(Card.self, from: Data(line.replacingOccurrences(of: #""rows":[]"#, with: #""rows":[],"placement":{"tab":"mine","section":"doing","position":3}"#).utf8))
+        XCTAssertEqual(doing.placement, Placement(tab: .mine, section: .doing, position: 3))
+        XCTAssertEqual(doing.sectionKey, "mine|doing")
+        XCTAssertEqual(doing.placementTag, "Mine \u{00B7} Doing")
+        let old = try JSONDecoder().decode(Card.self, from: Data(line.replacingOccurrences(of: #""rows":[]"#, with: #""rows":[],"placement":{"tab":"mine","section":"main","position":0}"#).utf8))
+        XCTAssertNil(old.placement?.section.value)
+        XCTAssertNil(old.sectionKey)
     }
 
     func testANotificationDecodes() throws {
@@ -230,11 +238,13 @@ final class SocketClientTests: XCTestCase {
         }
         let api = SocketDaemonAPI(socketPath: fake.path)
         try await api.place(account: "me", pr: "o/r#1", target: .review(.todo), position: .before("o/r#2"))
-        try await api.place(account: "me", pr: "o/r#1", target: .mine, position: .bottom)
+        try await api.place(account: "me", pr: "o/r#1", target: .mine(.todo), position: .bottom)
+        try await api.place(account: "me", pr: "o/r#1", target: .mine(.doing), position: .byDefault)
+        try await api.place(account: "me", pr: "o/r#1", target: .mine(.waiting), position: .before("o/r#2"))
         try await api.place(account: "me", pr: "o/r#1", target: .none, position: .byDefault)
         try await api.place(account: "me", pr: "o/r#1", target: .review(.waiting), position: .top)
         try await api.place(account: "me", pr: "o/r#1", target: .review(.done), position: .byDefault)
-        try await api.place(account: "me", pr: "o/r#1", target: .mineDone, position: .byDefault)
+        try await api.place(account: "me", pr: "o/r#1", target: .mine(.done), position: .byDefault)
         try await api.dismiss(account: "me", pr: "o/r#1")
         try await api.restore(account: "me", pr: "o/r#1")
         let muted = try await api.mute(account: "me", kind: .repo, name: "o/r")
@@ -244,7 +254,9 @@ final class SocketClientTests: XCTestCase {
         let sent = try fake.requests.map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]).mapValues { "\($0)" } }
         XCTAssertEqual(sent, [
             ["cmd": "place", "account": "me", "pr": "o/r#1", "tab": "review", "section": "todo", "before": "o/r#2"],
-            ["cmd": "place", "account": "me", "pr": "o/r#1", "tab": "mine", "at": "bottom"],
+            ["cmd": "place", "account": "me", "pr": "o/r#1", "tab": "mine", "section": "todo", "at": "bottom"],
+            ["cmd": "place", "account": "me", "pr": "o/r#1", "tab": "mine", "section": "doing"],
+            ["cmd": "place", "account": "me", "pr": "o/r#1", "tab": "mine", "section": "waiting", "before": "o/r#2"],
             ["cmd": "place", "account": "me", "pr": "o/r#1", "tab": "none"],
             ["cmd": "place", "account": "me", "pr": "o/r#1", "tab": "review", "section": "waiting", "at": "top"],
             ["cmd": "place", "account": "me", "pr": "o/r#1", "tab": "review", "section": "done"],

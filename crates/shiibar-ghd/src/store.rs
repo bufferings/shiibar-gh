@@ -14,14 +14,17 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// M7 (0.5). Version 6 (0.4) moves to 7 at startup keeping everything;
-/// versions 5 (0.3) and 4 (0.2) move to 7 keeping only the accounts.
-/// Versions 1 to 3 are the 0.1 schema, which is not migrated: such a
-/// database is treated like an unreadable one (DESIGN.md, "Saved state").
-pub const SCHEMA_VERSION: i64 = 7;
-/// The 0.4 schema, moved to 7 at startup with all its data.
+/// 0.6. Version 7 (0.5) moves to 8 at startup keeping everything; version 6
+/// (0.4) moves to 7 and then to 8, keeping everything; versions 5 (0.3) and 4
+/// (0.2) move to 8 keeping only the accounts. Versions 1 to 3 are the 0.1
+/// schema, which is not migrated: such a database is treated like an
+/// unreadable one (DESIGN.md, "Saved state").
+pub const SCHEMA_VERSION: i64 = 8;
+/// The 0.5 schema, moved to 8 at startup with all its data.
+const V05_VERSION: i64 = 7;
+/// The 0.4 schema, moved to 7 and then to 8 at startup with all its data.
 const V04_VERSION: i64 = 6;
-/// The 0.3 and 0.2 schemas, moved to 7 at startup with only the accounts.
+/// The 0.3 and 0.2 schemas, moved to 8 at startup with only the accounts.
 const MOVED_VERSIONS: [i64; 2] = [4, 5];
 /// The newest version of the 0.1 schema.
 const LAST_V01_VERSION: i64 = 3;
@@ -29,11 +32,13 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 const FILE_MODE: u32 = 0o600;
 const SIDE_FILES: [&str; 2] = ["-wal", "-shm"];
 
-/// The 0.5 schema. A PR's placement, Dismiss state, Checks results, newest
-/// review request and own Unmute are columns of `prs`; Mute lists hang off
-/// the account; deleted row ids and Dismiss records have their own tables.
-/// It is the 0.4 schema (version 6) with `prs.done_seq` and `prs.unmuted`.
-const SCHEMA_V7: &str = "
+/// The tables of versions 7 (0.5) and 8 (0.6), which differ only in the
+/// values of Mine's sections. A PR's placement, Dismiss state, Checks
+/// results, newest review request and own Unmute are columns of `prs`; Mute
+/// lists hang off the account; deleted row ids and Dismiss records have
+/// their own tables. It is the 0.4 schema (version 6) with `prs.done_seq`
+/// and `prs.unmuted`.
+const SCHEMA_TABLES: &str = "
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE accounts (
@@ -167,21 +172,36 @@ CREATE TABLE reaction_baselines (
 ";
 
 /// DESIGN.md, "Updating from 0.4": inside the caller's transaction, add the
-/// two columns of version 7 to `prs` and set `user_version`. Every table and
-/// row of version 6 stays. A PR starts without Unmute, and `done_seq` 0
-/// keeps the order 0.4 gave the cards in Done (time, then key). Any error
-/// leaves the transaction for the caller to roll back.
+/// two columns of version 7 to `prs`. Every table and row of version 6
+/// stays. A PR starts without Unmute, and `done_seq` 0 keeps the order 0.4
+/// gave the cards in Done (time, then key). Any error leaves the transaction
+/// for the caller to roll back.
 fn migrate_v6_to_v7(tx: &Transaction<'_>) -> rusqlite::Result<()> {
     tx.execute_batch(
         "ALTER TABLE prs ADD COLUMN done_seq INTEGER NOT NULL DEFAULT 0;
          ALTER TABLE prs ADD COLUMN unmuted INTEGER NOT NULL DEFAULT 0;",
+    )
+}
+
+/// DESIGN.md, "Updating from 0.5": inside the caller's transaction, move
+/// Mine's single list (section `main` of version 7) to Mine's Todo and set
+/// `user_version`. The one column holds the section of an open card and
+/// the section a card in Done had before Done, for every card, dismissed
+/// and muted ones included. Ranks keep their values, so the cards keep
+/// their order in Todo; Done's times and sequence and Review stay as they
+/// are. Any error leaves the transaction for the caller to roll back.
+fn migrate_v7_to_v8(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    tx.execute(
+        "UPDATE prs SET place_section = 'todo'
+         WHERE place_tab = 'mine' AND place_section = 'main'",
+        [],
     )?;
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)
 }
 
 /// DESIGN.md, "Updating from 0.3 and 0.2": inside the caller's transaction,
 /// keep each account's id, login, color and order, drop every table, create
-/// the version 7 tables, put the accounts back and set `user_version`. The
+/// the version 8 tables, put the accounts back and set `user_version`. The
 /// `accounts` table of versions 4 and 5 has the same four columns. Any error
 /// leaves the transaction for the caller to roll back.
 fn migrate_accounts_only(tx: &Transaction<'_>) -> rusqlite::Result<()> {
@@ -208,7 +228,7 @@ fn migrate_accounts_only(tx: &Transaction<'_>) -> rusqlite::Result<()> {
     for table in tables {
         tx.execute_batch(&format!("DROP TABLE \"{}\"", table.replace('"', "\"\"")))?;
     }
-    tx.execute_batch(SCHEMA_V7)?;
+    tx.execute_batch(SCHEMA_TABLES)?;
     let token = to_json(&TokenRec::default());
     let fetch = to_json(&FetchRec::default());
     let mut seq = 0;
@@ -425,19 +445,22 @@ impl Store {
             return Ok(OpenOutcome::Unreadable);
         }
         if version == 0 {
-            tx.execute_batch(SCHEMA_V7)?;
+            tx.execute_batch(SCHEMA_TABLES)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         let accounts_only = MOVED_VERSIONS.contains(&version);
-        let migrating = accounts_only || version == V04_VERSION;
+        let migrating = accounts_only || version == V04_VERSION || version == V05_VERSION;
         if migrating {
-            // DESIGN.md, "Updating from 0.4" and "Updating from 0.3 and
-            // 0.2": a failed move rolls back and leaves the database as it
-            // was, in the unreadable state.
+            // DESIGN.md, "Updating from 0.5", "Updating from 0.4" and
+            // "Updating from 0.3 and 0.2": version 6 goes through 7 to 8 in
+            // the one transaction, and a failed move rolls back and leaves
+            // the database as it was, in the unreadable state.
             let moved = if accounts_only {
                 migrate_accounts_only(&tx)
+            } else if version == V04_VERSION {
+                migrate_v6_to_v7(&tx).and_then(|()| migrate_v7_to_v8(&tx))
             } else {
-                migrate_v6_to_v7(&tx)
+                migrate_v7_to_v8(&tx)
             };
             if let Err(e) = moved {
                 drop(tx);

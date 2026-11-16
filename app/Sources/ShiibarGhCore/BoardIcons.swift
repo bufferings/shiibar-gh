@@ -199,6 +199,10 @@ public enum BoardIcons {
     public static let dismiss = BoardIcon([.path("M4.5 4.5l7 7M11.5 4.5l-7 7")], lineWidth: 1.7, roundCaps: true)
     /// The search field's magnifier (Main.html `.search`).
     public static let search = BoardIcon([.circle(cx: 7, cy: 7, r: 4.5, dash: nil), .path("M10.5 10.5L14 14")], lineWidth: 1.6, roundCaps: true)
+    /// The search field's clear button (Main.html `.sclr`): the × drawn in
+    /// the field's color over a filled circle (the standard search field's
+    /// clear glyph). This is the ×; the circle is filled under it.
+    public static let clearSearch = BoardIcon([.path("M5.6 5.6l4.8 4.8M10.4 5.6l-4.8 4.8")], lineWidth: 1.6, roundCaps: true)
 }
 
 extension BoardIcons {

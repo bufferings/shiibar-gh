@@ -19,7 +19,7 @@ final class StoreTests: XCTestCase {
         store.setOptions(ListOptions(groupBy: .status, thenBy: .owner, sort: .recentlyAdded), account: "1001")
         store.setKeepOnTop(false, account: "1001")
         store.setCollapsed(["review|todo"], account: "1001")
-        store.setExpanded(["mine|main"], account: "1001")
+        store.setExpanded(["mine|done"], account: "1001")
         store.setGroupOrders([.status: ["closed", "open"]], account: "1001")
         store.setRepositories(["o/b", "o/a"], account: "1001")
         store.setLastTab(.review, account: "1001", surface: .popover)
@@ -30,7 +30,7 @@ final class StoreTests: XCTestCase {
         XCTAssertFalse(again.keepOnTop(account: "1001"))
         XCTAssertTrue(again.keepOnTop(account: "583231"))
         XCTAssertEqual(again.collapsed(account: "1001"), ["review|todo"])
-        XCTAssertEqual(again.expanded(account: "1001"), ["mine|main"])
+        XCTAssertEqual(again.expanded(account: "1001"), ["mine|done"])
         XCTAssertEqual(again.groupOrders(account: "1001"), [.status: ["closed", "open"]])
         XCTAssertEqual(again.repositories(account: "1001"), ["o/b", "o/a"])
         XCTAssertEqual(again.lastTab(account: "1001", surface: .popover), .review)
@@ -38,6 +38,35 @@ final class StoreTests: XCTestCase {
         XCTAssertNil(again.windowFrame(account: "583231"), "another account has its own")
         XCTAssertEqual(again.options(account: "583231"), ListOptions())
         XCTAssertTrue(defaults.dictionaryRepresentation().keys.filter { $0.contains("1001") }.allSatisfy { $0.hasPrefix("v4.") })
+    }
+
+    /// DESIGN.md, "Updating from 0.5": the collapsed and expanded state of
+    /// 0.5's one list of Mine (`mine|main`) is dropped the first time each
+    /// account's state is read; Mine's Done and the rest stay.
+    func testZeroFivesOneListOfMineIsForgotten() {
+        let (defaults, suite) = testDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(["mine|done", "mine|main", "review|todo"], forKey: "v4.collapsed.1001")
+        defaults.set(["mine|main"], forKey: "v4.expanded.1001")
+        defaults.set(["mine|main", "mine|done"], forKey: "v4.expanded.583231")
+        let store = UIStateStore(defaults: defaults)
+        XCTAssertEqual(store.collapsed(account: "1001"), ["mine|done", "review|todo"])
+        XCTAssertEqual(defaults.stringArray(forKey: "v4.collapsed.1001"), ["mine|done", "review|todo"], "saved without it")
+        XCTAssertEqual(store.expanded(account: "1001"), [])
+        XCTAssertEqual(defaults.stringArray(forKey: "v4.expanded.1001"), [])
+        XCTAssertEqual(defaults.stringArray(forKey: "v4.expanded.583231"), ["mine|main", "mine|done"], "another account until it is read")
+        XCTAssertEqual(store.expanded(account: "583231"), ["mine|done"])
+        // Mine's new sections start from the defaults.
+        let sections = layout(.mine, collapsed: store.collapsed(account: "1001"), expanded: store.expanded(account: "1001"))
+        XCTAssertEqual(sections.map(\.collapsed), [false, false, false, true])
+    }
+
+    /// DESIGN.md, "Account color": no dot (nor its room) for None.
+    func testOnlyAColoredAccountHasItsDot() {
+        XCTAssertFalse(AccountColor.none.showsDot)
+        for color in AccountColor.allCases where color != .none {
+            XCTAssertTrue(color.showsDot, "\(color)")
+        }
     }
 
     func testPaletteHasDarkVariants() {
@@ -654,3 +683,44 @@ final class AppearanceTests: XCTestCase {
     }
 }
 
+
+/// The popover's and the window's height (DESIGN.md, "Screens", "Filter"):
+/// the user's, raised to the least height for the text size (the open
+/// options and the list's minimum included).
+final class SurfaceHeightTests: XCTestCase {
+    func testTheMinimumByTextSize() {
+        // Above the list with the options open: header, tabs, search and
+        // Filter rows and the options' area; below: the key hints.
+        XCTAssertEqual(SurfaceHeight.minimum(above: 150, below: 26, k: 1), 300, "never under 300")
+        XCTAssertEqual(SurfaceHeight.minimum(above: 150 + 139, below: 26, k: 1), 415)
+        XCTAssertEqual(SurfaceHeight.minimum(above: 225 + 208.5, below: 39, k: 1.5), 623, "at 18: everything grows")
+        XCTAssertEqual(SurfaceHeight.minimum(above: 112.5, below: 19.5, k: 0.75), 300)
+    }
+
+    func testARememberedHeightIsRaisedToTheMinimum() {
+        var height = SurfaceHeight(user: 320)
+        XCTAssertEqual(height.shown(), 320)
+        XCTAssertTrue(height.setMinimum(415))
+        XCTAssertEqual(height.shown(), 415, "raised when applied")
+        XCTAssertEqual(height.user, 320, "the user's height is the one kept")
+        XCTAssertFalse(height.setMinimum(415.2), "no change under half a point")
+        XCTAssertFalse(height.setMinimum(415), "the same minimum: nothing changes")
+        height.setMinimum(300)
+        XCTAssertEqual(height.shown(), 320, "a smaller text size: back to the user's height")
+        var tall = SurfaceHeight(user: 700)
+        tall.setMinimum(415)
+        XCTAssertEqual(tall.shown(), 700, "tall enough: unchanged")
+        XCTAssertEqual(SurfaceHeight(user: 320).raised(to: 415, room: nil), 415)
+    }
+
+    func testAResizeIsKeptAndTheScreenCaps() {
+        var height = SurfaceHeight(user: 320)
+        height.setMinimum(415)
+        height.setByUser(480)
+        XCTAssertEqual(height.shown(), 480)
+        height.setMinimum(800)
+        XCTAssertEqual(height.shown(room: 600), 600, "the screen's room: the list gets what is left")
+        XCTAssertEqual(height.shown(room: 200), 300, "never under 300")
+        XCTAssertEqual(SurfaceHeight(user: 100).user, 300)
+    }
+}

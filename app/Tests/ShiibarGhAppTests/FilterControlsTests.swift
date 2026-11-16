@@ -138,42 +138,13 @@ final class FilterControlsTests: XCTestCase {
 
     /// The display mode switch (DESIGN.md, "Compact"): two segments,
     /// `Detailed` at the left and `Compact` at the right with the board's
-    /// glyphs (Main.html), their names as tooltips; the current mode is
-    /// the selected segment; pressing the other switches, the current one
-    /// does nothing. Never the first responder.
-    func testTheDisplayModeSwitch() {
+    /// glyphs (Main.html); the rest of the switch is in TabRowTests.
+    func testTheDisplayModes() {
         XCTAssertEqual(DisplayMode.allCases.map(\.title), ["Detailed", "Compact"])
         XCTAssertEqual(DisplayMode.detailed.rawValue, 0)
         XCTAssertEqual(DisplayMode.detailed.icon, BoardIcons.compactOff)
         XCTAssertEqual(DisplayMode.compact.icon, BoardIcons.compactOn)
         XCTAssertNotEqual(BoardIcons.compactOff, BoardIcons.compactOn)
-        XCTAssertTrue(DisplayMode.compact.image(size: 14).isTemplate)
-
-        var chosen: [DisplayMode] = []
-        let coordinator = DisplayModeSwitch.Coordinator()
-        coordinator.choose = { chosen.append($0) }
-        coordinator.mode = .detailed
-        let control = ModeSegmentedControl()
-        control.segmentCount = 2
-        control.trackingMode = .selectOne
-        control.frame = NSRect(x: 0, y: 0, width: 52, height: 22)
-        control.selectedSegment = 1
-        coordinator.pressed(control)
-        XCTAssertEqual(chosen, [.compact], "the other segment switches")
-        XCTAssertEqual(control.selectedSegment, 0, "the model decides what shows")
-        coordinator.mode = .compact
-        control.selectedSegment = 1
-        coordinator.pressed(control)
-        XCTAssertEqual(chosen, [.compact], "the current mode: nothing")
-        XCTAssertEqual(control.segment(at: NSPoint(x: 5, y: 10)), 0, "Detailed at the left: its tooltip")
-        XCTAssertEqual(control.segment(at: NSPoint(x: 47, y: 10)), 1)
-        XCTAssertNil(control.segment(at: NSPoint(x: 80, y: 10)))
-
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: [.titled], backing: .buffered, defer: true)
-        window.contentView?.addSubview(control)
-        XCTAssertFalse(control.acceptsFirstResponder)
-        window.makeFirstResponder(control)
-        XCTAssertFalse(window.firstResponder === control)
     }
 }
 
@@ -203,13 +174,18 @@ enum SearchRowProbe {
         @FocusState var focused: Bool
         @State var text = ""
 
+        init(k: CGFloat, text: String = "") {
+            self.k = k
+            _text = State(initialValue: text)
+        }
+
         var body: some View {
             SearchRowContent(search: $text, focused: $focused).environment(\.textScale, k)
         }
     }
 
-    static func field(k: CGFloat, width: CGFloat) -> NSRect? {
-        let hosting = Probe.host(Host(k: k), width: width)
+    static func field(k: CGFloat, width: CGFloat, text: String = "") -> NSRect? {
+        let hosting = Probe.host(Host(k: k, text: text), width: width)
         var field: NSRect?
         Probe.walk(hosting) { view in
             if let text = view as? NSTextField, text.isEditable { field = text.convert(text.bounds, to: hosting) }

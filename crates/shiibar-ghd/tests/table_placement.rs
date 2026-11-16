@@ -34,13 +34,37 @@ fn closed(id: &str, author_me: bool) -> IngestPr {
 // ------------------------------------------------------------ Card states
 
 #[test]
-fn a_new_open_pr_of_the_account_goes_to_the_end_of_mine() {
+fn a_new_open_pr_of_the_account_goes_to_the_end_of_mines_todo() {
     let mut h = H::new();
     h.prs(vec![pr("PR_1"), other("PR_2")]);
-    assert_eq!(h.placement("PR_1"), place("mine", "main", 0));
+    assert_eq!(h.placement("PR_1"), place("mine", "todo", 0));
     assert_eq!(h.placement("PR_2"), None, "someone else's PR: no place");
     h.prs(vec![pr("PR_3")]);
-    assert_eq!(h.placement("PR_3"), place("mine", "main", 1));
+    assert_eq!(h.placement("PR_3"), place("mine", "todo", 1));
+    // After the cards the user put in Todo, and never in another section.
+    h.prs(vec![pr("PR_4"), other("PR_5")]);
+    h.place(
+        &key("PR_1"),
+        PlaceTab::Mine,
+        Some(Section::Doing),
+        None,
+        None,
+    )
+    .unwrap();
+    h.place(
+        &key("PR_5"),
+        PlaceTab::Mine,
+        Some(Section::Todo),
+        None,
+        None,
+    )
+    .unwrap();
+    h.prs(vec![pr("PR_6")]);
+    assert_eq!(
+        h.section(Tab::Mine, Section::Todo),
+        ["PR_3", "PR_4", "PR_5", "PR_6"]
+    );
+    assert_eq!(h.section(Tab::Mine, Section::Doing), ["PR_1"]);
 }
 
 #[test]
@@ -56,7 +80,10 @@ fn several_new_prs_go_to_mine_oldest_created_first() {
         made("PR_2", T0 - 3 * DAY),
         made("PR_3", T0 - 2 * DAY),
     ]);
-    assert_eq!(h.tab(Tab::Mine), ["PR_2", "PR_3", "PR_1"]);
+    assert_eq!(
+        h.section(Tab::Mine, Section::Todo),
+        ["PR_2", "PR_3", "PR_1"]
+    );
 }
 
 #[test]
@@ -121,13 +148,19 @@ fn a_placed_pr_does_not_move_on_a_review_request() {
         None,
     )
     .unwrap();
-    h.place(&key("PR_2"), PlaceTab::Mine, None, None, None)
-        .unwrap();
+    h.place(
+        &key("PR_2"),
+        PlaceTab::Mine,
+        Some(Section::Todo),
+        None,
+        None,
+    )
+    .unwrap();
     let a = h.ev("RR_1", "PR_1", IngestKind::ReviewRequested);
     let b = h.ev("RR_2", "PR_2", IngestKind::ReviewRequested);
     h.events(vec![a, b]);
     assert_eq!(h.placement("PR_1"), place("review", "waiting", 0));
-    assert_eq!(h.placement("PR_2"), place("mine", "main", 0));
+    assert_eq!(h.placement("PR_2"), place("mine", "todo", 0));
 }
 
 #[test]
@@ -155,13 +188,16 @@ fn an_automatic_addition_goes_to_the_end_muted_or_not() {
         ["PR_9", "PR_1", "PR_2", "PR_3"],
         "Unmute moves nothing"
     );
-    // The account's own PR goes to the end of Mine though its repository
-    // is muted.
+    // The account's own PR goes to the end of Mine's Todo though its
+    // repository is muted.
     h.mute(MuteKind::Repo, "org/app");
     h.prs(vec![pr("PR_5"), pr("PR_6")]);
     h.mute(MuteKind::Pr, &key("PR_5"));
     h.prs(vec![pr("PR_7")]);
-    assert_eq!(h.tab(Tab::Mine), ["PR_5", "PR_6", "PR_7"]);
+    assert_eq!(
+        h.section(Tab::Mine, Section::Todo),
+        ["PR_5", "PR_6", "PR_7"]
+    );
 }
 
 #[test]
@@ -228,7 +264,7 @@ fn done_follows_the_status_not_the_reopened_row() {
     h.events(vec![e]);
     assert_eq!(h.placement("PR_1"), place("mine", "done", 0));
     h.prs(vec![pr("PR_1")]);
-    assert_eq!(h.placement("PR_1"), place("mine", "main", 0));
+    assert_eq!(h.placement("PR_1"), place("mine", "todo", 0));
 }
 
 #[test]
@@ -246,9 +282,34 @@ fn add_to_a_closed_pr_places_it_in_that_tabs_done() {
     )
     .unwrap();
     assert_eq!(h.placement("PR_1"), place("review", "done", 0));
-    h.place(&key("PR_2"), PlaceTab::Mine, None, None, Some(At::Top))
-        .unwrap();
+    // The section is needed, but its value and the position are ignored.
+    h.place(
+        &key("PR_2"),
+        PlaceTab::Mine,
+        Some(Section::Waiting),
+        None,
+        Some(At::Top),
+    )
+    .unwrap();
     assert_eq!(h.placement("PR_2"), place("mine", "done", 0));
+    // Its place before Done is the end of Todo.
+    assert_eq!(h.engine.open_section(&full("PR_2")), Some(Section::Todo));
+}
+
+#[test]
+fn add_to_a_closed_pr_needs_a_section_all_the_same() {
+    // DESIGN.md, "Wire format": the section is needed in every case, also
+    // for a merged or closed unplaced PR.
+    let mut h = H::new();
+    h.prs(vec![other("PR_1")]);
+    h.prs(vec![closed("PR_1", false)]);
+    for tab in [PlaceTab::Review, PlaceTab::Mine] {
+        assert!(
+            invalid(h.place(&key("PR_1"), tab, None, None, None)),
+            "{tab:?}"
+        );
+        assert_eq!(h.placement("PR_1"), None, "{tab:?}");
+    }
 }
 
 // ------------------------------------------------------------------ place
@@ -364,22 +425,16 @@ fn place_is_invalid_in_these_cases() {
             ),
         ),
         (
-            "main in mine's done is not a section of review",
-            h.place(
-                &key("PR_3"),
-                r,
-                Some(Section::Main),
-                Some(&key("PR_1")),
-                None,
-            ),
-        ),
-        (
             "review without a section",
             h.place(&key("PR_3"), r, None, None, None),
         ),
         (
-            "main in review",
-            h.place(&key("PR_3"), r, Some(Section::Main), None, None),
+            "mine without a section",
+            h.place(&key("PR_3"), PlaceTab::Mine, None, None, None),
+        ),
+        (
+            "mine without a section, for the account's own PR",
+            h.place(&key("PR_1"), PlaceTab::Mine, None, None, Some(At::Top)),
         ),
         (
             "before a PR of another section",
@@ -424,12 +479,12 @@ fn place_is_invalid_in_these_cases() {
             h.place(&key("PR_2"), r, Some(Section::Todo), None, None),
         ),
         (
-            "mine with a section other than main or done",
+            "before a PR of the same section in the other tab",
             h.place(
                 &key("PR_3"),
                 PlaceTab::Mine,
                 Some(Section::Todo),
-                None,
+                Some(&key("PR_4")),
                 None,
             ),
         ),
@@ -682,16 +737,47 @@ fn a_dismissed_card_keeps_its_rank_and_returns_by_it() {
 #[test]
 fn list_of_review_and_mine_in_section_order() {
     let mut h = H::new();
-    h.prs(vec![pr("PR_1"), pr("PR_2"), other("PR_3")]);
+    h.prs(vec![
+        pr("PR_1"),
+        pr("PR_2"),
+        other("PR_3"),
+        pr("PR_4"),
+        pr("PR_5"),
+    ]);
     h.prs(vec![closed("PR_1", true)]);
-    assert_eq!(h.tab(Tab::Mine), ["PR_2", "PR_1"], "main, then done");
+    assert_eq!(
+        h.tab(Tab::Mine),
+        ["PR_2", "PR_4", "PR_5", "PR_1"],
+        "todo, then done"
+    );
     assert_eq!(h.placement("PR_1"), place("mine", "done", 0));
+    // Mine lists Doing, Todo, Waiting and Done in that order, as Review.
+    h.place(
+        &key("PR_5"),
+        PlaceTab::Mine,
+        Some(Section::Doing),
+        None,
+        None,
+    )
+    .unwrap();
+    h.place(
+        &key("PR_2"),
+        PlaceTab::Mine,
+        Some(Section::Waiting),
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(h.tab(Tab::Mine), ["PR_5", "PR_4", "PR_2", "PR_1"]);
+    assert_eq!(h.placement("PR_5"), place("mine", "doing", 0));
+    assert_eq!(h.placement("PR_4"), place("mine", "todo", 0));
+    assert_eq!(h.placement("PR_2"), place("mine", "waiting", 0));
     let cards = h.list(ListArgs {
         tab: Tab::Mine,
         dismissed: DismissedFilter::Include,
         ..ListArgs::default()
     });
-    assert_eq!(cards.len(), 2);
+    assert_eq!(cards.len(), 4);
     assert!(h.tab(Tab::Review).is_empty());
 }
 
@@ -864,9 +950,15 @@ fn an_open_card_in_done_moves_out_and_is_removed_like_any_other() {
         None,
         None
     )));
-    h.place(&key("PR_1"), PlaceTab::Mine, None, None, Some(At::Top))
-        .unwrap();
-    assert_eq!(h.placement("PR_1"), place("mine", "main", 0));
+    h.place(
+        &key("PR_1"),
+        PlaceTab::Mine,
+        Some(Section::Todo),
+        None,
+        Some(At::Top),
+    )
+    .unwrap();
+    assert_eq!(h.placement("PR_1"), place("mine", "todo", 0));
 }
 
 #[test]
@@ -964,15 +1056,21 @@ fn a_closed_card_moves_out_of_done_and_stays_out() {
         None,
     )
     .unwrap();
-    h.place(&key("PR_1"), PlaceTab::Mine, None, None, None)
-        .unwrap();
+    h.place(
+        &key("PR_1"),
+        PlaceTab::Mine,
+        Some(Section::Waiting),
+        None,
+        None,
+    )
+    .unwrap();
     assert_eq!(h.placement("PR_2"), place("review", "doing", 0));
-    assert_eq!(h.placement("PR_1"), place("mine", "main", 0));
+    assert_eq!(h.placement("PR_1"), place("mine", "waiting", 0));
     // Later fetches of the closed PRs move nothing.
     h.advance(DAY);
     h.prs(vec![closed("PR_1", true), closed("PR_2", false)]);
     assert_eq!(h.placement("PR_2"), place("review", "doing", 0));
-    assert_eq!(h.placement("PR_1"), place("mine", "main", 0));
+    assert_eq!(h.placement("PR_1"), place("mine", "waiting", 0));
     // Outside Done: no automatic Dismiss.
     assert_eq!(h.card(&key("PR_2")).unwrap().auto_dismiss_at, None);
     h.advance(10 * DAY);
@@ -1126,4 +1224,240 @@ fn auto_dismiss_at_shows_when_the_automatic_dismiss_is_due() {
         None,
         "restored"
     );
+}
+
+// ------------------------------------------------------------------ Mine
+
+#[test]
+fn mine_takes_the_sections_and_positions_of_review() {
+    // DESIGN.md, "Mine" and "Wire format": the four sections, `before` and
+    // `at`, and the default positions, as in Review.
+    let mut h = H::new();
+    h.prs(vec![pr("PR_1"), pr("PR_2"), pr("PR_3"), pr("PR_4")]);
+    assert_eq!(
+        h.section(Tab::Mine, Section::Todo),
+        ["PR_1", "PR_2", "PR_3", "PR_4"]
+    );
+    let to = |h: &mut H, id: &str, section: Section, before: Option<&str>, at: Option<At>| {
+        h.place(&key(id), PlaceTab::Mine, Some(section), before, at)
+            .unwrap()
+    };
+    to(&mut h, "PR_1", Section::Doing, None, None);
+    to(&mut h, "PR_2", Section::Doing, None, None);
+    assert_eq!(
+        h.section(Tab::Mine, Section::Doing),
+        ["PR_1", "PR_2"],
+        "end"
+    );
+    to(&mut h, "PR_3", Section::Doing, None, Some(At::Top));
+    assert_eq!(
+        h.section(Tab::Mine, Section::Doing),
+        ["PR_3", "PR_1", "PR_2"]
+    );
+    let card = to(&mut h, "PR_4", Section::Doing, Some(&key("PR_1")), None);
+    assert_eq!(card.placement.unwrap().position, 1);
+    assert_eq!(
+        h.section(Tab::Mine, Section::Doing),
+        ["PR_3", "PR_4", "PR_1", "PR_2"]
+    );
+    to(&mut h, "PR_4", Section::Doing, None, Some(At::Bottom));
+    assert_eq!(
+        h.section(Tab::Mine, Section::Doing),
+        ["PR_3", "PR_1", "PR_2", "PR_4"]
+    );
+    // From Doing or Waiting of Mine to Todo without a position: the top.
+    to(&mut h, "PR_1", Section::Todo, None, None);
+    to(&mut h, "PR_2", Section::Waiting, None, None);
+    to(&mut h, "PR_2", Section::Todo, None, None);
+    assert_eq!(h.section(Tab::Mine, Section::Todo), ["PR_2", "PR_1"]);
+    // Inside Todo without a position: the end.
+    to(&mut h, "PR_2", Section::Todo, None, None);
+    assert_eq!(h.section(Tab::Mine, Section::Todo), ["PR_1", "PR_2"]);
+    // From Done to Todo without a position: the end.
+    to(&mut h, "PR_3", Section::Done, None, None);
+    to(&mut h, "PR_3", Section::Todo, None, None);
+    assert_eq!(
+        h.section(Tab::Mine, Section::Todo),
+        ["PR_1", "PR_2", "PR_3"]
+    );
+    assert_eq!(h.placement("PR_3"), place("mine", "todo", 2));
+    assert_eq!(h.placement("PR_4"), place("mine", "doing", 0));
+}
+
+#[test]
+fn todo_takes_a_card_from_elsewhere_at_its_end() {
+    // DESIGN.md, "Wire format": the top of Todo is only for a card from
+    // Doing or Waiting of the same tab; one from the other tab, from Done or
+    // unplaced goes to the end, in Review and Mine alike.
+    let mut h = H::new();
+    h.prs(vec![
+        pr("PR_1"),
+        other("PR_2"),
+        other("PR_3"),
+        other("PR_4"),
+        other("PR_5"),
+    ]);
+    // Unplaced to Mine's Todo (`Add to Mine`): after the account's own PR.
+    h.place(
+        &key("PR_2"),
+        PlaceTab::Mine,
+        Some(Section::Todo),
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(h.section(Tab::Mine, Section::Todo), ["PR_1", "PR_2"]);
+    // Review's Doing to Mine's Todo: the end.
+    h.place(
+        &key("PR_3"),
+        PlaceTab::Review,
+        Some(Section::Doing),
+        None,
+        None,
+    )
+    .unwrap();
+    h.place(
+        &key("PR_3"),
+        PlaceTab::Mine,
+        Some(Section::Todo),
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        h.section(Tab::Mine, Section::Todo),
+        ["PR_1", "PR_2", "PR_3"]
+    );
+    // Mine's Waiting to Review's Todo: the end.
+    h.place(
+        &key("PR_4"),
+        PlaceTab::Review,
+        Some(Section::Todo),
+        None,
+        None,
+    )
+    .unwrap();
+    h.place(
+        &key("PR_5"),
+        PlaceTab::Mine,
+        Some(Section::Waiting),
+        None,
+        None,
+    )
+    .unwrap();
+    h.place(
+        &key("PR_5"),
+        PlaceTab::Review,
+        Some(Section::Todo),
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(h.section(Tab::Review, Section::Todo), ["PR_4", "PR_5"]);
+    // Review's Doing to Review's Todo: the top.
+    h.place(
+        &key("PR_2"),
+        PlaceTab::Review,
+        Some(Section::Doing),
+        None,
+        None,
+    )
+    .unwrap();
+    h.place(
+        &key("PR_2"),
+        PlaceTab::Review,
+        Some(Section::Todo),
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        h.section(Tab::Review, Section::Todo),
+        ["PR_2", "PR_4", "PR_5"]
+    );
+}
+
+#[test]
+fn mine_done_and_a_reopen_bring_a_card_back_to_its_section() {
+    // DESIGN.md, "Mine" and "Review": a card in Done goes back to the
+    // section and rank it had before Done on a reopen.
+    let mut h = H::new();
+    h.prs(vec![pr("PR_1"), pr("PR_2"), pr("PR_3"), pr("PR_4")]);
+    for id in ["PR_1", "PR_2", "PR_3"] {
+        h.place(&key(id), PlaceTab::Mine, Some(Section::Waiting), None, None)
+            .unwrap();
+    }
+    // A merge moves it to Done; a reopen brings it back.
+    h.prs(vec![closed("PR_2", true)]);
+    assert_eq!(h.placement("PR_2"), place("mine", "done", 0));
+    assert_eq!(h.section(Tab::Mine, Section::Waiting), ["PR_1", "PR_3"]);
+    h.prs(vec![pr("PR_2")]);
+    assert_eq!(h.placement("PR_2"), place("mine", "waiting", 1));
+    // A move to Done by hand, then a close and a reopen: back as well.
+    h.place(
+        &key("PR_4"),
+        PlaceTab::Mine,
+        Some(Section::Doing),
+        None,
+        None,
+    )
+    .unwrap();
+    h.place(
+        &key("PR_4"),
+        PlaceTab::Mine,
+        Some(Section::Done),
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(h.placement("PR_4"), place("mine", "done", 0));
+    assert!(h.section(Tab::Mine, Section::Doing).is_empty());
+    h.prs(vec![closed("PR_4", true)]);
+    h.prs(vec![pr("PR_4")]);
+    assert_eq!(h.placement("PR_4"), place("mine", "doing", 0));
+    // From another tab to Mine's Done: it keeps the end of Todo.
+    h.prs(vec![other("PR_5")]);
+    h.place(
+        &key("PR_5"),
+        PlaceTab::Review,
+        Some(Section::Doing),
+        None,
+        None,
+    )
+    .unwrap();
+    h.place(
+        &key("PR_5"),
+        PlaceTab::Mine,
+        Some(Section::Done),
+        None,
+        None,
+    )
+    .unwrap();
+    h.prs(vec![closed("PR_5", false)]);
+    h.prs(vec![other("PR_5")]);
+    assert_eq!(h.placement("PR_5"), place("mine", "todo", 0));
+    // Out of Done by hand, to any section.
+    h.prs(vec![closed("PR_1", true)]);
+    h.place(
+        &key("PR_1"),
+        PlaceTab::Mine,
+        Some(Section::Doing),
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(h.section(Tab::Mine, Section::Doing), ["PR_4", "PR_1"]);
+}
+
+#[test]
+fn a_closed_pr_of_the_account_found_new_goes_to_mines_done() {
+    // DESIGN.md, "Mine": found with its return trigger row; its place
+    // before Done is the end of Todo, where a reopen takes it.
+    let mut h = H::new();
+    h.prs(vec![pr("PR_1")]);
+    let mention = h.ev("M_2", "PR_2", IngestKind::Mentioned);
+    h.push(vec![closed("PR_2", true)], vec![mention], vec![]);
+    assert_eq!(h.placement("PR_2"), place("mine", "done", 0));
+    h.prs(vec![pr("PR_2")]);
+    assert_eq!(h.section(Tab::Mine, Section::Todo), ["PR_1", "PR_2"]);
 }

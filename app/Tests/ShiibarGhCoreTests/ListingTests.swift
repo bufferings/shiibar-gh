@@ -193,8 +193,10 @@ final class TabTests: XCTestCase {
         XCTAssertEqual(tags["T1"], "Review · Todo")
         XCTAssertEqual(tags["W1"], "Review · Waiting")
         XCTAssertEqual(tags["D1"], "Review · Done")
-        XCTAssertEqual(tags["M1"], "Mine")
+        XCTAssertEqual(tags["M1"], "Mine · Todo", "the tab and the section, as Review's")
         XCTAssertEqual(tags["M3"], "Mine · Done")
+        XCTAssertEqual(card("x", placement: mine(.doing, 0)).placementTag, "Mine · Doing")
+        XCTAssertEqual(card("x", placement: mine(.waiting, 0)).placementTag, "Mine · Waiting")
         XCTAssertEqual(tags["N1"], "-")
     }
 
@@ -236,14 +238,15 @@ final class SectionTests: XCTestCase {
         XCTAssertEqual(layout(.mine, cards: one).map(\.title), [])
     }
 
-    /// Mine keeps its empty Done, and its empty first list, while it has a
-    /// card and nothing is searched.
+    /// Mine keeps its empty sections, as Review does, while it has a card
+    /// and nothing is searched (DESIGN.md, "Mine").
     func testMineKeepsItsEmptySectionsAsDropPlaces() {
         let m1 = sampleCards().filter { $0.id == "M1" }
-        XCTAssertEqual(layout(.mine, cards: m1).map(\.key), ["mine|main", "mine|done"])
-        XCTAssertEqual(layout(.mine, cards: m1)[1].detail, "0 PRs")
+        XCTAssertEqual(layout(.mine, cards: m1).map(\.key), ["mine|doing", "mine|todo", "mine|waiting", "mine|done"])
+        XCTAssertEqual(layout(.mine, cards: m1).map(\.detail), ["0 PRs", "1 PR", "0 PRs", "0 PRs"])
+        XCTAssertEqual(layout(.mine, cards: m1).map(\.level), [1, 1, 1, 1], "every section has its heading")
         let m3 = sampleCards().filter { $0.id == "M3" }
-        XCTAssertEqual(layout(.mine, cards: m3).map(\.key), ["mine|main", "mine|done"])
+        XCTAssertEqual(layout(.mine, cards: m3).map(\.key), ["mine|doing", "mine|todo", "mine|waiting", "mine|done"])
         XCTAssertEqual(layout(.mine, cards: m1, search: "zzz").map(\.key), [])
         XCTAssertEqual(layout(.mine, cards: []).map(\.key), [])
     }
@@ -297,12 +300,30 @@ final class SectionTests: XCTestCase {
         XCTAssertEqual(collapsed.matching.count, 7)
     }
 
-    func testMineIsOneListWithoutAHeadingThenDone() {
+    func testMineHasReviewsFourSections() {
         let sections = layout(.mine)
-        XCTAssertEqual(sections.map(\.key), ["mine|main", "mine|done"])
-        XCTAssertEqual(sections.map(\.showsHeader), [false, true])
-        XCTAssertEqual(sections.map(\.accepts), [true, true])
-        XCTAssertEqual(sections[0].cards.map(\.id), ["M1", "M2"])
+        XCTAssertEqual(sections.map(\.title), ["Doing", "Todo", "Waiting", "Done"])
+        XCTAssertEqual(sections.map(\.key), ["mine|doing", "mine|todo", "mine|waiting", "mine|done"])
+        XCTAssertEqual(sections.map(\.showsHeader), [true, true, true, true])
+        XCTAssertEqual(sections.map(\.accepts), [true, true, true, true])
+        XCTAssertEqual(sections.map(\.isDone), [false, false, false, true])
+        XCTAssertEqual(sections[1].cards.map(\.id), ["M1", "M2"])
+        XCTAssertEqual(sections[3].cards.map(\.id), ["M3"])
+    }
+
+    /// "+ N more PRs" and the collapse of Mine's sections, each by its own
+    /// key (DESIGN.md, "Section size").
+    func testMineFoldsPastFiveAndCollapsesBySection() {
+        let todo = (0..<7).map { card("Q\($0)", authored: true, placement: mine(.todo, $0)) }
+        let waiting = (0..<2).map { card("V\($0)", placement: mine(.waiting, $0)) }
+        let sections = layout(.mine, cards: todo + waiting, collapsed: ["mine|waiting"])
+        XCTAssertEqual(sections[1].cards.count, 5)
+        XCTAssertEqual(sections[1].foldLine, "+ 2 more PRs")
+        XCTAssertTrue(sections[2].collapsed)
+        XCTAssertEqual(sections[2].cards, [])
+        let open = layout(.mine, cards: todo + waiting, expanded: ["mine|todo"])
+        XCTAssertEqual(open[1].cards.count, 7)
+        XCTAssertEqual(open[1].foldLine, "Show less")
     }
 
     /// Open first, then Merged and Closed; muted cards the Filter shows
@@ -405,8 +426,9 @@ final class SelectionAndHintTests: XCTestCase {
         XCTAssertTrue(expanded.contains(.row(id: "E", card: "T1")))
         XCTAssertTrue(expanded.contains(.olderActivity(card: "T1")))
         XCTAssertFalse(expanded.contains(.moreRows(card: "T1")))
-        XCTAssertEqual(PopoverLogic.items(view(.mine)).first, .header(card: "M1"), "no heading for Mine's first list")
-        XCTAssertEqual(PopoverLogic.items(view(nil)), [.header(card: "X2"), .header(card: "X1")])
+        XCTAssertEqual(Array(PopoverLogic.items(view(.mine)).prefix(3)), [.section("mine|doing"), .section("mine|todo"), .header(card: "M1")],
+                       "every section of Mine has its heading")
+        XCTAssertEqual(PopoverLogic.items(view(nil)), [.header(card: "X2"), .header(card: "X1")], "card headers only, no repository")
         XCTAssertEqual(PopoverLogic.move(nil, up: false, in: items), items.first)
         XCTAssertEqual(PopoverLogic.move(nil, up: true, in: items), items.last)
         XCTAssertEqual(PopoverLogic.move(items[0], up: true, in: items), items[0])
@@ -425,8 +447,11 @@ final class SelectionAndHintTests: XCTestCase {
         XCTAssertEqual(hint(.header(card: "T7"), review), "↑↓ Move  ⏎ Open  ⌥↑↓ Reorder  D T W Move to  ⌫ Dismiss  ⇧R Mark all read  ⌘F Search", "a muted card shown moves like the others")
         XCTAssertEqual(hint(.header(card: "D1"), review), "↑↓ Move  ⏎ Open  D T W Move to  ⌫ Dismiss  ⇧R Mark all read  ⌘F Search",
                        "Done: no Reorder")
-        XCTAssertEqual(hint(.header(card: "M1"), view(.mine)), "↑↓ Move  ⏎ Open  ⌥↑↓ Reorder  ⌫ Dismiss  ⇧R Mark all read  ⌘F Search")
-        XCTAssertEqual(hint(.header(card: "M3"), view(.mine)), "↑↓ Move  ⏎ Open  ⌫ Dismiss  ⇧R Mark all read  ⌘F Search")
+        XCTAssertEqual(hint(.header(card: "M1"), view(.mine)), "↑↓ Move  ⏎ Open  ⌥↑↓ Reorder  D T W Move to  ⌫ Dismiss  ⇧R Mark all read  ⌘F Search",
+                       "Mine as Review")
+        XCTAssertEqual(hint(.header(card: "M3"), view(.mine)), "↑↓ Move  ⏎ Open  D T W Move to  ⌫ Dismiss  ⇧R Mark all read  ⌘F Search",
+                       "Mine's Done as Review's")
+        XCTAssertEqual(hint(.section("mine|doing"), view(.mine)), "↑↓ Move  ⏎ Collapse  ⇧R Mark all read  ⌘F Search")
         XCTAssertEqual(hint(.header(card: "T1"), view(.all)), "↑↓ Move  ⏎ Open  ⌫ Dismiss  ⇧R Mark all read  ⌘F Search")
         XCTAssertEqual(hint(.header(card: "X1"), view(nil)), "↑↓ Move  ⏎ Open  ⌫ Restore  esc Back  ⌘F Search")
         XCTAssertEqual(hint(nil, view(nil)), "esc Back  ⌘F Search")
@@ -478,8 +503,10 @@ final class SelectionAndHintTests: XCTestCase {
         XCTAssertNil(act(.reorder(up: true), .header(card: "D1")), "Done")
         XCTAssertNil(act(.reorder(up: true), .header(card: "T2"), view(.all)), "All")
         XCTAssertEqual(act(.reorder(up: false), .header(card: "M1"), view(.mine)),
-                       .place(PlaceMove(card: "M1", target: .mine, position: .bottom, verb: .move)))
-        // D / T / W in Review only, also for a muted card.
+                       .place(PlaceMove(card: "M1", target: .mine(.todo), position: .bottom, verb: .move)))
+        XCTAssertEqual(act(.reorder(up: true), .header(card: "M2"), view(.mine)),
+                       .place(PlaceMove(card: "M2", target: .mine(.todo), position: .top, verb: .move)))
+        // D / T / W in Review and Mine, also for a muted card.
         XCTAssertEqual(act(.moveTo(.doing), .header(card: "T1")),
                        .place(PlaceMove(card: "T1", target: .review(.doing), position: .byDefault, verb: .move)))
         XCTAssertEqual(act(.moveTo(.waiting), .header(card: "T7")),
@@ -488,8 +515,16 @@ final class SelectionAndHintTests: XCTestCase {
         XCTAssertEqual(act(.moveTo(.todo), .header(card: "D1")),
                        .place(PlaceMove(card: "D1", target: .review(.todo), position: .byDefault, verb: .move)), "out of Done")
         XCTAssertNil(act(.reorder(up: false), .header(card: "M3"), view(.mine)), "Mine's Done")
-        XCTAssertNil(act(.moveTo(.todo), .header(card: "M1"), view(.mine)), "Mine")
+        XCTAssertEqual(act(.moveTo(.doing), .header(card: "M1"), view(.mine)),
+                       .place(PlaceMove(card: "M1", target: .mine(.doing), position: .byDefault, verb: .move)), "Mine")
+        XCTAssertEqual(act(.moveTo(.waiting), .row(id: "m1", card: "M1"), view(.mine)),
+                       .place(PlaceMove(card: "M1", target: .mine(.waiting), position: .byDefault, verb: .move)), "a row's card")
+        XCTAssertNil(act(.moveTo(.todo), .header(card: "M1"), view(.mine)), "already there")
+        XCTAssertEqual(act(.moveTo(.todo), .header(card: "M3"), view(.mine)),
+                       .place(PlaceMove(card: "M3", target: .mine(.todo), position: .byDefault, verb: .move)), "out of Mine's Done")
         XCTAssertNil(act(.moveTo(.todo), .header(card: "N1"), view(.all)), "All")
+        XCTAssertNil(act(.moveTo(.doing), .header(card: "M1"), view(.all)), "All, a card placed in Mine")
+        XCTAssertNil(act(.moveTo(.doing), .header(card: "T1"), view(.all)), "All, a card placed in Review")
     }
 
     func testTheLinkCommandCCopies() {
@@ -523,10 +558,13 @@ final class MenuTests: XCTestCase {
     func testAnAssignedCardInMine() {
         let menu = PopoverLogic.menu(for: .header(card: "M2"), view: view(.all), login: "bufferings-work")
         XCTAssertEqual(titles(menu), [
-            "Open on GitHub", "Copy link", "-", "Move to Done", "Remove from Mine", "-",
+            "Open on GitHub", "Copy link", "-", "Move to Doing", "Move to Waiting", "Move to Done", "Remove from Mine", "-",
             "Mute this pull request", "Mute acme-corp/web", "Mute @mk", "-", "Dismiss", "-", "Mark all as read",
         ])
-        XCTAssertEqual(menu[3]?.action, .place(PlaceMove(card: "M2", target: .mineDone, position: .byDefault, verb: .move)))
+        XCTAssertEqual(menu[3]?.action, .place(PlaceMove(card: "M2", target: .mine(.doing), position: .byDefault, verb: .move)))
+        XCTAssertEqual(menu[4]?.action, .place(PlaceMove(card: "M2", target: .mine(.waiting), position: .byDefault, verb: .move)))
+        XCTAssertEqual(menu[5]?.action, .place(PlaceMove(card: "M2", target: .mine(.done), position: .byDefault, verb: .move)))
+        XCTAssertFalse(titles(menu).contains("Move to Mine"))
     }
 
     /// A card in Done moves out and is removed like any other (DESIGN.md,
@@ -540,8 +578,8 @@ final class MenuTests: XCTestCase {
         XCTAssertEqual(Array(titles(d1)[2...7]), ["-", "Move to Doing", "Move to Todo", "Move to Waiting", "Remove from Review", "-"])
         XCTAssertEqual(d1[4]?.action, .place(PlaceMove(card: "D1", target: .review(.todo), position: .byDefault, verb: .move)))
         let m3 = items("M3")
-        XCTAssertEqual(Array(titles(m3)[2...4]), ["-", "Move to Mine", "-"], "your own PR stays in Mine")
-        XCTAssertEqual(m3[3]?.action, .place(PlaceMove(card: "M3", target: .mine, position: .byDefault, verb: .move)))
+        XCTAssertEqual(Array(titles(m3)[2...6]), ["-", "Move to Doing", "Move to Todo", "Move to Waiting", "-"], "your own PR stays in Mine")
+        XCTAssertEqual(m3[4]?.action, .place(PlaceMove(card: "M3", target: .mine(.todo), position: .byDefault, verb: .move)))
     }
 
     func testPlacementItemsLeaveOutWhatDoesNotApply() {
@@ -556,7 +594,7 @@ final class MenuTests: XCTestCase {
         XCTAssertTrue(items("N1").contains("Add to Mine"))
         let menu = PopoverLogic.menu(for: .header(card: "N1"), view: all, login: "x")
         XCTAssertEqual(menu[3]?.action, .place(PlaceMove(card: "N1", target: .review(.todo), position: .byDefault, verb: .add)))
-        XCTAssertEqual(menu[4]?.action, .place(PlaceMove(card: "N1", target: .mine, position: .byDefault, verb: .add)))
+        XCTAssertEqual(menu[4]?.action, .place(PlaceMove(card: "N1", target: .mine(.todo), position: .byDefault, verb: .add)))
         let own = card("O", authored: true)
         let ownMenu = titles(PopoverLogic.menu(for: .header(card: "O"), view: view(.all, cards: [own]), login: "x"))
         XCTAssertFalse(ownMenu.contains("Add to Review"), "your own PR is never in Review")
@@ -613,7 +651,12 @@ final class CardMoveTests: XCTestCase {
         XCTAssertEqual(CardDrop.target(.card("D1", lowerHalf: false), sections: sections), DropTarget(section: "review|done", position: .byDefault))
         XCTAssertEqual(CardDrop.target(.card("M3", lowerHalf: true), sections: layout(.mine)), DropTarget(section: "mine|done", position: .byDefault))
         XCTAssertNil(CardDrop.target(.card("T1", lowerHalf: false), sections: layout(.all)), "no drag in All")
-        XCTAssertEqual(CardDrop.target(.card("M2", lowerHalf: false), sections: layout(.mine)), DropTarget(section: "mine|main", position: .before("M2")))
+        XCTAssertEqual(CardDrop.target(.card("M2", lowerHalf: false), sections: layout(.mine)), DropTarget(section: "mine|todo", position: .before("M2")))
+        XCTAssertEqual(CardDrop.target(.card("M1", lowerHalf: false), sections: layout(.mine)), DropTarget(section: "mine|todo", position: .top))
+        XCTAssertEqual(CardDrop.target(.header("mine|doing"), sections: layout(.mine)), DropTarget(section: "mine|doing", position: .top),
+                       "an empty section of Mine")
+        XCTAssertEqual(CardDrop.target(.header("mine|waiting"), sections: layout(.mine)), DropTarget(section: "mine|waiting", position: .top))
+        XCTAssertEqual(CardDrop.target(.header("mine|done"), sections: layout(.mine)), DropTarget(section: "mine|done", position: .byDefault))
     }
 
     func testTheLine() {
@@ -640,13 +683,17 @@ final class CardMoveTests: XCTestCase {
                        PlaceMove(card: "T5", target: .review(.todo), position: .bottom, verb: .move), "past the muted cards")
         XCTAssertEqual(CardDrop.move(cards[0], to: DropTarget(section: "review|todo", position: .bottom), cards: cards),
                        PlaceMove(card: "R1", target: .review(.todo), position: .bottom, verb: .move))
-        XCTAssertEqual(CardDrop.move(cards[11], to: DropTarget(section: "mine|main", position: .before("M1")), cards: cards),
-                       PlaceMove(card: "M2", target: .mine, position: .before("M1"), verb: .move))
+        XCTAssertEqual(CardDrop.move(cards[11], to: DropTarget(section: "mine|todo", position: .before("M1")), cards: cards),
+                       PlaceMove(card: "M2", target: .mine(.todo), position: .before("M1"), verb: .move))
+        XCTAssertEqual(CardDrop.move(cards[11], to: DropTarget(section: "mine|doing", position: .top), cards: cards),
+                       PlaceMove(card: "M2", target: .mine(.doing), position: .top, verb: .move))
+        XCTAssertEqual(CardDrop.move(cards[11], to: DropTarget(section: "mine|waiting", position: .top), cards: cards),
+                       PlaceMove(card: "M2", target: .mine(.waiting), position: .top, verb: .move))
         // Into Done: no position; a card in Done stays where Done puts it.
         XCTAssertEqual(CardDrop.move(t2, to: DropTarget(section: "review|done", position: .byDefault), cards: cards),
                        PlaceMove(card: "T2", target: .review(.done), position: .byDefault, verb: .move))
         XCTAssertEqual(CardDrop.move(cards[11], to: DropTarget(section: "mine|done", position: .byDefault), cards: cards),
-                       PlaceMove(card: "M2", target: .mineDone, position: .byDefault, verb: .move))
+                       PlaceMove(card: "M2", target: .mine(.done), position: .byDefault, verb: .move))
         let d1 = cards.first { $0.id == "D1" }!
         XCTAssertNil(CardDrop.move(d1, to: DropTarget(section: "review|done", position: .byDefault), cards: cards))
         XCTAssertEqual(CardDrop.move(d1, to: DropTarget(section: "review|doing", position: .bottom), cards: cards),
@@ -687,20 +734,43 @@ final class CardMoveTests: XCTestCase {
         XCTAssertEqual(moved.first { $0.id == "M2" }?.placement?.position, 0)
         // A closed PR without a placement goes straight to Done.
         let closed = card("Z", state: .closed)
-        let added = LocalChange.place(PlaceMove(card: "Z", target: .mine, position: .byDefault, verb: .add)).apply(cards + [closed])
+        let added = LocalChange.place(PlaceMove(card: "Z", target: .mine(.todo), position: .byDefault, verb: .add)).apply(cards + [closed])
         XCTAssertEqual(order(added, "mine|done"), ["Z", "M3"])
         // Into Done: the top, newest entry first; out of Done: no automatic
         // Dismiss any more.
         moved = place("T3", .review(.done))
         XCTAssertEqual(order(moved, "review|done"), ["T3", "D1"])
         XCTAssertEqual(order(moved, "review|todo"), ["T1", "T2", "T4", "T5", "T6", "T7"])
-        moved = place("M2", .mineDone)
+        moved = place("M2", .mine(.done))
         XCTAssertEqual(order(moved, "mine|done"), ["M2", "M3"])
         var due = cards
         due[due.firstIndex { $0.id == "D1" }!].autoDismissAt = T0 + 86_400
         moved = LocalChange.place(PlaceMove(card: "D1", target: .review(.todo), position: .byDefault, verb: .move)).apply(due)
         XCTAssertEqual(order(moved, "review|todo"), ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "D1"], "from Done: the bottom")
         XCTAssertNil(moved.first { $0.id == "D1" }?.autoDismissAt)
+    }
+
+    /// Mine's moves shown at once follow the same rules as Review's: to
+    /// Todo at the top from Doing or Waiting of the same tab, else at the
+    /// bottom (DESIGN.md, "Mine", "Wire format").
+    func testAMoveInMineShownAtOnceFollowsThePlaceRules() {
+        var cards = sampleCards()
+        cards.append(card("MD", pr: "example-org/api#430", authored: true, placement: mine(.doing, 0)))
+        cards.append(card("MW", pr: "example-org/api#431", authored: true, placement: mine(.waiting, 0)))
+        func place(_ id: String, _ target: PlaceTarget, _ position: PlacePosition = .byDefault) -> [Card] {
+            LocalChange.place(PlaceMove(card: id, target: target, position: position, verb: .move)).apply(cards)
+        }
+        XCTAssertEqual(order(place("MD", .mine(.todo)), "mine|todo"), ["MD", "M1", "M2"], "from Mine's Doing: the top")
+        XCTAssertEqual(order(place("MW", .mine(.todo)), "mine|todo"), ["MW", "M1", "M2"], "from Mine's Waiting: the top")
+        XCTAssertEqual(order(place("M3", .mine(.todo)), "mine|todo"), ["M1", "M2", "M3"], "from Done: the bottom")
+        XCTAssertEqual(order(place("R1", .mine(.todo)), "mine|todo"), ["M1", "M2", "R1"], "from Review's Doing: the bottom")
+        XCTAssertEqual(order(place("N1", .mine(.todo)), "mine|todo"), ["M1", "M2", "N1"], "without a placement: the bottom")
+        XCTAssertEqual(order(place("MW", .review(.todo)), "review|todo").last, "MW", "from Mine's Waiting to Review: the bottom")
+        XCTAssertEqual(order(place("M1", .mine(.doing)), "mine|doing"), ["MD", "M1"], "to Doing: the bottom")
+        XCTAssertEqual(order(place("M2", .mine(.waiting), .top), "mine|waiting"), ["M2", "MW"])
+        let done = place("M1", .mine(.done))
+        XCTAssertEqual(order(done, "mine|done"), ["M1", "M3"])
+        XCTAssertEqual(done.first { $0.id == "M1" }?.placement?.section.value, .done)
     }
 
     func testDismissRestoreReadAndMuteShownAtOnce() {
@@ -755,5 +825,153 @@ final class CardMoveTests: XCTestCase {
         XCTAssertEqual(unmuted[1], cards[1], "another card")
         let user = LocalChange.mute(.user, "nobody-here").apply(cards)
         XCTAssertEqual(user, cards, "no card or row of that user")
+    }
+}
+
+/// `Dismiss all` on the heading of Done (DESIGN.md, "Dismiss", "`Dismiss
+/// all`"; "Section size").
+final class DismissAllTargetTests: XCTestCase {
+    /// Review's Done: D1 and E1–E5 merged, E6 merged and muted (its author
+    /// muted).
+    func doneCards() -> [Card] {
+        var cards = sampleCards()
+        for n in 1...6 {
+            cards.append(card("E\(n)", pr: "example-org/web#\(300 + n)", author: n == 6 ? "example-bot" : "ts", state: .merged,
+                              placement: review(.done, n), muted: n == 6 ? [.author] : []))
+        }
+        return cards
+    }
+
+    func done(_ tab: ListTab = .review, cards: [Card]? = nil, filter: ListFilter = mutedHidden, search: String = "",
+              collapsed: Set<String> = [], expanded: Set<String> = []) -> SectionLayout? {
+        layout(tab, cards: cards ?? doneCards(), collapsed: collapsed, expanded: expanded, search: search, filter: filter).first { $0.isDone }
+    }
+
+    func testTheCardsAreThoseTheFilterAndTheSearchLeaveFoldedOnesIncluded() {
+        let section = done()!
+        XCTAssertEqual(section.cards.count, 5, "five shown, one folded")
+        XCTAssertEqual(section.more, 1)
+        XCTAssertEqual(section.dismissAllCards?.map(\.id), ["D1", "E1", "E2", "E3", "E4", "E5"], "the folded one too, not muted E6")
+        XCTAssertEqual(section.detail, "6 PRs")
+        XCTAssertEqual(done(filter: mutedShown)?.dismissAllCards?.count, 7, "the Filter shows the muted one")
+        // The search leaves fewer cards than the heading counts.
+        let searched = done(search: "web#30")!
+        XCTAssertEqual(searched.dismissAllCards?.map(\.id), ["E1", "E2", "E3", "E4", "E5"])
+        XCTAssertEqual(searched.detail, "6 PRs", "the count ignores the search")
+        // `Unread only` keeping read cards: they are shown, so they are taken.
+        let kept = layout(.review, cards: doneCards(), filter: ListFilter(unreadOnly: true), kept: ["E2", "E3"]).first { $0.isDone }
+        XCTAssertEqual(kept?.dismissAllCards?.map(\.id), ["E2", "E3"])
+    }
+
+    /// Two or more cards: one card has its own ×, which does the same.
+    func testItShowsForTwoCardsOrMore() {
+        let one = sampleCards().filter { $0.id == "D1" }
+        let two = one + [card("E1", pr: "example-org/web#301", state: .merged, placement: review(.done, 1))]
+        XCTAssertNil(done(cards: one)?.dismissAllCards, "one card")
+        XCTAssertEqual(done(cards: two)?.dismissAllCards?.map(\.id), ["D1", "E1"], "two cards")
+        XCTAssertNil(done(search: "web#303")?.dismissAllCards, "the search leaves one")
+        XCTAssertNil(done(filter: ListFilter(statuses: [.closed]))?.dismissAllCards, "the Filter leaves none")
+        var closed = doneCards()
+        closed[closed.firstIndex { $0.id == "E1" }!].stateLabel = .known(.closed)
+        XCTAssertNil(done(cards: closed, filter: ListFilter(statuses: [.closed]))?.dismissAllCards, "the Filter leaves one")
+        // Folded cards count: five shown, one folded behind "+ 1 more PR".
+        let six = done()!
+        XCTAssertEqual(six.cards.count, 5)
+        XCTAssertEqual(six.dismissAllCards?.count, 6)
+    }
+
+    func testItShowsOnlyOnAnOpenDoneWithCards() {
+        XCTAssertNil(done(collapsed: ["review|done"])?.dismissAllCards, "collapsed")
+        XCTAssertNil(done(filter: ListFilter(statuses: [.open]))?.dismissAllCards, "the Filter leaves no card: an empty Done")
+        XCTAssertNotNil(done(filter: ListFilter(statuses: [.open])), "the empty Done still shows")
+        XCTAssertNil(done(search: "zzz"), "no match: no section")
+        let sections = layout(.review, cards: doneCards())
+        XCTAssertEqual(sections.map { $0.dismissAllCards != nil }, [false, false, false, true], "Done only")
+        XCTAssertNil(layout(.all, cards: doneCards()).first { $0.dismissAllCards != nil }, "not in All")
+        XCTAssertNil(done(.mine, cards: sampleCards())?.dismissAllCards, "Mine's Done with one card")
+        let m4 = card("M4", authored: true, state: .merged, placement: mine(.done, 1))
+        XCTAssertEqual(done(.mine, cards: sampleCards() + [m4])?.dismissAllCards?.map(\.id), ["M3", "M4"], "Mine's Done too")
+        XCTAssertEqual(done(expanded: ["review|done"])?.dismissAllCards?.count, 6, "expanded: the same cards")
+    }
+
+    func testTheConfirmationTexts() {
+        XCTAssertEqual(DismissedText.confirmAllTitle(count: 12), "Dismiss 12 pull requests?")
+        XCTAssertEqual(DismissedText.confirmAllTitle(count: 2), "Dismiss 2 pull requests?")
+        XCTAssertEqual(DismissedText.confirmAllText(keepDays: 7),
+                       "They move to the Dismissed list and are removed after 7 days. You can restore them from there.")
+        XCTAssertEqual(DismissedText.confirmAllText(keepDays: 1),
+                       "They move to the Dismissed list and are removed after 1 day. You can restore them from there.")
+        XCTAssertEqual(DismissConfirmation.all(section: "review|done", cards: ["a", "b"]).title, "Dismiss 2 pull requests?")
+        XCTAssertEqual(DismissConfirmation.card("a").title, "Dismiss this pull request?")
+        XCTAssertEqual(DismissConfirmation.card("a").text(keepDays: 7), DismissedText.confirmText(keepDays: 7))
+        XCTAssertEqual(DismissedText.dismissAll, "Dismiss all")
+        XCTAssertEqual(SettingsText.confirmDismissDetail, "Asks when you press × on a card or Dismiss all")
+    }
+}
+
+/// The Dismissed list by repository (DESIGN.md, "Dismissed list").
+final class DismissedGroupTests: XCTestCase {
+    func dismissed(_ id: String, _ pr: String, at: Int64) -> Card {
+        card(id, pr: pr, dismissedAt: at, expires: at + 7 * 86_400)
+    }
+
+    func testTheGroupsAndTheirOrder() {
+        let cards = [
+            dismissed("a1", "example-org/api#1", at: 100),
+            dismissed("w1", "example-org/web#1", at: 300),
+            dismissed("a2", "example-org/api#2", at: 200),
+            dismissed("i1", "acme-corp/infra#1", at: 50),
+            dismissed("w2", "example-org/web#2", at: 10),
+            card("open", pr: "example-org/api#9"),
+        ]
+        let groups = Listing.dismissedGroups(cards, search: "")
+        XCTAssertEqual(groups.map(\.repository), ["example-org/web", "example-org/api", "acme-corp/infra"], "by the newest dismissal in each")
+        XCTAssertEqual(groups.map(\.detail), ["2 PRs", "2 PRs", "1 PR"])
+        XCTAssertEqual(groups.map { $0.cards.map(\.id) }, [["w1", "w2"], ["a2", "a1"], ["i1"]], "newest first inside")
+    }
+
+    func testTheSameTimeGoesByNameIgnoringCase() {
+        let cards = [
+            dismissed("b", "Beta/app#1", at: 100),
+            dismissed("a", "alpha/app#1", at: 100),
+            dismissed("c", "charlie/app#1", at: 100),
+            dismissed("c2", "charlie/app#2", at: 100),
+            dismissed("c1", "charlie/app#3", at: 100),
+        ]
+        let groups = Listing.dismissedGroups(cards, search: "")
+        XCTAssertEqual(groups.map(\.repository), ["alpha/app", "Beta/app", "charlie/app"])
+        XCTAssertEqual(groups[2].cards.map(\.id), ["c", "c1", "c2"], "the same time: by id, as 0.5")
+    }
+
+    func testTheSearchLeavesOutGroupsButNotTheCountsNorTheOrder() {
+        let cards = [
+            dismissed("w1", "example-org/web#1", at: 300),
+            dismissed("a1", "example-org/api#1", at: 200),
+            dismissed("a2", "example-org/api#2", at: 100),
+        ]
+        var titled = cards
+        titled[2].title = "Fix the retry"
+        let groups = Listing.dismissedGroups(titled, search: "retry")
+        XCTAssertEqual(groups.map(\.repository), ["example-org/api"], "a group with no match is left out")
+        XCTAssertEqual(groups[0].detail, "2 PRs", "the count ignores the search")
+        XCTAssertEqual(groups[0].cards.map(\.id), ["a2"])
+        // The order comes from every card: a1 keeps api's place.
+        let both = Listing.dismissedGroups(titled, search: "example-org")
+        XCTAssertEqual(both.map(\.repository), ["example-org/web", "example-org/api"])
+        XCTAssertEqual(Listing.dismissedGroups([], search: ""), [])
+    }
+
+    /// ↑↓ go from card to card across the groups; the headings are not
+    /// items (DESIGN.md, "Selection and keys").
+    func testTheArrowsSkipTheHeadings() {
+        let cards = [
+            dismissed("w1", "example-org/web#1", at: 300),
+            dismissed("a1", "example-org/api#1", at: 200),
+            dismissed("w2", "example-org/web#2", at: 100),
+        ]
+        let items = PopoverLogic.items(view(nil, cards: cards))
+        XCTAssertEqual(items, [.header(card: "w1"), .header(card: "w2"), .header(card: "a1")])
+        XCTAssertEqual(PopoverLogic.move(.header(card: "w2"), up: false, in: items), .header(card: "a1"))
+        XCTAssertEqual(PopoverLogic.move(.header(card: "a1"), up: true, in: items), .header(card: "w2"))
     }
 }

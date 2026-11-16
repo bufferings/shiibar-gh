@@ -52,6 +52,12 @@ extension AccountColor {
         }
     }
 
+    /// Whether the account name has its dot before it (the popover's and
+    /// the window's header, the account list of Settings): every color but
+    /// None, which has neither the dot nor its room (DESIGN.md, "Account
+    /// color").
+    public var showsDot: Bool { self != .none }
+
     /// The dot before the account name: the color, or the text color.
     public var dotColor: Color {
         nsColor.map { Color(nsColor: $0) } ?? Palette.text.color

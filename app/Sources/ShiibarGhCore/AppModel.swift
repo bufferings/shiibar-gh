@@ -800,6 +800,23 @@ public final class AccountViewModel: ObservableObject {
 
     // MARK: Local operations
 
+    /// The last operation sent: the next one waits for it to be answered.
+    private var sending: Task<Void, Never>?
+
+    /// Sends an operation after the ones before it, so the daemon gets the
+    /// requests of the account in the order of the operations (DESIGN.md,
+    /// "Showing what an operation did"). Each request opens its own
+    /// connection: sent at once, a later one could reach the daemon first
+    /// and leave it in another state than the one shown. What shows is
+    /// changed at once, before this.
+    private func send(_ body: @escaping @MainActor () async -> Void) {
+        let previous = sending
+        sending = Task {
+            await previous?.value
+            await body()
+        }
+    }
+
     /// Show `change` at once and send `request`; a refusal (or no daemon)
     /// takes it back and shows the failure band (DESIGN.md, "Showing what
     /// an operation did").
@@ -811,7 +828,7 @@ public final class AccountViewModel: ObservableObject {
         recompute()
         surfacesKeepSelection()
         let api = app.api
-        Task {
+        send { [self] in
             do {
                 try await request(api)
                 if let index = pending.firstIndex(where: { $0.id == id }) { pending[index].dropAfter = listsStarted }
@@ -827,7 +844,7 @@ public final class AccountViewModel: ObservableObject {
 
     /// Several local operations of one action (a key, the multi-card menu
     /// or a drag of several selected cards): shown at once, sent one after another
-    /// in order; a refused one alone is taken back, and one failure band
+    /// in order, after the operations before them; a refused one alone is taken back, and one failure band
     /// shows for the action. `failed` gets the cards taken back.
     func runAll(_ items: [(card: String, change: LocalChange, request: (DaemonAPI) async throws -> Void)], failed: @escaping ([String]) -> Void) {
         guard !items.isEmpty else { return }
@@ -841,7 +858,7 @@ public final class AccountViewModel: ObservableObject {
         recompute()
         surfacesKeepSelection()
         let api = app.api
-        Task {
+        send { [self] in
             var refused: [String] = []
             var firstError: (OperationVerb, Error)?
             for (item, id) in zip(items, ids) {
