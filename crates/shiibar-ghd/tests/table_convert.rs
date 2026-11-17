@@ -888,7 +888,7 @@ fn conversation_comments_on_other_prs_are_comment_other() {
     pr.record("T_1", Some(T0), None);
     pr.timeline = vec![
         comment("C_1", user("alice"), T0 + 10, ""),
-        comment("C_2", bot("renovate"), T0 + 20, ""),
+        comment("C_2", bot("example-bot"), T0 + 20, ""),
         comment("C_3", user(ME), T0 + 30, ""),
         comment("C_4", user("bob"), T0 + 40, &mention_link(ME)),
         review("R_1", user("bob"), T0 + 50, "COMMENTED", "a review body"),
@@ -1439,4 +1439,22 @@ fn the_account_s_newest_submitted_review_and_the_created_time() {
     let pr = convert::pr_values(&node, &StatusExtra::default(), ctx(&t)).unwrap();
     assert_eq!(pr.created_at, T0 - 86_400);
     assert_eq!(pr.my_review_at, Some(T0 + 1));
+}
+
+#[test]
+fn an_addition_to_the_merge_queue_by_the_account_is_an_event_inside_the_window() {
+    // DESIGN.md, "Row kinds": ADDED_TO_MERGE_QUEUE_EVENT makes the row
+    // whoever acted, the account included. DESIGN.md, "Events before the
+    // watch started": the timeline is read from the window start (`since`),
+    // so an addition before it is not an event of this fetch.
+    let added = |id: &str, at: i64| json!({"__typename":"AddedToMergeQueueEvent","id":id,"createdAt":iso(at),"actor":{"login":ME}});
+    let mut pr = Pr::mine();
+    pr.timeline = vec![added("A_0", T0 - 10), added("A_1", T0 + 5)];
+    let out = pr.run();
+    let got: Vec<(&str, EventKind, Option<&str>)> = out
+        .events
+        .iter()
+        .map(|e| (e.id.as_str(), e.kind, e.actor.as_deref()))
+        .collect();
+    assert_eq!(got, [("A_1", EventKind::MergeQueueAdded, Some(ME))]);
 }

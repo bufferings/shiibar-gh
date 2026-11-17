@@ -1,6 +1,6 @@
 diff -ruN a/app/Sources/ShiibarGhApp/AppDelegate.swift b/app/Sources/ShiibarGhApp/AppDelegate.swift
---- a/app/Sources/ShiibarGhApp/AppDelegate.swift	2026-11-13 09:13:51
-+++ b/app/Sources/ShiibarGhApp/AppDelegate.swift	2026-11-14 02:00:01
+--- a/app/Sources/ShiibarGhApp/AppDelegate.swift
++++ b/app/Sources/ShiibarGhApp/AppDelegate.swift
 @@ -25,7 +25,14 @@
              about: { [weak self] in self?.about() },
              settings: { [weak self] in self?.showSettings(.general) }
@@ -68,8 +68,8 @@ diff -ruN a/app/Sources/ShiibarGhApp/AppDelegate.swift b/app/Sources/ShiibarGhAp
      private var didApplyLaunch = false
      private let keychainAlerts = KeychainAlerts()
 diff -ruN a/app/Sources/ShiibarGhApp/CardViews.swift b/app/Sources/ShiibarGhApp/CardViews.swift
---- a/app/Sources/ShiibarGhApp/CardViews.swift	2026-11-13 09:13:51
-+++ b/app/Sources/ShiibarGhApp/CardViews.swift	2026-11-14 02:00:01
+--- a/app/Sources/ShiibarGhApp/CardViews.swift
++++ b/app/Sources/ShiibarGhApp/CardViews.swift
 @@ -489,6 +489,7 @@
      @State private var width: CGFloat = 0
  
@@ -87,8 +87,8 @@ diff -ruN a/app/Sources/ShiibarGhApp/CardViews.swift b/app/Sources/ShiibarGhApp/
          let item = SelectionItem.row(id: row.id, card: card)
          let selected = model.selection == item
 diff -ruN a/app/Sources/ShiibarGhApp/Perf.swift b/app/Sources/ShiibarGhApp/Perf.swift
---- a/app/Sources/ShiibarGhApp/Perf.swift	1970-01-01 09:00:00
-+++ b/app/Sources/ShiibarGhApp/Perf.swift	2026-11-14 02:00:01
+--- a/app/Sources/ShiibarGhApp/Perf.swift
++++ b/app/Sources/ShiibarGhApp/Perf.swift
 @@ -0,0 +1,572 @@
 +// The measurement mode of docs/tasks/M7.md ("Speed of operation"). Chosen
 +// with `SHIIBAR_GH_PERF=1` or the launch argument `--perf`, and only with
@@ -663,8 +663,8 @@ diff -ruN a/app/Sources/ShiibarGhApp/Perf.swift b/app/Sources/ShiibarGhApp/Perf.
 +    }
 +}
 diff -ruN a/app/Sources/ShiibarGhApp/PerfSteps.swift b/app/Sources/ShiibarGhApp/PerfSteps.swift
---- a/app/Sources/ShiibarGhApp/PerfSteps.swift	1970-01-01 09:00:00
-+++ b/app/Sources/ShiibarGhApp/PerfSteps.swift	2026-11-14 02:00:01
+--- a/app/Sources/ShiibarGhApp/PerfSteps.swift
++++ b/app/Sources/ShiibarGhApp/PerfSteps.swift
 @@ -0,0 +1,8 @@
 +// The version-specific steps of the measurement mode (Perf.swift).
 +
@@ -675,8 +675,8 @@ diff -ruN a/app/Sources/ShiibarGhApp/PerfSteps.swift b/app/Sources/ShiibarGhApp/
 +    @MainActor static let current = PerfRunner.Steps()
 +}
 diff -ruN a/app/Sources/ShiibarGhApp/Surfaces.swift b/app/Sources/ShiibarGhApp/Surfaces.swift
---- a/app/Sources/ShiibarGhApp/Surfaces.swift	2026-11-13 09:13:51
-+++ b/app/Sources/ShiibarGhApp/Surfaces.swift	2026-11-14 02:00:01
+--- a/app/Sources/ShiibarGhApp/Surfaces.swift
++++ b/app/Sources/ShiibarGhApp/Surfaces.swift
 @@ -234,6 +234,11 @@
  
      // MARK: - Window
@@ -690,8 +690,8 @@ diff -ruN a/app/Sources/ShiibarGhApp/Surfaces.swift b/app/Sources/ShiibarGhApp/S
          popover.performClose(nil)
          if let panel = panels[account] {
 diff -ruN a/app/Sources/ShiibarGhCore/Services.swift b/app/Sources/ShiibarGhCore/Services.swift
---- a/app/Sources/ShiibarGhCore/Services.swift	2026-11-13 09:13:51
-+++ b/app/Sources/ShiibarGhCore/Services.swift	2026-11-14 02:00:01
+--- a/app/Sources/ShiibarGhCore/Services.swift
++++ b/app/Sources/ShiibarGhCore/Services.swift
 @@ -244,9 +244,16 @@
      private let loader: ImageLoading
      private let clock: () -> Date

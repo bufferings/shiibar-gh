@@ -410,16 +410,16 @@ enum Shapes {
         }
     }
 
-    /// The blue dot, the gray ring, or nothing (7k across).
+    /// The accent-colored dot, the gray ring, or nothing (7k across).
     static func dot(_ mark: UnreadMark, in rect: CGRect) {
         switch mark {
         case .blue:
-            Palette.blueDot.nsColor.setFill()
+            Palette.accent.nsColor.setFill()
             NSBezierPath(ovalIn: rect).fill()
         case .ring:
             let path = NSBezierPath(ovalIn: rect.insetBy(dx: 0.75, dy: 0.75))
             path.lineWidth = 1.5
-            Palette.mutedText.nsColor.setStroke()
+            Palette.secondary.nsColor.setStroke()
             path.stroke()
         case .none:
             break
@@ -444,9 +444,9 @@ enum Shapes {
             NSBezierPath(ovalIn: disc).fill()
             icon(BoardIcons.crossMark, in: box, color: Palette.onColor.nsColor)
         case .waiting:
-            icon(BoardIcons.statusClock, in: box, color: Palette.statusClock.nsColor)
+            icon(BoardIcons.statusClock, in: box, color: Palette.secondary.nsColor)
         case .empty:
-            icon(BoardIcons.statusNone, in: box, color: Palette.statusNone.nsColor)
+            icon(BoardIcons.statusNone, in: box, color: Palette.tertiary.nsColor)
         }
     }
 
@@ -472,7 +472,7 @@ struct StateStyle {
     static func of(_ label: Lenient<StateLabel>) -> StateStyle? {
         switch label.value {
         case .mergeable: return StateStyle(text: "Mergeable", background: Palette.green, foreground: Palette.onColor)
-        case .draft: return StateStyle(text: "Draft", background: Palette.tint, foreground: Palette.draftText)
+        case .draft: return StateStyle(text: "Draft", background: Palette.draftBackground, foreground: Palette.draftText)
         case .merged: return StateStyle(text: "Merged", background: Palette.purpleBackground, foreground: Palette.purpleText)
         case .closed: return StateStyle(text: "Closed", background: Palette.orangeIconBackground, foreground: Palette.orangeText)
         case .open, nil: return nil
@@ -486,9 +486,9 @@ struct StateStyle {
 /// `.op`), a status icon, a text button, the placement tag or Restore.
 final class ListButton: NSView {
     enum Look: Equatable {
-        case icon(BoardIcon, size: CGFloat, color: Shade)
+        case icon(BoardIcon, size: CGFloat, color: Tone)
         case status(StatusLook)
-        /// Plain text in the settings blue (`Show less`, `more`, `less`);
+        /// Plain text in the accent color (`Show less`, `more`, `less`);
         /// `marked`: on the yellow background of a search match (a `more`
         /// that hides a match of its row body).
         case text(String, size: CGFloat, marked: Bool = false)
@@ -656,7 +656,7 @@ final class ListButton: NSView {
     static func drawLook(_ look: Look, in bounds: CGRect, k: CGFloat, hovering: Bool = false, copied: Bool = false) {
         switch look {
         case .icon(let icon, let size, let color):
-            if hovering { Shapes.rounded(bounds, radius: 6, fill: Palette.tint.nsColor) }
+            if hovering { Shapes.rounded(bounds, radius: 6, fill: Palette.fill.nsColor) }
             let box = CGRect(x: bounds.midX - size / 2, y: bounds.midY - size / 2, width: size, height: size)
             if copied {
                 Shapes.icon(BoardIcons.copied, in: box, color: Palette.green.nsColor)
@@ -664,20 +664,21 @@ final class ListButton: NSView {
                 Shapes.icon(icon, in: box, color: color.nsColor)
             }
         case .status(let look):
-            if hovering { Shapes.rounded(bounds, radius: 6, fill: Palette.tint.nsColor) }
+            if hovering { Shapes.rounded(bounds, radius: 6, fill: Palette.fill.nsColor) }
             Shapes.status(look, in: bounds, k: k)
         case .text(let text, let size, let marked):
             let font = Ink.font(size)
             if marked { Ink.drawLineMatches(text, font, [0..<(text as NSString).length], in: bounds) }
-            Ink.drawLine(text, font, Palette.settingsTabSelected.nsColor, in: bounds)
+            Ink.drawLine(text, font, Palette.accent.nsColor, in: bounds)
         case .tag(let text):
             let capsule = bounds.insetBy(dx: 0.5, dy: 0.5)
-            Shapes.rounded(capsule, radius: capsule.height / 2, fill: Palette.tagBackground.nsColor, stroke: Palette.tagBorder.nsColor)
+            // A neutral chip: the placement is not a state or a mark.
+            Shapes.rounded(capsule, radius: capsule.height / 2, fill: Palette.band.nsColor)
             let font = Ink.font(10 * k, .semibold)
-            Ink.drawLine(text, font, Palette.tagText.nsColor, in: bounds.insetBy(dx: 6 * k, dy: 0))
+            Ink.drawLine(text, font, Palette.secondary.nsColor, in: bounds.insetBy(dx: 6 * k, dy: 0))
         case .restore:
             let box = bounds.insetBy(dx: 0.5, dy: 0.5)
-            Shapes.rounded(box, radius: 6, fill: Palette.surface.nsColor, stroke: Palette.controlBorder.nsColor)
+            Shapes.rounded(box, radius: 6, fill: Palette.surface.nsColor, stroke: Palette.border.nsColor)
             Ink.drawLine("Restore", Ink.font(11), Palette.text.nsColor, in: bounds.insetBy(dx: 8, dy: 0))
         }
     }
@@ -861,7 +862,7 @@ enum LineLayout {
         let leftHeight = max(tagSize?.height ?? 0, lh11)
         let room3 = right - left
         let fits = line3Fits(line, width: cellWidth, k: k, now: now)
-        let top3 = row2.maxY + 3 * k
+        let top3 = row2.maxY + 5 * k
         let line3: CGFloat
         let leftRow: CGRect
         let rightRow: CGRect
@@ -870,9 +871,9 @@ enum LineLayout {
             leftRow = CGRect(x: left, y: top3, width: room3, height: line3)
             rightRow = CGRect(x: left, y: top3, width: room3, height: line3)
         } else {
-            line3 = leftHeight + 2 + lh11
+            line3 = leftHeight + 4 * k + lh11
             leftRow = CGRect(x: left, y: top3, width: room3, height: leftHeight)
-            rightRow = CGRect(x: left, y: top3 + leftHeight + 2, width: room3, height: lh11)
+            rightRow = CGRect(x: left, y: top3 + leftHeight + 4 * k, width: room3, height: lh11)
         }
         var lx = leftRow.minX
         var tag: CGRect?
@@ -881,7 +882,7 @@ enum LineLayout {
             lx += tagSize.width + 6
         }
         let baseHead = CGRect(x: lx, y: center(lh11, in: leftRow), width: max(0, min(baseHeadWidth, leftRow.maxX - lx)), height: lh11)
-        let headerHeight = top3 + line3 + 5 * k
+        let headerHeight = top3 + line3 + 6 * k
         let header = CGRect(x: 0, y: 0, width: width, height: headerHeight)
 
         // Rows.
@@ -1021,12 +1022,12 @@ enum LineLayout {
         let avatar = CGRect(x: left, y: center(16 * k, in: row2), width: 16 * k, height: 16 * k)
         let title = CGRect(x: avatar.maxX + 6, y: center(lh12, in: row2), width: max(0, right - 6 - avatar.maxX - 6), height: lh12)
         let restoreSize = ListButton.restoreSize
-        let row3 = CGRect(x: 0, y: row2.maxY + 3 * k, width: width, height: max(lh11, restoreSize.height))
+        let row3 = CGRect(x: 0, y: row2.maxY + 5 * k, width: width, height: max(lh11, restoreSize.height))
         let restore = CGRect(x: right - restoreSize.width, y: center(restoreSize.height, in: row3), width: restoreSize.width, height: restoreSize.height)
         let daysWidth = Ink.width(DismissedText.daysLeft(card.dismissExpiresAt, now: now), f11)
         let daysLeft = CGRect(x: restore.minX - 8 - daysWidth, y: center(lh11, in: row3), width: daysWidth, height: lh11)
         return DismissedGeometry(
-            size: CGSize(width: width, height: row3.maxY + 5 * k), stateLabel: stateRect, prLabel: prLabel, chain: chain,
+            size: CGSize(width: width, height: row3.maxY + 6 * k), stateLabel: stateRect, prLabel: prLabel, chain: chain,
             avatar: avatar, title: title, daysLeft: daysLeft, restore: restore
         )
     }
@@ -1038,7 +1039,7 @@ enum LineLayout {
     static func heading(_ heading: HeadingLine, width: CGFloat, k: CGFloat) -> (frame: CGRect, height: CGFloat) {
         if heading.level == 1 {
             let inner = max(Ink.lineHeight(Ink.font(12 * k, .semibold)), Ink.lineHeight(Ink.font(11 * k)), 14 * k)
-            let band = CGRect(x: 12, y: 8, width: max(0, width - 24), height: 4 * k + inner + 4 * k)
+            let band = CGRect(x: 12, y: heading.gap, width: max(0, width - 24), height: 4 * k + inner + 4 * k)
             return (band, band.maxY + 6)
         }
         let inner = max(Ink.lineHeight(Ink.font(11 * k, .semibold)), Ink.lineHeight(Ink.font(11 * k)), 14 * k)
@@ -1146,13 +1147,41 @@ struct LineEnvironment {
     var now: Int64
     var autoDismissDays: Int64
     var context: CardContext
+    var look = ListLook()
+}
+
+/// What a line's colors depend on besides its appearance: the system
+/// colors (an accent color change resolves the same appearance to other
+/// colors) and whether the list has the keys (the selection's tint).
+struct ListLook: Equatable {
+    /// `SystemColors.epoch` when the line was configured.
+    var colors = 0
+    /// `SystemColors.accent` when the line was configured.
+    var accent: [CGFloat] = []
+    /// The list's window is key and the search field does not have the
+    /// keys: the selection is in the accent color, gray otherwise.
+    var selectionActive = true
 }
 
 /// The base of the line views: a press view (CardInput.swift) bound to one
 /// item state, drawn again when the state changes.
 class LineView: PressView {
     private(set) weak var state: ItemState?
-    var env: LineEnvironment?
+    var env: LineEnvironment? {
+        didSet {
+            // A cached image of the old colors goes, with the controls'.
+            if env?.look != oldValue?.look {
+                needsDisplay = true
+                for control in controls.values { control.needsDisplay = true }
+            }
+        }
+    }
+
+    /// The fill of a selected item: the accent tint while the list has the
+    /// keys, a neutral gray otherwise (DESIGN.md, "Colors").
+    var selectionFill: NSColor {
+        env?.look.selectionActive ?? true ? Palette.selection.nsColor : Palette.inactiveSelection.nsColor
+    }
     /// The control views, by their control id.
     private var controls: [String: ListButton] = [:]
     private var used: Set<String> = []
@@ -1178,7 +1207,7 @@ class LineView: PressView {
     /// missed the changes made while the table reuses a line, outside the
     /// window: a heading configured from Todo to Waiting there recorded no
     /// `needsDisplay`, and its Todo image was kept (the measurement mode's
-    /// trace; the owner saw cards of another repository under a heading).
+    /// trace; cards of another repository appeared under a heading).
     private(set) var drawnKey: DrawKey?
 
     /// What the drawing of this line reads, besides the item state, the
@@ -1192,6 +1221,7 @@ class LineView: PressView {
         var size: CGSize
         var scale: CGFloat
         var appearance: String
+        var look: ListLook?
         var idleControls: [ControlLook]
     }
 
@@ -1205,6 +1235,7 @@ class LineView: PressView {
         DrawKey(
             content: drawInputs(), state: snapshot, size: bounds.size, scale: window?.backingScaleFactor ?? 0,
             appearance: effectiveAppearance.name.rawValue,
+            look: env?.look,
             idleControls: controls.sorted { $0.key < $1.key }.compactMap { _, button in
                 !button.isHidden && button.lineDrawsIdle && !button.isActive ? ControlLook(look: button.look, frame: button.frame) : nil
             }
@@ -1410,7 +1441,10 @@ class LineView: PressView {
 }
 
 /// A section heading: a band (Main.html `.band`) or a small indented
-/// heading (`.grp2`). Pressing it folds the section.
+/// heading (`.grp2`). Pressing it folds the section. The Done of Review and
+/// Mine has `Dismiss all` between the count and the chevron. A repository
+/// of the Dismissed list is a band without the chevron, which a press does
+/// nothing to.
 final class HeadingLineView: LineView {
     var heading: HeadingLine?
 
@@ -1427,13 +1461,13 @@ final class HeadingLineView: LineView {
         let changed = self.heading != heading
         self.heading = heading
         self.env = env
-        kind = .heading(heading.key)
+        kind = heading.folds ? .heading(heading.key) : .label(heading.key)
         context = env.context
         bind(state)
         setAccessibilityElement(true)
-        setAccessibilityRole(.button)
+        setAccessibilityRole(heading.folds ? .button : .staticText)
         setAccessibilityLabel("\(heading.title), \(heading.detail)")
-        setAccessibilityValue(heading.collapsed ? "Collapsed" : "Expanded")
+        setAccessibilityValue(heading.folds ? (heading.collapsed ? "Collapsed" : "Expanded") : nil)
         layoutControls()
         if changed { needsDisplay = true }
     }
@@ -1445,10 +1479,11 @@ final class HeadingLineView: LineView {
     }
 
     private struct Parts {
-        var chevron: CGRect
+        var chevron: CGRect?
         var title: CGRect
         var showLess: CGRect?
         var detail: CGRect
+        var dismissAll: CGRect?
     }
 
     private func parts() -> Parts? {
@@ -1464,8 +1499,22 @@ final class HeadingLineView: LineView {
         let detailWidth = Ink.width(heading.detail, detailFont)
         let lessSize = heading.showLess ? ListButton.textSize("Show less", size: 11 * k) : nil
         if level1 {
-            let chevron = CGRect(x: right - chevronSize, y: LineLayout.center(chevronSize, in: line), width: chevronSize, height: chevronSize)
-            let detail = CGRect(x: chevron.minX - spacing - detailWidth, y: LineLayout.center(Ink.lineHeight(detailFont), in: line), width: detailWidth, height: Ink.lineHeight(detailFont))
+            // From the right: the chevron, `Dismiss all`, the count
+            // (DESIGN.md, "Section size").
+            var end = right
+            var chevron: CGRect?
+            if heading.folds {
+                chevron = CGRect(x: right - chevronSize, y: LineLayout.center(chevronSize, in: line), width: chevronSize, height: chevronSize)
+                end = chevron!.minX - spacing
+            }
+            var dismissAll: CGRect?
+            if heading.dismissAll {
+                // The board's `.dall`: 2 points of room on either side.
+                let size = ListButton.textSize(DismissedText.dismissAll, size: 11 * k)
+                dismissAll = CGRect(x: end - 2 - size.width, y: LineLayout.center(size.height, in: line), width: size.width, height: size.height)
+                end = dismissAll!.minX - 2 - spacing
+            }
+            let detail = CGRect(x: end - detailWidth, y: LineLayout.center(Ink.lineHeight(detailFont), in: line), width: detailWidth, height: Ink.lineHeight(detailFont))
             var titleRight = detail.minX - spacing
             var less: CGRect?
             if let lessSize {
@@ -1473,7 +1522,7 @@ final class HeadingLineView: LineView {
                 titleRight = less!.minX - spacing
             }
             let title = CGRect(x: left, y: LineLayout.center(Ink.lineHeight(titleFont), in: line), width: max(0, titleRight - left), height: Ink.lineHeight(titleFont))
-            return Parts(chevron: chevron, title: title, showLess: less, detail: detail)
+            return Parts(chevron: chevron, title: title, showLess: less, detail: detail, dismissAll: dismissAll)
         }
         let chevron = CGRect(x: left, y: LineLayout.center(chevronSize, in: line), width: chevronSize, height: chevronSize)
         let detail = CGRect(x: right - detailWidth, y: LineLayout.center(Ink.lineHeight(detailFont), in: line), width: detailWidth, height: Ink.lineHeight(detailFont))
@@ -1490,10 +1539,18 @@ final class HeadingLineView: LineView {
 
     private func layoutControls() {
         beginControls()
-        if let heading, let less = parts()?.showLess {
+        if let heading, let parts = parts() {
             let key = heading.key
-            control("show-less", .text("Show less", size: 11 * k), frame: less, help: nil, label: "Show less") { [weak self] in
-                self?.context?.list.perform(.toggleMore(key))
+            if let less = parts.showLess {
+                control("show-less", .text("Show less", size: 11 * k), frame: less, help: nil, label: "Show less") { [weak self] in
+                    self?.context?.list.perform(.toggleMore(key))
+                }
+            }
+            if let frame = parts.dismissAll {
+                control("dismiss-all", .text(DismissedText.dismissAll, size: 11 * k), frame: frame, help: nil, label: DismissedText.dismissAll) {
+                    [weak self] in
+                    self?.context?.list.perform(.dismissAll(section: key))
+                }
             }
         }
         endControls()
@@ -1508,18 +1565,21 @@ final class HeadingLineView: LineView {
         guard let heading, let parts = parts() else { return }
         let state = snapshot
         let highlighted = state.selected != nil || state.over
+        // A drop target takes the accent tint whatever has the keys.
+        let highlight = state.over ? Palette.selection.nsColor : selectionFill
         if heading.level == 1 {
-            Shapes.rounded(bounds, radius: 6, fill: highlighted ? Palette.selection.nsColor : Palette.band.nsColor)
-            if state.over { Shapes.rounded(bounds.insetBy(dx: 1, dy: 1), radius: 6, stroke: Palette.blueDot.nsColor, lineWidth: 2) }
+            Shapes.rounded(bounds, radius: 6, fill: highlighted ? highlight : Palette.band.nsColor)
+            if state.over { Shapes.rounded(bounds.insetBy(dx: 1, dy: 1), radius: 6, stroke: Palette.accent.nsColor, lineWidth: 2) }
             Ink.draw(heading.title, Ink.font(12 * k, .semibold), heading.collapsed ? Palette.secondary.nsColor : Palette.text.nsColor, in: parts.title)
             Ink.draw(heading.detail, Ink.font(11 * k), Palette.secondary.nsColor, in: parts.detail)
         } else {
-            if highlighted { Shapes.rounded(bounds, radius: 6, fill: Palette.selection.nsColor) }
-            Ink.draw(heading.title, Ink.font(11 * k, .semibold), Palette.strongText.nsColor, in: parts.title)
-            Ink.draw(heading.detail, Ink.font(11 * k), Palette.waiting.nsColor, in: parts.detail)
+            if highlighted { Shapes.rounded(bounds, radius: 6, fill: highlight) }
+            Ink.draw(heading.title, Ink.font(11 * k, .semibold), Palette.text.nsColor, in: parts.title)
+            Ink.draw(heading.detail, Ink.font(11 * k), Palette.secondary.nsColor, in: parts.detail)
         }
-        let icon = CGRect(x: parts.chevron.midX - 6 * k, y: parts.chevron.midY - 6 * k, width: 12 * k, height: 12 * k)
-        Shapes.icon(chevronIcon, in: icon, color: Palette.faded.nsColor)
+        guard let chevron = parts.chevron else { return }
+        let icon = CGRect(x: chevron.midX - 6 * k, y: chevron.midY - 6 * k, width: 12 * k, height: 12 * k)
+        Shapes.icon(chevronIcon, in: icon, color: Palette.secondary.nsColor)
     }
 }
 
@@ -1551,7 +1611,7 @@ final class FoldLineView: LineView {
     override func draw(_ dirtyRect: NSRect) {
         guard let fold else { return }
         let k = env?.k ?? 1
-        if snapshot.selected != nil { Shapes.rounded(bounds, radius: 6, fill: Palette.selection.nsColor) }
+        if snapshot.selected != nil { Shapes.rounded(bounds, radius: 6, fill: selectionFill) }
         let line = CGRect(x: 0, y: 2 * k, width: bounds.width, height: bounds.height - 4 * k)
         Shapes.dot(fold.mark, in: CGRect(x: 16, y: LineLayout.center(7 * k, in: line), width: 7 * k, height: 7 * k))
         let x = 16 + 7 * k + 8
@@ -1580,11 +1640,11 @@ final class EmptyLineView: LineView {
         let box = bounds
         if over { Shapes.rounded(box, radius: 10, fill: Palette.selection.nsColor) }
         Shapes.rounded(
-            box, radius: 10, stroke: over ? Palette.blueDot.nsColor : Palette.border.nsColor, lineWidth: over ? 2 : 1, inset: true, dash: [4, 3]
+            box, radius: 10, stroke: over ? Palette.accent.nsColor : Palette.border.nsColor, lineWidth: over ? 2 : 1, inset: true, dash: [4, 3]
         )
         let font = Ink.font(11 * k)
         let width = Ink.width("No pull requests", font)
-        Ink.drawLine("No pull requests", font, Palette.faded.nsColor, in: CGRect(x: box.midX - width / 2, y: box.minY, width: width + 1, height: box.height))
+        Ink.drawLine("No pull requests", font, Palette.secondary.nsColor, in: CGRect(x: box.midX - width / 2, y: box.minY, width: width + 1, height: box.height))
     }
 }
 
@@ -1683,7 +1743,7 @@ final class CardLineView: LineView {
             }
         }
         chainControl("chain", url: card.url, frame: geometry.chain)
-        control("dismiss", .icon(BoardIcons.dismiss, size: 12 * k, color: Palette.faded), frame: geometry.dismiss, help: "Dismiss", label: "Dismiss") { [weak list] in
+        control("dismiss", .icon(BoardIcons.dismiss, size: 12 * k, color: Palette.secondary), frame: geometry.dismiss, help: "Dismiss", label: "Dismiss") { [weak list] in
             list?.perform(.confirmDismiss(card: id))
         }
         if let tag = geometry.tag, let text = card.placementTag {
@@ -1785,7 +1845,7 @@ final class CardLineView: LineView {
 
     private func chainControl(_ id: String, url: String, frame: CGRect) {
         let list = env?.context.list
-        let button = control(id, .icon(BoardIcons.link, size: 12 * k, color: Palette.faded), frame: frame, help: "Copy link", label: "Copy link") {}
+        let button = control(id, .icon(BoardIcons.link, size: 12 * k, color: Palette.secondary), frame: frame, help: "Copy link", label: "Copy link") {}
         button.action = { [weak list, weak button] in
             list?.perform(.copyLink(url))
             button?.showCopied()
@@ -1868,7 +1928,7 @@ final class CardLineView: LineView {
         bounds.intersection(dirty).fill()
         // The selected heading, or one of several selected cards.
         if state.selected == .header(card: card.id) || state.marked {
-            Palette.selection.nsColor.setFill()
+            selectionFill.setFill()
             geometry.header.intersection(dirty).fill()
         }
         if geometry.header.intersects(dirty) {
@@ -1885,34 +1945,34 @@ final class CardLineView: LineView {
             let p = RowPresentation(row, now: now, cardMuted: muted, expanded: line.expandedBodies.contains(row.id))
             // The card is filled with the surface color already.
             if state.selected == .row(id: row.id, card: card.id) {
-                Palette.selection.nsColor.setFill()
+                selectionFill.setFill()
                 frame.frame.fill()
             }
-            Palette.rowDivider.nsColor.setFill()
+            Palette.border.nsColor.setFill()
             CGRect(x: frame.frame.minX, y: frame.frame.minY, width: frame.frame.width, height: 1).fill()
             Shapes.dot(p.mark, in: frame.dot)
-            Shapes.icon(BoardIcons.row(row.kind), in: frame.icon, color: p.gray ? Palette.mutedIcon.nsColor : Palette.botIcon.nsColor)
-            Ink.drawLine(p.label, f11b, p.gray ? Palette.mutedText.nsColor : Palette.strongText.nsColor, in: frame.label)
+            Shapes.icon(BoardIcons.row(row.kind), in: frame.icon, color: p.gray ? Palette.tertiary.nsColor : Palette.secondary.nsColor)
+            Ink.drawLine(p.label, f11b, p.gray ? Palette.secondary.nsColor : Palette.text.nsColor, in: frame.label)
             if let counts = p.counts, let rect = frame.counts {
                 Ink.drawLine(counts, f12, Palette.text.nsColor, in: rect)
             }
             let found = matches?.rows[row.id]
             if let found { Ink.drawLineMatches(p.meta, f11, found.meta, in: frame.meta) }
-            Ink.drawLine(p.meta, f11, p.gray ? Palette.mutedText.nsColor : Palette.secondary.nsColor, in: frame.meta)
+            Ink.drawLine(p.meta, f11, p.gray ? Palette.secondary.nsColor : Palette.secondary.nsColor, in: frame.meta)
             if let body = p.body, let rect = frame.body, frame.bodyLines > 0 {
                 if let found {
                     Ink.drawMatches(body, f12, found.body.found, in: rect, lines: frame.bodyLines)
                     if found.body.ellipsis { Ink.drawEllipsisMark(body, f12, in: rect, lines: frame.bodyLines) }
                 }
-                Ink.draw(body, f12, p.gray ? Palette.mutedText.nsColor : Palette.text.nsColor, in: rect, lines: frame.bodyLines)
+                Ink.draw(body, f12, p.gray ? Palette.secondary.nsColor : Palette.text.nsColor, in: rect, lines: frame.bodyLines)
             }
         }
         for foot in geometry.feet where foot.frame.intersects(dirty) {
             if state.selected == foot.item {
-                Palette.selection.nsColor.setFill()
+                selectionFill.setFill()
                 foot.frame.fill()
             }
-            Palette.rowDivider.nsColor.setFill()
+            Palette.border.nsColor.setFill()
             CGRect(x: foot.frame.minX, y: foot.frame.minY, width: foot.frame.width, height: 1).fill()
             let line = CGRect(x: 0, y: foot.frame.minY + 4 * k, width: foot.frame.width, height: foot.frame.height - 9 * k)
             Shapes.dot(foot.mark, in: CGRect(x: 14, y: LineLayout.center(7 * k, in: line), width: 7 * k, height: 7 * k))
@@ -1940,13 +2000,13 @@ final class CardLineView: LineView {
         }
         let f11 = Ink.font(11 * k)
         if let matches { Ink.drawMarks(Warnings.prLabel(card.pr), f11, matches.prLabel, in: geometry.prLabel) }
-        Ink.draw(Warnings.prLabel(card.pr), f11, muted ? Palette.mutedText.nsColor : Palette.secondary.nsColor, in: geometry.prLabel)
+        Ink.draw(Warnings.prLabel(card.pr), f11, muted ? Palette.secondary.nsColor : Palette.secondary.nsColor, in: geometry.prLabel)
         for (text, rect, filled) in geometry.marks {
             if filled {
                 Shapes.rounded(rect, radius: 4, fill: Palette.reviewMark.nsColor)
                 Ink.drawLine(text, Ink.font(10 * k, .bold), Palette.orangeText.nsColor, in: rect.insetBy(dx: 6 * k, dy: 0))
             } else {
-                Shapes.rounded(rect.insetBy(dx: 0.5, dy: 0.5), radius: 4, stroke: Palette.markBorder.nsColor)
+                Shapes.rounded(rect.insetBy(dx: 0.5, dy: 0.5), radius: 4, stroke: Palette.tertiary.nsColor)
                 Ink.drawLine(text, Ink.font(10 * k, .semibold), Palette.secondary.nsColor, in: rect.insetBy(dx: 5 * k, dy: 0))
             }
         }
@@ -1955,20 +2015,20 @@ final class CardLineView: LineView {
         drawAvatar(card, in: geometry.avatar, muted: muted)
         let titleFont = Ink.font(12 * k, muted ? .regular : .semibold)
         if let matches { Ink.drawMarks(card.title, titleFont, matches.title, in: geometry.title) }
-        Ink.draw(card.title, titleFont, muted ? Palette.mutedTitle.nsColor : Palette.text.nsColor, in: geometry.title)
+        Ink.draw(card.title, titleFont, muted ? Palette.secondary.nsColor : Palette.text.nsColor, in: geometry.title)
 
         // Line 3.
         let baseHead = "\(card.base) \u{2190} \(card.head)"
         if let matches { Ink.drawMarks(baseHead, f11, matches.baseHead, in: geometry.baseHead) }
-        Ink.draw(baseHead, f11, muted ? Palette.mutedText.nsColor : Palette.secondary.nsColor, in: geometry.baseHead)
+        Ink.draw(baseHead, f11, muted ? Palette.secondary.nsColor : Palette.secondary.nsColor, in: geometry.baseHead)
         let parts = geometry.timeParts(card, k: k, now: now)
         if let rect = parts.dismissedIn, let text = DismissedText.dismissedIn(card.autoDismissAt, now: now) {
-            Ink.draw(text, f11, Palette.faded.nsColor, in: rect)
+            Ink.draw(text, f11, Palette.secondary.nsColor, in: rect)
         }
         let times = CardText.times(card, now: now)
         let timesRect = parts.times.insetBy(dx: -1, dy: 0)
         if let matches { Ink.drawMatches(times, f11, matches.author, in: timesRect) }
-        Ink.draw(times, f11, muted ? Palette.mutedText.nsColor : Palette.waiting.nsColor, in: timesRect)
+        Ink.draw(times, f11, muted ? Palette.secondary.nsColor : Palette.secondary.nsColor, in: timesRect)
     }
 
     private func drawAvatar(_ card: Card, in rect: CGRect, muted: Bool) {
@@ -1979,10 +2039,10 @@ final class CardLineView: LineView {
             image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: muted ? 0.6 : 1, respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high.rawValue])
             NSGraphicsContext.restoreGraphicsState()
         } else {
-            Palette.avatarFill.nsColor.setFill()
+            Palette.quaternary.nsColor.setFill()
             NSBezierPath(ovalIn: rect).fill()
             let ring = NSBezierPath(ovalIn: rect.insetBy(dx: 0.5, dy: 0.5))
-            Palette.avatarBorder.nsColor.setStroke()
+            Palette.border.nsColor.setStroke()
             ring.stroke()
         }
     }
@@ -1992,7 +2052,7 @@ final class CardLineView: LineView {
 /// #number, the chain icon; the avatar and the title; the days left and
 /// Restore. No rows, no status icons, no ×.
 final class DismissedLineView: LineView {
-    private var card: Card?
+    private(set) var card: Card?
     private var search: [String] = []
     private var geometry: DismissedGeometry?
 
@@ -2040,7 +2100,7 @@ final class DismissedLineView: LineView {
         let k = env.k
         regions.items = [:]
         beginControls()
-        let chain = control("chain", .icon(BoardIcons.link, size: 12 * k, color: Palette.faded), frame: geometry.chain, help: "Copy link", label: "Copy link") {}
+        let chain = control("chain", .icon(BoardIcons.link, size: 12 * k, color: Palette.secondary), frame: geometry.chain, help: "Copy link", label: "Copy link") {}
         let url = card.url
         chain.action = { [weak list, weak chain] in
             list?.perform(.copyLink(url))
@@ -2067,8 +2127,12 @@ final class DismissedLineView: LineView {
     override func draw(_ dirtyRect: NSRect) {
         guard let card, let geometry, let env else { return }
         let k = env.k
-        (snapshot.selected != nil ? Palette.selection.nsColor : Palette.surface.nsColor).setFill()
+        Palette.surface.nsColor.setFill()
         bounds.fill()
+        if snapshot.selected != nil {
+            selectionFill.setFill()
+            bounds.fill()
+        }
         if let rect = geometry.stateLabel, let style = StateStyle.of(card.stateLabel) {
             Shapes.rounded(rect, radius: 4, fill: style.background.nsColor)
             Ink.drawLine(style.text, Ink.font(10 * k, .semibold), style.foreground.nsColor, in: rect.insetBy(dx: 6 * k, dy: 0))
@@ -2086,7 +2150,7 @@ final class DismissedLineView: LineView {
             image.draw(in: geometry.avatar, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
             NSGraphicsContext.restoreGraphicsState()
         } else {
-            Palette.avatarFill.nsColor.setFill()
+            Palette.quaternary.nsColor.setFill()
             NSBezierPath(ovalIn: geometry.avatar).fill()
         }
         if !search.isEmpty {
@@ -2118,7 +2182,7 @@ final class MessageLineView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let font = Ink.font(12 * k)
         let lines = Ink.lines(text, font, width: max(1, bounds.width - 24))
-        Ink.draw(text, font, Palette.faded.nsColor, in: CGRect(x: 12, y: 18 * k, width: max(0, bounds.width - 24), height: 0), lines: lines, center: true)
+        Ink.draw(text, font, Palette.secondary.nsColor, in: CGRect(x: 12, y: 18 * k, width: max(0, bounds.width - 24), height: 0), lines: lines, center: true)
     }
 }
 

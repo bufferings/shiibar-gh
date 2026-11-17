@@ -112,15 +112,18 @@ final class MultiRulesTests: XCTestCase {
                        ["Move to Doing", "Move to Todo", "Move to Waiting", "Move to Done", "Remove from Review", "Dismiss"])
         XCTAssertEqual(titles(.review, ["T1", "T2"]), ["Move to Doing", "Move to Waiting", "Move to Done", "Remove from Review", "Dismiss"],
                        "not to the section all of them are in")
-        XCTAssertEqual(titles(.mine, ["M1", "M2"]), ["Move to Done", "Remove from Mine", "Dismiss"])
-        XCTAssertEqual(titles(.mine, ["M1"]), ["Move to Done", "Dismiss"], "your own PR stays in Mine")
+        XCTAssertEqual(titles(.mine, ["M1", "M2"]), ["Move to Doing", "Move to Waiting", "Move to Done", "Remove from Mine", "Dismiss"],
+                       "Mine as Review")
+        XCTAssertEqual(titles(.mine, ["M1", "M3"]),
+                       ["Move to Doing", "Move to Todo", "Move to Waiting", "Move to Done", "Dismiss"], "your own PRs stay in Mine")
     }
 
     func testCardsAnOperationCannotTakeAreSkipped() {
         let add = MultiRules.plan(.add(.review(.todo)), cards: cards(["N1", "M1", "T1"]))
         XCTAssertEqual(add.moves.map(\.card), ["N1"])
         XCTAssertEqual(add.skipped, ["M1", "T1"], "your own PR, a placed card")
-        let mine = MultiRules.plan(.add(.mine), cards: cards(["N1", "M1"]))
+        let mine = MultiRules.plan(.add(.mine(.todo)), cards: cards(["N1", "M1"]))
+        XCTAssertEqual(mine.moves.first?.target, .mine(.todo), "Add to Mine: Todo")
         XCTAssertEqual(mine.moves.map(\.card), ["N1"])
         XCTAssertEqual(mine.skipped, ["M1"])
         let remove = MultiRules.plan(.remove, cards: cards(["M1", "M2"]))
@@ -144,9 +147,24 @@ final class MultiRulesTests: XCTestCase {
                        ["R1", "W1", "T1", "T2", "T3", "T4", "T5", "D1"])
         let done = MultiRules.plan(.move(.review(.done)), cards: cards(["T1", "T2", "T3"]))
         XCTAssertEqual(done.moves.map(\.card), ["T3", "T2", "T1"], "into Done the last first: the first shown is the newest")
-        let mine = MultiRules.plan(.move(.mineDone), cards: cards(["M1", "M2", "T1"]))
+        let mine = MultiRules.plan(.move(.mine(.done)), cards: cards(["M1", "M2", "T1"]))
         XCTAssertEqual(mine.moves.map(\.card), ["M2", "M1"])
         XCTAssertEqual(mine.skipped, ["T1"], "not in Mine")
+        // Mine's Todo: from its Doing and Waiting at the top, from Done at
+        // the bottom, as Review's.
+        var more = cards
+        more.append(card("MD", authored: true, placement: Placement(tab: .mine, section: .doing)))
+        more.append(card("MW", authored: true, placement: Placement(tab: .mine, section: .waiting)))
+        let pick = { (ids: [String]) in ids.compactMap { id in more.first { $0.id == id } } }
+        let todo = MultiRules.plan(.move(.mine(.todo)), cards: pick(["MD", "M1", "MW", "M3"]))
+        XCTAssertEqual(todo.moves, [
+            PlaceMove(card: "MW", target: .mine(.todo), position: .top, verb: .move),
+            PlaceMove(card: "MD", target: .mine(.todo), position: .top, verb: .move),
+            PlaceMove(card: "M3", target: .mine(.todo), position: .bottom, verb: .move),
+        ])
+        XCTAssertEqual(todo.unchanged, ["M1"])
+        let afterTodo = todo.moves.reduce(more) { LocalChange.place($1, $0) }
+        XCTAssertEqual(Listing.ranked(afterTodo.filter { $0.sectionKey == "mine|todo" }).map(\.id), ["MD", "MW", "M1", "M2", "M3"])
     }
 
     func testADropOnAMovingCardMovesOnToTheNextThatStays() {
@@ -363,7 +381,7 @@ final class SelectedCardsTests: XCTestCase {
         list.click(card: "T2", extent: .toggle)
         list.perform(.dismiss(card: "T1"))
         XCTAssertEqual(list.selectedCards.cards, ["T2"], "dismissed")
-        list.perform(.place(PlaceMove(card: "T2", target: .mine, position: .byDefault, verb: .move)))
+        list.perform(.place(PlaceMove(card: "T2", target: .mine(.todo), position: .byDefault, verb: .move)))
         XCTAssertFalse(list.selectedCards.contains("T2"), "moved to another tab")
     }
 
@@ -417,29 +435,83 @@ final class SelectedCardsTests: XCTestCase {
         XCTAssertEqual(list.sections.first { $0.key == "review|todo" }?.more, 2)
     }
 
-    // Mine has no heading over its first list: the upper half of its first
-    // card is the top (DESIGN.md, "What a press does").
+    /// Mine has Review's sections: the upper half of Todo's first card is
+    /// its top (DESIGN.md, "What a press does").
     func testADropOnTheUpperHalfOfMinesFirstCardGoesToTheTop() async {
         let list = await loaded(.mine)
-        XCTAssertEqual(list.sections.first?.showsHeader, false)
-        XCTAssertEqual(list.sections.first?.cards.map(\.id), ["M1", "M2"])
+        XCTAssertEqual(list.sections.map(\.key), ["mine|doing", "mine|todo", "mine|waiting", "mine|done"])
+        XCTAssertEqual(list.sections[1].cards.map(\.id), ["M1", "M2"])
         list.beginDrag("M2")
-        XCTAssertEqual(list.dragOver(.card("M1", lowerHalf: false)), DropTarget(section: "mine|main", position: .top))
+        XCTAssertEqual(list.dragOver(.card("M1", lowerHalf: false)), DropTarget(section: "mine|todo", position: .top))
         XCTAssertTrue(list.drop(.card("M1", lowerHalf: false)))
-        XCTAssertEqual(list.sections.first?.cards.map(\.id), ["M2", "M1"], "shown at once")
+        XCTAssertEqual(list.sections[1].cards.map(\.id), ["M2", "M1"], "shown at once")
         await settle()
         await settle()
-        XCTAssertEqual(calls("place"), ["place bufferings-work acme-corp/web#77 mine top"])
+        XCTAssertEqual(calls("place"), ["place bufferings-work acme-corp/web#77 mine todo top"])
+    }
+
+    /// A drop on an empty section of Mine (its frame or its heading).
+    func testADropOnAnEmptySectionOfMine() async {
+        let list = await loaded(.mine)
+        list.beginDrag("M2")
+        XCTAssertEqual(list.dragOver(.header("mine|doing")), DropTarget(section: "mine|doing", position: .top))
+        XCTAssertTrue(list.drop(.header("mine|doing")))
+        XCTAssertEqual(list.sections[0].cards.map(\.id), ["M2"], "shown at once")
+        await settle()
+        await settle()
+        XCTAssertEqual(calls("place"), ["place bufferings-work acme-corp/web#77 mine doing top"])
+        api.clearCalls()
+        list.beginDrag("M1")
+        XCTAssertTrue(list.drop(.header("mine|done")))
+        await settle()
+        await settle()
+        XCTAssertEqual(calls("place"), ["place bufferings-work example-org/api#421 mine done"])
     }
 
     func testOptionUpMovesToTheTopOfMine() async {
         let list = await loaded(.mine)
         list.select(.header(card: "M2"))
         list.press(.reorder(up: true))
-        XCTAssertEqual(list.sections.first?.cards.map(\.id), ["M2", "M1"])
+        XCTAssertEqual(list.sections[1].cards.map(\.id), ["M2", "M1"])
         await settle()
         await settle()
-        XCTAssertEqual(calls("place"), ["place bufferings-work acme-corp/web#77 mine top"])
+        XCTAssertEqual(calls("place"), ["place bufferings-work acme-corp/web#77 mine todo top"])
+    }
+
+    /// D / T / W move the selected card in Mine as in Review; in All they
+    /// do nothing (DESIGN.md, "Keyboard").
+    func testDTWMoveInMineAndDoNothingInAll() async {
+        let list = await loaded(.mine)
+        list.select(.header(card: "M2"))
+        list.press(.moveTo(.doing))
+        XCTAssertEqual(list.sections[0].cards.map(\.id), ["M2"])
+        XCTAssertEqual(list.selection, .header(card: "M2"), "the moved card stays selected")
+        list.press(.moveTo(.todo))
+        XCTAssertEqual(list.sections[1].cards.map(\.id), ["M2", "M1"], "from Doing: the top of Todo")
+        await settle()
+        await settle()
+        XCTAssertEqual(calls("place"), ["place bufferings-work acme-corp/web#77 mine doing", "place bufferings-work acme-corp/web#77 mine todo"])
+        // Several cards (the fake daemon kept them in Todo).
+        api.clearCalls()
+        list.select(.header(card: "M2"))
+        list.click(card: "M1", extent: .toggle)
+        list.press(.moveTo(.waiting))
+        XCTAssertEqual(list.sections[2].cards.map(\.id), ["M1", "M2"], "in the order shown")
+        await settle()
+        await settle()
+        XCTAssertEqual(calls("place").count, 2)
+        XCTAssertTrue(calls("place").allSatisfy { $0.hasSuffix("mine waiting bottom") }, "\(calls("place"))")
+        // All: nothing.
+        api.clearCalls()
+        list.openTab(.all)
+        list.select(.header(card: "M1"))
+        list.press(.moveTo(.doing))
+        list.select(.header(card: "T1"))
+        list.click(card: "M2", extent: .toggle)
+        list.press(.moveTo(.doing))
+        await settle()
+        await settle()
+        XCTAssertEqual(calls("place"), [], "D / T / W do nothing in All")
     }
 
     func testSelectedCardsDropTogetherAtTheTopOfMine() async {
@@ -449,11 +521,11 @@ final class SelectedCardsTests: XCTestCase {
         list.beginDrag("M3")
         XCTAssertEqual(list.draggingCount, 2)
         XCTAssertTrue(list.drop(.card("M1", lowerHalf: false)))
-        XCTAssertEqual(list.sections.first?.cards.map(\.id), ["M2", "M3", "M1"], "in the order shown")
+        XCTAssertEqual(list.sections[1].cards.map(\.id), ["M2", "M3", "M1"], "in the order shown")
         await settle()
         await settle()
         XCTAssertEqual(calls("place").count, 2)
-        XCTAssertTrue(calls("place").allSatisfy { $0.hasSuffix("mine top") }, "\(calls("place"))")
+        XCTAssertTrue(calls("place").allSatisfy { $0.hasSuffix("mine todo top") }, "\(calls("place"))")
     }
 
     func testArrowsEnterAndHintsWithSeveralCards() async {

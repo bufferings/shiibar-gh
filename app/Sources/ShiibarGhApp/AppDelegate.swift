@@ -89,6 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             NSApp.appearance = value == .system ? nil : NSAppearance(named: value == .dark ? .darkAqua : .aqua)
             self?.applySurfaceAppearance()
         }
+        SystemColors.watch()
         appearanceObservation = NSApp.observe(\.effectiveAppearance) { [weak self] _, _ in
             // System and the Mac switched between light and dark.
             DispatchQueue.main.async { self?.applySurfaceAppearance() }

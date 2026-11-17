@@ -383,12 +383,12 @@ extension PlacementSection {
         case .todo: return "Todo"
         case .waiting: return "Waiting"
         case .done: return "Done"
-        case .main: return "Mine"
         }
     }
 
-    /// Review's sections from the top (DESIGN.md, "Review").
-    public static let review: [PlacementSection] = [.doing, .todo, .waiting, .done]
+    /// The sections of Review and of Mine from the top (DESIGN.md,
+    /// "Review", "Mine").
+    public static let order: [PlacementSection] = [.doing, .todo, .waiting, .done]
 }
 
 extension Card {
@@ -401,13 +401,16 @@ extension Card {
         }
     }
 
-    /// The placement tag of All: `Review · Todo`, `Mine`, `Mine · Done`.
+    /// The placement tag of All, the tab and the section: `Review · Todo`,
+    /// `Mine · Waiting` (DESIGN.md, "All").
     public var placementTag: String? {
         guard let placement, let tab = placement.tab.value, let section = placement.section.value else { return nil }
+        let name: String
         switch tab {
-        case .review: return "Review · " + section.title
-        case .mine: return section == .done ? "Mine · Done" : "Mine"
+        case .review: name = "Review"
+        case .mine: name = "Mine"
         }
+        return name + " \u{00B7} " + section.title
     }
 
     /// The card's section key in its own tab, nil without a placement.
@@ -460,8 +463,8 @@ public enum SectionKey {
 public struct SectionLayout: Equatable, Identifiable {
     public var key: String
     public var title: String
-    /// 0: no heading (Group by None, the first list of Mine); 1: a band;
-    /// 2: an indented small heading.
+    /// 0: no heading (Group by None); 1: a band; 2: an indented small
+    /// heading.
     public var level: Int
     /// Holds cards (the innermost group).
     public var isLeaf: Bool
@@ -495,6 +498,27 @@ public struct SectionLayout: Equatable, Identifiable {
 
     /// The Review or Mine section, nil in All.
     public var placement: (PlacementTab, PlacementSection)? { SectionKey.placement(key) }
+
+    /// The cards `Dismiss all` dismisses, nil when the heading does not
+    /// show it (DESIGN.md, "Dismiss", "`Dismiss all`"): the Done of Review
+    /// or Mine, not collapsed, with two or more cards the Filter and the
+    /// search leave (folded ones included: `matching`). One card has its own
+    /// ×, which does the same. The heading's count ignores the search, so
+    /// this can be fewer.
+    public var dismissAllCards: [Card]? {
+        guard accepts, isDone, !collapsed, matching.count >= 2 else { return nil }
+        return matching
+    }
+}
+
+/// A repository of the Dismissed list: its heading (`owner/repo` and the
+/// count of its dismissed cards, whatever the search) and its cards after
+/// the search.
+public struct DismissedGroup: Equatable {
+    public var repository: String
+    /// `3 PRs`.
+    public var detail: String
+    public var cards: [Card]
 }
 
 /// Group orders per Group by value, as group keys (owner ids, repository
@@ -535,16 +559,16 @@ public enum Listing {
         Self.cards(cards, tab: tab).filter(visibility.shows)
     }
 
-    /// The unread count of a tab: its cards with a blue unread row, whatever
+    /// The unread count of a tab: its cards with a colored unread row, whatever
     /// the Filter and the search; muted gray ones do not count, a hidden
     /// muted card with an unread mention does (DESIGN.md, "Tabs").
     public static func unreadCount(_ cards: [Card], tab: ListTab) -> Int {
         Self.cards(cards, tab: tab).filter(\.hasBlueUnread).count
     }
 
-    /// The blue dot of `Filter`: a card of this tab that the Filter hides
-    /// has a blue unread row. The search does not count (DESIGN.md,
-    /// "Filter", "Blue dot"); `Unread only` never hides such a card.
+    /// The accent-colored dot of `Filter`: a card of this tab that the Filter hides
+    /// has a colored unread row. The search does not count (DESIGN.md,
+    /// "Filter", "Accent-color dot"); `Unread only` never hides such a card.
     public static func filterDot(_ cards: [Card], tab: ListTab, filter: ListFilter) -> Bool {
         Self.cards(cards, tab: tab).contains { $0.hasBlueUnread && !filter.shows($0, kept: false) }
     }
@@ -564,6 +588,34 @@ public enum Listing {
         cards.filter(\.isDismissed).sorted {
             let (a, b) = ($0.dismissedAt ?? 0, $1.dismissedAt ?? 0)
             return a != b ? a > b : $0.id < $1.id
+        }
+    }
+
+    /// The Dismissed list by repository (DESIGN.md, "Dismissed list"): the
+    /// groups newest dismissal first by the newest dismissal in each, the
+    /// same time by `owner/repo` ignoring case; the cards of a group as in
+    /// `dismissed`. The order and the counts come from every dismissed card,
+    /// whatever the search; a group the search leaves no card in is left
+    /// out.
+    public static func dismissedGroups(_ cards: [Card], search text: String) -> [DismissedGroup] {
+        var groups: [String: [Card]] = [:]
+        var newest: [String: Int64] = [:]
+        for card in dismissed(cards) {
+            let repo = repository(card.pr)
+            groups[repo, default: []].append(card)
+            newest[repo] = max(newest[repo] ?? Int64.min, card.dismissedAt ?? 0)
+        }
+        let order = groups.keys.sorted { a, b in
+            let (ta, tb) = (newest[a] ?? 0, newest[b] ?? 0)
+            if ta != tb { return ta > tb }
+            let (la, lb) = (a.lowercased(), b.lowercased())
+            return la != lb ? la < lb : a < b
+        }
+        return order.compactMap { repo in
+            let all = groups[repo] ?? []
+            let matching = search(all, text)
+            guard !matching.isEmpty else { return nil }
+            return DismissedGroup(repository: repo, detail: count(all.count), cards: matching)
         }
     }
 
@@ -705,9 +757,9 @@ public enum Listing {
     /// out of everything: the sections, the counts, "+ N more PRs" and the
     /// groups (DESIGN.md, "Filter"). Sections without a
     /// card after the search are left out; the counts ignore the search.
-    /// Review and Mine keep their empty sections (Done and Mine's first
-    /// list included) while the tab shows a card and nothing is searched,
-    /// so that a card can be dropped there.
+    /// Review and Mine keep their empty sections (Done included) while the
+    /// tab shows a card and nothing is searched, so that a card can be
+    /// dropped there.
     public static func sections(
         tab: ListTab, cards allCards: [Card], account: Account, options: ListOptions, orders: GroupOrders,
         repositories: [String], folding: Folding
@@ -718,15 +770,14 @@ public enum Listing {
         switch tab {
         case .review, .mine:
             let placementTab: PlacementTab = tab == .review ? .review : .mine
-            let sections: [PlacementSection] = tab == .review ? PlacementSection.review : [.main, .done]
-            return sections.compactMap { section in
+            return PlacementSection.order.compactMap { section in
                 let all = ranked(tabCards.filter { $0.placement?.section.value == section })
                 let matching = all.filter { found.contains($0.id) }
                 let keepsEmpty = !searching && !tabCards.isEmpty
                 guard !matching.isEmpty || keepsEmpty else { return nil }
                 return leaf(
                     key: SectionKey.placed(placementTab, section), title: section.title,
-                    level: section == .main ? 0 : 1, all: all, matching: matching, folding: folding, searching: searching,
+                    level: 1, all: all, matching: matching, folding: folding, searching: searching,
                     accepts: true, isDone: section == .done
                 )
             }

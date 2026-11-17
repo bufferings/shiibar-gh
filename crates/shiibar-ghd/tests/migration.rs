@@ -1,10 +1,12 @@
-//! The move of a 0.4 database (schema version 6) to version 7, keeping
-//! everything, and of a 0.3 database (version 5) and a 0.2 database
-//! (version 4) to version 7, keeping only the accounts. docs/tasks/M7.md,
-//! "Database and migration" and "How to test"; DESIGN.md, "Updating from
-//! 0.4" and "Updating from 0.3 and 0.2". The schemas come from tags v0.4.0
-//! (`data/schema_v04.sql`), v0.3.0 (`data/schema_v03.sql`) and v0.2.0
-//! (`data/schema_v02.sql`); the rows below are what those daemons write.
+//! The move of a 0.5 database (schema version 7) to version 8 and of a 0.4
+//! database (version 6) through 7 to 8, keeping everything, and of a 0.3
+//! database (version 5) and a 0.2 database (version 4) to version 8, keeping
+//! only the accounts. docs/tasks/M7.md and docs/tasks/M9.md, "Database and
+//! migration" and "How to test"; DESIGN.md, "Updating from 0.5", "Updating
+//! from 0.4" and "Updating from 0.3 and 0.2". The schemas come from tags
+//! v0.5.0 (`data/schema_v05.sql`), v0.4.0 (`data/schema_v04.sql`), v0.3.0
+//! (`data/schema_v03.sql`) and v0.2.0 (`data/schema_v02.sql`); the rows
+//! below are what those daemons write.
 
 mod common;
 
@@ -39,7 +41,7 @@ INSERT INTO owners (id, account, name, kind, github_id, seq, enabled, notify, sk
 INSERT INTO owner_events (owner, event, list, notify) VALUES
     ('o2', 'comment', 1, 0), ('o2', 'mentioned', 0, 0);
 INSERT INTO exclusions (owner, kind, position, name, state) VALUES
-    ('o2', 'user', 0, 'renovate', 'list_only'), ('o2', 'repo', 0, 'org/legacy', 'hidden');
+    ('o2', 'user', 0, 'example-bot', 'list_only'), ('o2', 'repo', 0, 'org/legacy', 'hidden');
 INSERT INTO prs (key, account, id, owner, repo, number, url, title, author, author_avatar_url,
     base, head, state, is_draft, review, checks, base_status, mergeable, failed_check,
     changes_requested_by, updated_at, is_private, requested_me, requested_team, assignees,
@@ -79,7 +81,7 @@ INSERT INTO prs (key, account, id, owner, repo, number, url, title, author, auth
     link_review, link_checks, link_base, unreadable, snoozed, added_at, prev_review,
     prev_checks, prev_base_status, prev_mergeable, gone_at, collected) VALUES
     ('1001:PR_N', '1001', 'PR_N', 'someone', 'lib', 7, 'https://github.com/someone/lib/pull/7',
-     'Bump', 'renovate', NULL, 'main', 'renovate/x', 'open', 0, 'none', 'passed',
+     'Bump', 'example-bot', NULL, 'main', 'example-bot/x', 'open', 0, 'none', 'passed',
      'up_to_date', 1, NULL, NULL, 1799999600, 0, 0, 0, '[]', 'r', 'c', 'b', 0, 1, 1799000200,
      'none', 'passed', 'up_to_date', 1, NULL, 0);
 INSERT INTO pr_rows (id, account, pr, kind, text, counts, actor, url, occurred_at, comment_id,
@@ -108,7 +110,7 @@ INSERT INTO accounts (id, login, color, seq, token, updated_at, dot, teams, grap
     '{"limit":5000,"remaining":4900,"reset_at":1800003000}', NULL,
     '{"own":{},"threads":{},"retries":{"PR_C":{"pr_id":"PR_C","since":1799990000,"failures":1,"owner":"o2"}},"pending_signals":["org/app#1"],"notif_last_modified":"Fri, 15 Jan 2027 08:00:00 GMT","notif_since":"2027-01-15T08:00:00Z","poll_interval":60,"notif_checked_at":1799999000,"status_failures":[],"failed_requests":[],"full_run_started_at":1799999000}');
 INSERT INTO mutes (account, kind, position, name) VALUES
-    ('1001', 'repo', 0, 'org/legacy'), ('1001', 'user', 0, 'renovate'),
+    ('1001', 'repo', 0, 'org/legacy'), ('1001', 'user', 0, 'example-bot'),
     ('1001', 'pr', 0, 'org/app#2');
 INSERT INTO owners (id, account, name, kind, github_id, seq, enabled, notify, skip_drafts,
     watch_started_at, fetched_at) VALUES
@@ -157,7 +159,7 @@ INSERT INTO prs (key, account, id, owner, repo, number, url, title, author, auth
      0, 1799000000, 1799000100, NULL, 0);
 INSERT INTO pr_rows (id, account, pr, kind, text, counts, actor, url, occurred_at, comment_id,
     unread, listed, made_at, notify) VALUES
-    ('1001:R_1', '1001', '1001:PR_1', 'comment', 'hello', NULL, 'renovate', 'u1', 1799999100,
+    ('1001:R_1', '1001', '1001:PR_1', 'comment', 'hello', NULL, 'example-bot', 'u1', 1799999100,
      'C_9', 1, 1, 1799999101, 'pending'),
     ('1001:R_2', '1001', '1001:PR_1', 'team_mentioned', 'hi @org/core', NULL, 'bob', 'u2',
      1799999000, NULL, 0, 0, 1799999001, 'delivered'),
@@ -170,12 +172,130 @@ INSERT INTO reaction_baselines (key, pr, counts) VALUES
     ('1001:C_1', '1001:PR_1', '{"THUMBS_UP":2}');
 "#;
 
+/// One of each placement 0.5 saves (DESIGN.md, "Updating from 0.5"): Mine's
+/// single list (section `main`) with ranks that leave gaps, a muted card
+/// added by hand, a dismissed card; two cards in Mine's Done whose section
+/// before Done is `main`, entered at the same time; Review's four sections.
+/// A row and the Mute list come along to show nothing else changes.
+const SEED_V7: &str = r#"
+INSERT INTO meta (key, value) VALUES ('seq', '5'), ('restore_accounts', 'false');
+INSERT INTO config (key, value) VALUES ('text_size', '14');
+INSERT INTO accounts (id, login, color, seq, token, updated_at, dot, teams, graphql_limit,
+    rest_limit, stopped_until, fetch) VALUES (
+    '1001', 'me', 'none', 1, '{"registered":true}', 1799999000, 0,
+    '[{"database_id":42,"slug":"core","org":"org"}]', NULL, NULL, NULL, '{}');
+INSERT INTO mutes (account, kind, position, name) VALUES ('1001', 'pr', 0, 'org/app#2');
+INSERT INTO owners (id, account, name, kind, github_id, seq, enabled, notify, skip_drafts,
+    watch_started_at, fetched_at) VALUES
+    ('o2', '1001', 'org', 'org', 100, 2, 1, 1, 1, 1799000000, 1799999000);
+INSERT INTO pr_rows (id, account, pr, kind, text, counts, actor, url, occurred_at, comment_id,
+    unread, listed, made_at, notify) VALUES
+    ('1001:R_1', '1001', '1001:PR_1', 'comment', 'hello', NULL, 'bob', 'u1', 1799999100,
+     'C_9', 1, 1, 1799999101, 'delivered');
+"#;
+
+/// A `prs` row of the 0.5 schema: PR `n` of org/app by `author`, its state,
+/// placement, Done entry (time and sequence) and Dismiss time.
+#[allow(clippy::too_many_arguments)]
+fn pr_v7(
+    n: u32,
+    author: &str,
+    state: &str,
+    tab: &str,
+    section: &str,
+    rank: i64,
+    done: Option<(i64, i64)>,
+    dismissed_at: Option<i64>,
+) -> String {
+    let null = |v: Option<i64>| v.map_or("NULL".to_string(), |v| v.to_string());
+    let closed_at = if state == "open" {
+        None
+    } else {
+        done.map(|(at, _)| at)
+    };
+    format!(
+        "INSERT INTO prs (key, account, id, owner, repo, number, url, title, author,
+            author_avatar_url, base, head, head_oid, state, is_draft, review, checks,
+            base_status, mergeable, failed_check, changes_requested_by, updated_at, created_at,
+            my_review_at, last_request_at, is_private, requested_me, requested_team, assignees,
+            link_review, link_checks, link_base, unreadable, added_at, prev_review, prev_checks,
+            prev_base_status, prev_mergeable, settled, settled_head, watch_reset, place_tab,
+            place_section, place_rank, closed_at, done_at, keep_after_close, dismissed_at,
+            restored, seen_closed, quiet_from, quiet_until, merged_event_at, collected,
+            done_seq, unmuted) VALUES
+            ('1001:PR_{n}', '1001', 'PR_{n}', 'org', 'app', {n},
+             'https://github.example/PR_{n}', 'Title {n}', '{author}', NULL, 'main', 'topic',
+             NULL, '{state}', 0, 'none', 'none', 'none', 0, NULL, NULL, 1799999000, 1798000000,
+             NULL, NULL, 0, 0, 0, '[]', 'r', 'c', 'b', 0, 1799000000, 'none', 'none', 'none', 0,
+             NULL, NULL, 0, '{tab}', '{section}', {rank}, {closed_at}, {done_at}, 0,
+             {dismissed_at}, 0, 0, NULL, NULL, NULL, 1, {done_seq}, 0);",
+        closed_at = null(closed_at),
+        done_at = null(done.map(|(at, _)| at)),
+        done_seq = done.map_or(0, |(_, seq)| seq),
+        dismissed_at = null(dismissed_at),
+    )
+}
+
+/// The cards of [`SEED_V7`].
+fn cards_v7() -> String {
+    [
+        pr_v7(1, "me", "open", "mine", "main", 0, None, None),
+        pr_v7(2, "alice", "open", "mine", "main", 2, None, None),
+        pr_v7(
+            3,
+            "me",
+            "open",
+            "mine",
+            "main",
+            5,
+            None,
+            Some(1_799_999_900),
+        ),
+        pr_v7(4, "me", "open", "mine", "main", 7, None, None),
+        pr_v7(
+            5,
+            "me",
+            "merged",
+            "mine",
+            "main",
+            1,
+            Some((1_799_999_000, 3)),
+            None,
+        ),
+        pr_v7(
+            6,
+            "me",
+            "closed",
+            "mine",
+            "main",
+            4,
+            Some((1_799_999_000, 4)),
+            None,
+        ),
+        pr_v7(7, "bob", "open", "review", "doing", 0, None, None),
+        pr_v7(8, "bob", "open", "review", "todo", 0, None, None),
+        pr_v7(9, "bob", "open", "review", "waiting", 0, None, None),
+        pr_v7(
+            10,
+            "bob",
+            "merged",
+            "review",
+            "waiting",
+            1,
+            Some((1_799_998_000, 1)),
+            None,
+        ),
+    ]
+    .concat()
+}
+
 /// A database of the given old version with its seed, plus `extra` SQL, at
 /// `dir/state.db`.
 fn old_database(dir: &Path, version: i64, extra: &str) -> PathBuf {
     let db = dir.join("state.db");
     let conn = Connection::open(&db).unwrap();
     let (schema, seed) = match version {
+        7 => (include_str!("data/schema_v05.sql"), SEED_V7),
         6 => (include_str!("data/schema_v04.sql"), SEED_V6),
         5 => (include_str!("data/schema_v03.sql"), SEED_V5),
         4 => (include_str!("data/schema_v02.sql"), SEED_V4),
@@ -183,6 +303,9 @@ fn old_database(dir: &Path, version: i64, extra: &str) -> PathBuf {
     };
     conn.execute_batch(schema).unwrap();
     conn.execute_batch(seed).unwrap();
+    if version == 7 {
+        conn.execute_batch(&cards_v7()).unwrap();
+    }
     conn.execute_batch(extra).unwrap();
     drop(conn);
     db
@@ -224,7 +347,7 @@ fn open(db: &Path) -> (Store, Data) {
 /// What every move leaves: the accounts and nothing else.
 fn only_the_accounts_are_left(db: &Path, data: &Data) {
     assert_eq!(version(db), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 7);
+    assert_eq!(SCHEMA_VERSION, 8);
     let mut names = tables(db);
     names.sort();
     assert_eq!(
@@ -279,7 +402,7 @@ fn only_the_accounts_are_left(db: &Path, data: &Data) {
 }
 
 #[test]
-fn a_0_3_database_moves_to_version_7_keeping_only_the_accounts() {
+fn a_0_3_database_moves_to_version_8_keeping_only_the_accounts() {
     let dir = tempfile::tempdir().unwrap();
     let db = old_database(dir.path(), 5, "");
     let (store, data) = open(&db);
@@ -303,7 +426,7 @@ fn a_0_3_database_moves_to_version_7_keeping_only_the_accounts() {
 }
 
 #[test]
-fn a_0_2_database_moves_to_version_7_keeping_only_the_accounts() {
+fn a_0_2_database_moves_to_version_8_keeping_only_the_accounts() {
     let dir = tempfile::tempdir().unwrap();
     let db = old_database(dir.path(), 4, "");
     let (store, data) = open(&db);
@@ -317,7 +440,7 @@ fn a_0_2_database_moves_to_version_7_keeping_only_the_accounts() {
 }
 
 #[test]
-fn a_moved_database_saves_and_opens_again_as_version_7() {
+fn a_moved_database_saves_and_opens_again_as_version_8() {
     let dir = tempfile::tempdir().unwrap();
     let db = old_database(dir.path(), 5, "");
     let (mut store, data) = open(&db);
@@ -343,7 +466,7 @@ fn a_moved_database_saves_and_opens_again_as_version_7() {
 
 #[test]
 fn a_failed_move_rolls_back_and_leaves_the_old_database_unreadable() {
-    // A view named like a version 7 table survives the drop of the old
+    // A view named like a version 8 table survives the drop of the old
     // tables, so creating that table fails after the drops already ran
     // inside the transaction.
     for old in [5, 4] {
@@ -393,7 +516,7 @@ fn a_0_1_database_stays_unreadable_and_a_newer_one_is_an_error() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("state.db");
     let conn = Connection::open(&db).unwrap();
-    conn.execute_batch("CREATE TABLE t (x); PRAGMA user_version = 8;")
+    conn.execute_batch("CREATE TABLE t (x); PRAGMA user_version = 9;")
         .unwrap();
     drop(conn);
     assert!(Store::open(&db).is_err());
@@ -452,7 +575,7 @@ fn the_daemon_starts_on_a_0_3_state_directory() {
 // ------------------------------------------------------------- from 0.4
 
 #[test]
-fn a_0_4_database_moves_to_version_7_keeping_everything() {
+fn a_0_4_database_moves_to_version_8_keeping_everything() {
     let dir = tempfile::tempdir().unwrap();
     let db = old_database(dir.path(), 6, "");
     let counts: Vec<i64> = [
@@ -473,7 +596,7 @@ fn a_0_4_database_moves_to_version_7_keeping_everything() {
     .collect();
     let (store, data) = open(&db);
     drop(store);
-    assert_eq!(version(&db), 7);
+    assert_eq!(version(&db), 8);
     let after: Vec<i64> = [
         "accounts",
         "owners",
@@ -522,7 +645,7 @@ fn a_0_4_database_moves_to_version_7_keeping_everything() {
         account.mutes,
         MuteRec {
             repos: vec!["org/legacy".into()],
-            users: vec!["renovate".into()],
+            users: vec!["example-bot".into()],
             prs: vec!["org/app#2".into()],
         }
     );
@@ -548,6 +671,15 @@ fn a_0_4_database_moves_to_version_7_keeping_everything() {
     let pr6 = &data.prs["1001:PR_6"];
     assert_eq!(pr6.dismissed_at, Some(1_799_999_900));
     assert!(pr6.restored);
+    // Through version 7 to 8: Mine's single list is Mine's Todo.
+    assert_eq!(
+        pr6.place,
+        Some(PlaceRec {
+            tab: PlacedTab::Mine,
+            section: Section::Todo,
+            rank: 0,
+        })
+    );
     assert_eq!(data.prs["1001:PR_4"].merged_event_at, Some(1_799_998_990));
     assert!(data.prs["1001:PR_4"].keep_after_close);
 
@@ -644,29 +776,43 @@ fn a_moved_0_4_database_saves_and_opens_again() {
 
 #[test]
 fn a_failed_move_from_0_4_rolls_back_and_leaves_version_6_unreadable() {
-    // The second column cannot be added after the first one was: the move
-    // fails inside its transaction.
-    let dir = tempfile::tempdir().unwrap();
-    let db = old_database(dir.path(), 6, "ALTER TABLE prs ADD COLUMN unmuted INTEGER;");
-    for start in 1..=2 {
-        assert!(
-            matches!(Store::open(&db).unwrap(), OpenOutcome::Unreadable),
-            "start {start}"
-        );
-        assert_eq!(version(&db), 6, "start {start}: old version");
-        let conn = Connection::open(&db).unwrap();
-        let columns: Vec<String> = conn
-            .prepare("SELECT name FROM pragma_table_info('prs')")
-            .unwrap()
-            .query_map([], |r| r.get(0))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
-        assert!(
-            !columns.contains(&"done_seq".to_string()),
-            "start {start}: the first column was rolled back"
-        );
-        assert_eq!(count(&db, "prs"), 6);
+    // The second column cannot be added after the first one was, or the
+    // step from 7 to 8 fails after both were: the move fails inside its
+    // transaction either way.
+    for extra in [
+        "ALTER TABLE prs ADD COLUMN unmuted INTEGER;",
+        "CREATE TRIGGER no_update BEFORE UPDATE ON prs BEGIN SELECT RAISE(ABORT, 'no'); END;",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let db = old_database(dir.path(), 6, extra);
+        for start in 1..=2 {
+            assert!(
+                matches!(Store::open(&db).unwrap(), OpenOutcome::Unreadable),
+                "start {start}"
+            );
+            assert_eq!(version(&db), 6, "start {start}: old version");
+            let conn = Connection::open(&db).unwrap();
+            let columns: Vec<String> = conn
+                .prepare("SELECT name FROM pragma_table_info('prs')")
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            assert!(
+                !columns.contains(&"done_seq".to_string()),
+                "start {start}: the first column was rolled back"
+            );
+            assert_eq!(count(&db, "prs"), 6);
+            let section: String = conn
+                .query_row(
+                    "SELECT place_section FROM prs WHERE key = '1001:PR_6'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(section, "main", "start {start}");
+        }
     }
 }
 
@@ -721,5 +867,273 @@ fn the_daemon_starts_on_a_0_4_state_directory() {
         daemon.ok(json!({"cmd":"config_get","key":"text_size"}))["value"],
         15
     );
+    daemon.stop();
+}
+
+// ------------------------------------------------------------- from 0.5
+
+const TABLES: [&str; 11] = [
+    "accounts",
+    "owners",
+    "owner_events",
+    "prs",
+    "pr_rows",
+    "deleted_rows",
+    "dismiss_records",
+    "reaction_baselines",
+    "mutes",
+    "config",
+    "meta",
+];
+
+#[test]
+fn a_0_5_database_moves_to_version_8_keeping_everything() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = old_database(dir.path(), 7, "");
+    let counts: Vec<i64> = TABLES.iter().map(|t| count(&db, t)).collect();
+    let (store, data) = open(&db);
+    drop(store);
+    assert_eq!(version(&db), 8);
+    let after: Vec<i64> = TABLES.iter().map(|t| count(&db, t)).collect();
+    assert_eq!(after, counts, "every row stays");
+
+    // Mine's single list is Mine's Todo with the same ranks; the cards in
+    // Done keep their entry and take Todo as their section before Done;
+    // Review stays.
+    let place = |n: u32| {
+        let pr = &data.prs[&format!("1001:PR_{n}")];
+        let p = pr.place.unwrap();
+        (p.tab, p.section, p.rank, pr.done_at, pr.done_seq)
+    };
+    let want = [
+        (1, PlacedTab::Mine, Section::Todo, 0, None, 0),
+        (2, PlacedTab::Mine, Section::Todo, 2, None, 0),
+        (3, PlacedTab::Mine, Section::Todo, 5, None, 0),
+        (4, PlacedTab::Mine, Section::Todo, 7, None, 0),
+        (5, PlacedTab::Mine, Section::Todo, 1, Some(1_799_999_000), 3),
+        (6, PlacedTab::Mine, Section::Todo, 4, Some(1_799_999_000), 4),
+        (7, PlacedTab::Review, Section::Doing, 0, None, 0),
+        (8, PlacedTab::Review, Section::Todo, 0, None, 0),
+        (9, PlacedTab::Review, Section::Waiting, 0, None, 0),
+        (
+            10,
+            PlacedTab::Review,
+            Section::Waiting,
+            1,
+            Some(1_799_998_000),
+            1,
+        ),
+    ];
+    for (n, tab, section, rank, done_at, done_seq) in want {
+        assert_eq!(place(n), (tab, section, rank, done_at, done_seq), "PR_{n}");
+    }
+    assert_eq!(data.prs["1001:PR_3"].dismissed_at, Some(1_799_999_900));
+    assert_eq!(
+        data.accounts["1001"].mutes.prs,
+        vec!["org/app#2".to_string()]
+    );
+    assert_eq!(data.config.text_size, 14);
+    assert!(data.rows["1001:R_1"].unread);
+    assert_eq!(
+        data.accounts["1001"].teams[0].org.as_deref(),
+        Some("org"),
+        "the teams of 0.5 keep their organization"
+    );
+}
+
+#[test]
+fn a_0_5_database_lists_mine_in_the_same_order_after_the_move() {
+    // docs/tasks/M9.md, "Risky points": the relative order of Mine's single
+    // list is the order of Todo, seen in the wire `placement.position`.
+    let dir = tempfile::tempdir().unwrap();
+    let db = old_database(dir.path(), 7, "");
+    let (_, data) = open(&db);
+    let engine = shiibar_ghd::engine::Engine::restore(data);
+    let now = shiibar_ghd::clock::Now::fixed(1_800_000_000, "Asia/Tokyo").unwrap();
+    let order = |tab| -> Vec<(String, String, u32, bool, bool)> {
+        engine
+            .list(
+                &shiibar_ghd::engine::ListArgs {
+                    tab,
+                    dismissed: shiibar_gh_proto::DismissedFilter::Include,
+                    ..Default::default()
+                },
+                &now,
+            )
+            .unwrap()
+            .iter()
+            .map(|c| {
+                let p = c.placement.as_ref().unwrap();
+                (
+                    c.pr.clone(),
+                    p.section.as_text(),
+                    p.position,
+                    !c.muted.is_empty(),
+                    c.dismissed_at.is_some(),
+                )
+            })
+            .collect()
+    };
+    let want = |rows: &[(&str, &str, u32, bool, bool)]| -> Vec<(String, String, u32, bool, bool)> {
+        rows.iter()
+            .map(|(a, b, c, d, e)| (a.to_string(), b.to_string(), *c, *d, *e))
+            .collect()
+    };
+    assert_eq!(
+        order(shiibar_gh_proto::Tab::Mine),
+        want(&[
+            ("org/app#1", "todo", 0, false, false),
+            ("org/app#2", "todo", 1, true, false),
+            ("org/app#4", "todo", 2, false, false),
+            ("org/app#6", "done", 0, false, false),
+            ("org/app#5", "done", 1, false, false),
+            // Dismissed: where it would come back, between #2 and #4.
+            ("org/app#3", "todo", 2, false, true),
+        ])
+    );
+    assert_eq!(
+        order(shiibar_gh_proto::Tab::Review),
+        want(&[
+            ("org/app#7", "doing", 0, false, false),
+            ("org/app#8", "todo", 0, false, false),
+            ("org/app#9", "waiting", 0, false, false),
+            ("org/app#10", "done", 0, false, false),
+        ])
+    );
+}
+
+#[test]
+fn a_moved_0_5_database_saves_and_opens_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = old_database(dir.path(), 7, "");
+    let (mut store, data) = open(&db);
+    let mut engine = shiibar_ghd::engine::Engine::restore(data);
+    let now = shiibar_ghd::clock::Now::fixed(1_800_000_000, "Asia/Tokyo").unwrap();
+    engine.set_clock(&now);
+    engine
+        .place(
+            "me",
+            "org/app#4",
+            &shiibar_ghd::engine::PlaceArgs {
+                tab: shiibar_gh_proto::PlaceTab::Mine,
+                section: Some(shiibar_gh_proto::Section::Doing),
+                before: None,
+                at: None,
+            },
+        )
+        .unwrap();
+    store.save(engine.data(), engine.dirty()).unwrap();
+    drop(store);
+    let (_, again) = open(&db);
+    assert_eq!(&again, engine.data(), "nothing lost");
+    assert_eq!(
+        again.prs["1001:PR_4"].place.map(|p| p.section),
+        Some(Section::Doing)
+    );
+}
+
+#[test]
+fn a_failed_move_from_0_5_rolls_back_and_leaves_version_7_unreadable() {
+    // The update fails inside the transaction, or the moved state cannot be
+    // read (a section no build knows in Review): either way nothing changes.
+    for extra in [
+        "CREATE TRIGGER no_update BEFORE UPDATE ON prs BEGIN SELECT RAISE(ABORT, 'no'); END;",
+        "UPDATE prs SET place_section = 'main' WHERE key = '1001:PR_7';",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let db = old_database(dir.path(), 7, extra);
+        for start in 1..=2 {
+            assert!(
+                matches!(Store::open(&db).unwrap(), OpenOutcome::Unreadable),
+                "{extra}: start {start}"
+            );
+            assert_eq!(version(&db), 7, "{extra}: start {start}: old version");
+            let mains: i64 = Connection::open(&db)
+                .unwrap()
+                .query_row(
+                    "SELECT count(*) FROM prs WHERE place_tab = 'mine' AND place_section = 'main'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(mains, 6, "{extra}: start {start}: rolled back");
+        }
+    }
+}
+
+/// The daemon on a 0.5 state directory, with a test Keychain file and no
+/// GitHub: Mine's single list is Mine's Todo in the same order, and a
+/// reopen takes a card in Mine's Done back to its rank in Todo.
+#[cfg(feature = "dev-ingest")]
+#[test]
+fn the_daemon_starts_on_a_0_5_state_directory() {
+    use common::*;
+    use serde_json::{Value, json};
+    let dir = tempfile::tempdir().unwrap();
+    old_database(dir.path(), 7, "");
+    let item = dir.path().join("keychain.json");
+    std::fs::write(
+        &item,
+        r#"{"version":2,"accounts":[{"id":"1001","login":"me","token":"ghp_test_only"}]}"#,
+    )
+    .unwrap();
+    let mut command = command(dir.path());
+    command
+        .env("SHIIBAR_GH_DEV_NOW", T0.to_string())
+        .env("SHIIBAR_GH_DEV_TZ", TZ)
+        .env("SHIIBAR_GH_DEV_KEYCHAIN", &item);
+    let daemon = TestDaemon::spawn(dir.path(), command);
+    assert_eq!(daemon.subscribe("cli").snapshot()["db_unreadable"], false);
+    let mine = || -> Vec<(String, Value)> {
+        daemon.ok(json!({"cmd":"list","account":"me","tab":"mine"}))["cards"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| {
+                (
+                    c["pr"].as_str().unwrap().to_string(),
+                    c["placement"].clone(),
+                )
+            })
+            .collect()
+    };
+    let at = |pr: &str, section: &str, position: u32| {
+        (
+            pr.to_string(),
+            json!({"tab":"mine","section":section,"position":position}),
+        )
+    };
+    assert_eq!(
+        mine(),
+        [
+            at("org/app#1", "todo", 0),
+            at("org/app#2", "todo", 1),
+            at("org/app#4", "todo", 2),
+            at("org/app#6", "done", 0),
+            at("org/app#5", "done", 1),
+        ]
+    );
+    // A reopen of the cards in Done: back to their ranks in Todo.
+    daemon.ingest(
+        vec![
+            with(pr("PR_5", "me"), json!({"updated_at": T0 + 10})),
+            with(pr("PR_6", "me"), json!({"updated_at": T0 + 10})),
+        ],
+        vec![],
+        vec![],
+    );
+    assert_eq!(
+        mine(),
+        [
+            at("org/app#1", "todo", 0),
+            at("org/app#5", "todo", 1),
+            at("org/app#2", "todo", 2),
+            at("org/app#6", "todo", 3),
+            at("org/app#4", "todo", 4),
+        ]
+    );
+    // The dismissed card comes back to its rank in Todo too.
+    daemon.ok(json!({"cmd":"restore","account":"me","pr":"org/app#3"}));
+    assert_eq!(mine()[4], at("org/app#3", "todo", 4));
     daemon.stop();
 }

@@ -16,12 +16,13 @@ final class MenuButtonTests: XCTestCase {
         host.layoutSubtreeIfNeeded()
         let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds)!
         host.cacheDisplay(in: host.bounds, to: rep)
-        let base = background.resolve(dark: dark)
+        let base = background.resolved(dark: dark)
         var count = 0
         for x in 0..<rep.pixelsWide {
             for y in 0..<rep.pixelsHigh {
                 guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-                if abs(c.redComponent - base.red) + abs(c.greenComponent - base.green) + abs(c.blueComponent - base.blue) > 0.15 {
+                if abs(c.redComponent - base.redComponent) + abs(c.greenComponent - base.greenComponent)
+                    + abs(c.blueComponent - base.blueComponent) > 0.15 {
                     count += 1
                 }
             }

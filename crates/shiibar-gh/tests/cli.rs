@@ -192,6 +192,8 @@ fn every_command_has_help_with_exit_0_and_needs_no_daemon() {
             "Exclusions",
             "drop_after_days",
             "keep_watching_days",
+            "[mine]",
+            "mine [--top",
         ] {
             assert!(!result.stdout.contains(gone), "{args:?}: {gone}");
         }
@@ -206,12 +208,14 @@ fn every_command_has_help_with_exit_0_and_needs_no_daemon() {
         "[review requested]",
         "[--tab all|review|mine]",
         "[--dismissed]",
-        "place <pr> review doing|todo|waiting [--top|--bottom|--before <pr>] --account <a>",
+        "place <pr> review|mine doing|todo|waiting [--top|--bottom|--before <pr>] --account <a>",
+        "<pr> review|mine done --account <a>",
         "mute pr|repo|user <name> --account <a>",
         "auto_dismiss_after_days",
         "dismissed_keep_days",
         "confirm_dismiss",
         "[review:todo]",
+        "[mine:doing]",
         "[muted]",
         "[unmuted]",
         "Show muted",
@@ -232,7 +236,7 @@ fn every_command_has_help_with_exit_0_and_needs_no_daemon() {
 #[test]
 fn usage_errors_exit_1() {
     let dir = tempfile::tempdir().unwrap();
-    let cases: [&[&str]; 54] = [
+    let cases: [&[&str]; 56] = [
         &[],
         &["nope"],
         // 0.1 commands are gone.
@@ -250,14 +254,25 @@ fn usage_errors_exit_1() {
         &["unsnooze", "a/b#1", "--account", "me"],
         &["list", "--snoozed"],
         &["owner", "exclusions", "org", "--account", "me"],
-        // `place` takes a tab, a section for review, one position.
+        // `place` takes a tab, a section for review and mine, one position.
         &["place", "a/b#1", "--account", "me"],
         &["place", "a/b#1", "review", "--account", "me"],
-        &["place", "a/b#1", "review", "done", "--account", "me"],
+        &[
+            "place",
+            "a/b#1",
+            "review",
+            "done",
+            "--top",
+            "--account",
+            "me",
+        ],
+        &["place", "a/b#1", "mine", "--account", "me"],
+        &["place", "a/b#1", "mine", "main", "--account", "me"],
         &[
             "place",
             "a/b#1",
             "mine",
+            "todo",
             "--top",
             "--bottom",
             "--account",
@@ -292,7 +307,7 @@ fn usage_errors_exit_1() {
         &["status", "a/b#1"],
         &["dismiss", "a/b#1"],
         &["restore", "a/b#1"],
-        &["place", "a/b#1", "mine"],
+        &["place", "a/b#1", "mine", "todo"],
         &["mute", "user", "x"],
         &["mutes"],
         &["open", "a/b#1"],
@@ -626,16 +641,16 @@ fn account_and_owner_commands_work_from_the_command_line() {
 
     // The Mute lists (DESIGN.md, "CLI (AI integration)").
     for args in [
-        &["mute", "user", "renovate", "--account", "me"][..],
+        &["mute", "user", "example-bot", "--account", "me"][..],
         &["mute", "repo", "org/legacy", "--account", "me"][..],
-        &["mute", "user", "Renovate", "--account", "me"][..],
+        &["mute", "user", "Example-Bot", "--account", "me"][..],
     ] {
         let result = daemon.cli(args);
         assert_eq!(result.code, 0, "{args:?}: {}", result.stderr);
     }
     assert_eq!(
         daemon.cli(&["mutes", "--account", "me"]).stdout,
-        "repo org/legacy\nuser renovate\n"
+        "repo org/legacy\nuser example-bot\n"
     );
     assert_eq!(
         daemon
@@ -652,7 +667,7 @@ fn account_and_owner_commands_work_from_the_command_line() {
     );
     assert_eq!(
         daemon
-            .cli(&["unmute", "user", "RENOVATE", "--account", "me"])
+            .cli(&["unmute", "user", "EXAMPLE-BOT", "--account", "me"])
             .code,
         0
     );
@@ -1021,7 +1036,10 @@ mod with_events {
             text.contains("org/app#3 [open] [review:todo] [review requested] review="),
             "{text}"
         );
-        assert!(text.contains("org/app#1 [open] [mine] review="), "{text}");
+        assert!(
+            text.contains("org/app#1 [open] [mine:todo] review="),
+            "{text}"
+        );
         let owners = daemon.cli(&["owner", "list"]).stdout;
         assert!(
             owners.contains("me org ") && owners.contains(" prs=3"),
@@ -1038,7 +1056,7 @@ mod with_events {
         // PR_4 is requested too, but no request row put it in Todo.
         assert_eq!(order, ["org/app#3"]);
         let mine = daemon.cli(&["list", "--tab", "mine"]).stdout;
-        assert!(mine.starts_with("org/app#1 [open] [mine]"), "{mine}");
+        assert!(mine.starts_with("org/app#1 [open] [mine:todo]"), "{mine}");
         assert_eq!(mine.lines().filter(|l| !l.starts_with(' ')).count(), 1);
     }
 
@@ -1070,12 +1088,12 @@ mod with_events {
             "prs":[pr("PR_2", 2, "alice", json!({"state":"merged"}))]
         }}));
         assert_eq!(
-            place(&["place", "org/app#2", "mine", "--account", "me"]),
+            place(&["place", "org/app#2", "mine", "waiting", "--account", "me"]),
             "org/app#2 [mine:done]\n"
         );
         assert_eq!(
-            place(&["place", "org/app#2", "mine", "--account", "me"]),
-            "org/app#2 [mine]\n"
+            place(&["place", "org/app#2", "mine", "todo", "--account", "me"]),
+            "org/app#2 [mine:todo]\n"
         );
         assert_eq!(
             place(&["place", "org/app#2", "mine", "done", "--account", "me"]),
@@ -1109,7 +1127,15 @@ mod with_events {
                 ],
                 1,
             ),
-            (&["place", "org/app#9", "mine", "--account", "me"], 2),
+            (
+                &["place", "org/app#9", "mine", "todo", "--account", "me"],
+                2,
+            ),
+            (&["place", "org/app#3", "mine", "--account", "me"], 1),
+            (
+                &["place", "org/app#3", "mine", "main", "--account", "me"],
+                1,
+            ),
         ] {
             assert_eq!(daemon.cli(args).code, code, "{args:?}");
         }
@@ -1122,6 +1148,112 @@ mod with_events {
         let text = daemon.cli(&["list"]).stdout;
         assert!(text.contains("org/app#3 [draft] [muted] review="), "{text}");
         assert!(text.contains(" comment [muted] text E_1"), "{text}");
+    }
+
+    /// DESIGN.md, "CLI (AI integration)": `place <pr> mine` takes the four
+    /// sections of Review; `list --tab mine` prints them in section order
+    /// with `[mine:<section>]`.
+    #[test]
+    fn place_in_mine_takes_the_sections_of_review() {
+        let daemon = seeded();
+        let place = |args: &[&str]| {
+            let result = daemon.cli(args);
+            assert_eq!(result.code, 0, "{args:?}: {}", result.stderr);
+            result.stdout
+        };
+        // The account's own PR starts at the end of Mine's Todo; another
+        // PR added by hand goes after it.
+        assert_eq!(
+            place(&["place", "org/app#3", "mine", "todo", "--account", "me"]),
+            "org/app#3 [mine:todo]\n"
+        );
+        let json = json_of(daemon.cli(&["status", "org/app#3", "--account", "me", "--json"]));
+        assert_eq!(
+            json["card"]["placement"],
+            json!({"tab":"mine","section":"todo","position":1})
+        );
+        for (section, mark) in [
+            ("doing", "[mine:doing]"),
+            ("waiting", "[mine:waiting]"),
+            ("done", "[mine:done]"),
+        ] {
+            assert_eq!(
+                place(&["place", "org/app#1", "mine", section, "--account", "me"]),
+                format!("org/app#1 {mark}\n")
+            );
+        }
+        // From Doing to Todo without a position: the top.
+        place(&["place", "org/app#1", "mine", "doing", "--account", "me"]);
+        place(&["place", "org/app#1", "mine", "todo", "--account", "me"]);
+        let json = json_of(daemon.cli(&["status", "org/app#1", "--account", "me", "--json"]));
+        assert_eq!(
+            json["card"]["placement"],
+            json!({"tab":"mine","section":"todo","position":0})
+        );
+        // Positions as in Review.
+        place(&[
+            "place",
+            "org/app#3",
+            "mine",
+            "todo",
+            "--top",
+            "--account",
+            "me",
+        ]);
+        place(&["place", "org/app#2", "mine", "doing", "--account", "me"]);
+        place(&[
+            "place",
+            "org/app#2",
+            "mine",
+            "todo",
+            "--before",
+            "org/app#1",
+            "--account",
+            "me",
+        ]);
+        let mine = daemon.cli(&["list", "--tab", "mine"]).stdout;
+        let heads: Vec<String> = mine
+            .lines()
+            .filter(|l| !l.starts_with(' '))
+            .map(|l| {
+                let mut words = l.split(' ');
+                let pr = words.next().unwrap();
+                let mark = words.find(|w| w.starts_with("[mine:")).unwrap_or("");
+                format!("{pr} {mark}")
+            })
+            .collect();
+        assert_eq!(
+            heads,
+            [
+                "org/app#3 [mine:todo]",
+                "org/app#2 [mine:todo]",
+                "org/app#1 [mine:todo]"
+            ]
+        );
+        // Section order: Doing, Todo, Waiting, Done.
+        place(&["place", "org/app#1", "mine", "done", "--account", "me"]);
+        place(&["place", "org/app#2", "mine", "waiting", "--account", "me"]);
+        place(&["place", "org/app#3", "mine", "doing", "--account", "me"]);
+        let json = json_of(daemon.cli(&["list", "--tab", "mine", "--json"]));
+        let sections: Vec<(String, String)> = json["cards"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| {
+                (
+                    c["pr"].as_str().unwrap().to_string(),
+                    c["placement"]["section"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            sections,
+            [
+                ("org/app#3".to_string(), "doing".to_string()),
+                ("org/app#2".to_string(), "waiting".to_string()),
+                ("org/app#1".to_string(), "done".to_string()),
+            ]
+        );
     }
 
     /// DESIGN.md, "CLI": `unmute pr` takes the PR out of Mute, setting
@@ -1198,7 +1330,10 @@ mod with_events {
             (&["read", "1001:nope"], 2),
             (&["dismiss", "org/app#1", "--account", "me"], 2),
             (&["restore", "org/app#3", "--account", "me"], 2),
-            (&["place", "org/app#1", "mine", "--account", "me"], 2),
+            (
+                &["place", "org/app#1", "mine", "todo", "--account", "me"],
+                2,
+            ),
             (&["status", "org/app#1", "--account", "me"], 2),
             (&["open", "1001:E_1"], 2),
         ];

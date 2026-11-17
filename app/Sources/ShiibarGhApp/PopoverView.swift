@@ -32,15 +32,17 @@ struct SurfaceActions {
     var openSettings: (SettingsDestination) -> Void
     var about: () -> Void
     var quit: () -> Void
+    /// `Settings…` in the ⌄ menu: only where no Settings button sits next
+    /// to it (the popover of `No accounts yet`). The account's header has
+    /// its gear button right beside the menu.
+    var menuHasSettings = false
 
-    /// The ⌄ menu (DESIGN.md, "Screens"); nil is a separator.
+    /// The ⌄ menu (DESIGN.md, "Screens"); nil is a separator. In an
+    /// account's header: About shiibar-gh, a separator, Quit shiibar-gh.
     var menuItems: [IconMenuItem?] {
-        [
-            IconMenuItem("About shiibar-gh", action: about),
-            IconMenuItem("Settings…") { openSettings(.general) },
-            nil,
-            IconMenuItem("Quit shiibar-gh", action: quit),
-        ]
+        var items: [IconMenuItem?] = [IconMenuItem("About shiibar-gh", action: about)]
+        if menuHasSettings { items.append(IconMenuItem("Settings…") { openSettings(.general) }) }
+        return items + [nil, IconMenuItem("Quit shiibar-gh", action: quit)]
     }
 }
 
@@ -141,8 +143,9 @@ final class SurfaceState {
     let options: Derived<FilterOptionsState>
     let dismissed: Derived<DismissedHeadingState>
     let grouping: Derived<Bool>
-    /// The card whose × asks for the confirmation, while it shows.
-    let confirming: Derived<String?>
+    /// What the Dismiss confirmation asks about (a card's ×, or `Dismiss
+    /// all`), while it shows.
+    let confirming: Derived<DismissConfirmation?>
 
     init(app: AppModel, model: AccountViewModel, list: SurfaceListModel) {
         let appChanges = app.objectWillChange.map { _ in () }.eraseToAnyPublisher()
@@ -253,21 +256,28 @@ struct PopoverView: View {
                     actions.openSettings(.account(model.accountId))
                 }
             case .list:
-                BannerView(lines: Warnings.banner(account?.warnings ?? [], now: now)) { app.bannerButton($0, account: model.accountId) }
-                if let failure = value.failure {
-                    FailureBand(text: failure)
+                // The bands come and go on their own: the surface's least
+                // height leaves them out (`SurfaceRoot.onMinimumHeight`).
+                VStack(spacing: 0) {
+                    BannerView(lines: PerfMode.hidesBanners ? [] : Warnings.banner(account?.warnings ?? [], now: now)) {
+                        app.bannerButton($0, account: model.accountId)
+                    }
+                    if let failure = value.failure {
+                        FailureBand(text: failure)
+                    }
                 }
+                .background(SurfaceAnchor(content: CardContext.of(list, avatars: avatars).content, part: .bands))
                 TabRow(list: list, state: state.tabs)
                 SearchRow(list: list, state: state.search)
                 FilterRowSlot(list: list, state: state.filterRow)
-                // The options take their height when there is room; the
-                // list keeps its minimum, and the options scroll inside
-                // (DESIGN.md, "Filter").
+                // The options keep their full height; the list takes the
+                // rest. The popover and the window are made high enough for
+                // the list's minimum (`SurfaceHeight`; DESIGN.md, "Filter").
                 FilterOptionsSlot(list: list, state: state.options)
                     .layoutPriority(1)
+                    .background(SurfaceAnchor(content: CardContext.of(list, avatars: avatars).content, part: .options))
                 DismissedHeadingSlot(list: list, state: state.dismissed, keepDays: value.keepDays)
                 ListSlot(content: CardContext.of(list, avatars: avatars).content, now: now)
-                    .frame(minHeight: FilterOptionsLayout.listMinimum * value.k)
                 KeyHintsSlot(chrome: list.chrome)
                     .background(SurfaceAnchor(content: CardContext.of(list, avatars: avatars).content, part: .hints))
             }
@@ -288,20 +298,20 @@ struct PopoverView: View {
     }
 }
 
-/// The Grouping sheet and the × confirmation, over the list too, with the
+/// The Grouping sheet and the Dismiss confirmation, over the list too, with the
 /// surface's text size.
 struct GroupingOverlay: View {
     @ObservedObject var top: Derived<SurfaceTop>
     @ObservedObject var grouping: Derived<Bool>
-    @ObservedObject var confirming: Derived<String?>
+    @ObservedObject var confirming: Derived<DismissConfirmation?>
     var list: SurfaceListModel
     var model: AccountViewModel
 
     var body: some View {
         let k = top.value.k
         Group {
-            if confirming.value != nil {
-                DismissConfirmSheet(keepDays: top.value.keepDays, list: list) { list.answerDismiss($0) }
+            if let asked = confirming.value {
+                DismissConfirmSheet(asked: asked, keepDays: top.value.keepDays, list: list) { list.answerDismiss($0) }
             } else if grouping.value {
                 GroupingSheet(model: model) { list.showsGrouping = false }
             }
@@ -312,10 +322,12 @@ struct GroupingOverlay: View {
     }
 }
 
-/// The confirmation of a card's × (DESIGN.md, "Confirming ×"; Main.html),
-/// in the Grouping sheet's form. ⏎ and Esc are read by the surface's keys
-/// (`KeyRules`), so the buttons never take the keyboard focus.
+/// The confirmation of a card's × and of `Dismiss all` (DESIGN.md,
+/// "Confirming ×", "`Dismiss all`"; Main.html), in the Grouping sheet's
+/// form; only the title and the text differ. ⏎ and Esc are read by the
+/// surface's keys (`KeyRules`), so the buttons never take the keyboard focus.
 struct DismissConfirmSheet: View {
+    var asked: DismissConfirmation
     var keepDays: Int64
     @ObservedObject var list: SurfaceListModel
     var answer: (Bool) -> Void
@@ -327,8 +339,8 @@ struct DismissConfirmSheet: View {
                 .contentShape(Rectangle())
                 .onTapGesture {}
             VStack(alignment: .leading, spacing: 10) {
-                Text(DismissedText.confirmTitle).font(.system(size: 13 * k, weight: .semibold))
-                Text(DismissedText.confirmText(keepDays: keepDays))
+                Text(asked.title).font(.system(size: 13 * k, weight: .semibold))
+                Text(asked.text(keepDays: keepDays))
                     .font(.system(size: 12 * k))
                     .foregroundColor(Palette.secondary.color)
                     .fixedSize(horizontal: false, vertical: true)
@@ -348,7 +360,7 @@ struct DismissConfirmSheet: View {
                     .fill(Palette.settingsBackground.color)
                     .shadow(color: .black.opacity(0.22), radius: 15, y: 12)
             )
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.settingsTabBarBorder.color, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.border.color, lineWidth: 1))
             .padding(EdgeInsets(top: 118, leading: 20, bottom: 20, trailing: 20))
         }
     }
@@ -412,7 +424,7 @@ struct Header: View {
         HStack(spacing: 6) {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 8) {
-                    AccountDot(color: color, size: 10 * k)
+                    if color.showsDot { AccountDot(color: color, size: 10 * k) }
                     Text(login).font(.system(size: 14 * k, weight: .semibold)).lineLimit(1)
                 }
                 if let updated {
@@ -463,9 +475,9 @@ struct UsageView: View {
                 .foregroundColor(usage.warn ? Palette.caution.color : Palette.secondary.color)
             if let fraction = usage.fraction, let percent = usage.percent {
                 ZStack(alignment: .leading) {
-                    Rectangle().fill(Palette.usageTrack.color)
+                    Rectangle().fill(Palette.quaternary.color)
                     Rectangle()
-                        .fill(usage.warn ? Palette.usageWarnFill.color : Palette.usageFill.color)
+                        .fill(usage.warn ? Palette.usageWarnFill.color : Palette.tertiary.color)
                         .frame(width: 40 * k * CGFloat(fraction))
                     Text(percent)
                         .font(.system(size: 9 * k, weight: .bold))
@@ -485,14 +497,14 @@ struct UsageView: View {
 }
 
 /// Refresh in progress (Main.html `.iconbtn.busy`): a gray circle with a
-/// turning blue arc, in place of the button until the answer.
+/// turning arc in the accent color, in place of the button until the answer.
 struct RefreshProgress: View {
     @State private var turning = false
 
     var body: some View {
         ZStack {
-            IconView(icon: BoardIcons.progressTrack, size: 16, color: Palette.usageTrack.color)
-            IconView(icon: BoardIcons.progressArc, size: 16, color: Palette.blueDot.color)
+            IconView(icon: BoardIcons.progressTrack, size: 16, color: Palette.quaternary.color)
+            IconView(icon: BoardIcons.progressArc, size: 16, color: Palette.accent.color)
                 .rotationEffect(.degrees(turning ? 360 : 0))
                 .animation(.linear(duration: 1).repeatForever(autoreverses: false), value: turning)
         }
@@ -503,7 +515,7 @@ struct RefreshProgress: View {
     }
 }
 
-/// Keep on top (Main.html `.pin`): filled blue while on, outlined while off.
+/// Keep on top (Main.html `.pin`): filled in the accent color while on, outlined while off.
 struct PinButton: View {
     var on: Bool
     var toggle: () -> Void
@@ -512,14 +524,14 @@ struct PinButton: View {
         Button(action: toggle) {
             Group {
                 if on {
-                    IconShape(icon: BoardIcons.pin).fill(Palette.settingsTabSelected.color)
+                    IconShape(icon: BoardIcons.pin).fill(Palette.accent.color)
                 } else {
-                    IconView(icon: BoardIcons.pin, size: 14, color: Palette.botIcon.color)
+                    IconView(icon: BoardIcons.pin, size: 14, color: Palette.secondary.color)
                 }
             }
             .frame(width: 14, height: 14)
             .frame(width: 24, height: 24)
-            .background(RoundedRectangle(cornerRadius: 6).fill(on ? Palette.settingsTabSelectedBackground.color : .clear))
+            .background(RoundedRectangle(cornerRadius: 6).fill(on ? Palette.selection.color : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -541,7 +553,7 @@ struct BannerView: View {
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                     HStack(alignment: .center, spacing: 8) {
-                        IconView(icon: BoardIcons.warning, size: 14 * k, color: Palette.bannerText.color)
+                        IconView(icon: BoardIcons.warning, size: 14 * k, color: Palette.text.color)
                         Text(line.text).fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         if let button = line.button {
@@ -551,9 +563,9 @@ struct BannerView: View {
                 }
             }
             .font(.system(size: 12 * k))
-            .foregroundColor(Palette.bannerText.color)
+            .foregroundColor(Palette.text.color)
             .padding(EdgeInsets(top: 7, leading: 10, bottom: 7, trailing: 10))
-            .background(RoundedRectangle(cornerRadius: 8).fill(Palette.bannerBackground.color))
+            .background(RoundedRectangle(cornerRadius: 8).fill(Palette.warningBand.color))
             .padding(EdgeInsets(top: 8, leading: 12, bottom: 0, trailing: 12))
         }
     }
@@ -567,14 +579,14 @@ struct FailureBand: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
-            IconView(icon: BoardIcons.failure, size: 14 * k, color: Palette.orangeText.color)
+            IconView(icon: BoardIcons.failure, size: 14 * k, color: Palette.text.color)
             Text(text).fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .font(.system(size: 12 * k))
-        .foregroundColor(Palette.orangeText.color)
+        .foregroundColor(Palette.text.color)
         .padding(EdgeInsets(top: 7, leading: 10, bottom: 7, trailing: 10))
-        .background(RoundedRectangle(cornerRadius: 8).fill(Palette.orangeIconBackground.color))
+        .background(RoundedRectangle(cornerRadius: 8).fill(Palette.failureBand.color))
         .padding(EdgeInsets(top: 8, leading: 12, bottom: 0, trailing: 12))
         .accessibilityElement(children: .combine)
     }
@@ -612,16 +624,24 @@ struct TabRow: View {
     @ObservedObject var state: Derived<TabRowState>
     @Environment(\.textScale) var k
 
+    /// The tab names' line: the display mode switch, the Dismissed icon
+    /// and its count are centered on it at every text size (DESIGN.md,
+    /// "Screens").
+    static let line = VerticalAlignment(TabLine.self)
+
+    enum TabLine: AlignmentID {
+        static func defaultValue(in context: ViewDimensions) -> CGFloat { context[VerticalAlignment.center] }
+    }
+
     var body: some View {
-        HStack(alignment: .bottom, spacing: 2) {
+        HStack(alignment: Self.line, spacing: 2) {
             ForEach(ListTab.allCases, id: \.self) { tab in
                 tabButton(tab)
             }
             Spacer(minLength: 0)
             compactButton
-                .padding(.bottom, 3)
             dismissedButton
-                .padding(.bottom, 3)
+                .padding(.leading, 6 * k - 2)
         }
         .padding(EdgeInsets(top: 8, leading: 12, bottom: 0, trailing: 12))
         .overlay(alignment: .bottom) { Rectangle().fill(Palette.border.color).frame(height: 1) }
@@ -637,10 +657,11 @@ struct TabRow: View {
                 Text(tab.title)
                     .font(.system(size: 12 * k, weight: on ? .semibold : .regular))
                     .foregroundColor(on ? Palette.text.color : Palette.secondary.color)
+                    .alignmentGuide(Self.line) { $0[VerticalAlignment.center] }
                 if count > 0 {
                     Text("\(count)")
                         .font(.system(size: 10 * k, weight: .bold))
-                        .foregroundColor(Palette.blueDot.color)
+                        .foregroundColor(Palette.accent.color)
                 }
             }
             .padding(EdgeInsets(top: 4 * k, leading: 10, bottom: 6 * k, trailing: 10))
@@ -665,17 +686,19 @@ struct TabRow: View {
     var dismissedButton: some View {
         let open = state.value.showingDismissed
         let count = state.value.dismissedCount
-        let color = open ? Palette.settingsTabSelected.color : Palette.botIcon.color
+        let color = open ? Palette.accent.color : Palette.secondary.color
         return Button { open ? list.closeDismissedList() : list.openDismissedList() } label: {
-            HStack(spacing: 4) {
+            // The board's `.dbtn` (22 points high, 6 of room at the sides,
+            // 4 between the icon and the count), scaled with the text.
+            HStack(spacing: 4 * k) {
                 IconView(icon: BoardIcons.dismissedBox, size: 14 * k, color: color)
                 if count > 0 {
                     Text("\(count)").font(.system(size: 11 * k)).foregroundColor(color)
                 }
             }
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 6 * k)
             .frame(height: 22 * k)
-            .background(RoundedRectangle(cornerRadius: 6).fill(open ? Palette.settingsTabSelectedBackground.color : .clear))
+            .background(RoundedRectangle(cornerRadius: 6 * k).fill(open ? Palette.selection.color : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -692,7 +715,9 @@ struct SearchRow: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        SearchRowContent(search: Binding(get: { list.search }, set: { list.setSearch($0) }), focused: $focused)
+        SearchRowContent(search: Binding(get: { list.search }, set: { list.setSearch($0) }), focused: $focused) { [list] in
+            list.clearSearch()
+        }
         .onChange(of: state.value.focused) { _, value in if focused != value { focused = value } }
         .onChange(of: focused) { _, value in if list.searchFocused != value { list.searchFocused = value } }
     }
@@ -702,23 +727,61 @@ struct SearchRow: View {
 struct SearchRowContent: View {
     var search: Binding<String>
     var focused: FocusState<Bool>.Binding
+    /// The clear button pressed (nil: the field clears its own text).
+    var clear: (() -> Void)? = nil
     @Environment(\.textScale) var k
 
     var body: some View {
         HStack(spacing: 6) {
-            IconView(icon: BoardIcons.search, size: 13 * k, color: Palette.waiting.color)
+            IconView(icon: BoardIcons.search, size: 13 * k, color: Palette.secondary.color)
             TextField("Search", text: search)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12 * k))
                 .focused(focused)
                 .accessibilityLabel("Search")
+            // At the right end inside the field, only while there is text
+            // (no room kept when empty); the text stops before it.
+            if !search.wrappedValue.isEmpty {
+                SearchClearButton(size: 12 * k) {
+                    if let clear {
+                        clear()
+                    } else {
+                        search.wrappedValue = ""
+                    }
+                    focused.wrappedValue = true
+                }
+            }
         }
         .padding(.horizontal, 8)
         .frame(height: 24 * k)
         .background(RoundedRectangle(cornerRadius: 6).fill(Palette.surface.color))
-        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.controlBorder.color, lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.border.color, lineWidth: 1))
         .frame(minWidth: 0, maxWidth: .infinity)
         .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+    }
+}
+
+/// The search field's clear button (DESIGN.md, "Search field"): a filled
+/// circle with a ×, the field's placeholder gray. Never a keyboard focus
+/// stop (mouse only, like the popover's other controls); the tooltip
+/// `Clear` (QuickTip); assistive apps read "Clear search".
+struct SearchClearButton: View {
+    var size: CGFloat
+    var press: () -> Void
+
+    var body: some View {
+        Button(action: press) {
+            ZStack {
+                Circle().fill(Palette.placeholder.color)
+                IconView(icon: BoardIcons.clearSearch, size: size, color: Palette.surface.color)
+            }
+            .frame(width: size, height: size)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .quickHelp(FilterText.clearSearch)
+        .accessibilityLabel(FilterText.clearSearchLabel)
     }
 }
 
@@ -854,7 +917,7 @@ struct DismissedHeading: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Button { list.closeDismissedList() } label: {
-                    Text("\u{2190}").font(.system(size: 13 * k)).foregroundColor(Palette.strongText.color)
+                    Text("\u{2190}").font(.system(size: 13 * k)).foregroundColor(Palette.text.color)
                         .padding(.horizontal, 4)
                         .contentShape(Rectangle())
                 }
@@ -868,7 +931,7 @@ struct DismissedHeading: View {
             .padding(EdgeInsets(top: 2, leading: 12, bottom: 4, trailing: 14))
             Text(DismissedText.note(keepDays: keepDays))
                 .font(.system(size: 11 * k))
-                .foregroundColor(Palette.waiting.color)
+                .foregroundColor(Palette.secondary.color)
                 .padding(EdgeInsets(top: 2, leading: 16, bottom: 8, trailing: 16))
         }
     }
@@ -907,9 +970,9 @@ struct KeyHints: View {
                 HStack(spacing: 3) {
                     Text(hint.key)
                         .font(.system(size: 11 * k, design: .monospaced))
-                        .foregroundColor(Palette.strongText.color)
+                        .foregroundColor(Palette.text.color)
                         .padding(.horizontal, 4)
-                        .background(RoundedRectangle(cornerRadius: 3).fill(Palette.tint.color))
+                        .background(RoundedRectangle(cornerRadius: 3).fill(Palette.fill.color))
                     Text(hint.text)
                 }
                 .fixedSize()
@@ -986,11 +1049,11 @@ struct GroupingSheet: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Grouping").font(.system(size: 13 * k, weight: .semibold))
                 HStack(spacing: 8) {
-                    Text("Group by").font(.system(size: 11 * k, weight: .semibold)).foregroundColor(Palette.strongText.color)
+                    Text("Group by").font(.system(size: 11 * k, weight: .semibold)).foregroundColor(Palette.text.color)
                     PullDown(title: options.groupBy.title, toolTip: "Group by", items: GroupBy.allCases.map { value in
                         IconMenuItem(value.title, checked: value == options.groupBy) { model.setGroupBy(value) }
                     })
-                    Text("Then by").font(.system(size: 11 * k, weight: .semibold)).foregroundColor(Palette.strongText.color)
+                    Text("Then by").font(.system(size: 11 * k, weight: .semibold)).foregroundColor(Palette.text.color)
                     PullDown(
                         title: options.thenByTitle, toolTip: "Then by", enabled: options.groupBy != .none,
                         items: options.thenByChoices.map { value in
@@ -1000,12 +1063,12 @@ struct GroupingSheet: View {
                     Spacer(minLength: 0)
                 }
                 HStack(spacing: 8) {
-                    Text("Sort").font(.system(size: 11 * k, weight: .semibold)).foregroundColor(Palette.strongText.color)
+                    Text("Sort").font(.system(size: 11 * k, weight: .semibold)).foregroundColor(Palette.text.color)
                     PullDown(title: options.sort.title, toolTip: "Sort", items: Self.sortItems(options) { model.setSort($0) })
                     Spacer(minLength: 0)
                 }
                 ForEach([options.groupBy, options.thenBy].filter { $0 != .none }, id: \.self) { by in
-                    Text("Order of " + by.title).font(.system(size: 11 * k, weight: .semibold)).foregroundColor(Palette.strongText.color)
+                    Text("Order of " + by.title).font(.system(size: 11 * k, weight: .semibold)).foregroundColor(Palette.text.color)
                     GroupOrderList(model: model, by: by)
                 }
                 HStack {
@@ -1019,7 +1082,7 @@ struct GroupingSheet: View {
                     .fill(Palette.settingsBackground.color)
                     .shadow(color: .black.opacity(0.22), radius: 15, y: 12)
             )
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.settingsTabBarBorder.color, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.border.color, lineWidth: 1))
             .padding(EdgeInsets(top: 118, leading: 20, bottom: 20, trailing: 20))
         }
     }
@@ -1043,7 +1106,7 @@ struct GroupOrderList: View {
         List {
             ForEach(groups) { group in
                 HStack(spacing: 8) {
-                    Text("\u{2261}").foregroundColor(Palette.grip.color)
+                    Text("\u{2261}").foregroundColor(Palette.tertiary.color)
                     Text(group.title).lineLimit(1)
                 }
                 .font(.system(size: 12 * k))
@@ -1052,7 +1115,7 @@ struct GroupOrderList: View {
         }
         .listStyle(.plain)
         .frame(height: min(CGFloat(groups.count), 6) * 24 * k + 4)
-        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.groupBorder.color, lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.border.color, lineWidth: 1))
     }
 }
 

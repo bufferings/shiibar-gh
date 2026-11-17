@@ -1953,7 +1953,7 @@ fn approved_reviews_on_my_pr_make_a_row_each_and_a_comment_with_a_body() {
             vec![
                 review("R_1", "alice", "APPROVED", T0 + 10, ""),
                 review("R_2", "bob", "APPROVED", T0 + 20, "LGTM"),
-                review("R_3", "renovate", "APPROVED", T0 + 30, ""),
+                review("R_3", "example-bot", "APPROVED", T0 + 30, ""),
             ],
         );
     });
@@ -1961,7 +1961,7 @@ fn approved_reviews_on_my_pr_make_a_row_each_and_a_comment_with_a_body() {
     let daemon = start(dir.path(), &github);
     setup(&daemon);
     daemon.clock(T0 + 100);
-    for (id, actor) in [("R_1", "alice"), ("R_2", "bob"), ("R_3", "renovate")] {
+    for (id, actor) in [("R_1", "alice"), ("R_2", "bob"), ("R_3", "example-bot")] {
         let row = daemon
             .row(&format!("{id}:approved"))
             .unwrap_or_else(|| panic!("{id}"));
@@ -1974,7 +1974,7 @@ fn approved_reviews_on_my_pr_make_a_row_each_and_a_comment_with_a_body() {
     assert!(daemon.row("R_1").is_none());
     // A bot is a user for Mute, by its GraphQL login (no `[bot]`): its
     // row turns gray.
-    daemon.ok(json!({"cmd":"mute","account":ME,"kind":"user","name":"renovate"}));
+    daemon.ok(json!({"cmd":"mute","account":ME,"kind":"user","name":"example-bot"}));
     assert_eq!(daemon.row("R_3:approved").unwrap()["muted"], true);
     assert_eq!(daemon.row("R_2:approved").unwrap()["muted"], false);
     daemon.stop();

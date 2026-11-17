@@ -19,7 +19,7 @@ final class StoreTests: XCTestCase {
         store.setOptions(ListOptions(groupBy: .status, thenBy: .owner, sort: .recentlyAdded), account: "1001")
         store.setKeepOnTop(false, account: "1001")
         store.setCollapsed(["review|todo"], account: "1001")
-        store.setExpanded(["mine|main"], account: "1001")
+        store.setExpanded(["mine|done"], account: "1001")
         store.setGroupOrders([.status: ["closed", "open"]], account: "1001")
         store.setRepositories(["o/b", "o/a"], account: "1001")
         store.setLastTab(.review, account: "1001", surface: .popover)
@@ -30,7 +30,7 @@ final class StoreTests: XCTestCase {
         XCTAssertFalse(again.keepOnTop(account: "1001"))
         XCTAssertTrue(again.keepOnTop(account: "583231"))
         XCTAssertEqual(again.collapsed(account: "1001"), ["review|todo"])
-        XCTAssertEqual(again.expanded(account: "1001"), ["mine|main"])
+        XCTAssertEqual(again.expanded(account: "1001"), ["mine|done"])
         XCTAssertEqual(again.groupOrders(account: "1001"), [.status: ["closed", "open"]])
         XCTAssertEqual(again.repositories(account: "1001"), ["o/b", "o/a"])
         XCTAssertEqual(again.lastTab(account: "1001", surface: .popover), .review)
@@ -40,10 +40,73 @@ final class StoreTests: XCTestCase {
         XCTAssertTrue(defaults.dictionaryRepresentation().keys.filter { $0.contains("1001") }.allSatisfy { $0.hasPrefix("v4.") })
     }
 
-    func testPaletteHasDarkVariants() {
-        XCTAssertLessThan(Palette.background.dark.red, Palette.background.light.red)
-        XCTAssertEqual(Palette.text.resolve(dark: false), RGB(hex: 0x1D1D1F))
-        XCTAssertEqual(Palette.text.resolve(dark: true), RGB(hex: 0xECECEE))
+    /// DESIGN.md, "Updating from 0.5": the collapsed and expanded state of
+    /// 0.5's one list of Mine (`mine|main`) is dropped the first time each
+    /// account's state is read; Mine's Done and the rest stay.
+    func testZeroFivesOneListOfMineIsForgotten() {
+        let (defaults, suite) = testDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(["mine|done", "mine|main", "review|todo"], forKey: "v4.collapsed.1001")
+        defaults.set(["mine|main"], forKey: "v4.expanded.1001")
+        defaults.set(["mine|main", "mine|done"], forKey: "v4.expanded.583231")
+        let store = UIStateStore(defaults: defaults)
+        XCTAssertEqual(store.collapsed(account: "1001"), ["mine|done", "review|todo"])
+        XCTAssertEqual(defaults.stringArray(forKey: "v4.collapsed.1001"), ["mine|done", "review|todo"], "saved without it")
+        XCTAssertEqual(store.expanded(account: "1001"), [])
+        XCTAssertEqual(defaults.stringArray(forKey: "v4.expanded.1001"), [])
+        XCTAssertEqual(defaults.stringArray(forKey: "v4.expanded.583231"), ["mine|main", "mine|done"], "another account until it is read")
+        XCTAssertEqual(store.expanded(account: "583231"), ["mine|done"])
+        // Mine's new sections start from the defaults.
+        let sections = layout(.mine, collapsed: store.collapsed(account: "1001"), expanded: store.expanded(account: "1001"))
+        XCTAssertEqual(sections.map(\.collapsed), [false, false, false, true])
+    }
+
+    /// DESIGN.md, "Account color": no dot (nor its room) for None.
+    func testOnlyAColoredAccountHasItsDot() {
+        XCTAssertFalse(AccountColor.none.showsDot)
+        for color in AccountColor.allCases where color != .none {
+            XCTAssertTrue(color.showsDot, "\(color)")
+        }
+    }
+
+    func testFixedColorsHaveDarkVariants() {
+        XCTAssertLessThan(Palette.purpleBackground.dark.red, Palette.purpleBackground.light.red)
+        XCTAssertEqual(Palette.green.resolve(dark: false), RGB(hex: 0x1F8A3E))
+        XCTAssertEqual(Palette.green.resolve(dark: true), RGB(hex: 0x2FA352))
+    }
+
+    /// The grounds follow the system colors with shiibar-cc's expressions:
+    /// the list's ground is darker than the card on dark and grayer on
+    /// light, and the card on dark is white at 0.07 over the ground, opaque.
+    func testGroundsFollowTheSystemColors() {
+        for dark in [false, true] {
+            let ground = Palette.background.resolved(dark: dark)
+            let card = Palette.surface.resolved(dark: dark)
+            XCTAssertEqual(ground.alphaComponent, 1, "dark=\(dark)")
+            XCTAssertEqual(card.alphaComponent, 1, "dark=\(dark)")
+            XCTAssertNotEqual(ground.redComponent, card.redComponent, accuracy: 0.01, "dark=\(dark)")
+        }
+        let ground = Palette.background.resolved(dark: true)
+        let card = Palette.surface.resolved(dark: true)
+        XCTAssertEqual(card.redComponent, ground.redComponent * 0.93 + 0.07, accuracy: 0.01)
+        let light = Palette.surface.resolved(dark: false)
+        let control = Tone(.controlBackgroundColor).resolved(dark: false)
+        XCTAssertEqual(light.redComponent, control.redComponent, accuracy: 0.001)
+    }
+
+    /// Text grays are the label colors; the selection is the accent color
+    /// at 0.16, and gray while the list does not have the keys.
+    func testTextAndSelectionFollowTheSystemColors() {
+        for dark in [false, true] {
+            XCTAssertEqual(Palette.text.resolved(dark: dark), Tone(.labelColor).resolved(dark: dark), "dark=\(dark)")
+            XCTAssertEqual(Palette.secondary.resolved(dark: dark), Tone(.secondaryLabelColor).resolved(dark: dark))
+            XCTAssertEqual(Palette.border.resolved(dark: dark), Tone(.separatorColor).resolved(dark: dark))
+            let accent = Tone(.controlAccentColor).resolved(dark: dark)
+            let selection = Palette.selection.resolved(dark: dark)
+            XCTAssertEqual(selection.alphaComponent, 0.16, accuracy: 0.001)
+            XCTAssertEqual(selection.redComponent, accent.redComponent, accuracy: 0.001)
+            XCTAssertEqual(Palette.inactiveSelection.resolved(dark: dark).alphaComponent, dark ? 0.26 : 0.18, accuracy: 0.001)
+        }
     }
 }
 
@@ -115,7 +178,7 @@ final class SettingsModelTests: XCTestCase {
         settings.setEvent(org, of: account, .teamReviewRequested, .list, false)
         XCTAssertTrue(settings.addMute(.repo, " example-org/legacy ", of: account))
         XCTAssertFalse(settings.addMute(.user, "  ", of: account), "an empty name is not taken")
-        settings.removeMute(.user, "renovate", of: account)
+        settings.removeMute(.user, "example-bot", of: account)
         settings.removeOwner(pub, of: account)
         settings.removeAccount(account)
         await settle()
@@ -124,7 +187,7 @@ final class SettingsModelTests: XCTestCase {
             "owner_notify bufferings-work example-org false", "owner_skip_drafts bufferings-work example-org true",
             "owner_events_set bufferings-work example-org team_review_requested list false",
             "mute bufferings-work repo example-org/legacy",
-            "unmute bufferings-work user renovate",
+            "unmute bufferings-work user example-bot",
             "owner_remove bufferings-work public", "account_remove bufferings-work",
         ] {
             XCTAssertTrue(api.calls.contains(call), call)
@@ -182,7 +245,7 @@ final class SettingsModelTests: XCTestCase {
     func testTheMutedLists() async {
         let settings = SettingsModel(app: app, launch: nil)
         let account = sampleAccount()
-        api.mutes = Mutes(repos: ["example-org/legacy"], users: ["renovate"], prs: [])
+        api.mutes = Mutes(repos: ["example-org/legacy"], users: ["example-bot"], prs: [])
         settings.windowOpened()
         settings.show(.account("3407303"))
         await settle()
@@ -654,3 +717,44 @@ final class AppearanceTests: XCTestCase {
     }
 }
 
+
+/// The popover's and the window's height (DESIGN.md, "Screens", "Filter"):
+/// the user's, raised to the least height for the text size (the open
+/// options and the list's minimum included).
+final class SurfaceHeightTests: XCTestCase {
+    func testTheMinimumByTextSize() {
+        // Above the list with the options open: header, tabs, search and
+        // Filter rows and the options' area; below: the key hints.
+        XCTAssertEqual(SurfaceHeight.minimum(above: 150, below: 26, k: 1), 300, "never under 300")
+        XCTAssertEqual(SurfaceHeight.minimum(above: 150 + 139, below: 26, k: 1), 415)
+        XCTAssertEqual(SurfaceHeight.minimum(above: 225 + 208.5, below: 39, k: 1.5), 623, "at 18: everything grows")
+        XCTAssertEqual(SurfaceHeight.minimum(above: 112.5, below: 19.5, k: 0.75), 300)
+    }
+
+    func testARememberedHeightIsRaisedToTheMinimum() {
+        var height = SurfaceHeight(user: 320)
+        XCTAssertEqual(height.shown(), 320)
+        XCTAssertTrue(height.setMinimum(415))
+        XCTAssertEqual(height.shown(), 415, "raised when applied")
+        XCTAssertEqual(height.user, 320, "the user's height is the one kept")
+        XCTAssertFalse(height.setMinimum(415.2), "no change under half a point")
+        XCTAssertFalse(height.setMinimum(415), "the same minimum: nothing changes")
+        height.setMinimum(300)
+        XCTAssertEqual(height.shown(), 320, "a smaller text size: back to the user's height")
+        var tall = SurfaceHeight(user: 700)
+        tall.setMinimum(415)
+        XCTAssertEqual(tall.shown(), 700, "tall enough: unchanged")
+        XCTAssertEqual(SurfaceHeight(user: 320).raised(to: 415, room: nil), 415)
+    }
+
+    func testAResizeIsKeptAndTheScreenCaps() {
+        var height = SurfaceHeight(user: 320)
+        height.setMinimum(415)
+        height.setByUser(480)
+        XCTAssertEqual(height.shown(), 480)
+        height.setMinimum(800)
+        XCTAssertEqual(height.shown(room: 600), 600, "the screen's room: the list gets what is left")
+        XCTAssertEqual(height.shown(room: 200), 300, "never under 300")
+        XCTAssertEqual(SurfaceHeight(user: 100).user, 300)
+    }
+}

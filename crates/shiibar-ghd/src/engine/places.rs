@@ -14,7 +14,6 @@ fn wire_section(section: Section) -> proto::Section {
         Section::Doing => proto::Section::Doing,
         Section::Todo => proto::Section::Todo,
         Section::Waiting => proto::Section::Waiting,
-        Section::Main => proto::Section::Main,
     }
 }
 
@@ -178,7 +177,9 @@ impl Engine {
         // entered it earlier in the same second (DESIGN.md, "Review").
         let done_seq = self.next_done_seq();
         // Where the card goes: a tab and its section, or that tab's Done.
-        let (tab, section, to_done) = match args.tab {
+        // Review and Mine take the same sections, and the section is needed
+        // in every case (DESIGN.md, "Wire format").
+        let tab = match args.tab {
             proto::PlaceTab::None => {
                 if args.section.is_some() || args.before.is_some() || args.at.is_some() {
                     return Err(invalid("place none takes no section or position"));
@@ -204,29 +205,26 @@ impl Engine {
                 if authored {
                     return Err(invalid(format!("{key} is your own and stays in Mine")));
                 }
-                match args.section {
-                    _ if !open && from.is_none() => (PlacedTab::Review, Section::Todo, true),
-                    Some(proto::Section::Doing) => (PlacedTab::Review, Section::Doing, false),
-                    Some(proto::Section::Todo) => (PlacedTab::Review, Section::Todo, false),
-                    Some(proto::Section::Waiting) => (PlacedTab::Review, Section::Waiting, false),
-                    Some(proto::Section::Done) => (PlacedTab::Review, Section::Todo, true),
-                    Some(_) => return Err(invalid("review takes doing, todo, waiting or done")),
-                    None => return Err(invalid("review needs a section")),
-                }
+                PlacedTab::Review
             }
-            proto::PlaceTab::Mine => match args.section {
-                _ if !open && from.is_none() => (PlacedTab::Mine, Section::Main, true),
-                None | Some(proto::Section::Main) => (PlacedTab::Mine, Section::Main, false),
-                Some(proto::Section::Done) => (PlacedTab::Mine, Section::Main, true),
-                Some(_) => return Err(invalid("mine takes main or done")),
-            },
+            proto::PlaceTab::Mine => PlacedTab::Mine,
+        };
+        let (section, to_done) = match args.section {
+            None => return Err(invalid("review and mine need a section")),
+            // A merged or closed unplaced PR goes to that tab's Done whatever
+            // the section says.
+            Some(_) if !open && from.is_none() => (Section::Todo, true),
+            Some(proto::Section::Doing) => (Section::Doing, false),
+            Some(proto::Section::Todo) => (Section::Todo, false),
+            Some(proto::Section::Waiting) => (Section::Waiting, false),
+            Some(proto::Section::Done) => (Section::Todo, true),
         };
         if to_done {
             // DESIGN.md, "Review": Done keeps its own order, newest entry
             // first. A merged or closed unplaced PR goes straight to Done
             // and keeps the time of its detection; another card enters Done
             // now. A card keeps the section and rank it had before Done, or
-            // takes the end of Todo (Mine) when it comes from elsewhere.
+            // takes the end of Todo when it comes from elsewhere.
             if !open && from.is_none() {
                 self.place_at_end(&pr_key, tab, section);
                 if let Some(pr) = self.pr_mut(&pr_key)
@@ -278,13 +276,14 @@ impl Engine {
             }
             (None, Some(proto::At::Top)) => 0,
             (None, Some(proto::At::Bottom)) => members.len(),
+            // Todo takes a card from Doing or Waiting of the same tab at its
+            // top, and any other card at its end, in Review and Mine alike.
             (None, None) => {
                 let from_side = !from_done
                     && from.is_some_and(|p| {
-                        p.tab == PlacedTab::Review
-                            && matches!(p.section, Section::Doing | Section::Waiting)
+                        p.tab == tab && matches!(p.section, Section::Doing | Section::Waiting)
                     });
-                if tab == PlacedTab::Review && section == Section::Todo && from_side {
+                if section == Section::Todo && from_side {
                     0
                 } else {
                     members.len()

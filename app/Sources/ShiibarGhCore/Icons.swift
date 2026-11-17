@@ -111,7 +111,7 @@ public struct HeaderButton: View {
 
     public var body: some View {
         Button(action: action) {
-            IconView(icon: icon, size: size, color: Palette.botIcon.color)
+            IconView(icon: icon, size: size, color: Palette.secondary.color)
                 .frame(width: 24, height: 24)
                 .contentShape(Rectangle())
         }
@@ -128,8 +128,8 @@ public struct HoverButtonStyle: ButtonStyle {
 
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .foregroundColor(Palette.botIcon.color)
-            .background(RoundedRectangle(cornerRadius: 6).fill(hovering || configuration.isPressed ? Palette.tint.color : .clear))
+            .foregroundColor(Palette.secondary.color)
+            .background(RoundedRectangle(cornerRadius: 6).fill(hovering || configuration.isPressed ? Palette.fill.color : .clear))
             .onHover { hovering = $0 }
     }
 }
@@ -216,7 +216,8 @@ public enum IconMenu {
 }
 
 /// The menu bar image of one account (docs/design/MenuBarIcon.html): the
-/// placeholder glyph in the account color, the blue dot at the top right and
+/// placeholder glyph in the account color, the dot in the accent color at the
+/// top right and
 /// the triangle at the bottom left, each cut out of the glyph so it reads on
 /// any menu bar.
 ///
@@ -230,16 +231,35 @@ public enum IconMenu {
 /// only then, or when the color or the marks change: `StatusItemLook`).
 /// The image is not a template: a template image "should consist of only
 /// black and clear colors" (NSImage.isTemplate), which would lose the tint
-/// and the blue dot.
+/// and the dot's accent color.
 public enum MenuBarImage {
     public static let width: CGFloat = 26
     public static let height: CGFloat = 22
 
-    public static func make(color: AccountColor, marks: MenuBarMarks, appearance: NSAppearance) -> NSImage {
+    /// The accent color of the dot as drawn for `appearance`, in sRGB: the
+    /// image is drawn with it, and the status item's look keeps it
+    /// (`StatusItemLook.accent`), so the image changes only with it.
+    public static func dotColor(for appearance: NSAppearance) -> NSColor {
+        var color = NSColor.controlAccentColor
+        appearance.performAsCurrentDrawingAppearance {
+            color = Palette.accent.nsColor.usingColorSpace(.sRGB) ?? .controlAccentColor
+        }
+        return color
+    }
+
+    public static func components(_ color: NSColor) -> [CGFloat] {
+        let c = color.usingColorSpace(.sRGB) ?? color
+        return [c.redComponent, c.greenComponent, c.blueComponent, c.alphaComponent]
+    }
+
+    public static func make(
+        color: AccountColor, marks: MenuBarMarks, appearance: NSAppearance, dot: NSColor? = nil
+    ) -> NSImage {
+        let dot = (dot ?? dotColor(for: appearance)).cgColor
         let image = NSImage(size: NSSize(width: width, height: height), flipped: false) { _ in
             var drawn = false
             appearance.performAsCurrentDrawingAppearance {
-                drawn = draw(color: color, marks: marks, dark: appearance.isDark)
+                drawn = draw(color: color, marks: marks, dark: appearance.isDark, dot: dot)
             }
             return drawn
         }
@@ -247,7 +267,7 @@ public enum MenuBarImage {
         return image
     }
 
-    private static func draw(color: AccountColor, marks: MenuBarMarks, dark: Bool) -> Bool {
+    private static func draw(color: AccountColor, marks: MenuBarMarks, dark: Bool, dot: CGColor) -> Bool {
         guard let context = NSGraphicsContext.current?.cgContext else { return false }
         // None: the color of the other menu bar icons (DESIGN.md, "Account
         // colors": black in light, white in dark).
@@ -273,7 +293,7 @@ public enum MenuBarImage {
         if marks.dot {
             let center = CGPoint(x: 20, y: height - 4.5)
             knockOut(CGPath(ellipseIn: CGRect(x: center.x - 5, y: center.y - 5, width: 10, height: 10), transform: nil))
-            context.setFillColor(Palette.blueDot.nsColor.cgColor)
+            context.setFillColor(dot)
             context.fillEllipse(in: CGRect(x: center.x - 3.5, y: center.y - 3.5, width: 7, height: 7))
         }
         if marks.triangle {

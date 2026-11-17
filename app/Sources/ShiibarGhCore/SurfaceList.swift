@@ -76,9 +76,10 @@ public final class SurfaceListModel: ObservableObject {
     @Quiet public private(set) var selectedCards = CardSelection() { didSet { refreshChrome(); selectionMoved() } }
     /// The Grouping sheet shows.
     @Published public var showsGrouping = false
-    /// The card whose × was pressed while its confirmation sheet shows
-    /// (DESIGN.md, "Confirming ×"): the list takes no input meanwhile.
-    @Published public private(set) var confirmingDismiss: String? = nil
+    /// What the Dismiss confirmation sheet asks about while it shows (a
+    /// card's ×, or `Dismiss all`; DESIGN.md, "Confirming ×", "`Dismiss
+    /// all`"): the list takes no input meanwhile.
+    @Published public private(set) var confirmingDismiss: DismissConfirmation? = nil
     /// `Don't ask again` on that sheet; off each time the sheet opens.
     @Published public var skipsNextConfirmations = false
     /// The card whose height changes because `more`, `less`, "+ N more" or
@@ -172,8 +173,8 @@ public final class SurfaceListModel: ObservableObject {
         Visibility(filter: filter, kept: lingering)
     }
 
-    /// The blue dot of `Filter`: a card of the tab shown that the Filter
-    /// hides has a blue unread row (DESIGN.md, "Filter").
+    /// The accent-colored dot of `Filter`: a card of the tab shown that the Filter
+    /// hides has a colored unread row (DESIGN.md, "Filter").
     public var filterDot: Bool {
         Listing.filterDot(data.cards, tab: tab, filter: filter)
     }
@@ -269,7 +270,7 @@ public final class SurfaceListModel: ObservableObject {
     }
 
     /// The cards changed (AccountViewModel), or the selection did: a card
-    /// shown that lost its last blue unread row is kept. Worked out before
+    /// shown that lost its last colored unread row is kept. Worked out before
     /// the selection follows the change, so a selected card that was read
     /// stays selected.
     func updateLinger() {
@@ -306,7 +307,7 @@ public final class SurfaceListModel: ObservableObject {
     }
 
     /// The surface is shown again (the popover opened, the window opened):
-    /// the cards without a blue unread row now do not show, selected or
+    /// the cards without a colored unread row now do not show, selected or
     /// not (DESIGN.md, "Filter").
     func shown() {
         resetLinger()
@@ -404,9 +405,15 @@ public final class SurfaceListModel: ObservableObject {
         return sections
     }
 
-    /// The Dismissed list after its search.
+    /// The Dismissed list by repository, after its search.
+    public var dismissedGroups: [DismissedGroup] {
+        Listing.dismissedGroups(data.cards, search: data.search(.dismissed))
+    }
+
+    /// The Dismissed list's cards after its search, in the order shown:
+    /// group by group (↑↓ goes from card to card across the groups).
     public var dismissedCards: [Card] {
-        Listing.search(Listing.dismissed(data.cards), data.search(.dismissed))
+        dismissedGroups.flatMap(\.cards)
     }
 
     /// Every dismissed card, whatever the search: the count.
@@ -658,14 +665,29 @@ public final class SurfaceListModel: ObservableObject {
     }
 
     /// The confirmation sheet's `Dismiss` (⏎) or `Cancel` (Esc): only the
-    /// card whose × was pressed is dismissed, whatever is selected.
-    /// `Don't ask again` counts with `Dismiss` only.
+    /// card whose × was pressed, or the cards `Dismiss all` took, are
+    /// dismissed, whatever is selected. `Don't ask again` counts with
+    /// `Dismiss` only.
     public func answerDismiss(_ confirmed: Bool) {
-        guard let card = confirmingDismiss else { return }
+        guard let asked = confirmingDismiss else { return }
         confirmingDismiss = nil
         guard confirmed else { return }
         if skipsNextConfirmations { app.stopConfirmingDismiss() }
-        data.dismiss(card)
+        switch asked {
+        case .card(let card): data.dismiss(card)
+        case .all(let section, let cards): dismissDone(section, cards)
+        }
+    }
+
+    /// `Dismiss all`'s cards that are still in that Done (DESIGN.md,
+    /// "`Dismiss all`"): one already dismissed, moved to another section or
+    /// tab, back where it was by a reopen, or gone is left out. One request
+    /// a card, as with several selected cards; a refused one comes back
+    /// alone. The selection is not part of it.
+    private func dismissDone(_ section: String, _ cards: [String]) {
+        let still = Set(data.cards.filter { !$0.isDismissed && $0.sectionKey == section }.map(\.id))
+        let taken = cards.filter(still.contains)
+        if !taken.isEmpty { data.dismissAll(taken, failed: { _ in }) }
     }
 
     /// A key while the surface has the focus and the search field does not.
@@ -711,8 +733,9 @@ public final class SurfaceListModel: ObservableObject {
         case .delete where !showingDismissed && multiple:
             multi(.dismiss)
         case .moveTo(let section) where !showingDismissed && multiple:
-            guard tab == .review, section != .done else { return }
-            multi(.move(.review(section)))
+            // Review and Mine only: in All, D / T / W do nothing.
+            guard tab != .all, section != .done else { return }
+            multi(.move(PlaceTarget(tab == .review ? .review : .mine, section)))
         case .reorder(let up) where !showingDismissed && multiple:
             reorderSelected(up: up)
         case .open, .markAllRead, .delete, .reorder, .moveTo:
@@ -735,6 +758,18 @@ public final class SurfaceListModel: ObservableObject {
         data.setSearch(text, searchScope)
     }
 
+    /// The search field's clear button shows while there is text (DESIGN.md,
+    /// "Screens", "Search field").
+    public var showsSearchClear: Bool { !search.isEmpty }
+
+    /// The clear button pressed: the text of what shows (the tab's, or the
+    /// Dismissed list's) goes, and the search field keeps (or takes) the
+    /// keyboard. Esc in the field clears and goes back to the list instead.
+    public func clearSearch() {
+        setSearch("")
+        searchFocused = true
+    }
+
     public func perform(_ action: PopoverAction) {
         switch action {
         case .multi(let operation):
@@ -754,9 +789,19 @@ public final class SurfaceListModel: ObservableObject {
         case .confirmDismiss(let card):
             if app.confirmDismiss {
                 skipsNextConfirmations = false
-                confirmingDismiss = card
+                confirmingDismiss = .card(card)
             } else {
                 data.dismiss(card)
+            }
+        case .dismissAll(let key):
+            // The cards shown when it is pressed: the sheet keeps them.
+            guard !showingDismissed, let cards = sections.first(where: { $0.key == key })?.dismissAllCards else { return }
+            let ids = cards.map(\.id)
+            if app.confirmDismiss {
+                skipsNextConfirmations = false
+                confirmingDismiss = .all(section: key, cards: ids)
+            } else {
+                dismissDone(key, ids)
             }
         case .restore(let card):
             data.restore(card)

@@ -180,7 +180,8 @@ final class AppModelTests: XCTestCase {
         view.openTab(.review)
         view.select(.header(card: "T1"))
         view.perform(.confirmDismiss(card: "N1"))
-        XCTAssertEqual(view.confirmingDismiss, "N1")
+        XCTAssertEqual(view.confirmingDismiss, .card("N1"))
+        XCTAssertEqual(view.confirmingDismiss?.title, "Dismiss this pull request?")
         XCTAssertNil(view.data.cards.first { $0.id == "N1" }?.dismissedAt, "nothing dismissed yet")
         view.press(.delete)
         XCTAssertNil(view.data.cards.first { $0.id == "T1" }?.dismissedAt, "the list takes no key meanwhile")
@@ -226,6 +227,213 @@ final class AppModelTests: XCTestCase {
         try await Task.sleep(nanoseconds: 100_000_000)
         let saved = try await view.data.app.api.configGet(DismissedText.confirmKey)
         XCTAssertEqual(saved.boolValue, false, "saved as the setting")
+    }
+
+    /// Review's Done with D1 and E1–E6 (E6 muted for its author).
+    func doneCards() -> [Card] {
+        var cards = sampleCards()
+        for n in 1...6 {
+            cards.append(card("E\(n)", pr: "example-org/web#\(300 + n)", author: n == 6 ? "example-bot" : "ts", state: .merged,
+                              placement: review(.done, n), muted: n == 6 ? [.author] : []))
+        }
+        return cards
+    }
+
+    func dismissedIds(_ view: SurfaceListModel) -> Set<String> {
+        Set(view.data.cards.filter(\.isDismissed).map(\.id))
+    }
+
+    /// DESIGN.md, "`Dismiss all`": the sheet counts the cards shown when it
+    /// was pressed (the folded one too, not the muted one the Filter
+    /// hides), and `Dismiss` sends one `dismiss` a card.
+    func testDismissAllAsksThenDismissesTheCardsShown() async {
+        let view = await loaded(doneCards())
+        view.openTab(.review)
+        view.perform(.dismissAll(section: "review|done"))
+        XCTAssertEqual(view.confirmingDismiss, .all(section: "review|done", cards: ["D1", "E1", "E2", "E3", "E4", "E5"]))
+        XCTAssertEqual(view.confirmingDismiss?.title, "Dismiss 6 pull requests?")
+        XCTAssertEqual(view.confirmingDismiss?.text(keepDays: 7),
+                       "They move to the Dismissed list and are removed after 7 days. You can restore them from there.")
+        XCTAssertEqual(dismissedIds(view), ["X1", "X2"], "nothing dismissed yet")
+        view.press(.delete)
+        XCTAssertEqual(dismissedIds(view), ["X1", "X2"], "the list takes no key meanwhile")
+        view.answerDismiss(false)
+        XCTAssertNil(view.confirmingDismiss)
+        XCTAssertEqual(dismissedIds(view), ["X1", "X2"], "Cancel changes nothing")
+        api.clearCalls()
+        view.perform(.dismissAll(section: "review|done"))
+        view.answerDismiss(true)
+        XCTAssertEqual(dismissedIds(view), ["X1", "X2", "D1", "E1", "E2", "E3", "E4", "E5"], "shown at once")
+        XCTAssertTrue(view.data.app.confirmDismiss, "the setting stays")
+        await settle()
+        XCTAssertEqual(calls("dismiss").count, 6)
+        XCTAssertTrue(calls("dismiss").contains("dismiss bufferings-work acme-corp/infra#58"))
+        XCTAssertFalse(calls("dismiss").contains { $0.hasSuffix("#306") }, "the muted card the Filter hides stays")
+    }
+
+    /// With search text only the matching cards; one card reads as one.
+    /// With search text only the matching cards; one card left: no
+    /// `Dismiss all` (its × does the same).
+    func testDismissAllTakesTheSearchAndNeedsTwoCards() async {
+        let view = await loaded(doneCards())
+        view.openTab(.review)
+        view.setSearch("Title E3")
+        XCTAssertEqual(view.sections.first { $0.isDone }?.detail, "6 PRs", "the heading counts every card")
+        XCTAssertNil(view.sections.first { $0.isDone }?.dismissAllCards, "one card")
+        view.perform(.dismissAll(section: "review|done"))
+        XCTAssertNil(view.confirmingDismiss, "nothing to press")
+        view.setSearch("web#30")
+        view.perform(.dismissAll(section: "review|done"))
+        XCTAssertEqual(view.confirmingDismiss, .all(section: "review|done", cards: ["E1", "E2", "E3", "E4", "E5"]))
+        XCTAssertEqual(view.confirmingDismiss?.title, "Dismiss 5 pull requests?")
+        view.answerDismiss(true)
+        XCTAssertEqual(dismissedIds(view), ["X1", "X2", "E1", "E2", "E3", "E4", "E5"])
+        // Collapsed: no `Dismiss all`, the action does nothing.
+        view.setSearch("")
+        view.data.setCollapsed("review|done", true)
+        view.perform(.dismissAll(section: "review|done"))
+        XCTAssertNil(view.confirmingDismiss)
+    }
+
+    /// The sheet keeps its cards while the list changes; at `Dismiss` a card
+    /// no longer in that Done is left out (DESIGN.md, "`Dismiss all`").
+    func testDismissAllLeavesOutCardsThatLeftDoneMeanwhile() async {
+        let view = await loaded(doneCards())
+        view.openTab(.review)
+        view.perform(.dismissAll(section: "review|done"))
+        let asked = view.confirmingDismiss
+        // Meanwhile: E1 back in Todo (a reopen), E2 dismissed elsewhere,
+        // E3 gone, E4 moved to Mine.
+        var next = doneCards()
+        next[next.firstIndex { $0.id == "E1" }!].placement = review(.todo, 9)
+        next[next.firstIndex { $0.id == "E2" }!].dismissedAt = T0
+        next.removeAll { $0.id == "E3" }
+        next[next.firstIndex { $0.id == "E4" }!].placement = mine(.todo, 9)
+        api.cards = next
+        view.data.reload()
+        await settle()
+        XCTAssertEqual(view.confirmingDismiss, asked, "the sheet's cards and count stay")
+        api.clearCalls()
+        view.answerDismiss(true)
+        await settle()
+        XCTAssertEqual(Set(calls("dismiss")), [
+            "dismiss bufferings-work acme-corp/infra#58", "dismiss bufferings-work example-org/web#305",
+        ])
+    }
+
+    /// `Don't ask again` turns `confirm_dismiss` off for × and `Dismiss
+    /// all`; off, `Dismiss all` dismisses at once.
+    func testDismissAllFollowsConfirmDismiss() async {
+        let m4 = card("M4", pr: "example-org/api#391", author: "bufferings-work", authored: true, state: .merged, placement: mine(.done, 1))
+        let view = await loaded(doneCards() + [m4])
+        view.openTab(.mine)
+        view.perform(.dismissAll(section: "mine|done"))
+        XCTAssertEqual(view.confirmingDismiss, .all(section: "mine|done", cards: ["M3", "M4"]))
+        XCTAssertFalse(view.skipsNextConfirmations, "off when the sheet opens")
+        view.skipsNextConfirmations = true
+        view.answerDismiss(true)
+        XCTAssertFalse(view.data.app.confirmDismiss)
+        XCTAssertTrue(dismissedIds(view).isSuperset(of: ["M3", "M4"]))
+        view.openTab(.review)
+        view.perform(.dismissAll(section: "review|done"))
+        XCTAssertNil(view.confirmingDismiss, "no sheet")
+        XCTAssertTrue(dismissedIds(view).isSuperset(of: ["D1", "E1", "E5"]))
+        view.perform(.confirmDismiss(card: "T1"))
+        XCTAssertNil(view.confirmingDismiss, "nor for ×")
+    }
+
+    /// A refused card alone comes back, with one band for the action; the
+    /// selected "+ N more PRs" that went is not selected any more.
+    func testDismissAllShowsAFailureOnceAndClearsTheSelectionThatWent() async {
+        let view = await loaded(doneCards())
+        view.openTab(.review)
+        view.data.app.stopConfirmingDismiss()
+        await settle()
+        api.refuseContaining["#302"] = DaemonError(code: .notFound, message: "Pull request not found")
+        api.refuseContaining["#303"] = DaemonError(code: .notFound, message: "Pull request not found")
+        view.select(.more("review|done"))
+        XCTAssertEqual(view.selection, .more("review|done"))
+        view.perform(.dismissAll(section: "review|done"))
+        XCTAssertNil(view.selection, "the line went with the cards")
+        // The daemon dismisses the others.
+        api.cards = doneCards().map { card in
+            var card = card
+            if ["D1", "E1", "E4", "E5"].contains(card.id) { card.dismissedAt = T0 }
+            return card
+        }
+        await settle()
+        XCTAssertEqual(dismissedIds(view).intersection(["E2", "E3"]), [], "the refused ones are back")
+        XCTAssertEqual(view.data.failure, "Couldn't dismiss: Pull request not found")
+        XCTAssertEqual(view.sections.first { $0.isDone }?.matching.map(\.id), ["E2", "E3"])
+    }
+
+    /// The requests of the account reach the daemon in the order of the
+    /// operations, whatever each one takes (DESIGN.md, "Showing what an
+    /// operation did"): here the first is slow to arrive. A refused one is
+    /// taken back alone and the later ones still go.
+    func testOperationsReachTheDaemonInTheirOrder() async {
+        let view = await loaded()
+        view.openTab(.mine)
+        api.arrivalDelay = ["place": 150_000_000]
+        api.refuseContaining = ["restore": DaemonError(code: .notFound, message: "Pull request not found")]
+        api.clearCalls()
+        view.select(.header(card: "M2"))
+        view.press(.moveTo(.doing))
+        view.press(.moveTo(.todo))
+        XCTAssertEqual(view.sections[1].cards.map(\.id), ["M2", "M1"], "shown at once: back at the top of Todo")
+        view.perform(.dismiss(card: "N1"))
+        view.perform(.restore(card: "X1"))
+        view.perform(.mute(.repo, "acme-corp/web"))
+        view.data.markRead(["m1"])
+        view.perform(.place(PlaceMove(card: "T1", target: .review(.waiting), position: .byDefault, verb: .move)))
+        // Each waits for the one before: wait until the last has gone (or
+        // 10 seconds), however busy the machine.
+        func sent() -> [String] { api.calls.filter { !$0.hasPrefix("list") && !$0.hasPrefix("mutes_get") } }
+        for _ in 0..<200 where sent().count < 7 { await settle() }
+        await settle()
+        XCTAssertEqual(sent(), [
+            "place bufferings-work acme-corp/web#77 mine doing",
+            "place bufferings-work acme-corp/web#77 mine todo",
+            "dismiss bufferings-work acme-corp/web#80",
+            "restore bufferings-work example-org/web#205",
+            "mute bufferings-work repo acme-corp/web",
+            "read m1",
+            "place bufferings-work example-org/api#407 review waiting",
+        ])
+        XCTAssertEqual(view.data.failure, "Couldn't restore: Pull request not found")
+    }
+
+    /// The search field's clear button (DESIGN.md, "Search field"): shown
+    /// while there is text; it clears the text of what shows (the tab's or
+    /// the Dismissed list's) and puts the keyboard in the field.
+    func testTheClearButtonClearsTheTextOfWhatShows() async {
+        let view = await loaded()
+        view.openTab(.review)
+        XCTAssertFalse(view.showsSearchClear, "no text: no button")
+        view.setSearch("retry")
+        view.data.setSearch("old", .tab(.mine))
+        XCTAssertTrue(view.showsSearchClear)
+        XCTAssertFalse(view.searchFocused)
+        view.clearSearch()
+        XCTAssertEqual(view.search, "")
+        XCTAssertFalse(view.showsSearchClear)
+        XCTAssertTrue(view.searchFocused, "the field takes the keyboard")
+        XCTAssertEqual(view.data.search(.tab(.mine)), "old", "another tab's text stays")
+        // The Dismissed list's own text.
+        view.searchFocused = false
+        view.openDismissedList()
+        view.setSearch("infra")
+        view.data.setSearch("keep", .tab(.review))
+        XCTAssertTrue(view.showsSearchClear)
+        view.clearSearch()
+        XCTAssertEqual(view.data.search(.dismissed), "")
+        XCTAssertEqual(view.data.search(.tab(.review)), "keep", "the tab's text stays")
+        XCTAssertTrue(view.searchFocused)
+        // Esc in the field clears and goes back to the list instead.
+        view.setSearch("x")
+        view.leaveSearch(clearing: true)
+        XCTAssertEqual(view.search, "")
+        XCTAssertFalse(view.searchFocused)
     }
 
     /// Main.html: "Couldn't dismiss: daemon not running".
@@ -330,7 +538,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(calls("mute"), ["mute bufferings-work repo example-org/web"])
         XCTAssertEqual(view.data.mutes, Mutes(repos: ["example-org/web"]))
         api.refuse["unmute"] = DaemonError(code: .notFound, message: "Not muted")
-        view.perform(.unmute(.user, "renovate"))
+        view.perform(.unmute(.user, "example-bot"))
         await settle()
         XCTAssertEqual(view.data.failure, "Couldn't unmute: Not muted")
         XCTAssertTrue(view.data.cards[6].isMuted, "back to muted")
@@ -348,7 +556,7 @@ final class AppModelTests: XCTestCase {
         let view = await loaded()
         view.openTab(.review)
         api.refuse["place"] = DaemonError(code: .invalid, message: "Invalid")
-        view.perform(.place(PlaceMove(card: "N1", target: .mine, position: .byDefault, verb: .add)))
+        view.perform(.place(PlaceMove(card: "N1", target: .mine(.todo), position: .byDefault, verb: .add)))
         await settle()
         XCTAssertEqual(view.data.failure, "Couldn't add: Invalid")
         view.perform(.place(PlaceMove(card: "M2", target: .none, position: .byDefault, verb: .remove)))
@@ -393,7 +601,7 @@ final class AppModelTests: XCTestCase {
         await settle()
         XCTAssertEqual(calls("read"), ["read m1"], "only the tab's; never read_all")
         view.openTab(.review)
-        view.setSearch("renovate")
+        view.setSearch("example-bot")
         view.perform(.markAllRead)
         await settle()
         XCTAssertEqual(calls("read"), ["read m1"], "the muted cards the Filter hides are left out")

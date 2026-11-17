@@ -51,8 +51,7 @@ public enum BoardIcons {
         [.rect(x: 2, y: 3, width: 12, height: 10, radius: 1.5), .path("M2 6h12")],
         lineWidth: 1.5, roundJoins: true
     )
-    /// The header's Settings button: a gear (Main.html since the owner's
-    /// stage 6 review).
+    /// The header's Settings button: a gear (Main.html).
     public static let settings = BoardIcon(
         [
             .path("M8.00 1.40 L9.29 1.53 L9.88 3.47 L10.72 3.93 L12.67 3.33 L13.49 4.33 L12.53 6.12 L12.81 7.04 L14.60 8.00 L14.47 9.29 L12.53 9.88 L12.07 10.72 L12.67 12.67 L11.67 13.49 L9.88 12.53 L8.96 12.81 L8.00 14.60 L6.71 14.47 L6.12 12.53 L5.28 12.07 L3.33 12.67 L2.51 11.67 L3.47 9.88 L3.19 8.96 L1.40 8.00 L1.53 6.71 L3.47 6.12 L3.93 5.28 L3.33 3.33 L4.33 2.51 L6.12 3.47 L7.04 3.19Z"),
@@ -85,7 +84,7 @@ public enum BoardIcons {
         lineWidth: 1.4, roundCaps: true, roundJoins: true
     )
     /// The display mode switch of the tab row (DESIGN.md, "Compact";
-    /// Main.html, candidate A of the Compact icons, chosen by the owner).
+    /// Main.html, the Compact icons).
     /// `Detailed` (`compactOff`): a card frame with a heading line and two
     /// shorter rows; `Compact` (`compactOn`): two slim cards stacked,
     /// headings only. Swap the paths here to change the glyphs.
@@ -200,6 +199,10 @@ public enum BoardIcons {
     public static let dismiss = BoardIcon([.path("M4.5 4.5l7 7M11.5 4.5l-7 7")], lineWidth: 1.7, roundCaps: true)
     /// The search field's magnifier (Main.html `.search`).
     public static let search = BoardIcon([.circle(cx: 7, cy: 7, r: 4.5, dash: nil), .path("M10.5 10.5L14 14")], lineWidth: 1.6, roundCaps: true)
+    /// The search field's clear button (Main.html `.sclr`): the × drawn in
+    /// the field's color over a filled circle (the standard search field's
+    /// clear glyph). This is the ×; the circle is filled under it.
+    public static let clearSearch = BoardIcon([.path("M5.6 5.6l4.8 4.8M10.4 5.6l-4.8 4.8")], lineWidth: 1.6, roundCaps: true)
 }
 
 extension BoardIcons {
@@ -224,7 +227,8 @@ extension BoardIcons {
 }
 
 /// The marks on an account's menu bar icon (DESIGN.md, "Screens";
-/// MenuBarIcon.html): the blue dot top right and the triangle bottom left.
+/// MenuBarIcon.html): the dot in the accent color top right and the
+/// triangle bottom left.
 /// There is no number.
 public struct MenuBarMarks: Equatable {
     public var dot: Bool
@@ -253,29 +257,54 @@ public struct MenuBarMarks: Equatable {
 }
 
 /// What a status item shows. The image is set again only when this changes
-/// (DESIGN.md, "UI": the appearance, the account color, the blue dot and the
-/// triangle), and the label and tooltip only when they change: setting the
-/// image of a status button redraws it and notifies its effective
-/// appearance, which made 0.3.0 redraw in a loop.
+/// (DESIGN.md, "UI": the appearance, the account color, the dot and its
+/// accent color, the triangle), and the label and tooltip only when they
+/// change: setting the image of a status button redraws it and notifies its
+/// effective appearance, which made 0.3.0 redraw in a loop.
 public struct StatusItemLook: Equatable {
     public var dark: Bool
     public var color: AccountColor
     public var marks: MenuBarMarks
+    /// The accent color the dot is drawn in, as sRGB components.
+    public var accent: [CGFloat]
     public var accessibilityLabel: String
     public var toolTip: String
 
-    public init(dark: Bool, color: AccountColor, marks: MenuBarMarks, accessibilityLabel: String, toolTip: String) {
+    public init(
+        dark: Bool, color: AccountColor, marks: MenuBarMarks, accent: [CGFloat] = [], accessibilityLabel: String, toolTip: String
+    ) {
         self.dark = dark
         self.color = color
         self.marks = marks
+        self.accent = accent
         self.accessibilityLabel = accessibilityLabel
         self.toolTip = toolTip
     }
 
-    /// The parts of the look the image is drawn from.
+    /// The parts of the look the image is drawn from. The accent color
+    /// counts only while the dot shows.
     public func sameImage(as other: StatusItemLook?) -> Bool {
         guard let other else { return false }
         return dark == other.dark && color == other.color && marks == other.marks
+            && (!marks.dot || accent == other.accent)
+    }
+}
+
+/// The looks last set on the status buttons, by button: `update` answers
+/// what to set again for a new look and keeps it.
+public struct StatusItemLooks {
+    private var looks: [ObjectIdentifier: StatusItemLook] = [:]
+
+    public init() {}
+
+    public mutating func update(_ id: ObjectIdentifier, to look: StatusItemLook) -> StatusItemUpdate {
+        let change = StatusItemUpdate(from: looks[id], to: look)
+        if !change.isEmpty { looks[id] = look }
+        return change
+    }
+
+    public mutating func forget(_ id: ObjectIdentifier) {
+        looks[id] = nil
     }
 }
 

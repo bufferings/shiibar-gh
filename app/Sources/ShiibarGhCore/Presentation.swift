@@ -306,12 +306,12 @@ extension String {
 }
 
 /// The mark at the start of a row, of "+ N more" and of "+ N more PRs"
-/// (DESIGN.md, "How rows look"): a blue dot, a gray ring for muted unread
+/// (DESIGN.md, "How rows look"): a accent-colored dot, a gray ring for muted unread
 /// ones, or nothing.
 public enum UnreadMark: Equatable {
     case none, blue, ring
 
-    /// Blue if any is blue unread, the ring if only gray ones are unread.
+    /// Blue if any is colored unread, the ring if only gray ones are unread.
     public static func of(_ rows: [Row]) -> UnreadMark {
         if rows.contains(where: \.isBlueUnread) { return .blue }
         if rows.contains(where: \.isGrayUnread) { return .ring }
@@ -360,7 +360,7 @@ public struct RowPresentation: Equatable {
 
     /// `cardMuted`: the row's card is muted. Its rows are gray except a
     /// mention of you or your team, which keeps the normal color and the
-    /// blue dot (DESIGN.md, "Card"). `expanded`: `more` was pressed on the
+    /// accent-colored dot (DESIGN.md, "Card"). `expanded`: `more` was pressed on the
     /// body; it shows up to 5 wrapped lines and `less`.
     public init(_ row: Row, now: Int64, cardMuted: Bool = false, expanded: Bool = false) {
         let kind = row.kind.value
@@ -675,7 +675,7 @@ public enum SettingsText {
     public static let autoDismissDetail = "Merged and closed PRs move to Dismissed after this many days"
     public static let keepDismissedDetail = "Dismissed PRs can be restored for this many days"
     public static let confirmDismissTitle = "Confirm before dismissing"
-    public static let confirmDismissDetail = "Asks when you press × on a card"
+    public static let confirmDismissDetail = "Asks when you press × on a card or Dismiss all"
     public static let ssoNote =
         "If an organization enforces SAML SSO, authorize the token for it after creating it (Configure SSO on the token page)."
     public static let textSizeDetail = "Text in the popover and its window"
@@ -780,6 +780,20 @@ public enum DismissedText {
     public static func confirmText(keepDays: Int64) -> String {
         "It moves to the Dismissed list and is removed after " + RelativeTime.days(keepDays) + ". You can restore it from there."
     }
+
+    /// The confirmation of `Dismiss all` (DESIGN.md, "`Dismiss all`"):
+    /// `count` is the number of cards it dismisses, two or more (the
+    /// button shows for two or more).
+    public static func confirmAllTitle(count: Int) -> String {
+        "Dismiss \(count) pull requests?"
+    }
+
+    public static func confirmAllText(keepDays: Int64) -> String {
+        "They move to the Dismissed list and are removed after " + RelativeTime.days(keepDays) + ". You can restore them from there."
+    }
+
+    /// The text button at the right of Done's heading.
+    public static let dismissAll = "Dismiss all"
 
     /// `Dismissed in 2 days` on a card whose automatic Dismiss is due
     /// (`auto_dismiss_at`): whole days to it, rounded up as `daysLeft`, at

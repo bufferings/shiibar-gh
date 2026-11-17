@@ -13,4 +13,7 @@ git -C "$repo" archive v0.4.0 app | tar -x -C "$work/a"
 git -C "$repo" archive v0.4.0 app | tar -x -C "$work/b"
 (cd "$work/b" && patch -p1 -s < "$repo/scripts/perf/measure-0.4.patch")
 cp "$repo/app/Sources/ShiibarGhApp/Perf.swift" "$work/b/app/Sources/ShiibarGhApp/Perf.swift"
-(cd "$work" && diff -ruN a/app b/app > "$repo/scripts/perf/measure-0.4.patch") || true
+# The file headers carry no modification times: `patch` does not need them.
+(cd "$work" && diff -ruN a/app b/app || true) |
+    sed -E 's/^((---|\+\+\+) [ab]\/[^[:space:]]+)[[:space:]].*$/\1/' \
+        > "$repo/scripts/perf/measure-0.4.patch"

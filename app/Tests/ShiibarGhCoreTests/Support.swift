@@ -271,7 +271,12 @@ final class FakeAPI: DaemonAPI, @unchecked Sendable {
         return cards
     }
 
+    /// How long a request of an operation takes to reach the fake daemon,
+    /// by command name, in nanoseconds: a slow connection.
+    var arrivalDelay: [String: UInt64] = [:]
+
     private func operation(_ call: String, _ name: String) async throws {
+        if let delay = arrivalDelay[name] { try? await Task.sleep(nanoseconds: delay) }
         try record(call)
         if operationDelay > 0 { try? await Task.sleep(nanoseconds: operationDelay) }
         if let error = refuse[name] { throw error }
@@ -308,8 +313,7 @@ final class FakeAPI: DaemonAPI, @unchecked Sendable {
         let to: String
         switch target {
         case .review(let section): to = "review " + section.rawValue
-        case .mine: to = "mine"
-        case .mineDone: to = "mine done"
+        case .mine(let section): to = "mine " + section.rawValue
         case .none: to = "none"
         }
         let at: String

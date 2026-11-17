@@ -57,6 +57,9 @@ enum PressKind {
     /// A card; `section` is nil in the Dismissed list.
     case card(Card, section: String?, canDrag: Bool)
     case heading(String)
+    /// A heading that takes no press: a repository of the Dismissed list.
+    /// A click or a right click on it does nothing, the selection included.
+    case label(String)
     /// "+ N more PRs" or `Show less` of a section.
     case fold(String)
     /// The frame of an empty Review or Mine section.
@@ -86,6 +89,11 @@ class PressView: NSView {
         return false
     }
 
+    private var isLabel: Bool {
+        if case .label = kind { return true }
+        return false
+    }
+
     /// The mouse-down events this view takes: everything but the first
     /// click of a series on a control, which goes to the control.
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -94,7 +102,7 @@ class PressView: NSView {
         guard bounds.contains(local), let event = NSApp.currentEvent else { return nil }
         switch event.type {
         case .leftMouseDown:
-            if event.modifierFlags.contains(.control) { return isCard ? self : nil }
+            if event.modifierFlags.contains(.control) { return isCard || isLabel ? self : nil }
             if let control = regions.control(at: local), event.clickCount <= 1 {
                 list?.click(.control(controlId(control)), count: 1)
                 return super.hitTest(point)
@@ -102,7 +110,7 @@ class PressView: NSView {
             if case .empty = kind { return nil }
             return self
         case .rightMouseDown:
-            return isCard ? self : nil
+            return isCard || isLabel ? self : nil
         default:
             return super.hitTest(point)
         }
@@ -111,7 +119,7 @@ class PressView: NSView {
     private func controlId(_ control: String) -> String {
         switch kind {
         case .card(let card, _, _): return card.id + "|" + control
-        case .heading(let key), .fold(let key), .empty(let key): return key + "|" + control
+        case .heading(let key), .label(let key), .fold(let key), .empty(let key): return key + "|" + control
         }
     }
 
@@ -179,7 +187,7 @@ class PressView: NSView {
                 list.select(.more(key))
                 list.perform(.toggleMore(key))
             }
-        case .empty:
+        case .empty, .label:
             break
         }
     }
@@ -259,6 +267,8 @@ class PressView: NSView {
             return .header(key)
         case .fold(let key):
             return .more(key)
+        case .label:
+            return nil
         }
     }
 }

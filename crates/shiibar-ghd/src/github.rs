@@ -274,7 +274,7 @@ pub fn sso_url(header: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// `2026-12-03 13:03:23 UTC`, the form the owner saw, or with a numeric
+/// `2026-12-03 13:03:23 UTC`, the form seen in a real response, or with a numeric
 /// offset in place of `UTC`.
 pub fn parse_expiry(text: &str) -> Option<i64> {
     let text = text.trim();

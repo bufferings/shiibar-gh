@@ -22,8 +22,8 @@ struct SettingsView: View {
             }
             .padding(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
             .frame(maxWidth: .infinity)
-            .background(Palette.settingsTabBar.color)
-            .overlay(alignment: .bottom) { Rectangle().fill(Palette.settingsTabBarBorder.color).frame(height: 1) }
+            .background(Palette.settingsBackground.color)
+            .overlay(alignment: .bottom) { Rectangle().fill(Palette.border.color).frame(height: 1) }
             if app.dbUnreadable {
                 VStack(alignment: .leading) {
                     GroupBox2 {
@@ -71,13 +71,13 @@ struct TabButton: View {
     var body: some View {
         Button(action: action) {
             VStack(spacing: 3) {
-                IconView(icon: icon, size: 18, color: selected ? Palette.settingsTabSelected.color : Palette.strongText.color)
+                IconView(icon: icon, size: 18, color: selected ? Palette.accent.color : Palette.text.color)
                 Text(tab.rawValue).font(.system(size: 11))
             }
-            .foregroundColor(selected ? Palette.settingsTabSelected.color : Palette.strongText.color)
+            .foregroundColor(selected ? Palette.accent.color : Palette.text.color)
             .frame(minWidth: 72)
             .padding(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
-            .background(RoundedRectangle(cornerRadius: 7).fill(selected ? Palette.settingsTabSelectedBackground.color : .clear))
+            .background(RoundedRectangle(cornerRadius: 7).fill(selected ? Palette.selection.color : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -91,7 +91,7 @@ struct Section2<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.system(size: 12, weight: .semibold)).foregroundColor(Palette.strongText.color).padding(.leading, 4)
+            Text(title).font(.system(size: 12, weight: .semibold)).foregroundColor(Palette.text.color).padding(.leading, 4)
             GroupBox2 { content }
         }
     }
@@ -103,7 +103,7 @@ struct GroupBox2<Content: View>: View {
     var body: some View {
         VStack(spacing: 0) { content }
             .background(RoundedRectangle(cornerRadius: 10).fill(Palette.surface.color))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.groupBorder.color, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.border.color, lineWidth: 1))
     }
 }
 
@@ -117,7 +117,7 @@ struct Item<Content: View>: View {
             .frame(maxWidth: .infinity, minHeight: 22, alignment: .leading)
             .padding(EdgeInsets(top: 9, leading: 14, bottom: 9, trailing: 14))
             .overlay(alignment: .top) {
-                if !first { Rectangle().fill(Palette.itemDivider.color).frame(height: 1) }
+                if !first { Rectangle().fill(Palette.border.color).frame(height: 1) }
             }
     }
 }
@@ -189,7 +189,7 @@ struct StateText: View {
                 case .good: return Palette.greenText.color
                 case .caution: return Palette.caution.color
                 case .bad: return Palette.orangeText.color
-                case .neutral: return Palette.waiting.color
+                case .neutral: return Palette.secondary.color
                 }
             }())
             .lineLimit(1)
@@ -197,7 +197,7 @@ struct StateText: View {
     }
 }
 
-/// The board's `.btn`; `primary` is the blue default button of a sheet.
+/// The board's `.btn`; `primary` is the default button in the accent color of a sheet.
 struct SettingsButton: View {
     var title: String
     var primary = false
@@ -213,8 +213,8 @@ struct SettingsButton: View {
                 .lineLimit(1)
                 .foregroundColor(primary ? Palette.onColor.color : Palette.text.color)
                 .padding(small ? EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8) : EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10))
-                .background(RoundedRectangle(cornerRadius: 6).fill(primary ? Palette.blueDot.color : Palette.surface.color))
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(primary ? Palette.blueDot.color : Palette.controlBorder.color, lineWidth: 1))
+                .background(RoundedRectangle(cornerRadius: 6).fill(primary ? Palette.accent.color : Palette.surface.color))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(primary ? Palette.accent.color : Palette.border.color, lineWidth: 1))
                 .contentShape(Rectangle())
                 .fixedSize()
         }

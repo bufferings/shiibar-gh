@@ -55,7 +55,9 @@ public protocol ImageLoading: AnyObject, Sendable {
 /// (`expandedRows.`, `expandedBodies.`, `filters.`, `filtersOpen.`,
 /// `searches.`, `compact.`, `popover.height.`), which start from their
 /// defaults: nothing expanded, the default Filter closed, no search text,
-/// Compact off, the popover's default height ("Updating from 0.4").
+/// Compact off, the popover's default height ("Updating from 0.4"). 0.6
+/// reads 0.5's keys as they are, dropping only the collapsed and expanded
+/// state of Mine's one list ("Updating from 0.5").
 public final class UIStateStore {
     private let defaults: UserDefaults
     static let prefix = "v4."
@@ -120,7 +122,7 @@ public final class UIStateStore {
     }
 
     public func collapsed(account: String) -> Set<String> {
-        Set(defaults.stringArray(forKey: Self.collapsedKey + account) ?? [])
+        sectionKeys(Self.collapsedKey + account)
     }
 
     public func setCollapsed(_ keys: Set<String>, account: String) {
@@ -128,7 +130,23 @@ public final class UIStateStore {
     }
 
     public func expanded(account: String) -> Set<String> {
-        Set(defaults.stringArray(forKey: Self.expandedKey + account) ?? [])
+        sectionKeys(Self.expandedKey + account)
+    }
+
+    /// The section key of 0.5's one list of Mine, which 0.6 replaced with
+    /// Doing, Todo and Waiting (DESIGN.md, "Updating from 0.5").
+    static let oldMineList = "mine|main"
+
+    /// The collapsed or expanded sections saved under `key`. 0.5's key of
+    /// Mine's one list is dropped from the saved value the first time it is
+    /// read; Mine's Done keeps its key and stays as it was.
+    private func sectionKeys(_ key: String) -> Set<String> {
+        var saved = defaults.stringArray(forKey: key) ?? []
+        if saved.contains(Self.oldMineList) {
+            saved.removeAll { $0 == Self.oldMineList }
+            defaults.set(saved, forKey: key)
+        }
+        return Set(saved)
     }
 
     public func setExpanded(_ keys: Set<String>, account: String) {

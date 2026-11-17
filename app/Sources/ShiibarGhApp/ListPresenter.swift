@@ -56,6 +56,12 @@ final class ListContent: ObservableObject {
     weak var listAnchor: FrameAnchor?
     weak var headerAnchor: FrameAnchor?
     weak var hintsAnchor: FrameAnchor?
+    /// The Filter's options while they show: their area's height, for the
+    /// surface's least height (`SurfaceRoot.onMinimumHeight`).
+    weak var optionsAnchor: FrameAnchor?
+    /// The warning and failure bands while they show: left out of the
+    /// surface's least height.
+    weak var bandsAnchor: FrameAnchor?
     var onSlot: (() -> Void)?
     /// The time and the text scale from the surface.
     var environment: (Int64, CGFloat)? { didSet { onEnvironment?() } }
@@ -98,7 +104,10 @@ final class ListContent: ObservableObject {
         // The search of what shows (a tab's, or the Dismissed list's).
         let words = Search.words(list.search)
         if list.showingDismissed {
-            out += list.dismissedCards.map { .dismissed($0, search: words) }
+            for (index, group) in list.dismissedGroups.enumerated() {
+                out.append(.heading(HeadingLine(group, first: index == 0)))
+                out += group.cards.map { .dismissed($0, search: words) }
+            }
             out.append(.end)
             return out
         }

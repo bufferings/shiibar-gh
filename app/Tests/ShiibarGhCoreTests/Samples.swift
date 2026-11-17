@@ -40,15 +40,16 @@ func review(_ section: PlacementSection, _ position: Int) -> Placement {
     Placement(tab: .review, section: section, position: position)
 }
 
-func mine(_ section: PlacementSection = .main, _ position: Int) -> Placement {
+func mine(_ section: PlacementSection = .todo, _ position: Int) -> Placement {
     Placement(tab: .mine, section: section, position: position)
 }
 
 /// The board's Review tab, Mine and All in small:
-/// - Review: Doing R1; Todo T1–T5, then T6 (muted for its author renovate)
-///   and T7 (muted by itself and for renovate; it has an unread mention);
+/// - Review: Doing R1; Todo T1–T5, then T6 (muted for its author example-bot)
+///   and T7 (muted by itself and for example-bot; it has an unread mention);
 ///   Waiting W1; Done D1 (merged).
-/// - Mine: M1 (authored, unread blue row), M2 (assigned), Done M3 (closed).
+/// - Mine: Todo M1 (authored, unread blue row), M2 (assigned); Done M3
+///   (closed); Doing and Waiting empty.
 /// - All only: N1 (acme-corp, gray unread row by a muted user).
 /// - Dismissed: X1 (older), X2 (newer, merged).
 func sampleCards() -> [Card] {
@@ -66,16 +67,16 @@ func sampleCards() -> [Card] {
         card("T3", pr: "example-org/docs#88", author: "jo", placement: review(.todo, 2), updated: T0 - 20),
         card("T4", pr: "example-org/api#415", author: "rk", placement: review(.todo, 3), updated: T0 - 10),
         card("T5", pr: "example-org/web#219", author: "jo", placement: review(.todo, 4), updated: T0 - 5),
-        card("T6", pr: "example-org/web#241", author: "renovate", placement: review(.todo, 5), muted: [.author], updated: T0 - 4,
+        card("T6", pr: "example-org/web#241", author: "example-bot", placement: review(.todo, 5), muted: [.author], updated: T0 - 4,
              rows: [row("t6", pr: "example-org/web#241", kind: .teamReviewRequested, text: "for frontend team", unread: true, muted: true)]),
-        card("T7", pr: "example-org/api#402", author: "renovate", placement: review(.todo, 6), muted: [.pr, .author], prMute: .mute,
+        card("T7", pr: "example-org/api#402", author: "example-bot", placement: review(.todo, 6), muted: [.pr, .author], prMute: .mute,
              updated: T0 - 3,
-             rows: [row("t7", pr: "example-org/api#402", kind: .mentioned, text: "needs a manual step", actor: "renovate", unread: true)]),
+             rows: [row("t7", pr: "example-org/api#402", kind: .mentioned, text: "needs a manual step", actor: "example-bot", unread: true)]),
         card("W1", pr: "acme-corp/infra#61", owner: "o3", author: "dz", placement: review(.waiting, 0), updated: T0 - 200),
         card("D1", pr: "acme-corp/infra#58", owner: "o3", author: "mk", state: .merged, placement: review(.done, 0), updated: T0 - 300),
-        card("M1", pr: "example-org/api#421", author: "bufferings-work", authored: true, placement: mine(.main, 0), updated: T0 - 60,
+        card("M1", pr: "example-org/api#421", author: "bufferings-work", authored: true, placement: mine(.todo, 0), updated: T0 - 60,
              rows: [row("m1", pr: "example-org/api#421", kind: .checksPassed, unread: true)]),
-        card("M2", pr: "acme-corp/web#77", owner: "o3", author: "mk", assigned: true, placement: mine(.main, 1), updated: T0 - 70),
+        card("M2", pr: "acme-corp/web#77", owner: "o3", author: "mk", assigned: true, placement: mine(.todo, 1), updated: T0 - 70),
         card("M3", pr: "example-org/api#390", author: "bufferings-work", authored: true, state: .closed, placement: mine(.done, 0), updated: T0 - 400),
         card("N1", pr: "acme-corp/web#80", owner: "o3", author: "zz", updated: T0 - 1,
              rows: [row("n1", pr: "acme-corp/web#80", owner: "o3", text: "noise", actor: "bot", unread: true, muted: true)]),
@@ -113,7 +114,10 @@ func view(
     _ tab: ListTab?, cards: [Card] = sampleCards(), options: ListOptions = ListOptions(), expandedRows: Set<String> = [],
     filter: ListFilter = mutedShown, search: String = ""
 ) -> ListView {
-    guard let tab else { return ListView(tab: nil, dismissed: Listing.dismissed(cards), expandedRows: expandedRows, cards: cards) }
+    guard let tab else {
+        let dismissed = Listing.dismissedGroups(cards, search: search).flatMap(\.cards)
+        return ListView(tab: nil, dismissed: dismissed, expandedRows: expandedRows, cards: cards)
+    }
     return ListView(
         tab: tab, sections: layout(tab, options: options, cards: cards, search: search, filter: filter), expandedRows: expandedRows,
         cards: cards

@@ -298,15 +298,14 @@ pub enum PlacedTab {
     Mine,
 }
 
-/// A section of Review (`doing`, `todo`, `waiting`, `done`) or of Mine
-/// (`main`, `done`). DESIGN.md, "Review" and "Mine".
+/// A section of Review or Mine: both tabs have `doing`, `todo`, `waiting`
+/// and `done`. DESIGN.md, "Review" and "Mine".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Section {
     Doing,
     Todo,
     Waiting,
-    Main,
     Done,
 }
 
@@ -1182,6 +1181,23 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn mine_takes_the_sections_of_review_and_main_is_none() {
+        // DESIGN.md, "Wire format": `main` (0.5) is no section.
+        for section in ["doing", "todo", "waiting", "done"] {
+            let line = format!(
+                r#"{{"cmd":"place","account":"me","pr":"o/r#1","tab":"mine","section":"{section}"}}"#
+            );
+            assert!(serde_json::from_str::<Request>(&line).is_ok(), "{section}");
+        }
+        assert!(
+            serde_json::from_str::<Request>(
+                r#"{"cmd":"place","account":"me","pr":"o/r#1","tab":"mine","section":"main"}"#
+            )
+            .is_err()
+        );
     }
 
     #[test]

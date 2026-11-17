@@ -43,7 +43,7 @@ final class HiddenPlaceTests: XCTestCase {
     func todo() -> [Card] {
         [
             card("T1", placement: review(.todo, 0)),
-            card("H", author: "renovate", placement: review(.todo, 1), muted: [.author]),
+            card("H", author: "example-bot", placement: review(.todo, 1), muted: [.author]),
             card("T2", placement: review(.todo, 2)),
             card("T3", placement: review(.todo, 3)),
             card("K", pr: "other/k#1", placement: review(.todo, 4)),
@@ -120,12 +120,12 @@ final class HiddenPlaceTests: XCTestCase {
 final class MuteRuleTests: XCTestCase {
     func base(own: Bool = false, prMute: PrMute = .none) -> Card {
         card(
-            "P", pr: "example-org/api#9", author: own ? "me" : "renovate", authored: own, prMute: prMute,
+            "P", pr: "example-org/api#9", author: own ? "me" : "example-bot", authored: own, prMute: prMute,
             rows: [
-                row("c", pr: "example-org/api#9", text: "bump", actor: "renovate"),
-                row("m", pr: "example-org/api#9", kind: .mentioned, actor: "renovate", unread: true),
-                row("t", pr: "example-org/api#9", kind: .teamMentioned, actor: "renovate", unread: true),
-                row("x", pr: "example-org/api#9", kind: .checksFailed, actor: "renovate"),
+                row("c", pr: "example-org/api#9", text: "bump", actor: "example-bot"),
+                row("m", pr: "example-org/api#9", kind: .mentioned, actor: "example-bot", unread: true),
+                row("t", pr: "example-org/api#9", kind: .teamMentioned, actor: "example-bot", unread: true),
+                row("x", pr: "example-org/api#9", kind: .checksFailed, actor: "example-bot"),
                 row("o", pr: "example-org/api#9", text: "lgtm", actor: "al"),
             ]
         )
@@ -138,7 +138,7 @@ final class MuteRuleTests: XCTestCase {
             for prMute in [PrMute.none, .mute, .unmute] {
                 for repo in [false, true] {
                     for author in [false, true] {
-                        let mutes = Mutes(repos: repo ? ["Example-Org/API"] : [], users: author ? ["RENOVATE", "me"] : [])
+                        let mutes = Mutes(repos: repo ? ["Example-Org/API"] : [], users: author ? ["EXAMPLE-BOT", "me"] : [])
                         let card = base(own: own, prMute: prMute)
                         let reasons = MuteRules.reasons(card, prMute: prMute, mutes)
                         var expected: [MuteReason] = []
@@ -150,7 +150,7 @@ final class MuteRuleTests: XCTestCase {
                         XCTAssertEqual(reasons, expected, "own \(own) pr \(prMute) repo \(repo) author \(author)")
                         let cardMuted = !reasons.isEmpty
                         let rows = card.rows.map { MuteRules.rowMuted($0, cardMuted: cardMuted, prMute: prMute, mutes) }
-                        // c: by the muted user (renovate); m, t: mentions;
+                        // c: by the muted user (example-bot); m, t: mentions;
                         // x: a state change; o: by al.
                         let byUser = author && prMute != .unmute
                         XCTAssertEqual(rows, [cardMuted || byUser, false, false, cardMuted, cardMuted],
@@ -219,7 +219,7 @@ final class MuteRuleTests: XCTestCase {
 
     func testTheMutesTheCardsTell() {
         let mutes = Mutes.inferred(from: sampleCards())
-        XCTAssertEqual(mutes, Mutes(repos: [], users: ["renovate"], prs: ["example-org/api#402"]))
+        XCTAssertEqual(mutes, Mutes(repos: [], users: ["example-bot"], prs: ["example-org/api#402"]))
         XCTAssertEqual(Mutes(users: ["a"]).changing(.user, "A", on: false), Mutes())
         XCTAssertEqual(Mutes(users: ["a"]).changing(.user, "A", on: true), Mutes(users: ["A"]))
     }

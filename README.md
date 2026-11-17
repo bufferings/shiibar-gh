@@ -3,7 +3,8 @@
 macOS menu bar app for the GitHub pull requests you are involved in. It
 tells you what happened on them (unread marks and notifications), and you
 keep the PRs you review and your own PRs in the order you choose: the
-popover has the tabs All, Review (Doing, Todo, Waiting, Done) and Mine.
+popover has the tabs All, Review and Mine, the last two with the sections
+Doing, Todo, Waiting and Done.
 Dismiss a PR when you are done with it; it comes back when someone mentions
 you or your team, replies in a thread you take part in, requests your
 review, or reopens it. Mute a repository, a user or a single PR to hide its
@@ -17,8 +18,9 @@ classic personal access token (scopes `repo`, `notifications`, `read:org`).
 Under an account you add owners (organizations or personal accounts) and,
 if you like, Public.
 
-**Upgrading.** Version 0.5 keeps everything from 0.4. From 0.3 and 0.2 it
-keeps only the accounts (with their colors and order) and their tokens:
+**Upgrading.** Version 0.6 keeps everything from 0.5 and 0.4; the cards of
+Mine start in Todo. Version 0.5 cannot read the saved state once 0.6 has
+run. From 0.3 and 0.2 it keeps only the accounts (with their colors and order) and their tokens:
 owners, event tables, settings, PRs and rows start empty, so add your
 owners again. Version 0.2 and later do
 not read the saved state or tokens of 0.1: add your accounts again.

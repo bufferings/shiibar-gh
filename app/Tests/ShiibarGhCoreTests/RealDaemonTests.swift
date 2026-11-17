@@ -206,6 +206,65 @@ final class RealDaemonTests: XCTestCase {
         XCTAssertEqual(placed.first { $0.pr == "example-org/api#1" }?.placement?.section, .known(.doing), "the daemon moved it")
         XCTAssertNil(data.failure)
 
+        // Mine has Review's sections: `Add to Mine` sends `section: todo`,
+        // D moves within Mine, `Move to Done`, and `Dismiss all` dismisses
+        // Done's cards one `dismiss` each.
+        func daemonCard(_ pr: String, _ done: (Card) -> Bool) async throws -> Card? {
+            var card: Card?
+            for _ in 0..<100 {
+                card = try await api.list(ListQuery(account: "me", dismissed: .include)).first { $0.pr == pr }
+                if let card, done(card) { break }
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+            return card
+        }
+        try await dev(api, ["cmd": "dev_ingest", "account": "me", "ingest": [
+            "prs": [pr("PR_3", number: 3, assignees: ["me"])], "events": [], "succeeded_owners": ["example-org"],
+        ]])
+        try await wait { data.cards.count == 3 }
+        view.openTab(.all)
+        let add = try XCTUnwrap(view.rightClick(.header(card: "3407303:PR_3")).compactMap { $0 }.first { $0.title == "Add to Mine" })
+        view.perform(add.action)
+        var mine = try await daemonCard("example-org/api#3") { $0.placement?.tab == .known(.mine) }
+        XCTAssertEqual(mine?.placement, Placement(tab: .mine, section: .todo, position: 0), "Add to Mine: Todo")
+        view.openTab(.mine)
+        XCTAssertEqual(view.sections.map(\.key), ["mine|doing", "mine|todo", "mine|waiting", "mine|done"])
+        view.select(.header(card: "3407303:PR_3"))
+        view.press(.moveTo(.doing))
+        mine = try await daemonCard("example-org/api#3") { $0.placement?.section == .known(.doing) }
+        XCTAssertEqual(mine?.placement, Placement(tab: .mine, section: .doing, position: 0), "D in Mine")
+        // Back to back: the daemon gets them in their order and ends where
+        // the screen shows the card.
+        view.press(.moveTo(.waiting))
+        view.press(.moveTo(.todo))
+        view.press(.moveTo(.doing))
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+        mine = try await daemonCard("example-org/api#3") { $0.placement?.section == .known(.doing) }
+        XCTAssertEqual(mine?.placement?.section, .known(.doing), "the last press wins at the daemon")
+        XCTAssertEqual(data.cards.first { $0.pr == "example-org/api#3" }?.placement?.section, .known(.doing))
+        view.perform(.place(PlaceMove(card: "3407303:PR_2", target: .mine(.todo), position: .byDefault, verb: .add)))
+        mine = try await daemonCard("example-org/api#2") { $0.placement?.tab == .known(.mine) }
+        XCTAssertEqual(mine?.placement, Placement(tab: .mine, section: .todo, position: 0))
+        try await wait { data.cards.first { $0.pr == "example-org/api#2" }?.placement?.tab == .known(.mine) }
+        let toDone = try XCTUnwrap(view.rightClick(.header(card: "3407303:PR_2")).compactMap { $0 }.first { $0.title == "Move to Done" })
+        view.perform(toDone.action)
+        mine = try await daemonCard("example-org/api#2") { $0.placement?.section == .known(.done) }
+        XCTAssertEqual(mine?.placement?.section, .known(.done), "Move to Done in Mine")
+        try await wait { view.sections.first { $0.key == "mine|done" }?.matching.map(\.pr) == ["example-org/api#2"] }
+        XCTAssertNil(view.sections.first { $0.key == "mine|done" }?.dismissAllCards, "one card: no Dismiss all")
+        view.perform(.place(PlaceMove(card: "3407303:PR_3", target: .mine(.done), position: .byDefault, verb: .move)))
+        mine = try await daemonCard("example-org/api#3") { $0.placement?.section == .known(.done) }
+        try await wait { view.sections.first { $0.key == "mine|done" }?.dismissAllCards?.count == 2 }
+        view.perform(.dismissAll(section: "mine|done"))
+        XCTAssertEqual(view.confirmingDismiss?.title, "Dismiss 2 pull requests?")
+        view.answerDismiss(true)
+        mine = try await daemonCard("example-org/api#2") { $0.dismissedAt != nil }
+        XCTAssertNotNil(mine?.dismissedAt, "the daemon has it dismissed")
+        mine = try await daemonCard("example-org/api#3") { $0.dismissedAt != nil }
+        XCTAssertNotNil(mine?.dismissedAt)
+        XCTAssertNil(data.failure)
+        view.openTab(.review)
+
         // 0.5's Mute: a repository Mute, then `Unmute this pull request` on
         // one of its PRs keeps that PR out of Mute (`pr_mute` unmute), shown
         // at once and by the daemon.

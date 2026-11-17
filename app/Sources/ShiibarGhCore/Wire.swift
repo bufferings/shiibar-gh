@@ -142,9 +142,9 @@ public enum PrFilter: String, Equatable, Codable, CaseIterable {
 /// `placement.tab` and the `tab` of `place` (`none` only in `place`).
 public enum PlacementTab: String, Equatable, Codable, CaseIterable { case review, mine }
 
-/// `placement.section`: Review's four, Mine's `main` and `done`.
+/// `placement.section`: the four sections of Review and of Mine.
 public enum PlacementSection: String, Equatable, Codable, CaseIterable {
-    case doing, todo, waiting, done, main
+    case doing, todo, waiting, done
 }
 
 /// What a card is muted for (`card.muted`).
@@ -380,7 +380,7 @@ public struct Row: Equatable, Decodable, Identifiable {
     public var url: String
     public var occurredAt: Int64
     public var unread: Bool
-    /// The row is muted now: a gray ring instead of the blue dot, and no
+    /// The row is muted now: a gray ring instead of the accent-colored dot, and no
     /// notification (DESIGN.md, "Mute").
     public var muted: Bool
 
@@ -434,7 +434,7 @@ public struct Row: Equatable, Decodable, Identifiable {
         kind.value == .mentioned || kind.value == .teamMentioned
     }
 
-    /// An unread row that counts: blue, not gray (DESIGN.md, "How unread
+    /// An unread row that counts: in the accent color, not gray (DESIGN.md, "How unread
     /// clears": muted rows count only when they are mentions of you or your
     /// team).
     public var isBlueUnread: Bool {
@@ -445,7 +445,7 @@ public struct Row: Equatable, Decodable, Identifiable {
     public var isGrayUnread: Bool { unread && !isBlueUnread }
 }
 
-/// Where a card is placed: a Review section or Mine, with its rank in the
+/// Where a card is placed: a section of Review or Mine, with its rank in the
 /// section, muted cards counted where their rank puts them (DESIGN.md,
 /// "Wire format", `placement`).
 public struct Placement: Equatable, Decodable {
@@ -619,7 +619,7 @@ public struct Card: Equatable, Decodable, Identifiable {
         muted.contains { $0.value == reason }
     }
 
-    /// A row of the card is blue unread.
+    /// A row of the card is colored unread.
     public var hasBlueUnread: Bool { rows.contains(where: \.isBlueUnread) }
 
     public var hasGrayUnread: Bool { rows.contains(where: \.isGrayUnread) }

@@ -98,7 +98,7 @@ public struct CardSelection: Equatable {
 /// multi-card menu.
 public enum MultiOperation: Equatable {
     case dismiss
-    /// `Add to Review` (Todo) or `Add to Mine`.
+    /// `Add to Review` or `Add to Mine` (Todo).
     case add(PlaceTarget)
     /// `Move to …`, D / T / W.
     case move(PlaceTarget)
@@ -133,13 +133,13 @@ public enum MultiRules {
     public static func operations(_ tab: ListTab) -> [MultiItem] {
         switch tab {
         case .all:
-            return [MultiItem(title: "Add to Review", operation: .add(.review(.todo))), MultiItem(title: "Add to Mine", operation: .add(.mine))]
+            return [MultiItem(title: "Add to Review", operation: .add(.review(.todo))), MultiItem(title: "Add to Mine", operation: .add(.mine(.todo)))]
         case .review:
-            return PlacementSection.review.map { MultiItem(title: "Move to " + $0.title, operation: .move(.review($0))) }
+            return PlacementSection.order.map { MultiItem(title: "Move to " + $0.title, operation: .move(.review($0))) }
                 + [MultiItem(title: "Remove from Review", operation: .remove)]
         case .mine:
-            return [MultiItem(title: "Move to Done", operation: .move(.mineDone)), MultiItem(title: "Move to Mine", operation: .move(.mine)),
-                    MultiItem(title: "Remove from Mine", operation: .remove)]
+            return PlacementSection.order.map { MultiItem(title: "Move to " + $0.title, operation: .move(.mine($0))) }
+                + [MultiItem(title: "Remove from Mine", operation: .remove)]
         }
     }
 
@@ -172,15 +172,8 @@ public enum MultiRules {
 
     /// The section a target lands in, for a card.
     static func landing(_ target: PlaceTarget, _ card: Card) -> (PlacementTab, PlacementSection)? {
-        switch target {
-        case .none: return nil
-        case .review(let section):
-            return (.review, card.isFinished && card.placement == nil ? .done : section)
-        case .mine:
-            return (.mine, card.isFinished && card.placement == nil ? .done : .main)
-        case .mineDone:
-            return (.mine, .done)
-        }
+        guard let (tab, section) = target.placed else { return nil }
+        return (tab, card.isFinished && card.placement == nil ? .done : section)
     }
 
     /// The requests of an operation on `cards` (the selected cards in the
@@ -205,7 +198,7 @@ public enum MultiRules {
         case .add(let target):
             var takes: [Card] = []
             for card in cards {
-                if card.placement != nil || (target == .review(.todo) && card.authoredByMe) {
+                if card.placement != nil || (target.placed?.tab == .review && card.authoredByMe) {
                     plan.skipped.append(card.id)
                 } else {
                     takes.append(card)

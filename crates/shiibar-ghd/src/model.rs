@@ -417,7 +417,6 @@ stored_enum!(Section {
     Doing = "doing",
     Todo = "todo",
     Waiting = "waiting",
-    Main = "main",
 });
 
 stored_enum!(Appearance {
@@ -455,7 +454,7 @@ impl EventTable {
 }
 
 /// A login compared for Mute: without case, as GraphQL spells it.
-/// DESIGN.md, "Mute": a bot is compared by `Bot.login` (`renovate`, without
+/// DESIGN.md, "Mute": a bot is compared by `Bot.login` (`example-bot`, without
 /// `[bot]`). Every actor shiibar-gh records comes from GraphQL, so no REST
 /// `[bot]` suffix ever needs removing.
 pub fn user_key(login: &str) -> String {

@@ -78,13 +78,29 @@ public enum PlacePosition: Equatable {
     case byDefault
 }
 
-/// The target of `place`: a Review section (Done included), Mine, Mine's
-/// Done, or no placement.
+/// The target of `place`: a section of Review or of Mine (Done included),
+/// or no placement. The wire's `section` is required for both tabs
+/// (DESIGN.md, "Wire format").
 public enum PlaceTarget: Equatable {
     case review(PlacementSection)
-    case mine
-    case mineDone
+    case mine(PlacementSection)
     case none
+
+    public init(_ tab: PlacementTab, _ section: PlacementSection) {
+        switch tab {
+        case .review: self = .review(section)
+        case .mine: self = .mine(section)
+        }
+    }
+
+    /// The tab and the section asked for; nil for no placement.
+    public var placed: (tab: PlacementTab, section: PlacementSection)? {
+        switch self {
+        case .review(let section): return (.review, section)
+        case .mine(let section): return (.mine, section)
+        case .none: return nil
+        }
+    }
 }
 
 /// `owner_lookup`'s answer.
@@ -226,11 +242,9 @@ public final class SocketDaemonAPI: DaemonAPI, @unchecked Sendable {
         case .review(let section):
             fields["tab"] = "review"
             fields["section"] = section.rawValue
-        case .mine:
+        case .mine(let section):
             fields["tab"] = "mine"
-        case .mineDone:
-            fields["tab"] = "mine"
-            fields["section"] = "done"
+            fields["section"] = section.rawValue
         case .none:
             fields["tab"] = "none"
         }

@@ -25,6 +25,7 @@
 import AppKit
 import os
 import ShiibarGhCore
+import SwiftUI
 
 extension Array {
     /// `count` elements, going round the array.
@@ -102,6 +103,11 @@ enum PerfMode {
         ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_DAEMON"].map { URL(fileURLWithPath: $0) }
     }
 
+    /// A window the snapshots draw as if it were key: a hidden window of an
+    /// app that is not active never is, and the selection's accent tint
+    /// shows only in a key window (ListTable.swift, `ListLook`).
+    @MainActor static weak var assumedKeyWindow: NSWindow?
+
     /// The name of the scratch defaults, one per mode (a measurement run
     /// and a demo do not share them). The values are kept in memory only
     /// (`ScratchDefaults`): nothing is written to the user's Preferences.
@@ -126,6 +132,10 @@ enum PerfMode {
     /// notification permission, file avatars) with the app used by hand:
     /// nothing runs by itself.
     static let demo: Bool = ProcessInfo.processInfo.environment["SHIIBAR_GH_DEMO"] == "1"
+    /// The measurement mode without the warning bands
+    /// (`SHIIBAR_GH_PERF_NO_BANNERS=1`): the account of the measurement data
+    /// has no token, whose band would always show.
+    static let hidesBanners: Bool = enabled && ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_NO_BANNERS"] == "1"
 
     /// The measurement or the demo mode: the sandbox either way.
     static var sandboxed: Bool { enabled || demo }
@@ -540,6 +550,13 @@ final class PerfRunner: NSObject {
             await heightScenarios(list: list, window: window)
             return finish()
         }
+        // `SHIIBAR_GH_PERF_ONLY=m9` measures the operations 0.6 added or
+        // changed alone (Mine's sections, `Dismiss all`, the Dismissed list
+        // by repository), and quits.
+        if ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_ONLY"] == "m9" {
+            await mineOperations(list: list, window: window)
+            return finish()
+        }
         if ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_ONLY"] == "search" {
             await searchOperations(list: list, window: window)
             if let directory = ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_SHOTS"] {
@@ -572,6 +589,7 @@ final class PerfRunner: NSObject {
         await filterOperations(list: list, window: window)
         await compactOperations(list: list, window: window)
         await searchOperations(list: list, window: window)
+        await mineOperations(list: list, window: window)
         finish()
     }
 
@@ -1065,6 +1083,12 @@ final class PerfRunner: NSObject {
             if !reached { log("consistency \(name): could not reach the target") }
             pointer.endForMeasurement(at: point)
         }
+        // A card of Done with `Dismissed in N days` moved by W into an empty
+        // Waiting: in one change the empty frame goes, the card moves and
+        // its line 3 stops wrapping (its height changes). First, while Done
+        // still has its merged and closed cards.
+        await doneToEmptyWaiting(.mine, list: list, window: window, run: run)
+        await doneToEmptyWaiting(.review, list: list, window: window, run: run)
         do {
             list.openTab(.review)
             await fold()
@@ -1174,6 +1198,7 @@ final class PerfRunner: NSObject {
             }
         }
         if list.compact { list.toggleCompact() }
+        await mineScenarios(list: list, window: window, run: run)
         await filterScenarios(list: list, window: window, run: run)
         // All, grouped by repository: what changes which card a line shows,
         // its size or its look.
@@ -1236,10 +1261,167 @@ final class PerfRunner: NSObject {
         await run("All: search, scroll down") { scrollBy(1500) }
         await run("All: search, a word only behind more") { list.setSearch("rows drop") }
         await run("All: search, matches shown and hidden") { list.setSearch("rows release") }
+        await run("All: the search field's clear button") { list.clearSearch() }
+        list.searchFocused = false
+        await run("All: search again") { list.setSearch("rows release") }
         await run("All: search cleared") { list.setSearch("") }
         await heightScenarios(list: list, window: window)
         log("consistency: \(consistencyChecks - consistencyFailures) of \(consistencyChecks) ok")
         notes.append("consistency: \(consistencyChecks - consistencyFailures) of \(consistencyChecks) ok")
+    }
+
+    /// Mine's four sections, `Dismiss all` showing and going, and the
+    /// Dismissed list by repository (docs/tasks/M9.md, "Risks"): each
+    /// change followed by the list's consistency check.
+    private func mineScenarios(list: SurfaceListModel, window: NSWindow, run: (String, () -> Void) async -> Void) async {
+        func mine(_ section: PlacementSection) -> [Card] {
+            list.sections.first { $0.key == SectionKey.placed(.mine, section) }?.cards ?? []
+        }
+        let scroll = listScrollView(in: window)
+        list.openTab(.mine)
+        if let scroll { scrollTo(scroll, y: 0) }
+        await pause(0.8)
+        let doing = SectionKey.placed(.mine, .doing)
+        let waiting = SectionKey.placed(.mine, .waiting)
+        let done = SectionKey.placed(.mine, .done)
+        if let card = mine(.todo).first {
+            await run("Mine: Todo → Doing heading") {
+                list.select(.header(card: card.id))
+                list.beginDrag(card.id)
+                list.dragOver(.header(doing))
+                list.drop(.header(doing))
+            }
+        }
+        if let card = mine(.todo).first {
+            await run("Mine: D") {
+                list.select(.header(card: card.id))
+                list.press(.moveTo(.doing))
+            }
+            await run("Mine: T (from Doing: the top of Todo)") { list.press(.moveTo(.todo)) }
+            await run("Mine: W") { list.press(.moveTo(.waiting)) }
+            await run("Mine: Move to Done") {
+                list.perform(.place(PlaceMove(card: card.id, target: .mine(.done), position: .byDefault, verb: .move)))
+            }
+        }
+        if let card = mine(.todo).dropFirst().first {
+            await run("Mine: ⌥↑") {
+                list.select(.header(card: card.id))
+                list.press(.reorder(up: true))
+            }
+        }
+        let two = mine(.todo).prefix(2).map(\.id)
+        if two.count == 2 {
+            await run("Mine: two Todo cards → Waiting") {
+                list.select(.header(card: two[0]))
+                list.click(card: two[1], extent: .toggle)
+                list.beginDrag(two[0])
+                list.dragOver(.header(waiting))
+                list.drop(.header(waiting))
+            }
+        }
+        list.clearSelection()
+        list.openTab(.mine)
+        await pause(0.6)
+        tableController(window)?.scrollForMeasurement(toLine: "section:" + done, offset: -40)
+        await pause(0.4)
+        // `Dismiss all` goes with the collapse and comes back.
+        await run("Mine: collapse Done (no Dismiss all)") { list.perform(.toggleSection(done)) }
+        await run("Mine: expand Done (Dismiss all)") { list.perform(.toggleSection(done)) }
+        // One card left in Done: its × does the same, no `Dismiss all`.
+        let one = list.sections.first(where: { $0.key == done })?.matching.first
+        await run("Mine: search without a Done card (no Dismiss all)") { list.setSearch("zz-no-such-text") }
+        if let one {
+            await run("Mine: search leaving one Done card (no Dismiss all)") { list.setSearch(one.pr + " " + one.title) }
+        }
+        await run("Mine: search cleared") { list.setSearch("") }
+        await run("Mine: Dismiss all, its sheet") { list.perform(.dismissAll(section: done)) }
+        await run("Mine: Dismiss all, Dismiss") { list.answerDismiss(true) }
+        list.openTab(.review)
+        await pause(0.6)
+        let reviewDone = SectionKey.placed(.review, .done)
+        tableController(window)?.scrollForMeasurement(toLine: "section:" + reviewDone, offset: -40)
+        await pause(0.4)
+        await run("Review: Dismiss all, its sheet") { list.perform(.dismissAll(section: reviewDone)) }
+        await run("Review: Dismiss all, Cancel") { list.answerDismiss(false) }
+        // The Dismissed list by repository: open, searched, a Restore.
+        await run("Dismissed list: open") { list.openDismissedList() }
+        await run("Dismissed list: search") { list.setSearch("repo-0") }
+        await run("Dismissed list: search cleared") { list.setSearch("") }
+        if let card = list.dismissedCards.dropFirst().first {
+            await run("Dismissed list: Restore") {
+                list.select(.header(card: card.id))
+                list.press(.delete)
+            }
+        }
+        await run("Dismissed list: ↓") { list.press(.down) }
+        await run("Dismissed list: back") { list.closeDismissedList() }
+    }
+
+    /// W on a card of Done that has `Dismissed in N days`, with Waiting
+    /// emptied first, at a text size and window width where the card's
+    /// line 3 wraps with `Dismissed in N days` and fits without it (then
+    /// back to 12 and the old width): a line whose height changes in the
+    /// same change that removes and inserts lines.
+    private func doneToEmptyWaiting(
+        _ tab: PlacementTab, list: SurfaceListModel, window: NSWindow, run: (String, () -> Void) async -> Void
+    ) async {
+        let name = tab == .review ? "Review" : "Mine"
+        list.openTab(tab == .review ? .review : .mine)
+        await pause(0.6)
+        let waiting = SectionKey.placed(tab, .waiting)
+        let done = SectionKey.placed(tab, .done)
+        for card in list.data.cards where !card.isDismissed && card.sectionKey == waiting {
+            list.perform(.place(PlaceMove(card: card.id, target: PlaceTarget(tab, .todo), position: .bottom, verb: .move)))
+        }
+        await pause(1.2)
+        let frame = window.frame
+        let table = tableController(window)
+        let margin = frame.width - (table?.widthForMeasurement ?? frame.width)
+        let now = app.now
+        // The first (card, text size, window width) whose line 3 stops
+        // wrapping when `Dismissed in N days` goes.
+        var found: (Card, Int, CGFloat)?
+        search: for card in list.sections.first(where: { $0.key == done })?.cards ?? [] where card.autoDismissAt != nil {
+            var plain = card
+            plain.autoDismissAt = nil
+            for size in stride(from: 18, through: 12, by: -1) {
+                let k = CGFloat(size) / 12
+                for windowWidth in [frame.width, 400, 520, 360, 600, 640] {
+                    let w = windowWidth - margin
+                    func fits(_ c: Card) -> Bool {
+                        LineLayout.line3Fits(CardLine(card: c, section: done, showsTag: false, indented: false, expanded: false, canDrag: true),
+                                             width: w, k: k, now: now)
+                    }
+                    if !fits(card) && fits(plain) {
+                        found = (card, size, windowWidth)
+                        break search
+                    }
+                }
+            }
+        }
+        guard let (card, size, windowWidth) = found else {
+            log("consistency \(name): no card of Done whose line 3 changes with Dismissed in N days")
+            return
+        }
+        window.setFrame(NSRect(x: frame.minX, y: frame.minY, width: windowWidth, height: frame.height), display: true)
+        for _ in 12..<size {
+            app.changeTextSize(.larger)
+            await pause(0.4)
+        }
+        await pause(1)
+        tableController(window)?.scrollForMeasurement(toLine: "section:" + done, offset: -40)
+        await pause(0.6)
+        let before = tableController(window)?.heightForMeasurement(line: "card:" + card.id)
+        await run("\(name) at \(size), width \(Int(windowWidth)): W on a Done card into an empty Waiting") {
+            list.select(.header(card: card.id))
+            list.press(.moveTo(.waiting))
+        }
+        let after = tableController(window)?.heightForMeasurement(line: "card:" + card.id)
+        log("consistency \(name): \(card.pr) height \(before.map { "\($0)" } ?? "-") -> \(after.map { "\($0)" } ?? "-")")
+        list.clearSelection()
+        app.changeTextSize(.reset)
+        window.setFrame(frame, display: true)
+        await pause(1.2)
     }
 
     /// `more`, `less`, "+ N more" and `Show less` with their animation
@@ -1466,7 +1648,7 @@ final class PerfRunner: NSObject {
         if shown.count >= 3, let row = shown[1].rows.last(where: \.isBlueUnread) {
             let read = shown[1]
             let next = shown[2]
-            // Its other blue rows read first (selecting a row reads it; the
+            // Its other colored unread rows read first (selecting a row reads it; the
             // rows past the newest three by Mark all as read's way is not
             // here: the card's own rows).
             for other in read.rows where other.isBlueUnread && other.id != row.id {
@@ -1549,23 +1731,47 @@ final class PerfRunner: NSObject {
             }
             return nil
         }
+        // The window cannot be made lower than its least height for the
+        // text size (the options at their full height, the list's minimum).
+        let k = CGFloat(TextSize.ratio(app.textSize))
+        let lowest = window.frame.height
         let listHeight = root?.frames.list?.height ?? 0
-        let listScroll = listScrollView(in: window)
-        var options: NSScrollView?
-        func walk(_ view: NSView) {
-            if let scroll = view as? NSScrollView, scroll !== listScroll, scroll.documentView.map({ $0.frame.height > 60 }) == true {
-                options = scroll
-            }
-            view.subviews.forEach(walk)
-        }
-        if let content = window.contentView { walk(content) }
-        let inner = options.map { ($0.documentView?.frame.height ?? 0, $0.contentView.bounds.height) }
-        let scrolls = inner.map { $0.0 > $0.1 + 0.5 } ?? false
-        if listHeight >= 100 - 0.5, scrolls {
-            log(String(format: "consistency short window: the list keeps %.0f pt; the options scroll (%.0f in %.0f)", listHeight, inner?.0 ?? 0, inner?.1 ?? 0))
+        // A warning band (the measurement data's account has no token) takes
+        // its room from the list at the least height.
+        let hasWarning = !(app.account(list.data.accountId)?.warnings.isEmpty ?? true) && !PerfMode.hidesBanners
+        let directory = ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_CONSISTENCY"]
+        if let directory { snapshot(window, directory + "/short-window-open.png") }
+        // Closing and opening the options at that height changes nothing
+        // but the list's share.
+        let open = list.showsFilterOptions
+        list.toggleFilterOpen()
+        await pause(0.8)
+        let closedHeight = window.frame.height
+        let closedList = root?.frames.list?.height ?? 0
+        if let directory { snapshot(window, directory + "/short-window-closed.png") }
+        list.toggleFilterOpen()
+        await pause(0.8)
+        let reopened = window.frame.height
+        // A failure band comes and goes: the height stays, the list gives
+        // it its room.
+        let listBefore = root?.frames.list?.height ?? 0
+        if let card = shownCards(list).first?.0 { list.data.restore(card.id) }
+        await pause(1)
+        let banded = window.frame.height
+        let listBanded = root?.frames.list?.height ?? 0
+        for _ in 0..<30 where list.data.failure != nil { await pause(0.5) }
+        await pause(0.8)
+        let unbanded = window.frame.height
+        log("consistency short window: a failure band: height \(lowest) -> \(banded) -> \(unbanded), list \(listBefore) -> \(listBanded)")
+        let area = FilterOptionsLayout.areaHeight(lines: list.filterOptions.count, k: k)
+        if open, listHeight >= 100 * k - 0.5 || hasWarning, abs(closedHeight - lowest) < 0.5, abs(reopened - lowest) < 0.5,
+           abs(banded - lowest) < 0.5, abs(unbanded - lowest) < 0.5, listBanded < listBefore,
+           abs(closedList - listHeight - area) < 1.5 {
+            log(String(format: "consistency short window: lowest %.0f pt; the list keeps %.0f pt with the options open (%.0f closed); the options' area %.1f pt; open and close keep the height",
+                       lowest, listHeight, closedList, area))
         } else {
             consistencyFailures += 1
-            log("consistency short window: FAIL list \(listHeight) pt, options \(String(describing: inner))")
+            log("consistency short window: FAIL lowest \(lowest), closed \(closedHeight), reopened \(reopened), list \(listHeight) open / \(closedList) closed, options open \(open), area \(area)")
             notes.append("short window: FAIL list \(listHeight) pt")
         }
     }
@@ -1591,6 +1797,48 @@ final class PerfRunner: NSObject {
         let dark = ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_DARK"] == "1"
         if dark { window.appearance = NSAppearance(named: .darkAqua) }
         let suffix = dark ? "-dark" : ""
+        PerfMode.assumedKeyWindow = window
+        SystemColors.bump()
+        // The warning band and the failure band of an operation, one under
+        // the other on the list's ground, as the surface shows them.
+        do {
+            let bands = VStack(spacing: 0) {
+                BannerView(lines: [BannerLine(kind: .fetchFailed, text: "Couldn't reach GitHub \u{00B7} retrying in 4 min", button: nil)], press: { _ in })
+                FailureBand(text: "Couldn't dismiss: daemon not running")
+            }
+            .padding(.bottom, 8)
+            .frame(width: 460)
+            .background(Palette.background.color)
+            let host = NSHostingView(rootView: bands)
+            host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            host.frame = NSRect(origin: .zero, size: host.fittingSize)
+            let holder = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            holder.alphaValue = 0
+            holder.contentView = host
+            host.layoutSubtreeIfNeeded()
+            snapshot(holder, directory + "/bands\(suffix).png")
+        }
+        // The menu bar image with the dot and the triangle, on a light and a
+        // dark menu bar strip, in the accent color of this run.
+        for barDark in [false, true] {
+            let appearance = NSAppearance(named: barDark ? .darkAqua : .aqua)!
+            let image = MenuBarImage.make(color: .none, marks: MenuBarMarks(dot: true, triangle: true), appearance: appearance)
+            let scale: CGFloat = 4
+            let size = NSSize(width: MenuBarImage.width * scale, height: MenuBarImage.height * scale)
+            if let rep = NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: Int(size.width), pixelsHigh: Int(size.height), bitsPerSample: 8, samplesPerPixel: 4,
+                hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+            ) {
+                NSGraphicsContext.saveGraphicsState()
+                NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+                (barDark ? NSColor(white: 0.16, alpha: 1) : NSColor(white: 0.93, alpha: 1)).setFill()
+                NSRect(origin: .zero, size: size).fill()
+                image.draw(in: NSRect(origin: .zero, size: size))
+                NSGraphicsContext.restoreGraphicsState()
+                try? rep.representation(using: .png, properties: [:])?.write(
+                    to: URL(fileURLWithPath: directory + "/menubar\(barDark ? "-dark" : "").png"))
+            }
+        }
         list.openTab(.all)
         await pause(1.5)
         snapshot(window, directory + "/all\(suffix).png")
@@ -1599,6 +1847,16 @@ final class PerfRunner: NSObject {
             steps.toggle?(list, other.id)
             await pause(0.5)
             snapshot(window, directory + "/all-selected\(suffix).png")
+            // The same selection while the search field has the keys: the
+            // gray of a selection the list does not drive (DESIGN.md,
+            // "Colors").
+            list.searchFocused = true
+            await pause(0.5)
+            snapshot(window, directory + "/all-selected-inactive\(suffix).png")
+            list.searchFocused = false
+            window.makeFirstResponder(nil)
+            await pause(0.3)
+            log("selection look: key window \(window.isKeyWindow), drawn as key \(PerfMode.assumedKeyWindow === window)")
             list.clearSelection()
         }
         if let scroll = listScrollView(in: window) {
@@ -1626,7 +1884,7 @@ final class PerfRunner: NSObject {
             log("menu of muted \(card.pr): \(menu.joined(separator: " | "))")
         }
         // The Filter: the summary with `Reset` (the options closed),
-        // the options open in All and in Review, the blue dot, Compact on.
+        // the options open in All and in Review, the accent-colored dot, Compact on.
         let saved = list.filter
         list.setMuteChoice(.hide)
         list.toggleStatus(.merged)
@@ -1668,12 +1926,14 @@ final class PerfRunner: NSObject {
             list.endDrag()
             await pause(0.3)
         }
-        // Mine: over the upper half of its first card (no heading above it).
+        // Mine: its four sections; a drag over the upper half of Todo's
+        // first card.
         list.openTab(.mine)
         await pause(1)
         if let scroll = listScrollView(in: window) { scrollTo(scroll, y: 0) }
         await pause(0.3)
-        let mine = shownCards(list).filter { $0.1.accepts && $0.0.canDrag }.map(\.0)
+        snapshot(window, directory + "/mine\(suffix).png")
+        let mine = shownCards(list).filter { $0.1.key == SectionKey.placed(.mine, .todo) }.map(\.0)
         if mine.count >= 2 {
             list.beginDrag(mine[1].id)
             list.dragOver(.card(mine[0].id, lowerHalf: false))
@@ -1682,16 +1942,79 @@ final class PerfRunner: NSObject {
             list.endDrag()
             await pause(0.3)
         }
+        // Mine's Done with `Dismiss all` on its heading, and its sheet.
+        let done = SectionKey.placed(.mine, .done)
+        tableController(window)?.scrollForMeasurement(toLine: "section:" + done, offset: -40)
+        await pause(0.8)
+        snapshot(window, directory + "/mine-done\(suffix).png")
+        list.perform(.dismissAll(section: done))
+        await pause(0.8)
+        snapshot(window, directory + "/mine-dismiss-all-sheet\(suffix).png")
+        list.answerDismiss(false)
         list.openTab(.review)
         await pause(0.5)
         if let (card, _) = shownCards(list).first {
             list.perform(.dismiss(card: card.id))
             await pause(1)
         }
+        // The Dismissed list by repository, then with search text.
         list.openDismissedList()
         await pause(1)
         snapshot(window, directory + "/dismissed\(suffix).png")
+        list.setSearch("repo-0")
+        await pause(0.8)
+        snapshot(window, directory + "/dismissed-search\(suffix).png")
+        list.setSearch("")
         list.closeDismissedList()
+        // The least height at 9, 12 and 18 with the options open (the list
+        // scrolled under the box: the strip of background between them);
+        // at 12, a failure band coming and going leaves the height as it is
+        // and takes its room from the list.
+        list.openTab(.all)
+        if !list.filterOpen { list.toggleFilterOpen() }
+        let frame = window.frame
+        func root() -> SurfaceRoot? {
+            var queue = window.contentView.map { [$0] } ?? []
+            while !queue.isEmpty {
+                let next = queue.removeFirst()
+                if let root = next as? SurfaceRoot { return root }
+                queue += next.subviews
+            }
+            return nil
+        }
+        func listHeight() -> CGFloat { root()?.frames.list?.height ?? 0 }
+        while app.textSize > 9 {
+            app.changeTextSize(.smaller)
+            await pause(0.4)
+        }
+        for size in [9, 12, 18] {
+            while app.textSize < size {
+                app.changeTextSize(.larger)
+                await pause(0.4)
+            }
+            window.setFrame(NSRect(x: frame.minX, y: frame.maxY - 300, width: frame.width, height: 300), display: true)
+            await pause(1)
+            if let scroll = listScrollView(in: window) { scrollTo(scroll, y: 300) }
+            await pause(0.8)
+            log("lowest window at \(size): \(window.frame.height) pt, content minimum \((window as? NSPanel)?.contentMinSize.height ?? 0), list \(listHeight()) pt")
+            snapshot(window, directory + "/options-lowest-\(size)\(suffix).png")
+            guard size == 12 else { continue }
+            // A failure band: a Restore the daemon refuses (the card is not
+            // dismissed).
+            let before = (window.frame.height, listHeight())
+            if let card = shownCards(list).first?.0 { list.data.restore(card.id) }
+            await pause(1)
+            let with = (window.frame.height, listHeight())
+            snapshot(window, directory + "/options-lowest-12-band\(suffix).png")
+            for _ in 0..<30 where list.data.failure != nil { await pause(0.5) }
+            await pause(0.8)
+            let after = (window.frame.height, listHeight())
+            log("lowest window at 12 with a failure band (\(list.data.failure == nil ? "gone" : "still there")): height \(before.0) -> \(with.0) -> \(after.0), list \(before.1) -> \(with.1) -> \(after.1)")
+        }
+        app.changeTextSize(.reset)
+        list.toggleFilterOpen()
+        window.setFrame(frame, display: true)
+        await pause(1)
     }
 
     // MARK: Scroll
@@ -1998,6 +2321,87 @@ final class PerfRunner: NSObject {
             }
             record("\(tab.title) Filter open/close", samples)
         }
+    }
+
+    /// The operations of 0.6 (docs/tasks/M9.md, "Risks"): moves between
+    /// Mine's sections (`Move to …`, D / T / W), `Dismiss all` (its sheet
+    /// and its `Dismiss`, on Review's Done refilled from Todo between the
+    /// samples, not measured), and the Dismissed list by repository
+    /// (opening and closing it, typing in its search field).
+    private func mineOperations(list: SurfaceListModel, window: NSWindow) async {
+        func cards(_ tab: PlacementTab, _ section: PlacementSection) -> [Card] {
+            shownCards(list).filter { $0.1.key == SectionKey.placed(tab, section) }.map(\.0)
+        }
+        list.openTab(.mine)
+        if let scroll = listScrollView(in: window) { scrollTo(scroll, y: 0) }
+        await pause(0.8)
+        var samples: [Sample] = []
+        for i in 0..<10 {
+            let target: PlacementSection = i % 2 == 0 ? .waiting : .todo
+            let from: PlacementSection = target == .waiting ? .todo : .waiting
+            guard let card = cards(.mine, from).first else { break }
+            let move = PlaceMove(card: card.id, target: .mine(target), position: .byDefault, verb: .move)
+            samples.append(await measure("move", "Mine Move to \(target.title) \(card.pr)") { list.perform(.place(move)) })
+        }
+        record("Mine Move to …", samples)
+        samples = []
+        for i in 0..<10 {
+            let target: PlacementSection = i % 2 == 0 ? .doing : .todo
+            let from: PlacementSection = target == .doing ? .todo : .doing
+            guard let card = cards(.mine, from).first else { break }
+            list.select(.header(card: card.id))
+            await pause(0.2)
+            samples.append(await measure("move", "Mine \(target.title) key \(card.pr)") { list.press(.moveTo(target)) })
+        }
+        record("Mine D/T/W", samples)
+        list.clearSelection()
+
+        list.openTab(.review)
+        await pause(0.5)
+        let done = SectionKey.placed(.review, .done)
+        var sheets: [Sample] = []
+        var answers: [Sample] = []
+        for _ in 0..<10 {
+            // Three cards of Todo into Done, then Done in view.
+            let three = Array(cards(.review, .todo).prefix(3))
+            guard three.count == 3 else { break }
+            list.select(.header(card: three[0].id))
+            for card in three.dropFirst() { list.click(card: card.id, extent: .toggle) }
+            list.multi(.move(.review(.done)))
+            list.clearSelection()
+            await pause(1)
+            tableController(window)?.scrollForMeasurement(toLine: "section:" + done, offset: -40)
+            await pause(0.5)
+            guard list.sections.first(where: { $0.key == done })?.dismissAllCards != nil else { break }
+            if app.confirmDismiss {
+                sheets.append(await measure("dismissAll", "Review Dismiss all sheet") { list.perform(.dismissAll(section: done)) })
+                answers.append(await measure("dismissAll", "Review Dismiss all") { list.answerDismiss(true) })
+            } else {
+                answers.append(await measure("dismissAll", "Review Dismiss all") { list.perform(.dismissAll(section: done)) })
+            }
+            await pause(0.5)
+        }
+        record("Review Dismiss all (sheet)", sheets)
+        record("Review Dismiss all", answers)
+
+        samples = []
+        for i in 0..<10 {
+            samples.append(await measure("dismissed", "Dismissed list \(i % 2 == 0 ? "open" : "close")") {
+                if i % 2 == 0 { list.openDismissedList() } else { list.closeDismissedList() }
+            })
+        }
+        record("Dismissed list open/close", samples)
+        list.openDismissedList()
+        await pause(0.5)
+        let text = "repo-1 cache"
+        samples = []
+        for i in 1...text.count {
+            let typed = String(text.prefix(i))
+            samples.append(await measure("search", "Dismissed \"\(typed)\"") { list.setSearch(typed) })
+        }
+        record("Dismissed list search typing", samples)
+        list.setSearch("")
+        list.closeDismissedList()
     }
 
     /// Typing in the search field (DESIGN.md, "Showing what matched",

@@ -5,10 +5,12 @@ sandbox state directory, through a `dev-ingest` build of shiibar-ghd.
 The data: one account `me` (id 1001, no token) with the owner `org` and
 Public; 200 PRs that are not dismissed, 3 rows each (a mention with a body
 long enough for 3 lines on a third of them), spread over 20 repositories so
-every All group (Group by Repository) folds into "+ N more PRs"; Review with
-Doing, Todo, Waiting and Done, Mine, and the cards of one muted user. For
+every All group (Group by Repository) folds into "+ N more PRs"; Review and
+Mine with Doing, Todo, Waiting and Done, and the cards of one muted user. For
 the Filter the PRs have the four statuses (open, draft, merged,
 closed), and a quarter of the cards are read (the rest have unread rows).
+30 more PRs are dismissed, for the Dismissed list by repository; they are not
+among the 200.
 The avatars are PNG files in the state directory, referenced by file:// URLs.
 
 No token is ever passed (a dev-ingest daemon without SHIIBAR_GH_DEV_KEYCHAIN
@@ -19,7 +21,10 @@ not empty, so it never touches a real one.
 Usage: make-data.py <shiibar-ghd built with --features dev-ingest> <empty dir> [--demo]
 
 --demo loads the data of the demo mode (scripts/perf/demo.sh) instead: about
-200 cards over All, Review (Doing, Todo, Waiting, Done) and Mine, many
+200 cards over All, Review and Mine (each with Doing, Todo, Waiting, Done and
+cards to `Dismiss all` in Done), dismissed cards of several repositories (the
+Dismissed list by repository), the account `me` with the color None and a
+second account with the color Blue (the dot before the name), many
 repositories, a muted repository and a muted user, merged and closed cards
 (in Done when placed), drafts, read cards and cards with unread rows (blue,
 and gray on the muted cards: what the Filter sorts out), and
@@ -27,7 +32,7 @@ rows with bodies of every length (unread mentions of 1, 3, 6 and 12 and more
 lines, read rows, long single lines, team mentions, cards with more than
 three rows), an own PR in the muted repository, a PR of it taken out of Mute
 by itself (Unmute), and team mentions on the muted user's cards. It needs a
-0.5 daemon or later (the working tree's).
+0.6 daemon or later (the working tree's: Mine's sections).
 """
 
 import json
@@ -44,10 +49,12 @@ ME = "me"
 OWNER = "org"
 REPOS = [f"repo-{i:02d}" for i in range(1, 21)]
 USERS = [f"user{i:02d}" for i in range(1, 12)]
-MUTED_USER = "renovate-bot"
+MUTED_USER = "example-bot"
 # 200 for the measurement of docs/tasks/M7.md; SHIIBAR_GH_PERF_CARDS for a
 # smaller run.
 CARDS = int(os.environ.get("SHIIBAR_GH_PERF_CARDS", "200"))
+# Dismissed PRs on top of them (the Dismissed list by repository).
+DISMISSED = 30
 MENTION_BODY = (
     "@me could you take a look at the migration plan before Friday? "
     "The second step rewrites the index of the events table and I am not sure "
@@ -146,7 +153,7 @@ def demo(daemon, colors, start):
     """The demo data (see the module's docstring)."""
     repos = [f"repo-{i:02d}" for i in range(1, 25)]
     muted_repo = "repo-24"
-    prs, events, review, done, mine_done = [], [], [], [], []
+    prs, events, review, done, mine_done, mine_open, assigned, dismissed = [], [], [], [], [], [], [], []
     for n in range(1, 201):
         repo = repos[(n * 7) % len(repos)]
         # 41 is an own PR in the muted repository (repo-24).
@@ -206,6 +213,14 @@ def demo(daemon, colors, start):
             mine_done.append(key)
         elif (merged or closed) and requested:
             done.append(key)
+        elif author == ME:
+            mine_open.append(key)
+        elif n % 13 == 0 and not requested:
+            assigned.append(key)
+        # The Dismissed list: five PRs in each of three repositories (n and
+        # n + 24 share one) and a few alone.
+        if not requested and author != ME and (n % 24 in (7, 9, 14) and n <= 120 or n in (151, 163)):
+            dismissed.append(key)
 
     for i in range(0, len(prs), 40):
         ids = {p["id"] for p in prs[i:i + 40]}
@@ -222,6 +237,22 @@ def demo(daemon, colors, start):
         daemon.ok({"cmd": "place", "account": ME, "pr": pr, "tab": "review", "section": "done"})
     for pr in mine_done:
         daemon.ok({"cmd": "place", "account": ME, "pr": pr, "tab": "mine", "section": "done"})
+    # Mine: your own open PRs came to Todo; spread them over the sections
+    # (an open one in Done too), and add assigned PRs (`Add to Mine`).
+    for index, pr in enumerate(mine_open):
+        section = ["doing", "todo", "waiting", "todo", "done", "todo"][index % 6]
+        if section != "todo":
+            daemon.ok({"cmd": "place", "account": ME, "pr": pr, "tab": "mine", "section": section})
+    for pr in assigned:
+        daemon.ok({"cmd": "place", "account": ME, "pr": pr, "tab": "mine", "section": "todo"})
+    for pr in dismissed:
+        daemon.ok({"cmd": "dismiss", "account": ME, "pr": pr})
+    # `me` without a color (no dot before its name), a second account with
+    # Blue (the dot).
+    daemon.ok({"cmd": "account_color", "account": ME, "color": "none"})
+    daemon.ok({"cmd": "dev_account_add", "id": "1002", "login": "me-two"})
+    daemon.ok({"cmd": "dev_owner_add", "account": "me-two", "owner": "public", "kind": "public"})
+    daemon.ok({"cmd": "account_color", "account": "me-two", "color": "blue"})
     daemon.ok({"cmd": "mute", "account": ME, "kind": "user", "name": MUTED_USER})
     daemon.ok({"cmd": "mute", "account": ME, "kind": "repo", "name": f"{OWNER}/{muted_repo}"})
     # A PR of the muted repository taken out of Mute by itself (its own
@@ -270,8 +301,8 @@ def main():
         print(json.dumps({"state_dir": state, "cards": len(shown), "rows": sum(len(c["rows"]) for c in shown)}, sort_keys=True))
         return
 
-    prs, events, review, muted = [], [], [], []
-    for n in range(1, CARDS + 1):
+    prs, events, review, muted, own = [], [], [], [], []
+    for n in range(1, CARDS + DISMISSED + 1):
         repo = REPOS[(n - 1) % len(REPOS)]
         if n % 7 == 0:
             author = ME
@@ -314,6 +345,12 @@ def main():
             # The daemon keeps no `comment_other` row on a merged or closed
             # PR: replies instead, so every card still has 3 rows.
             kinds = [("reply", text) if kind == "comment_other" else (kind, text) for kind, text in kinds]
+            if requested or author == ME:
+                # No reply after the merge or close (requests, or reopens of
+                # your own PR), so the card in Done has `Dismissed in N days`
+                # (DESIGN.md, "Dismiss"; the consistency scene of a Done card
+                # moved to an empty Waiting).
+                kinds = [first] * 3 if requested else [("reopened", f"{actor} reopened it")] * 3
         for j, (kind, text) in enumerate(kinds):
             events.append({
                 "id": f"E_{n}_{j}", "pr_id": pr_id, "kind": kind, "occurred_at": updated - j * 5,
@@ -322,6 +359,8 @@ def main():
             })
         if requested:
             review.append(f"{OWNER}/{repo}#{n}")
+        if author == ME and n <= CARDS and prs[-1]["state"] == "open":
+            own.append(f"{OWNER}/{repo}#{n}")
         if author == MUTED_USER:
             muted.append(n)
 
@@ -333,12 +372,19 @@ def main():
         }})
 
     # Review: the requested PRs went to Todo; spread some over the other
-    # sections.
+    # sections. Mine likewise: your own PRs came to its Todo.
     for index, pr in enumerate(review):
         section = ["doing", "todo", "waiting", "todo", "done"][index % 5]
         if section != "todo":
             daemon.ok({"cmd": "place", "account": ME, "pr": pr, "tab": "review", "section": section})
+    for index, pr in enumerate(own):
+        section = ["doing", "todo", "waiting", "todo", "done"][index % 5]
+        if section != "todo":
+            daemon.ok({"cmd": "place", "account": ME, "pr": pr, "tab": "mine", "section": section})
     daemon.ok({"cmd": "mute", "account": ME, "kind": "user", "name": MUTED_USER})
+    # The PRs past the 200: dismissed (the Dismissed list).
+    for p in prs[CARDS:]:
+        daemon.ok({"cmd": "dismiss", "account": ME, "pr": f"{OWNER}/{p['repo']}#{p['number']}"})
     # A quarter of the cards read (for the Filter's `Unread only`).
     cards = daemon.ok({"cmd": "list", "account": ME})["cards"]
     read = [row["id"] for index, card in enumerate(cards) if index % 4 == 0 for row in card["rows"]]
