@@ -29,10 +29,10 @@ final class AppearanceRenderTests: XCTestCase {
             let rep = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
             view.cacheDisplay(in: view.bounds, to: rep)
             let pixel = try XCTUnwrap(rep.colorAt(x: 10, y: 10)?.usingColorSpace(.sRGB))
-            let want = Palette.background.resolve(dark: dark)
-            XCTAssertEqual(pixel.redComponent, want.red, accuracy: 0.03, "dark=\(dark)")
-            XCTAssertEqual(pixel.greenComponent, want.green, accuracy: 0.03, "dark=\(dark)")
-            XCTAssertEqual(pixel.blueComponent, want.blue, accuracy: 0.03, "dark=\(dark)")
+            let want = Palette.background.resolved(dark: dark)
+            XCTAssertEqual(pixel.redComponent, want.redComponent, accuracy: 0.03, "dark=\(dark)")
+            XCTAssertEqual(pixel.greenComponent, want.greenComponent, accuracy: 0.03, "dark=\(dark)")
+            XCTAssertEqual(pixel.blueComponent, want.blueComponent, accuracy: 0.03, "dark=\(dark)")
         }
     }
 }

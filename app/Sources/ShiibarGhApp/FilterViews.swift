@@ -1,6 +1,6 @@
 // The Filter row and the options (docs/design/Main.html, the Filter scenes;
 // DESIGN.md, "Screens", "Filter"): under the search row, always (not while
-// the Dismissed list shows), `Filter` with its chevron and the blue dot,
+// the Dismissed list shows), `Filter` with its chevron and the accent-colored dot,
 // then, while a setting differs from its default, the summary; in All,
 // `Grouping…` at the right end. Nothing in the row changes a setting. When
 // open, one option a line between the row and the list, and `Reset` under
@@ -105,7 +105,7 @@ struct FilterRowState: Equatable {
     var showsGrouping: Bool
 }
 
-/// `Filter`, its chevron (right while closed, down while open) and the blue
+/// `Filter`, its chevron (right while closed, down while open) and the accent-colored
 /// dot when there is one (Main.html `.flt`). Any press on it opens or closes
 /// the options; the dot has no action of its own.
 struct FilterButton: View {
@@ -123,10 +123,10 @@ struct FilterButton: View {
                     .font(.system(size: 12 * k))
                     .foregroundColor(Palette.text.color)
                     .fixedSize()
-                IconView(icon: open ? BoardIcons.filterOpen : BoardIcons.filterClosed, size: 10 * k, color: Palette.waiting.color)
+                IconView(icon: open ? BoardIcons.filterOpen : BoardIcons.filterClosed, size: 10 * k, color: Palette.secondary.color)
                 if dot {
                     Circle()
-                        .fill(Palette.blueDot.color)
+                        .fill(Palette.accent.color)
                         .frame(width: 7 * k, height: 7 * k)
                         .frame(height: 24 * k)
                         .contentShape(Rectangle())
@@ -275,7 +275,7 @@ struct FilterOptions: View {
         HStack(spacing: 12) {
             Text(name)
                 .font(.system(size: 12 * k))
-                .foregroundColor(Palette.strongText.color)
+                .foregroundColor(Palette.text.color)
                 .lineLimit(1)
                 .fixedSize()
             Spacer(minLength: 0)
@@ -599,9 +599,9 @@ final class ModeSwitchView: NSView {
             path.addLine(to: CGPoint(x: box.minX, y: box.minY))
         }
         path.closeSubpath()
-        let fill = on ? Palette.settingsTabSelectedBackground.nsColor : Palette.surface.nsColor
-        let stroke = on ? Palette.tagBorder.nsColor : Palette.controlBorder.nsColor
-        let ink = on ? Palette.settingsTabSelected.nsColor : Palette.botIcon.nsColor
+        let fill = on ? Palette.selection.nsColor : Palette.surface.nsColor
+        let stroke = on ? Palette.accentLine.nsColor : Palette.border.nsColor
+        let ink = on ? Palette.accent.nsColor : Palette.secondary.nsColor
         context.addPath(path)
         context.setFillColor(fill.cgColor)
         context.fillPath()

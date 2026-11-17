@@ -69,10 +69,44 @@ final class StoreTests: XCTestCase {
         }
     }
 
-    func testPaletteHasDarkVariants() {
-        XCTAssertLessThan(Palette.background.dark.red, Palette.background.light.red)
-        XCTAssertEqual(Palette.text.resolve(dark: false), RGB(hex: 0x1D1D1F))
-        XCTAssertEqual(Palette.text.resolve(dark: true), RGB(hex: 0xECECEE))
+    func testFixedColorsHaveDarkVariants() {
+        XCTAssertLessThan(Palette.purpleBackground.dark.red, Palette.purpleBackground.light.red)
+        XCTAssertEqual(Palette.green.resolve(dark: false), RGB(hex: 0x1F8A3E))
+        XCTAssertEqual(Palette.green.resolve(dark: true), RGB(hex: 0x2FA352))
+    }
+
+    /// The grounds follow the system colors with shiibar-cc's expressions:
+    /// the list's ground is darker than the card on dark and grayer on
+    /// light, and the card on dark is white at 0.07 over the ground, opaque.
+    func testGroundsFollowTheSystemColors() {
+        for dark in [false, true] {
+            let ground = Palette.background.resolved(dark: dark)
+            let card = Palette.surface.resolved(dark: dark)
+            XCTAssertEqual(ground.alphaComponent, 1, "dark=\(dark)")
+            XCTAssertEqual(card.alphaComponent, 1, "dark=\(dark)")
+            XCTAssertNotEqual(ground.redComponent, card.redComponent, accuracy: 0.01, "dark=\(dark)")
+        }
+        let ground = Palette.background.resolved(dark: true)
+        let card = Palette.surface.resolved(dark: true)
+        XCTAssertEqual(card.redComponent, ground.redComponent * 0.93 + 0.07, accuracy: 0.01)
+        let light = Palette.surface.resolved(dark: false)
+        let control = Tone(.controlBackgroundColor).resolved(dark: false)
+        XCTAssertEqual(light.redComponent, control.redComponent, accuracy: 0.001)
+    }
+
+    /// Text grays are the label colors; the selection is the accent color
+    /// at 0.16, and gray while the list does not have the keys.
+    func testTextAndSelectionFollowTheSystemColors() {
+        for dark in [false, true] {
+            XCTAssertEqual(Palette.text.resolved(dark: dark), Tone(.labelColor).resolved(dark: dark), "dark=\(dark)")
+            XCTAssertEqual(Palette.secondary.resolved(dark: dark), Tone(.secondaryLabelColor).resolved(dark: dark))
+            XCTAssertEqual(Palette.border.resolved(dark: dark), Tone(.separatorColor).resolved(dark: dark))
+            let accent = Tone(.controlAccentColor).resolved(dark: dark)
+            let selection = Palette.selection.resolved(dark: dark)
+            XCTAssertEqual(selection.alphaComponent, 0.16, accuracy: 0.001)
+            XCTAssertEqual(selection.redComponent, accent.redComponent, accuracy: 0.001)
+            XCTAssertEqual(Palette.inactiveSelection.resolved(dark: dark).alphaComponent, dark ? 0.26 : 0.18, accuracy: 0.001)
+        }
     }
 }
 

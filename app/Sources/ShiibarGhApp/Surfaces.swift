@@ -25,7 +25,7 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
     /// effective appearance, which called `update()` again: 0.3.0 spent
     /// about 90% CPU in that loop (DESIGN.md, "Implementation policy",
     /// "UI": the image is not set again while it is the same).
-    private var looks: [ObjectIdentifier: StatusItemLook] = [:]
+    private var looks = StatusItemLooks()
     private let popover = NSPopover()
     private var popoverAccount: String?
     private var panels: [String: NSPanel] = [:]
@@ -54,6 +54,11 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         app.objectWillChange
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in DispatchQueue.main.async { self?.update() } }
+            .store(in: &cancellables)
+        // The dot follows the accent color: `show` sets a new image only if
+        // the color it resolves to changed.
+        SystemColors.changed
+            .sink { [weak self] in DispatchQueue.main.async { self?.update() } }
             .store(in: &cancellables)
         // The popover's width follows the text size at once; a window keeps
         // the size it has (DESIGN.md, "Text size").
@@ -136,18 +141,21 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         guard let button = item.button else { return }
         let id = ObjectIdentifier(item)
         let appearance = button.effectiveAppearance
-        let look = StatusItemLook(dark: appearance.isDark, color: color, marks: marks, accessibilityLabel: label, toolTip: toolTip)
-        let change = StatusItemUpdate(from: looks[id], to: look)
+        let dot = MenuBarImage.dotColor(for: appearance)
+        let look = StatusItemLook(
+            dark: appearance.isDark, color: color, marks: marks, accent: MenuBarImage.components(dot),
+            accessibilityLabel: label, toolTip: toolTip
+        )
+        let change = looks.update(id, to: look)
         guard !change.isEmpty else { return }
-        looks[id] = look
-        if change.image { button.image = MenuBarImage.make(color: color, marks: marks, appearance: appearance) }
+        if change.image { button.image = MenuBarImage.make(color: color, marks: marks, appearance: appearance, dot: dot) }
         if change.accessibilityLabel { button.setAccessibilityLabel(label) }
         if change.toolTip { button.toolTip = toolTip }
     }
 
     private func remove(_ item: NSStatusItem) {
         appearanceWatch[ObjectIdentifier(item)] = nil
-        looks[ObjectIdentifier(item)] = nil
+        looks.forget(ObjectIdentifier(item))
         NSStatusBar.system.removeStatusItem(item)
     }
 

@@ -173,8 +173,8 @@ public final class SurfaceListModel: ObservableObject {
         Visibility(filter: filter, kept: lingering)
     }
 
-    /// The blue dot of `Filter`: a card of the tab shown that the Filter
-    /// hides has a blue unread row (DESIGN.md, "Filter").
+    /// The accent-colored dot of `Filter`: a card of the tab shown that the Filter
+    /// hides has a colored unread row (DESIGN.md, "Filter").
     public var filterDot: Bool {
         Listing.filterDot(data.cards, tab: tab, filter: filter)
     }
@@ -270,7 +270,7 @@ public final class SurfaceListModel: ObservableObject {
     }
 
     /// The cards changed (AccountViewModel), or the selection did: a card
-    /// shown that lost its last blue unread row is kept. Worked out before
+    /// shown that lost its last colored unread row is kept. Worked out before
     /// the selection follows the change, so a selected card that was read
     /// stays selected.
     func updateLinger() {
@@ -307,7 +307,7 @@ public final class SurfaceListModel: ObservableObject {
     }
 
     /// The surface is shown again (the popover opened, the window opened):
-    /// the cards without a blue unread row now do not show, selected or
+    /// the cards without a colored unread row now do not show, selected or
     /// not (DESIGN.md, "Filter").
     func shown() {
         resetLinger()

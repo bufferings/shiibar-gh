@@ -25,6 +25,7 @@
 import AppKit
 import os
 import ShiibarGhCore
+import SwiftUI
 
 extension Array {
     /// `count` elements, going round the array.
@@ -101,6 +102,11 @@ enum PerfMode {
     static var daemon: URL? {
         ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_DAEMON"].map { URL(fileURLWithPath: $0) }
     }
+
+    /// A window the snapshots draw as if it were key: a hidden window of an
+    /// app that is not active never is, and the selection's accent tint
+    /// shows only in a key window (ListTable.swift, `ListLook`).
+    @MainActor static weak var assumedKeyWindow: NSWindow?
 
     /// The name of the scratch defaults, one per mode (a measurement run
     /// and a demo do not share them). The values are kept in memory only
@@ -1642,7 +1648,7 @@ final class PerfRunner: NSObject {
         if shown.count >= 3, let row = shown[1].rows.last(where: \.isBlueUnread) {
             let read = shown[1]
             let next = shown[2]
-            // Its other blue rows read first (selecting a row reads it; the
+            // Its other colored unread rows read first (selecting a row reads it; the
             // rows past the newest three by Mark all as read's way is not
             // here: the card's own rows).
             for other in read.rows where other.isBlueUnread && other.id != row.id {
@@ -1791,6 +1797,48 @@ final class PerfRunner: NSObject {
         let dark = ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_DARK"] == "1"
         if dark { window.appearance = NSAppearance(named: .darkAqua) }
         let suffix = dark ? "-dark" : ""
+        PerfMode.assumedKeyWindow = window
+        SystemColors.bump()
+        // The warning band and the failure band of an operation, one under
+        // the other on the list's ground, as the surface shows them.
+        do {
+            let bands = VStack(spacing: 0) {
+                BannerView(lines: [BannerLine(kind: .fetchFailed, text: "Couldn't reach GitHub \u{00B7} retrying in 4 min", button: nil)], press: { _ in })
+                FailureBand(text: "Couldn't dismiss: daemon not running")
+            }
+            .padding(.bottom, 8)
+            .frame(width: 460)
+            .background(Palette.background.color)
+            let host = NSHostingView(rootView: bands)
+            host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            host.frame = NSRect(origin: .zero, size: host.fittingSize)
+            let holder = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            holder.alphaValue = 0
+            holder.contentView = host
+            host.layoutSubtreeIfNeeded()
+            snapshot(holder, directory + "/bands\(suffix).png")
+        }
+        // The menu bar image with the dot and the triangle, on a light and a
+        // dark menu bar strip, in the accent color of this run.
+        for barDark in [false, true] {
+            let appearance = NSAppearance(named: barDark ? .darkAqua : .aqua)!
+            let image = MenuBarImage.make(color: .none, marks: MenuBarMarks(dot: true, triangle: true), appearance: appearance)
+            let scale: CGFloat = 4
+            let size = NSSize(width: MenuBarImage.width * scale, height: MenuBarImage.height * scale)
+            if let rep = NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: Int(size.width), pixelsHigh: Int(size.height), bitsPerSample: 8, samplesPerPixel: 4,
+                hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+            ) {
+                NSGraphicsContext.saveGraphicsState()
+                NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+                (barDark ? NSColor(white: 0.16, alpha: 1) : NSColor(white: 0.93, alpha: 1)).setFill()
+                NSRect(origin: .zero, size: size).fill()
+                image.draw(in: NSRect(origin: .zero, size: size))
+                NSGraphicsContext.restoreGraphicsState()
+                try? rep.representation(using: .png, properties: [:])?.write(
+                    to: URL(fileURLWithPath: directory + "/menubar\(barDark ? "-dark" : "").png"))
+            }
+        }
         list.openTab(.all)
         await pause(1.5)
         snapshot(window, directory + "/all\(suffix).png")
@@ -1799,6 +1847,16 @@ final class PerfRunner: NSObject {
             steps.toggle?(list, other.id)
             await pause(0.5)
             snapshot(window, directory + "/all-selected\(suffix).png")
+            // The same selection while the search field has the keys: the
+            // gray of a selection the list does not drive (DESIGN.md,
+            // "Colors").
+            list.searchFocused = true
+            await pause(0.5)
+            snapshot(window, directory + "/all-selected-inactive\(suffix).png")
+            list.searchFocused = false
+            window.makeFirstResponder(nil)
+            await pause(0.3)
+            log("selection look: key window \(window.isKeyWindow), drawn as key \(PerfMode.assumedKeyWindow === window)")
             list.clearSelection()
         }
         if let scroll = listScrollView(in: window) {
@@ -1826,7 +1884,7 @@ final class PerfRunner: NSObject {
             log("menu of muted \(card.pr): \(menu.joined(separator: " | "))")
         }
         // The Filter: the summary with `Reset` (the options closed),
-        // the options open in All and in Review, the blue dot, Compact on.
+        // the options open in All and in Review, the accent-colored dot, Compact on.
         let saved = list.filter
         list.setMuteChoice(.hide)
         list.toggleStatus(.merged)

@@ -176,7 +176,7 @@ final class TabTests: XCTestCase {
         XCTAssertEqual(Listing.dismissed(cards).map(\.id), ["X2", "X1"], "newest dismissal first")
     }
 
-    /// Cards with a blue unread row; a gray muted row does not count, a
+    /// Cards with a colored unread row; a gray muted row does not count, a
     /// mention in a muted card does (DESIGN.md, "Tabs").
     func testUnreadCountsCountCardsWithABlueRow() {
         let cards = sampleCards()

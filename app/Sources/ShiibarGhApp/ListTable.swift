@@ -497,14 +497,14 @@ final class DropLineView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let blue = Palette.blueDot.nsColor
+        let accent = Palette.accent.nsColor
         let line = NSRect(x: 4, y: bounds.midY - 1, width: bounds.width - 4, height: 2)
-        blue.setFill()
+        accent.setFill()
         line.fill()
         let circle = NSBezierPath(ovalIn: NSRect(x: 1, y: bounds.midY - 3, width: 6, height: 6))
         Palette.background.nsColor.setFill()
         circle.fill()
-        blue.setStroke()
+        accent.setStroke()
         circle.lineWidth = 2
         circle.stroke()
     }
@@ -587,6 +587,22 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
         context.avatars.objectWillChange.sink { [weak self] _ in
             DispatchQueue.main.async { self?.redrawVisible() }
         }.store(in: &cancellables)
+        // The selection's tint follows the keys: the window turning key or
+        // not, the search field taking or leaving them; the system colors.
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            NotificationCenter.default.publisher(for: name)
+                .sink { [weak self] note in
+                    MainActor.assumeIsolated {
+                        guard let self, (note.object as? NSWindow) === self.table.window else { return }
+                        self.lookMayChange()
+                    }
+                }
+                .store(in: &cancellables)
+        }
+        content.list.$searchFocused.removeDuplicates()
+            .sink { [weak self] _ in DispatchQueue.main.async { self?.lookMayChange() } }
+            .store(in: &cancellables)
+        SystemColors.changed.sink { [weak self] in MainActor.assumeIsolated { self?.lookMayChange() } }.store(in: &cancellables)
         content.onDropLine = { [weak self] in self?.placeDropLine() }
         content.table = self
         context.drag.scrollView = scrollView
@@ -666,7 +682,29 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
     }
 
     private var environment: LineEnvironment {
-        LineEnvironment(k: k, now: now, autoDismissDays: autoDismissDays, context: context)
+        LineEnvironment(k: k, now: now, autoDismissDays: autoDismissDays, context: context, look: look)
+    }
+
+    /// The colors the lines are drawn with now (`ListLook`).
+    private var look = ListLook()
+
+    /// Works out the look again; a change draws every line again.
+    private func refreshLook() {
+        let window = table.window
+        let next = ListLook(
+            colors: SystemColors.epoch, accent: SystemColors.accent,
+            selectionActive: ((window?.isKeyWindow ?? false) || (window != nil && window === PerfMode.assumedKeyWindow))
+                && !content.list.searchFocused
+        )
+        guard next != look else { return }
+        look = next
+        redrawAll = true
+    }
+
+    private func lookMayChange() {
+        let before = look
+        refreshLook()
+        if look != before { setNeedsApply() }
     }
 
     // MARK: Applying a change
@@ -687,6 +725,7 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
     }
 
     private func apply() {
+        refreshLook()
         let list = content.list
         if openings != list.openings {
             // The surface closed since: every position goes.

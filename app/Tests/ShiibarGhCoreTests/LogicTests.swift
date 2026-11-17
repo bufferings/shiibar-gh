@@ -153,6 +153,34 @@ final class PresentationTests: XCTestCase {
         XCTAssertEqual([tip.image, tip.accessibilityLabel, tip.toolTip], [false, false, true])
     }
 
+    /// The dot is drawn in the accent color, so the image depends on it:
+    /// repeated notifications with the same color set nothing, and a new
+    /// accent color sets the image once (the 0.3.0 loop came from setting it
+    /// on every notification).
+    func testTheMenuBarImageIsSetOnceForANewAccentColor() {
+        let blue: [CGFloat] = [0, 0.48, 1, 1]
+        let purple: [CGFloat] = [0.58, 0.24, 0.59, 1]
+        func look(dot: Bool = true, accent: [CGFloat]) -> StatusItemLook {
+            StatusItemLook(dark: false, color: .none, marks: MenuBarMarks(dot: dot, triangle: false), accent: accent, accessibilityLabel: "l", toolTip: "t")
+        }
+        var looks = StatusItemLooks()
+        let id = ObjectIdentifier(NSObject())
+        var images = 0
+        func show(_ look: StatusItemLook) {
+            if looks.update(id, to: look).image { images += 1 }
+        }
+        show(look(accent: blue))
+        XCTAssertEqual(images, 1, "the first look sets the image")
+        for _ in 0..<5 { show(look(accent: blue)) }
+        XCTAssertEqual(images, 1, "notifications with the same color set nothing")
+        show(look(accent: purple))
+        for _ in 0..<5 { show(look(accent: purple)) }
+        XCTAssertEqual(images, 2, "a new accent color sets the image exactly once")
+        show(look(dot: false, accent: purple))
+        show(look(dot: false, accent: blue))
+        XCTAssertEqual(images, 3, "without the dot the accent color does not change the image")
+    }
+
     func testRelativeTimes() {
         let cases: [(Int64, String)] = [
             (0, "just now"), (59, "just now"), (60, "1 min ago"), (3_599, "59 min ago"),
@@ -189,7 +217,7 @@ final class PresentationTests: XCTestCase {
             var body: String?
             var lines: Int
         }
-        // Every row is a record: the blue dot while unread; a read row only
+        // Every row is a record: the accent-colored dot while unread; a read row only
         // loses the dot (DESIGN.md, "How rows look").
         let cases = [
             Case(row: Row(id: "1", kind: .mentioned, text: "hi\nthere", actor: "alice", occurredAt: at),

@@ -115,18 +115,18 @@ struct Sidebar: View {
         .padding(EdgeInsets(top: 10, leading: 8, bottom: 10, trailing: 8))
         .frame(width: 170)
         .frame(maxHeight: .infinity)
-        .background(Palette.sidebar.color)
-        .overlay(alignment: .trailing) { Rectangle().fill(Palette.groupBorder.color).frame(width: 1) }
+        .background(Palette.settingsBackground.color)
+        .overlay(alignment: .trailing) { Rectangle().fill(Palette.border.color).frame(width: 1) }
     }
 
     func row<Label: View>(selected: Bool, indent: Bool, @ViewBuilder label: () -> Label, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 8) { label() }
                 .font(.system(size: 12, weight: selected && !indent ? .semibold : .regular))
-                .foregroundColor(selected ? Palette.settingsTabSelected.color : (indent ? Palette.strongText.color : Palette.text.color))
+                .foregroundColor(selected ? Palette.accent.color : (indent ? Palette.text.color : Palette.text.color))
                 .padding(EdgeInsets(top: 6, leading: indent ? 26 : 8, bottom: 6, trailing: 8))
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 6).fill(selected ? Palette.settingsTabSelectedBackground.color : .clear))
+                .background(RoundedRectangle(cornerRadius: 6).fill(selected ? Palette.selection.color : .clear))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -180,7 +180,7 @@ struct AccountPane: View {
                 Button { model.select(.owner(account: account.id, owner: owner.id)) } label: {
                     Item(first: index == 0) {
                         Label2(title: owner.displayName, sub: owner.kindTitle)
-                        Control { Text("\u{203A}").foregroundColor(Palette.waiting.color) }
+                        Control { Text("\u{203A}").foregroundColor(Palette.secondary.color) }
                     }
                     .contentShape(Rectangle())
                 }
@@ -192,7 +192,7 @@ struct AccountPane: View {
             }
             .padding(EdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14))
             .overlay(alignment: .top) {
-                if !account.owners.isEmpty { Rectangle().fill(Palette.itemDivider.color).frame(height: 1) }
+                if !account.owners.isEmpty { Rectangle().fill(Palette.border.color).frame(height: 1) }
             }
         }
         Section2(title: "API usage") {
@@ -319,11 +319,11 @@ struct EventTable: View {
             .font(.system(size: 11, weight: .semibold))
             .foregroundColor(Palette.secondary.color)
             .padding(EdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6))
-            .overlay(alignment: .bottom) { Rectangle().fill(Palette.groupBorder.color).frame(height: 1) }
+            .overlay(alignment: .bottom) { Rectangle().fill(Palette.border.color).frame(height: 1) }
             ForEach(SettingsText.eventGroups, id: \.0) { group, kinds in
                 Text(group)
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(Palette.strongText.color)
+                    .foregroundColor(Palette.text.color)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(EdgeInsets(top: 7, leading: 6, bottom: 4, trailing: 6))
                     .background(Palette.settingsBackground.color.opacity(0.5))
@@ -337,7 +337,7 @@ struct EventTable: View {
                     }
                     .font(.system(size: 12))
                     .padding(EdgeInsets(top: 3, leading: 6, bottom: 3, trailing: 6))
-                    .overlay(alignment: .top) { Rectangle().fill(Palette.rowDivider.color).frame(height: 1) }
+                    .overlay(alignment: .top) { Rectangle().fill(Palette.border.color).frame(height: 1) }
                 }
             }
         }
@@ -354,7 +354,7 @@ struct EventTable: View {
         } else {
             Text(on ? "\u{2713}" : "\u{2013}")
                 .fontWeight(on ? .semibold : .regular)
-                .foregroundColor(on ? Palette.blueDot.color : Palette.faded.color)
+                .foregroundColor(on ? Palette.accent.color : Palette.secondary.color)
         }
     }
 }
@@ -386,18 +386,18 @@ struct MutedRow: View {
                             .lineLimit(1)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10))
-                            .background(selected == entry ? Palette.settingsTabSelectedBackground.color : Color.clear)
+                            .background(selected == entry ? Palette.selection.color : Color.clear)
                             .contentShape(Rectangle())
                             .onTapGesture { selected = entry }
                             .overlay(alignment: .top) {
-                                if entry != entries.first { Rectangle().fill(Palette.rowDivider.color).frame(height: 1) }
+                                if entry != entries.first { Rectangle().fill(Palette.border.color).frame(height: 1) }
                             }
                     }
                 }
                 .frame(minHeight: 22, alignment: .top)
                 .background(RoundedRectangle(cornerRadius: 6).fill(Palette.surface.color))
                 .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.groupBorder.color, lineWidth: 1))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.border.color, lineWidth: 1))
                 HStack(spacing: 4) {
                     TextField("", text: $name)
                         .textFieldStyle(.roundedBorder)
@@ -462,7 +462,7 @@ struct TokenSheet: View {
                     .padding(EdgeInsets(top: 0, leading: 12, bottom: 10, trailing: 12))
             }
             .background(RoundedRectangle(cornerRadius: 6).fill(Palette.surface.color))
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.groupBorder.color, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.border.color, lineWidth: 1))
             VStack(alignment: .leading, spacing: 2) {
                 Text("2. Paste the token and test it").font(.system(size: 12, weight: .semibold))
                 Text(isAdd
@@ -483,7 +483,7 @@ struct TokenSheet: View {
                     HStack(spacing: 8) {
                         switch row {
                         case .placeholder(let label):
-                            Text(label).foregroundColor(Palette.faded.color).frame(maxWidth: .infinity, alignment: .leading)
+                            Text(label).foregroundColor(Palette.secondary.color).frame(maxWidth: .infinity, alignment: .leading)
                         case .result(let line):
                             Text(line.label).frame(maxWidth: .infinity, alignment: .leading)
                             Text(line.text).foregroundColor(tone(line.tone))
@@ -495,12 +495,12 @@ struct TokenSheet: View {
                     .font(.system(size: 12))
                     .frame(minHeight: 22)
                     .padding(EdgeInsets(top: 3, leading: 10, bottom: 3, trailing: 10))
-                    .overlay(alignment: .top) { Rectangle().fill(Palette.rowDivider.color).frame(height: 1) }
+                    .overlay(alignment: .top) { Rectangle().fill(Palette.border.color).frame(height: 1) }
                 }
             }
             .background(RoundedRectangle(cornerRadius: 6).fill(Palette.surface.color))
             .clipShape(RoundedRectangle(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.groupBorder.color, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.border.color, lineWidth: 1))
             ErrorText(text: model.error)
             HStack(spacing: 8) {
                 if model.showsSaveLater {
@@ -526,7 +526,7 @@ struct TokenSheet: View {
         case .good: return Palette.greenText.color
         case .bad: return Palette.orangeText.color
         case .caution: return Palette.caution.color
-        case .neutral: return Palette.waiting.color
+        case .neutral: return Palette.secondary.color
         }
     }
 }
@@ -603,7 +603,7 @@ struct CopySheet: View {
             EventTable(cells: { table[$0.rawValue] ?? EventCell(list: false, notify: false) }, editable: false) { _, _, _ in }
                 .padding(EdgeInsets(top: 2, leading: 8, bottom: 6, trailing: 8))
                 .background(RoundedRectangle(cornerRadius: 6).fill(Palette.surface.color))
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.groupBorder.color, lineWidth: 1))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.border.color, lineWidth: 1))
             Text(SettingsText.copyNote(owner?.displayName ?? "")).font(.system(size: 12)).foregroundColor(Palette.secondary.color)
             ErrorText(text: settings.errors["events:" + ownerId])
             HStack(spacing: 8) {

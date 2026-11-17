@@ -559,16 +559,16 @@ public enum Listing {
         Self.cards(cards, tab: tab).filter(visibility.shows)
     }
 
-    /// The unread count of a tab: its cards with a blue unread row, whatever
+    /// The unread count of a tab: its cards with a colored unread row, whatever
     /// the Filter and the search; muted gray ones do not count, a hidden
     /// muted card with an unread mention does (DESIGN.md, "Tabs").
     public static func unreadCount(_ cards: [Card], tab: ListTab) -> Int {
         Self.cards(cards, tab: tab).filter(\.hasBlueUnread).count
     }
 
-    /// The blue dot of `Filter`: a card of this tab that the Filter hides
-    /// has a blue unread row. The search does not count (DESIGN.md,
-    /// "Filter", "Blue dot"); `Unread only` never hides such a card.
+    /// The accent-colored dot of `Filter`: a card of this tab that the Filter hides
+    /// has a colored unread row. The search does not count (DESIGN.md,
+    /// "Filter", "Accent-color dot"); `Unread only` never hides such a card.
     public static func filterDot(_ cards: [Card], tab: ListTab, filter: ListFilter) -> Bool {
         Self.cards(cards, tab: tab).contains { $0.hasBlueUnread && !filter.shows($0, kept: false) }
     }

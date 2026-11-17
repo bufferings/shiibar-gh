@@ -360,7 +360,7 @@ struct DismissConfirmSheet: View {
                     .fill(Palette.settingsBackground.color)
                     .shadow(color: .black.opacity(0.22), radius: 15, y: 12)
             )
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.settingsTabBarBorder.color, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.border.color, lineWidth: 1))
             .padding(EdgeInsets(top: 118, leading: 20, bottom: 20, trailing: 20))
         }
     }
@@ -475,9 +475,9 @@ struct UsageView: View {
                 .foregroundColor(usage.warn ? Palette.caution.color : Palette.secondary.color)
             if let fraction = usage.fraction, let percent = usage.percent {
                 ZStack(alignment: .leading) {
-                    Rectangle().fill(Palette.usageTrack.color)
+                    Rectangle().fill(Palette.quaternary.color)
                     Rectangle()
-                        .fill(usage.warn ? Palette.usageWarnFill.color : Palette.usageFill.color)
+                        .fill(usage.warn ? Palette.usageWarnFill.color : Palette.tertiary.color)
                         .frame(width: 40 * k * CGFloat(fraction))
                     Text(percent)
                         .font(.system(size: 9 * k, weight: .bold))
@@ -497,14 +497,14 @@ struct UsageView: View {
 }
 
 /// Refresh in progress (Main.html `.iconbtn.busy`): a gray circle with a
-/// turning blue arc, in place of the button until the answer.
+/// turning arc in the accent color, in place of the button until the answer.
 struct RefreshProgress: View {
     @State private var turning = false
 
     var body: some View {
         ZStack {
-            IconView(icon: BoardIcons.progressTrack, size: 16, color: Palette.usageTrack.color)
-            IconView(icon: BoardIcons.progressArc, size: 16, color: Palette.blueDot.color)
+            IconView(icon: BoardIcons.progressTrack, size: 16, color: Palette.quaternary.color)
+            IconView(icon: BoardIcons.progressArc, size: 16, color: Palette.accent.color)
                 .rotationEffect(.degrees(turning ? 360 : 0))
                 .animation(.linear(duration: 1).repeatForever(autoreverses: false), value: turning)
         }
@@ -515,7 +515,7 @@ struct RefreshProgress: View {
     }
 }
 
-/// Keep on top (Main.html `.pin`): filled blue while on, outlined while off.
+/// Keep on top (Main.html `.pin`): filled in the accent color while on, outlined while off.
 struct PinButton: View {
     var on: Bool
     var toggle: () -> Void
@@ -524,14 +524,14 @@ struct PinButton: View {
         Button(action: toggle) {
             Group {
                 if on {
-                    IconShape(icon: BoardIcons.pin).fill(Palette.settingsTabSelected.color)
+                    IconShape(icon: BoardIcons.pin).fill(Palette.accent.color)
                 } else {
-                    IconView(icon: BoardIcons.pin, size: 14, color: Palette.botIcon.color)
+                    IconView(icon: BoardIcons.pin, size: 14, color: Palette.secondary.color)
                 }
             }
             .frame(width: 14, height: 14)
             .frame(width: 24, height: 24)
-            .background(RoundedRectangle(cornerRadius: 6).fill(on ? Palette.settingsTabSelectedBackground.color : .clear))
+            .background(RoundedRectangle(cornerRadius: 6).fill(on ? Palette.selection.color : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -553,7 +553,7 @@ struct BannerView: View {
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                     HStack(alignment: .center, spacing: 8) {
-                        IconView(icon: BoardIcons.warning, size: 14 * k, color: Palette.bannerText.color)
+                        IconView(icon: BoardIcons.warning, size: 14 * k, color: Palette.text.color)
                         Text(line.text).fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         if let button = line.button {
@@ -563,9 +563,9 @@ struct BannerView: View {
                 }
             }
             .font(.system(size: 12 * k))
-            .foregroundColor(Palette.bannerText.color)
+            .foregroundColor(Palette.text.color)
             .padding(EdgeInsets(top: 7, leading: 10, bottom: 7, trailing: 10))
-            .background(RoundedRectangle(cornerRadius: 8).fill(Palette.bannerBackground.color))
+            .background(RoundedRectangle(cornerRadius: 8).fill(Palette.warningBand.color))
             .padding(EdgeInsets(top: 8, leading: 12, bottom: 0, trailing: 12))
         }
     }
@@ -579,14 +579,14 @@ struct FailureBand: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
-            IconView(icon: BoardIcons.failure, size: 14 * k, color: Palette.orangeText.color)
+            IconView(icon: BoardIcons.failure, size: 14 * k, color: Palette.text.color)
             Text(text).fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .font(.system(size: 12 * k))
-        .foregroundColor(Palette.orangeText.color)
+        .foregroundColor(Palette.text.color)
         .padding(EdgeInsets(top: 7, leading: 10, bottom: 7, trailing: 10))
-        .background(RoundedRectangle(cornerRadius: 8).fill(Palette.orangeIconBackground.color))
+        .background(RoundedRectangle(cornerRadius: 8).fill(Palette.failureBand.color))
         .padding(EdgeInsets(top: 8, leading: 12, bottom: 0, trailing: 12))
         .accessibilityElement(children: .combine)
     }
@@ -661,7 +661,7 @@ struct TabRow: View {
                 if count > 0 {
                     Text("\(count)")
                         .font(.system(size: 10 * k, weight: .bold))
-                        .foregroundColor(Palette.blueDot.color)
+                        .foregroundColor(Palette.accent.color)
                 }
             }
             .padding(EdgeInsets(top: 4 * k, leading: 10, bottom: 6 * k, trailing: 10))
@@ -686,7 +686,7 @@ struct TabRow: View {
     var dismissedButton: some View {
         let open = state.value.showingDismissed
         let count = state.value.dismissedCount
-        let color = open ? Palette.settingsTabSelected.color : Palette.botIcon.color
+        let color = open ? Palette.accent.color : Palette.secondary.color
         return Button { open ? list.closeDismissedList() : list.openDismissedList() } label: {
             // The board's `.dbtn` (22 points high, 6 of room at the sides,
             // 4 between the icon and the count), scaled with the text.
@@ -698,7 +698,7 @@ struct TabRow: View {
             }
             .padding(.horizontal, 6 * k)
             .frame(height: 22 * k)
-            .background(RoundedRectangle(cornerRadius: 6 * k).fill(open ? Palette.settingsTabSelectedBackground.color : .clear))
+            .background(RoundedRectangle(cornerRadius: 6 * k).fill(open ? Palette.selection.color : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -733,7 +733,7 @@ struct SearchRowContent: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            IconView(icon: BoardIcons.search, size: 13 * k, color: Palette.waiting.color)
+            IconView(icon: BoardIcons.search, size: 13 * k, color: Palette.secondary.color)
             TextField("Search", text: search)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12 * k))
@@ -755,7 +755,7 @@ struct SearchRowContent: View {
         .padding(.horizontal, 8)
         .frame(height: 24 * k)
         .background(RoundedRectangle(cornerRadius: 6).fill(Palette.surface.color))
-        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.controlBorder.color, lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.border.color, lineWidth: 1))
         .frame(minWidth: 0, maxWidth: .infinity)
         .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
     }
@@ -772,7 +772,7 @@ struct SearchClearButton: View {
     var body: some View {
         Button(action: press) {
             ZStack {
-                Circle().fill(Palette.faded.color)
+                Circle().fill(Palette.placeholder.color)
                 IconView(icon: BoardIcons.clearSearch, size: size, color: Palette.surface.color)
             }
             .frame(width: size, height: size)
@@ -917,7 +917,7 @@ struct DismissedHeading: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Button { list.closeDismissedList() } label: {
-                    Text("\u{2190}").font(.system(size: 13 * k)).foregroundColor(Palette.strongText.color)
+                    Text("\u{2190}").font(.system(size: 13 * k)).foregroundColor(Palette.text.color)
                         .padding(.horizontal, 4)
                         .contentShape(Rectangle())
                 }
@@ -931,7 +931,7 @@ struct DismissedHeading: View {
             .padding(EdgeInsets(top: 2, leading: 12, bottom: 4, trailing: 14))
             Text(DismissedText.note(keepDays: keepDays))
                 .font(.system(size: 11 * k))
-                .foregroundColor(Palette.waiting.color)
+                .foregroundColor(Palette.secondary.color)
                 .padding(EdgeInsets(top: 2, leading: 16, bottom: 8, trailing: 16))
         }
     }
@@ -970,9 +970,9 @@ struct KeyHints: View {
                 HStack(spacing: 3) {
                     Text(hint.key)
                         .font(.system(size: 11 * k, design: .monospaced))
-                        .foregroundColor(Palette.strongText.color)
+                        .foregroundColor(Palette.text.color)
                         .padding(.horizontal, 4)
-                        .background(RoundedRectangle(cornerRadius: 3).fill(Palette.tint.color))
+                        .background(RoundedRectangle(cornerRadius: 3).fill(Palette.fill.color))
                     Text(hint.text)
                 }
                 .fixedSize()
@@ -1049,11 +1049,11 @@ struct GroupingSheet: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Grouping").font(.system(size: 13 * k, weight: .semibold))
                 HStack(spacing: 8) {
-                    Text("Group by").font(.system(size: 11 * k, weight: .semibold)).foregroundColor(Palette.strongText.color)
+                    Text("Group by").font(.system(size: 11 * k, weight: .semibold)).foregroundColor(Palette.text.color)
                     PullDown(title: options.groupBy.title, toolTip: "Group by", items: GroupBy.allCases.map { value in
                         IconMenuItem(value.title, checked: value == options.groupBy) { model.setGroupBy(value) }
                     })
-                    Text("Then by").font(.system(size: 11 * k, weight: .semibold)).foregroundColor(Palette.strongText.color)
+                    Text("Then by").font(.system(size: 11 * k, weight: .semibold)).foregroundColor(Palette.text.color)
                     PullDown(
                         title: options.thenByTitle, toolTip: "Then by", enabled: options.groupBy != .none,
                         items: options.thenByChoices.map { value in
@@ -1063,12 +1063,12 @@ struct GroupingSheet: View {
                     Spacer(minLength: 0)
                 }
                 HStack(spacing: 8) {
-                    Text("Sort").font(.system(size: 11 * k, weight: .semibold)).foregroundColor(Palette.strongText.color)
+                    Text("Sort").font(.system(size: 11 * k, weight: .semibold)).foregroundColor(Palette.text.color)
                     PullDown(title: options.sort.title, toolTip: "Sort", items: Self.sortItems(options) { model.setSort($0) })
                     Spacer(minLength: 0)
                 }
                 ForEach([options.groupBy, options.thenBy].filter { $0 != .none }, id: \.self) { by in
-                    Text("Order of " + by.title).font(.system(size: 11 * k, weight: .semibold)).foregroundColor(Palette.strongText.color)
+                    Text("Order of " + by.title).font(.system(size: 11 * k, weight: .semibold)).foregroundColor(Palette.text.color)
                     GroupOrderList(model: model, by: by)
                 }
                 HStack {
@@ -1082,7 +1082,7 @@ struct GroupingSheet: View {
                     .fill(Palette.settingsBackground.color)
                     .shadow(color: .black.opacity(0.22), radius: 15, y: 12)
             )
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.settingsTabBarBorder.color, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.border.color, lineWidth: 1))
             .padding(EdgeInsets(top: 118, leading: 20, bottom: 20, trailing: 20))
         }
     }
@@ -1106,7 +1106,7 @@ struct GroupOrderList: View {
         List {
             ForEach(groups) { group in
                 HStack(spacing: 8) {
-                    Text("\u{2261}").foregroundColor(Palette.grip.color)
+                    Text("\u{2261}").foregroundColor(Palette.tertiary.color)
                     Text(group.title).lineLimit(1)
                 }
                 .font(.system(size: 12 * k))
@@ -1115,7 +1115,7 @@ struct GroupOrderList: View {
         }
         .listStyle(.plain)
         .frame(height: min(CGFloat(groups.count), 6) * 24 * k + 4)
-        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.groupBorder.color, lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Palette.border.color, lineWidth: 1))
     }
 }
 

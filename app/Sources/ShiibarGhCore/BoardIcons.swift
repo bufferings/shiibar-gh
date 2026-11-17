@@ -227,7 +227,8 @@ extension BoardIcons {
 }
 
 /// The marks on an account's menu bar icon (DESIGN.md, "Screens";
-/// MenuBarIcon.html): the blue dot top right and the triangle bottom left.
+/// MenuBarIcon.html): the dot in the accent color top right and the
+/// triangle bottom left.
 /// There is no number.
 public struct MenuBarMarks: Equatable {
     public var dot: Bool
@@ -256,29 +257,54 @@ public struct MenuBarMarks: Equatable {
 }
 
 /// What a status item shows. The image is set again only when this changes
-/// (DESIGN.md, "UI": the appearance, the account color, the blue dot and the
-/// triangle), and the label and tooltip only when they change: setting the
-/// image of a status button redraws it and notifies its effective
-/// appearance, which made 0.3.0 redraw in a loop.
+/// (DESIGN.md, "UI": the appearance, the account color, the dot and its
+/// accent color, the triangle), and the label and tooltip only when they
+/// change: setting the image of a status button redraws it and notifies its
+/// effective appearance, which made 0.3.0 redraw in a loop.
 public struct StatusItemLook: Equatable {
     public var dark: Bool
     public var color: AccountColor
     public var marks: MenuBarMarks
+    /// The accent color the dot is drawn in, as sRGB components.
+    public var accent: [CGFloat]
     public var accessibilityLabel: String
     public var toolTip: String
 
-    public init(dark: Bool, color: AccountColor, marks: MenuBarMarks, accessibilityLabel: String, toolTip: String) {
+    public init(
+        dark: Bool, color: AccountColor, marks: MenuBarMarks, accent: [CGFloat] = [], accessibilityLabel: String, toolTip: String
+    ) {
         self.dark = dark
         self.color = color
         self.marks = marks
+        self.accent = accent
         self.accessibilityLabel = accessibilityLabel
         self.toolTip = toolTip
     }
 
-    /// The parts of the look the image is drawn from.
+    /// The parts of the look the image is drawn from. The accent color
+    /// counts only while the dot shows.
     public func sameImage(as other: StatusItemLook?) -> Bool {
         guard let other else { return false }
         return dark == other.dark && color == other.color && marks == other.marks
+            && (!marks.dot || accent == other.accent)
+    }
+}
+
+/// The looks last set on the status buttons, by button: `update` answers
+/// what to set again for a new look and keeps it.
+public struct StatusItemLooks {
+    private var looks: [ObjectIdentifier: StatusItemLook] = [:]
+
+    public init() {}
+
+    public mutating func update(_ id: ObjectIdentifier, to look: StatusItemLook) -> StatusItemUpdate {
+        let change = StatusItemUpdate(from: looks[id], to: look)
+        if !change.isEmpty { looks[id] = look }
+        return change
+    }
+
+    public mutating func forget(_ id: ObjectIdentifier) {
+        looks[id] = nil
     }
 }
 

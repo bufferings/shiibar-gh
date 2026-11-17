@@ -230,7 +230,7 @@ struct CardDragPreview: View {
                         .foregroundColor(Palette.onColor.color)
                         .padding(.horizontal, 6 * k)
                         .frame(height: 16 * k)
-                        .background(Capsule().fill(Palette.blueDot.color))
+                        .background(Capsule().fill(Palette.accent.color))
                 }
             }
             Text(card.title)
@@ -279,7 +279,7 @@ struct StateLabelView: View {
         let style: (String, Color, Color)? = {
             switch label.value {
             case .mergeable: return ("Mergeable", Palette.green.color, Palette.onColor.color)
-            case .draft: return ("Draft", Palette.tint.color, Palette.draftText.color)
+            case .draft: return ("Draft", Palette.draftBackground.color, Palette.draftText.color)
             case .merged: return ("Merged", Palette.purpleBackground.color, Palette.purpleText.color)
             case .closed: return ("Closed", Palette.orangeIconBackground.color, Palette.orangeText.color)
             case .open, nil: return nil

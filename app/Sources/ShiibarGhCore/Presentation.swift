@@ -306,12 +306,12 @@ extension String {
 }
 
 /// The mark at the start of a row, of "+ N more" and of "+ N more PRs"
-/// (DESIGN.md, "How rows look"): a blue dot, a gray ring for muted unread
+/// (DESIGN.md, "How rows look"): a accent-colored dot, a gray ring for muted unread
 /// ones, or nothing.
 public enum UnreadMark: Equatable {
     case none, blue, ring
 
-    /// Blue if any is blue unread, the ring if only gray ones are unread.
+    /// Blue if any is colored unread, the ring if only gray ones are unread.
     public static func of(_ rows: [Row]) -> UnreadMark {
         if rows.contains(where: \.isBlueUnread) { return .blue }
         if rows.contains(where: \.isGrayUnread) { return .ring }
@@ -360,7 +360,7 @@ public struct RowPresentation: Equatable {
 
     /// `cardMuted`: the row's card is muted. Its rows are gray except a
     /// mention of you or your team, which keeps the normal color and the
-    /// blue dot (DESIGN.md, "Card"). `expanded`: `more` was pressed on the
+    /// accent-colored dot (DESIGN.md, "Card"). `expanded`: `more` was pressed on the
     /// body; it shows up to 5 wrapped lines and `less`.
     public init(_ row: Row, now: Int64, cardMuted: Bool = false, expanded: Bool = false) {
         let kind = row.kind.value

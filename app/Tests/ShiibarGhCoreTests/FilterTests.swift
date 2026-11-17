@@ -14,7 +14,7 @@ import XCTest
 
 final class FilterValueTests: XCTestCase {
     /// One card for each status (Mergeable is Open), muted or not, with a
-    /// blue unread row or not (a muted card without one has a gray unread
+    /// colored unread row or not (a muted card without one has a gray unread
     /// row: hidden by `Unread only` too).
     func grid() -> [Card] {
         var out: [Card] = []
@@ -147,7 +147,7 @@ final class FilterListTests: XCTestCase {
         XCTAssertEqual(Listing.shown(cards, tab: .review, visibility: shows(ListFilter(statuses: [.merged]))).count, 1)
     }
 
-    /// The dot: a card the Filter hides has a blue unread row; the search
+    /// The dot: a card the Filter hides has a colored unread row; the search
     /// does not count; only the tab shown.
     func testTheBlueDot() {
         let cards = sampleCards()
@@ -320,7 +320,7 @@ final class UnreadLingerTests: XCTestCase {
         XCTAssertEqual(linger.kept, held("U1"))
         linger.update(cards: cards(read: ["U1"]), filter: filter, selected: [], now: 6)
         XCTAssertEqual(linger.kept, ["U1": 6])
-        // A new blue unread row: an ordinary card again.
+        // A new colored unread row: an ordinary card again.
         linger.update(cards: cards(), filter: filter, selected: [], now: 7)
         XCTAssertEqual(linger.ids, [])
     }
@@ -389,7 +389,7 @@ final class FilterModelTests: XCTestCase {
         defaults.removePersistentDomain(forName: suite)
     }
 
-    /// Todo: U1–U3 with a blue unread row each, R read, G with a gray
+    /// Todo: U1–U3 with a colored unread row each, R read, G with a gray
     /// unread row only; Doing: K (blue); W1 waiting, read.
     func unreadCards() -> [Card] {
         ["U1", "U2", "U3"].enumerated().map { i, id in
@@ -588,7 +588,7 @@ final class FilterModelTests: XCTestCase {
         assertSelectionConsistent(list)
     }
 
-    /// The blue dot of the tab shown only, whatever the search.
+    /// The accent-colored dot of the tab shown only, whatever the search.
     func testTheDotOfTheTabShown() async {
         let list = await loaded(.review, cards: sampleCards())
         XCTAssertTrue(list.filterDot, "T7's mention, hidden")
@@ -745,7 +745,7 @@ final class FilterModelTests: XCTestCase {
         list.select(.header(card: "U2"))
         clock.advance(4)
         XCTAssertEqual(list.lingering, ["U1"], "4 s after it was let go again")
-        // A new blue unread row: an ordinary card.
+        // A new colored unread row: an ordinary card.
         api.cards = unreadCards()
         list.data.reload()
         await settle()
@@ -848,7 +848,7 @@ final class FilterModelTests: XCTestCase {
         assertSelectionConsistent(list)
     }
 
-    /// Turned on: a card without a blue unread row does not show, selected
+    /// Turned on: a card without a colored unread row does not show, selected
     /// or not.
     func testTurningUnreadOnlyOnHidesTheReadCardsAtOnce() async {
         let list = await loaded(.review, cards: unreadCards())

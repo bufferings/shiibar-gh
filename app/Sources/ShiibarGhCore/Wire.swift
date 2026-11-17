@@ -380,7 +380,7 @@ public struct Row: Equatable, Decodable, Identifiable {
     public var url: String
     public var occurredAt: Int64
     public var unread: Bool
-    /// The row is muted now: a gray ring instead of the blue dot, and no
+    /// The row is muted now: a gray ring instead of the accent-colored dot, and no
     /// notification (DESIGN.md, "Mute").
     public var muted: Bool
 
@@ -434,7 +434,7 @@ public struct Row: Equatable, Decodable, Identifiable {
         kind.value == .mentioned || kind.value == .teamMentioned
     }
 
-    /// An unread row that counts: blue, not gray (DESIGN.md, "How unread
+    /// An unread row that counts: in the accent color, not gray (DESIGN.md, "How unread
     /// clears": muted rows count only when they are mentions of you or your
     /// team).
     public var isBlueUnread: Bool {
@@ -619,7 +619,7 @@ public struct Card: Equatable, Decodable, Identifiable {
         muted.contains { $0.value == reason }
     }
 
-    /// A row of the card is blue unread.
+    /// A row of the card is colored unread.
     public var hasBlueUnread: Bool { rows.contains(where: \.isBlueUnread) }
 
     public var hasGrayUnread: Bool { rows.contains(where: \.isGrayUnread) }

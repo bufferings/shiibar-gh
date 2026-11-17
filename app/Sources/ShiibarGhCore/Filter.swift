@@ -1,5 +1,5 @@
 // The Filter of a tab (DESIGN.md, "Filter"): what it hides (Mute, the PR
-// status, `Unread only`), its summary, its blue dot, and the cards that
+// status, `Unread only`), its summary, its accent-colored dot, and the cards that
 // `Unread only` keeps for a while after they are read ("A card read under
 // `Unread only`"). Each of All, Review and Mine has its own settings, kept
 // per account; the Dismissed list has none.
@@ -8,7 +8,7 @@ import Foundation
 
 /// The texts of `Filter` (DESIGN.md, "Filter").
 public enum FilterText {
-    /// The tooltip of the blue dot.
+    /// The tooltip of the accent-colored dot.
     public static let dotTip = "Unread pull requests are hidden by the filter"
     /// The button under the options, at the right end.
     public static let reset = "Reset"
@@ -96,7 +96,7 @@ public struct ListFilter: Equatable, Codable {
     public var muted: MuteChoice
     /// The statuses shown; never empty.
     public private(set) var statuses: Set<PRStatus>
-    /// Hide the cards without a blue unread row.
+    /// Hide the cards without a colored unread row.
     public var unreadOnly: Bool
 
     public static let allStatuses = Set(PRStatus.allCases)
@@ -186,7 +186,7 @@ public struct ListFilter: Equatable, Codable {
         !statuses.contains(Listing.status(card))
     }
 
-    /// `Unread only` hides the card: no blue unread row (the rule of the
+    /// `Unread only` hides the card: no colored unread row (the rule of the
     /// tabs' unread counts; a card with gray unread rows only is hidden).
     public func hidesByUnread(_ card: Card) -> Bool {
         unreadOnly && !card.hasBlueUnread
@@ -230,15 +230,15 @@ public struct Visibility: Equatable {
 }
 
 /// The cards that `Unread only` keeps showing after they lost their last
-/// blue unread row (DESIGN.md, "Filter", "A card read under `Unread
+/// colored unread row (DESIGN.md, "Filter", "A card read under `Unread
 /// only`"), on one surface. Times are seconds of a clock the caller gives
 /// (any origin).
 ///
-/// - A card the Filter showed loses its last blue unread row: it is kept.
+/// - A card the Filter showed loses its last colored unread row: it is kept.
 /// - It stays while it (or an item in it) is selected; once it is not
 ///   selected, it goes after `duration`, counted from the later of the two.
 ///   Selected again, the count starts over.
-/// - A new blue unread row makes it an ordinary card again.
+/// - A new colored unread row makes it an ordinary card again.
 /// - Opening a tab, changing the Filter (Reset too), the Dismissed list and closing the
 ///   surface `reset` it: nothing is kept, and the cards shown then are the
 ///   ones that may be kept next.
@@ -296,7 +296,7 @@ public struct UnreadLinger: Equatable {
                         next[card.id] = .some(now)
                     }
                 } else if shown.contains(card.id) {
-                    // It had a blue unread row: shown until now.
+                    // It had a colored unread row: shown until now.
                     next[card.id] = .some(isSelected ? nil : now)
                 }
             }
