@@ -68,7 +68,11 @@ final class TabRowTests: XCTestCase {
         host.cacheDisplay(in: host.bounds, to: rep)
         if dark { return Measure(image: rep, switchFrame: frame, icon: .zero, count: .zero, tabName: .zero, glyphs: []) }
         let scale = CGFloat(rep.pixelsWide) / host.bounds.width
-        func ink(_ region: CGRect) -> CGRect? {
+        // `limit`: gray text is half as dark as the label color and its
+        // edges are lighter still, so the text regions use a higher limit
+        // than the segments, where the fill of the selected one must not
+        // count.
+        func ink(_ region: CGRect, limit: CGFloat = 0.62) -> CGRect? {
             var minX = Int.max, minY = Int.max, maxX = -1, maxY = -1
             let x0 = max(0, Int(region.minX * scale)), x1 = min(rep.pixelsWide, Int(region.maxX * scale))
             let y0 = max(0, Int(region.minY * scale)), y1 = min(rep.pixelsHigh, Int(region.maxY * scale))
@@ -79,7 +83,7 @@ final class TabRowTests: XCTestCase {
                     // Composited on white: a pixel nothing was drawn on is clear.
                     let mean = (c.redComponent + c.greenComponent + c.blueComponent) / 3
                     let l = mean * c.alphaComponent + (1 - c.alphaComponent)
-                    if l < 0.62 { minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y) }
+                    if l < limit { minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y) }
                 }
             }
             guard maxX >= 0 else { return nil }
@@ -91,11 +95,11 @@ final class TabRowTests: XCTestCase {
             layout.frame(mode).offsetBy(dx: frame.minX, dy: frame.minY).insetBy(dx: 2 * k, dy: 2 * k)
         }
         let right = CGRect(x: frame.maxX + 1, y: 0, width: width - frame.maxX - 1, height: host.bounds.height - 2)
-        let dismissed = try XCTUnwrap(ink(right))
+        let dismissed = try XCTUnwrap(ink(right, limit: 0.8))
         // The icon is the first 14·k points of the Dismissed ink; the count
         // the rest.
-        let iconInk = try XCTUnwrap(ink(CGRect(x: dismissed.minX, y: 0, width: 14 * k, height: host.bounds.height - 2)))
-        let countInk = try XCTUnwrap(ink(CGRect(x: dismissed.minX + 14 * k + 1, y: 0, width: width, height: host.bounds.height - 2)))
+        let iconInk = try XCTUnwrap(ink(CGRect(x: dismissed.minX, y: 0, width: 14 * k, height: host.bounds.height - 2), limit: 0.8))
+        let countInk = try XCTUnwrap(ink(CGRect(x: dismissed.minX + 14 * k + 1, y: 0, width: width, height: host.bounds.height - 2), limit: 0.8))
         // The icon's square: 14·k centered on its ink horizontally; its
         // glyph is placed in the square as the board places it (y 2.8 to
         // 13 of 16), so the square's top is the ink's top less 2.8/16.
