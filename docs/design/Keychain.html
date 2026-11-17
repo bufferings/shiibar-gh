@@ -138,7 +138,7 @@ a{color:var(--accent)}a:hover{color:var(--accent)}
 .seg span.on{background:var(--card);color:var(--label);box-shadow:0 1px 2px rgba(0,0,0,.12)}
 .bar3{display:flex;gap:8px;padding:8px 12px 4px;align-items:center}
 .bar3.second{padding:0 12px 8px}
-.adot{width:10px;height:10px;border-radius:5px;background:#C7420D;flex:0 0 10px}
+.adot{width:10px;height:10px;border-radius:2.5px;background:#C7420D;flex:0 0 10px}
 .pop{width:460px}
 .side{width:170px;flex:0 0 170px;border-right:1px solid var(--separator);background:var(--window);padding:10px 8px;display:flex;flex-direction:column;gap:2px;box-sizing:border-box}
 .srow{padding:6px 8px;border-radius:6px;font-size:12px;display:flex;gap:8px;align-items:center}
@@ -241,6 +241,14 @@ body{margin:0;padding:24px;background:#e9e9ee}
 .dmode .dseg:last-child{border-radius:0 6px 6px 0}
 .dmode .dseg.on{background:var(--selection);border-color:var(--accent-line);color:var(--accent);z-index:1}
 .dmode + .dbtn{margin-left:4px}
+
+/* Header: a band with the account, then one row with the status and the buttons */
+.pbar{height:34px;display:flex;align-items:center;justify-content:center;gap:8px;padding:0 16px;background:var(--band);border-bottom:1px solid var(--separator);font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden}
+.pbar>span:last-child{overflow:hidden;text-overflow:ellipsis}
+.phead{padding:8px 10px 0 16px}
+.win2 .tbar{position:relative;height:28px;padding:0 12px;gap:0;background:var(--band);border-bottom:1px solid var(--separator)}
+.win2 .tbar .ttl{position:absolute;left:76px;right:76px;top:0;bottom:0;display:flex;align-items:center;justify-content:center;gap:7px;font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden}
+.win2 .tbar .ttl>span:last-child{overflow:hidden;text-overflow:ellipsis}
 </style>
 </head>
 <body>
@@ -254,11 +262,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
         <div class="alert"><div class="aicon"></div><div class="atitle">Saved tokens are unreadable</div><div class="atext">Reset deletes the Keychain item. You enter every token again. PRs and settings stay.</div><button class="abtn pri">Reset tokens</button><button class="abtn">Not now</button></div>
       </div>
       <div class="pop" style="width: 460px">
-        <div class="phead">
-          <div style="display: flex; flex-direction: column; flex: 1; min-width: 0">
-            <div style="display: flex; align-items: center; gap: 8px"><span class="adot"></span><span style="font-weight: 600; font-size: 14px">bufferings-work</span></div>
-            <div class="m">Updated 1 min ago · <span class="api">API<span class="batt"><i style="width: 25%"></i><b>25%</b></span></span></div>
-          </div>
+        <div class="pbar"><span class="adot"></span><span>bufferings-work</span></div><div class="phead"><div style="flex: 1; min-width: 0"><div class="m">Updated 1 min ago · <span class="api">API<span class="batt"><i style="width: 25%"></i><b>25%</b></span></span></div></div>
           <button class="iconbtn" aria-label="Refresh" title="Refresh (⌘R)"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"></path><path d="M13.5 2.5v3h-3"></path></svg></button>
           <button class="iconbtn" aria-label="Open in window"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5"></rect><path d="M2 6h12"></path></svg></button>
           <button class="iconbtn" aria-label="Settings"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.4l1.29.13.59 1.94.84.46 1.95-.6.82 1 -.96 1.79.28.92 1.79.96-.13 1.29-1.94.59-.46.84.6 1.95-1 .82-1.79-.96-.92.28-.96 1.79-1.29-.13-.59-1.94-.84-.46-1.95.6-.82-1 .96-1.79-.28-.92L1.4 8l.13-1.29 1.94-.59.46-.84-.6-1.95 1-.82 1.79.96.92-.28z"></path><circle cx="8" cy="8" r="2.2"></circle></svg></button>
@@ -274,11 +278,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
       </div>
       <div class="cap" style="margin: 0">Same popover when the saved tokens are unreadable (one banner at a time)</div>
       <div class="pop" style="width: 460px">
-        <div class="phead">
-          <div style="display: flex; flex-direction: column; flex: 1; min-width: 0">
-            <div style="display: flex; align-items: center; gap: 8px"><span class="adot"></span><span style="font-weight: 600; font-size: 14px">bufferings-work</span></div>
-            <div class="m">Updated 1 min ago · <span class="api">API<span class="batt"><i style="width: 25%"></i><b>25%</b></span></span></div>
-          </div>
+        <div class="pbar"><span class="adot"></span><span>bufferings-work</span></div><div class="phead"><div style="flex: 1; min-width: 0"><div class="m">Updated 1 min ago · <span class="api">API<span class="batt"><i style="width: 25%"></i><b>25%</b></span></span></div></div>
           <button class="iconbtn" aria-label="Refresh" title="Refresh (⌘R)"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"></path><path d="M13.5 2.5v3h-3"></path></svg></button>
           <button class="iconbtn" aria-label="Open in window"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5"></rect><path d="M2 6h12"></path></svg></button>
           <button class="iconbtn" aria-label="Settings"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.4l1.29.13.59 1.94.84.46 1.95-.6.82 1 -.96 1.79.28.92 1.79.96-.13 1.29-1.94.59-.46.84.6 1.95-1 .82-1.79-.96-.92.28-.96 1.79-1.29-.13-.59-1.94-.84-.46-1.95.6-.82-1 .96-1.79-.28-.92L1.4 8l.13-1.29 1.94-.59.46-.84-.6-1.95 1-.82 1.79.96.92-.28z"></path><circle cx="8" cy="8" r="2.2"></circle></svg></button>
@@ -313,7 +313,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
         <div class="pane">
           <div><div class="gh">Account</div><div class="group">
             <div class="item"><div class="lbl"><span style="font-weight: 600">Token</span><span class="sub">Expires 2026-11-12</span></div><div class="ctl"><span class="st2 warn">Keychain unavailable</span></div></div>
-            <div class="item"><div class="lbl"><span style="font-weight: 600">Menu bar icon color</span><span class="sub">Tints this account's icon and the dot next to its name.</span></div><div class="ctl"><span class="sel"><span class="sw" style="background: #C7420D"></span>Red &#8964;</span></div></div>
+            <div class="item"><div class="lbl"><span style="font-weight: 600">Menu bar icon color</span><span class="sub">Tints this account's icon and the square next to its name.</span></div><div class="ctl"><span class="sel"><span class="sw" style="background: #C7420D"></span>Red &#8964;</span></div></div>
           </div></div>
           <div><div class="gh">Owners</div><div class="group">
             <div class="item"><div class="lbl"><span style="font-weight: 600">example-org</span><span class="sub">Organization</span></div><div class="ctl"><span class="gray">&rsaquo;</span></div></div>
