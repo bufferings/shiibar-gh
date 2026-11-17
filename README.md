@@ -4,7 +4,7 @@ macOS menu bar app for the GitHub pull requests you are involved in. It
 tells you what happened on them (unread marks and notifications), and you
 keep the PRs you review and your own PRs in the order you choose: the
 popover has the tabs All, Review and Mine, the last two with the sections
-Doing, Todo, Waiting and Done.
+Done, Waiting, Doing and Todo.
 Dismiss a PR when you are done with it; it comes back when someone mentions
 you or your team, replies in a thread you take part in, requests your
 review, or reopens it. Mute a repository, a user or a single PR to hide its
