@@ -1495,3 +1495,26 @@ fn the_daemon_starts_on_a_0_6_state_directory() {
     assert_eq!(merged["unread"], true, "a 0.6 row keeps its unread mark");
     daemon.stop();
 }
+
+#[test]
+fn a_card_without_the_time_it_was_added_sorts_as_the_oldest() {
+    // DESIGN.md, "All", "Order": a card with no row and no added time (a
+    // record without one) comes after every other, as in the app.
+    let dir = tempfile::tempdir().unwrap();
+    let db = old_database(
+        dir.path(),
+        8,
+        "UPDATE prs SET added_at = NULL WHERE key = '1001:PR_8';",
+    );
+    let (_, data) = open(&db);
+    assert_eq!(data.prs["1001:PR_8"].added_at, None);
+    let engine = shiibar_ghd::engine::Engine::restore(data);
+    let now = shiibar_ghd::clock::Now::fixed(1_800_000_000, "Asia/Tokyo").unwrap();
+    let all: Vec<String> = engine
+        .list(&shiibar_ghd::engine::ListArgs::default(), &now)
+        .unwrap()
+        .into_iter()
+        .map(|c| c.pr)
+        .collect();
+    assert_eq!(all.last().map(String::as_str), Some("org/app#8"), "{all:?}");
+}

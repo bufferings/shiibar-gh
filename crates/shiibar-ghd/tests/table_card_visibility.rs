@@ -470,3 +470,13 @@ fn search_follows_the_examples_of_the_design() {
     assert_eq!(rows("bob"), ["E_1"]);
     assert!(rows("bob PR_2").is_empty());
 }
+
+#[test]
+fn ties_go_by_the_key_as_a_string() {
+    // DESIGN.md, "All", "Order": cards added at once without rows go by
+    // their PR key as a string (`PR_10` before `PR_9`), as the app sorts
+    // them (ShiibarGhCoreTests, RecentActivityTests, the same values).
+    let mut h = H::new();
+    h.prs(vec![other("PR_9"), other("PR_10"), other("PR_2")]);
+    assert_eq!(h.card_ids(ListArgs::default()), ["PR_10", "PR_2", "PR_9"]);
+}

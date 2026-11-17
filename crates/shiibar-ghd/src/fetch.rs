@@ -90,9 +90,14 @@ fn timeline_nodes() -> String {
 /// `assignees` is a `UserConnection` of `PullRequest` (public schema).
 /// `timelineItems { updatedAt }` is the timeline time
 /// (`PullRequestTimelineItemsConnection.updatedAt: DateTime!`); asking only
-/// for it needs neither `first` nor `last`, and did not raise the cost of a
-/// 50-id request (`rateLimit.cost`, read-only requests on public
-/// repositories, 2026-11-17). DESIGN.md, "API usage".
+/// for it needs neither `first` nor `last`. It leaves the points a request
+/// costs (`rateLimit.cost`) as they are, but GitHub takes longer to answer
+/// it: for 50 very large PRs (NixOS/nixpkgs) the request without it
+/// answered in 7 to 10 s or 502, and with it answered 502 or 504 after about
+/// 11 s every time, while 25 at a time answered in 6 to 10 s (read-only
+/// requests on public repositories, three times each, 2026-11-17). A 502 or
+/// 504 is split in halves (`split`), so such an owner costs one more round
+/// of requests. DESIGN.md, "API usage".
 fn pr_status_fields() -> String {
     format!(
         "id number url title state isDraft createdAt updatedAt isCrossRepository \
@@ -1032,7 +1037,10 @@ impl Run<'_> {
                 }
                 Some(pr)
                     if pr.updated_at != updated
-                        || timeline_moved(pr.timeline_updated_at, timeline)
+                        // A dismissed card has no status fetch, so its
+                        // timeline time is never compared (DESIGN.md, "API
+                        // usage", "Timeline time").
+                        || (!pr.dismissed && timeline_moved(pr.timeline_updated_at, timeline))
                         || (!pr.collected && pr.watched) =>
                 {
                     wanted.insert(id.clone());
@@ -1533,7 +1541,43 @@ impl Run<'_> {
         Ok(convert::failed_check_name(&runs, &jobs, contexts))
     }
 
+    /// The events of `wanted`. A run that stops on the way (rate limit,
+    /// 401) leaves the known PRs it did not reach to be fetched again from
+    /// their window: their new `updatedAt` and timeline time are saved with
+    /// the run, so the next run would otherwise see nothing moved and skip
+    /// them (DESIGN.md, "Fetch success and failure").
     async fn events_of(
+        &mut self,
+        op: &OwnerPlan,
+        wanted: &BTreeSet<String>,
+        candidates: &BTreeSet<String>,
+        ctx: Ctx<'_>,
+    ) -> Result<(), CallError> {
+        let result = self.events_of_inner(op, wanted, candidates, ctx).await;
+        if let Err(e) = &result
+            && stops_the_run(e)
+        {
+            let owner_since = op.since();
+            let retried: BTreeSet<String> = self
+                .out
+                .retries_failed
+                .iter()
+                .map(|(id, _)| id.clone())
+                .collect();
+            for id in wanted {
+                if self.plan.prs.contains_key(id)
+                    && !self.events_ok.contains(id)
+                    && !retried.contains(id)
+                {
+                    let since = self.since_of(id, owner_since);
+                    self.out.retries_failed.push((id.clone(), since));
+                }
+            }
+        }
+        result
+    }
+
+    async fn events_of_inner(
         &mut self,
         op: &OwnerPlan,
         wanted: &BTreeSet<String>,

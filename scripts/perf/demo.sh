@@ -54,7 +54,7 @@ PY
 trap cleanup EXIT INT TERM
 python3 "$repo/scripts/perf/make-data.py" "$daemon" "$state" --demo
 
-echo "demo: running with state directory $state; quit from the demo's menu (⌄ › Quit shiibar-gh) or press Ctrl-C"
+echo "demo: running with state directory $state; quit from the demo's menu (⌄ › Quit) or press Ctrl-C"
 SHIIBAR_GH_DEMO=1 \
 SHIIBAR_GH_STATE_DIR="$state" \
 SHIIBAR_GH_PERF_DAEMON="$daemon" \

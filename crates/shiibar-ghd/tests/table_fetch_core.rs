@@ -1553,3 +1553,25 @@ fn failed_requests_are_kept_for_the_next_run() {
         "None keeps the list"
     );
 }
+
+#[test]
+fn a_new_watch_start_forgets_the_saved_timeline_time() {
+    // DESIGN.md, "API usage", "Timeline time": setting the watch start again
+    // discards the saved value with the PR's other previous values, so the
+    // next status fetch only saves it again.
+    let mut h = H::new();
+    h.prs(vec![IngestPr {
+        timeline_updated_at: Some(T0 + 5),
+        ..pr("PR_1")
+    }]);
+    let saved = |h: &H| h.engine.data().prs[&full("PR_1")].timeline_updated_at;
+    assert_eq!(saved(&h), Some(T0 + 5));
+    // A status answer without the value keeps the saved one.
+    h.prs(vec![pr("PR_1")]);
+    assert_eq!(saved(&h), Some(T0 + 5));
+    let owner = h.owner_id(ORG);
+    let now = h.now.clone();
+    h.engine.owner_enable(&owner, false, &now);
+    h.engine.owner_enable(&owner, true, &now);
+    assert_eq!(saved(&h), None);
+}

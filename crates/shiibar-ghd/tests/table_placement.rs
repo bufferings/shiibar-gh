@@ -1462,3 +1462,26 @@ fn a_closed_pr_of_the_account_found_new_goes_to_mines_done() {
     h.prs(vec![pr("PR_2")]);
     assert_eq!(h.section(Tab::Mine, Section::Todo), ["PR_1", "PR_2"]);
 }
+
+#[test]
+fn list_of_review_has_its_four_sections_in_the_screens_order() {
+    // DESIGN.md, "Review" and "CLI": Done, Waiting, Doing, Todo, every
+    // section with a card.
+    let mut h = H::new();
+    h.prs(vec![
+        other("PR_1"),
+        other("PR_2"),
+        other("PR_3"),
+        other("PR_4"),
+    ]);
+    for (id, section) in [
+        ("PR_1", Section::Todo),
+        ("PR_2", Section::Doing),
+        ("PR_3", Section::Waiting),
+        ("PR_4", Section::Done),
+    ] {
+        h.place(&key(id), PlaceTab::Review, Some(section), None, None)
+            .unwrap();
+    }
+    assert_eq!(h.tab(Tab::Review), ["PR_4", "PR_3", "PR_2", "PR_1"]);
+}

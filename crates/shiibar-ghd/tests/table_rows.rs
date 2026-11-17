@@ -412,10 +412,9 @@ fn an_own_addition_to_the_merge_queue_removed_by_the_queue_makes_two_rows() {
 }
 
 #[test]
-fn a_row_carries_its_actors_avatar_and_the_actor_kinds_have_no_text() {
+fn a_row_carries_its_actors_avatar_and_none_without_an_actor() {
     // DESIGN.md, "Wire format": `actor_avatar_url` of the row's actor;
-    // `null` for a row without an actor. Merged, Closed, Reopened, Approved
-    // and Added to merge queue have no text.
+    // `null` for a row without an actor.
     let mut h = H::new();
     h.prs(vec![other("PR_1")]);
     let mut comment = h.ev_at("C_1", "PR_1", IngestKind::CommentOther, T0 + 5);

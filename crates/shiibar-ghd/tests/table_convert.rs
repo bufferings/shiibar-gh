@@ -1534,3 +1534,44 @@ fn every_row_takes_its_actors_avatar() {
     assert_eq!(approved.kind, EventKind::Approved);
     assert_eq!(approved.actor_avatar_url, url("ivan"));
 }
+
+#[test]
+fn the_rows_that_show_their_actor_on_line_1_have_no_text() {
+    // DESIGN.md, "Row text and targets" and "Wire format": Merged, Closed,
+    // Reopened, Approved and Added to merge queue have no body; who caused
+    // them is the actor.
+    let mut pr = Pr::others();
+    pr.timeline = vec![
+        json!({"__typename":"ClosedEvent","id":"CL_1","createdAt":iso(T0 + 10),
+               "url":"https://c/CL_1","actor":user("example-user")}),
+        json!({"__typename":"ReopenedEvent","id":"RO_1","createdAt":iso(T0 + 20),
+               "actor":user("example-user")}),
+        json!({"__typename":"AddedToMergeQueueEvent","id":"MQ_1","createdAt":iso(T0 + 30),
+               "actor":user("example-user")}),
+        json!({"__typename":"MergedEvent","id":"M_1","createdAt":iso(T0 + 40),
+               "url":"https://m/M_1","actor":user("example-user")}),
+    ];
+    let mut mine = Pr::mine();
+    mine.timeline = vec![review("R_1", user("example-user"), T0 + 10, "APPROVED", "")];
+    let events: Vec<_> = pr
+        .run()
+        .events
+        .into_iter()
+        .chain(mine.run().events)
+        .collect();
+    let kinds: Vec<(String, EventKind)> = events.iter().map(|e| (e.id.clone(), e.kind)).collect();
+    assert_eq!(
+        kinds,
+        [
+            ("CL_1".to_string(), EventKind::Closed),
+            ("RO_1".to_string(), EventKind::Reopened),
+            ("MQ_1".to_string(), EventKind::MergeQueueAdded),
+            ("M_1".to_string(), EventKind::Merged),
+            ("R_1".to_string(), EventKind::Approved),
+        ]
+    );
+    for e in &events {
+        assert_eq!(e.text, None, "{}", e.id);
+        assert_eq!(e.actor.as_deref(), Some("example-user"), "{}", e.id);
+    }
+}

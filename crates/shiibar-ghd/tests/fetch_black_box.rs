@@ -4195,3 +4195,107 @@ fn rows_of_the_accounts_own_merge_queue_events_are_read() {
     assert_eq!(removed["actor"], "github-merge-queue");
     daemon.stop();
 }
+
+/// DESIGN.md, "API usage", "Timeline time": a dismissed card has no status
+/// fetch, so its timeline time moving alone fetches no events.
+#[test]
+fn a_dismissed_card_whose_timeline_time_alone_moves_fetches_no_events() {
+    let github = world();
+    github.with(|w| {
+        w.prs.push(pr_node(
+            "PR_1",
+            "org",
+            1,
+            "alice",
+            json!({"timelineItems": {"updatedAt": iso(T0)}}),
+        ))
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    daemon.ok(json!({"cmd":"dismiss","account":ME,"pr":"org/app#1"}));
+    github.with(|w| w.prs[0]["timelineItems"] = json!({"updatedAt": iso(T0 + 150)}));
+    github.clear_requests();
+    daemon.clock(T0 + 200);
+    assert!(!ops(&github, "Status").iter().any(|r| carries(r, "PR_1")));
+    assert!(!ops(&github, "Events").iter().any(|r| carries(r, "PR_1")));
+    daemon.stop();
+}
+
+/// DESIGN.md, "Fetch success and failure": the events of a PR fetched
+/// because its timeline time moved are fetched again from their window
+/// when that fetch fails, so the addition to the merge queue is not lost.
+#[test]
+fn a_failed_events_fetch_after_a_timeline_move_is_retried() {
+    let github = world();
+    github.with(|w| {
+        w.prs.push(pr_node(
+            "PR_1",
+            "org",
+            1,
+            "alice",
+            json!({"timelineItems": {"updatedAt": iso(T0)}}),
+        ))
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    github.with(|w| {
+        w.prs[0]["timelineItems"] = json!({"updatedAt": iso(T0 + 150)});
+        w.timeline.insert(
+            "PR_1".into(),
+            vec![json!({"__typename":"AddedToMergeQueueEvent","id":"MQ_1",
+                        "createdAt":iso(T0 + 150),"actor":{"__typename":"User","login":"bob"}})],
+        );
+    });
+    github
+        .intercept(|req| (req.op.as_deref() == Some("Events")).then(|| Resp::json(500, json!({}))));
+    daemon.clock(T0 + 200);
+    assert!(daemon.row("MQ_1").is_none(), "the fetch failed");
+    github.clear_overrides();
+    github.clear_requests();
+    // The timeline time does not move again: only the retry fetches it.
+    daemon.clock(T0 + 2000);
+    assert!(ops(&github, "Events").iter().any(|r| carries(r, "PR_1")));
+    assert_eq!(daemon.row("MQ_1").unwrap()["kind"], "merge_queue_added");
+    daemon.stop();
+}
+
+/// DESIGN.md, "Fetch success and failure": a run stopped by the rate limit
+/// during the events fetch saves the PRs' new `updatedAt`; the PRs it did
+/// not reach are fetched again by the next run, so their events are not
+/// lost.
+#[test]
+fn a_run_stopped_during_the_events_fetch_fetches_them_again() {
+    let github = world();
+    github.with(|w| w.prs.push(pr_node("PR_1", "org", 1, "alice", json!({}))));
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    github.with(|w| {
+        w.prs[0]["updatedAt"] = json!(iso(T0 + 150));
+        w.timeline.insert(
+            "PR_1".into(),
+            vec![issue_comment("C_1", "bob", T0 + 150, &mention_link("me"))],
+        );
+    });
+    github.intercept(|req| {
+        (req.op.as_deref() == Some("Events")).then(|| {
+            Resp::json(403, json!({"message":"API rate limit exceeded"}))
+                .header("x-ratelimit-remaining", "0")
+                .header("x-ratelimit-reset", (T0 + 900).to_string())
+        })
+    });
+    daemon.clock(T0 + 200);
+    assert!(daemon.row("C_1").is_none(), "stopped before the events");
+    github.clear_overrides();
+    github.clear_requests();
+    // `updatedAt` does not move again.
+    daemon.clock(T0 + 3000);
+    assert!(ops(&github, "Events").iter().any(|r| carries(r, "PR_1")));
+    assert_eq!(daemon.row("C_1").unwrap()["kind"], "mentioned");
+    daemon.stop();
+}
