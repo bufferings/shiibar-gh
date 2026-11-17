@@ -1,6 +1,6 @@
 # shiibar-gh
 
-macOS menu bar app for the GitHub pull requests you are involved in, per account and per owner (organizations, personal accounts and Public). It tells you what happened on them; you order the PRs you review and your own PRs in the tabs Review and Mine (each with the sections Doing, Todo, Waiting, Done) next to All, Dismiss the ones you are done with, and Mute repositories, users or single PRs. Read-only against GitHub.
+macOS menu bar app for the GitHub pull requests you are involved in, per account and per owner (organizations, personal accounts and Public). It tells you what happened on them; you order the PRs you review and your own PRs in the tabs Review and Mine (each with the sections Done, Waiting, Doing, Todo) next to All, Dismiss the ones you are done with, and Mute repositories, users or single PRs. Read-only against GitHub.
 
 ## Source of truth
 
