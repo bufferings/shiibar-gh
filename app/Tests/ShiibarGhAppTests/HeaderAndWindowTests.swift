@@ -253,7 +253,8 @@ final class HeaderAndWindowTests: XCTestCase {
                     try await Task.sleep(nanoseconds: 20_000_000)
                 }
                 let expected = surface == .popover ? heights.popover : heights.window
-                XCTAssertEqual(try XCTUnwrap(reported, "\(size) \(surface)"), expected, accuracy: 0.5, "\(size) \(surface)")
+                // The least height differs by up to 1 pt between macOS versions.
+                XCTAssertEqual(try XCTUnwrap(reported, "\(size) \(surface)"), expected, accuracy: 1, "\(size) \(surface)")
                 XCTAssertFalse(window.isVisible)
             }
         }
