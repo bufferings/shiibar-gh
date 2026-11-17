@@ -55,6 +55,18 @@ final class RecentActivityTests: XCTestCase {
         XCTAssertEqual(byAdded, cards.map(\.id), "all added at once: by the key, merged and closed included")
     }
 
+    /// A tie goes by the PR key as a string, as the daemon sorts it
+    /// (`PR_10` before `PR_9`); a card without the time it was added sorts
+    /// as the oldest. The daemon's test (table_card_visibility,
+    /// `ties_go_by_the_key_as_a_string`) uses the same values.
+    func testTiesGoByTheKeyAsAStringAndAnUnknownAddTimeIsTheOldest() {
+        var unknown = card("1001:PR_1", added: T0)
+        unknown.addedAt = nil
+        let cards = [card("1001:PR_9", added: T0), card("1001:PR_10", added: T0), card("1001:PR_2", added: T0), unknown]
+        XCTAssertEqual(Listing.sorted(cards, by: .recentActivity).map(\.id), ["1001:PR_10", "1001:PR_2", "1001:PR_9", "1001:PR_1"])
+        XCTAssertEqual(Listing.sorted(cards, by: .recentlyAdded).map(\.id), ["1001:PR_10", "1001:PR_2", "1001:PR_9", "1001:PR_1"])
+    }
+
     /// `Recent activity` keeps 0.6's saved value of `Recently updated`.
     func testTheSortNamesAndThe06Choice() throws {
         XCTAssertEqual(SortOrder.allCases.map(\.title), ["Recent activity", "Recently added"])
@@ -164,6 +176,10 @@ final class NamesAndKeysTests: XCTestCase {
         XCTAssertEqual(app.items.map(\.title), ["About Shiibar GH", "", "Settings…", "", "Close Window", "", "Quit Shiibar GH"])
         XCTAssertEqual(MainMenu.make().items[1].submenu?.items.map(\.title), ["Undo", "Redo", "", "Cut", "Copy", "Paste", "Select All"])
         XCTAssertEqual(KeychainDialog.unavailable.message, "If macOS asked whether Shiibar GH may use the Keychain, allow it, then retry.")
+        XCTAssertEqual(SettingsText.loginItemBlocked, "Allow Shiibar GH in System Settings › General › Login Items")
+        XCTAssertEqual(SettingsText.removeAccountDetail,
+                       "Deletes this account and its owners from Shiibar GH: token, PRs, mutes and settings. Nothing changes on GitHub.")
+        XCTAssertEqual(SettingsText.removeOwnerDetail, "Deletes this owner from Shiibar GH: its PRs and settings. Nothing changes on GitHub.")
         XCTAssertEqual(StateDirectory.root(environment: ["HOME": "/Users/example"]), "/Users/example/.local/state/shiibar-gh")
     }
 
@@ -175,6 +191,8 @@ final class NamesAndKeysTests: XCTestCase {
         XCTAssertEqual(KeyRules.decide(r, inSearch: true, hasSearchText: true), .refresh)
         XCTAssertEqual(KeyRules.decide(r, inSearch: false, hasSearchText: false, inDismissed: true), .refresh)
         XCTAssertEqual(KeyRules.decide(r, inSearch: false, hasSearchText: false, confirming: true), .ignore)
+        XCTAssertEqual(KeyRules.decide(r, inSearch: false, hasSearchText: false, sheet: true), .ignore, "the Grouping sheet")
+        XCTAssertEqual(KeyRules.decide(r, inSearch: true, hasSearchText: false, sheet: true), .ignore)
         XCTAssertEqual(KeyRules.decide(KeyPress(characters: "R", modifiers: [.shift]), inSearch: false, hasSearchText: false), .key(.markAllRead))
     }
 

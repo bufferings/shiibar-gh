@@ -987,8 +987,9 @@ enum LineLayout {
 
     /// The size of a row's avatar at text size 12 (DESIGN.md, "Constants").
     static let rowAvatar: CGFloat = 14
-    /// From the end of the time to the chain icon (Main.html `.evl`).
-    static let timeGap: CGFloat = 4
+    /// From the end of the time to the chain icon (Main.html
+    /// `.evl`: a 6-point gap, `.etm + .op.ln` without a margin).
+    static let timeGap: CGFloat = 6
 
     /// Where a row's line 1 puts the actor and the time in its band
     /// (`RowFrame.meta`): the time at the right end, always shown in full;
@@ -2052,7 +2053,7 @@ final class CardLineView: LineView {
             let found = matches?.rows[row.id]
             let parts = rowLine(frame, row, p)
             if let rect = parts.avatar, let image = rowImage(row) {
-                drawRound(image, in: rect, muted: p.gray)
+                drawRound(image, in: rect, opacity: Self.avatarOpacity(p))
             }
             if let actor = p.actor, let rect = parts.name {
                 if let found { Ink.drawLineMatches(actor, f11, found.actor, in: rect) }
@@ -2131,18 +2132,25 @@ final class CardLineView: LineView {
         Ink.draw(times, f11, muted ? Palette.secondary.nsColor : Palette.secondary.nsColor, in: timesRect)
     }
 
-    /// An avatar image in a circle; faint for a muted card or row.
-    private func drawRound(_ image: NSImage, in rect: CGRect, muted: Bool) {
+    /// DESIGN.md, "How rows look": a row's avatar is faint (0.6) exactly
+    /// when its text is gray (a muted row, a row of a muted card other than
+    /// a mention of you or your team).
+    static func avatarOpacity(_ p: RowPresentation) -> CGFloat {
+        p.gray ? 0.6 : 1
+    }
+
+    /// An avatar image in a circle.
+    private func drawRound(_ image: NSImage, in rect: CGRect, opacity: CGFloat) {
         NSGraphicsContext.saveGraphicsState()
         NSBezierPath(ovalIn: rect).addClip()
-        image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: muted ? 0.6 : 1, respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high.rawValue])
+        image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: opacity, respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high.rawValue])
         NSGraphicsContext.restoreGraphicsState()
     }
 
     private func drawAvatar(_ card: Card, in rect: CGRect, muted: Bool) {
         guard let avatars = env?.context.avatars else { return }
         if let image = DecodedAvatars.image(card.authorAvatarUrl, data: avatars.image(for: card.authorAvatarUrl)) {
-            drawRound(image, in: rect, muted: muted)
+            drawRound(image, in: rect, opacity: muted ? 0.6 : 1)
         } else {
             Palette.quaternary.nsColor.setFill()
             NSBezierPath(ovalIn: rect).fill()

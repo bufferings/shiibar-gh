@@ -109,6 +109,10 @@ struct FilterRowState: Equatable {
 /// dot when there is one (Main.html `.flt`). Any press on it opens or closes
 /// the options; the dot has no action of its own.
 struct FilterButton: View {
+    /// At text size 12, in proportion to the text size; `Grouping…` beside
+    /// it is as tall (DESIGN.md, "Constants").
+    static let height: CGFloat = 24
+
     var open: Bool
     var dot: Bool
     var toggle: () -> Void
@@ -128,13 +132,13 @@ struct FilterButton: View {
                     Circle()
                         .fill(Palette.accent.color)
                         .frame(width: 7 * k, height: 7 * k)
-                        .frame(height: 24 * k)
+                        .frame(height: Self.height * k)
                         .contentShape(Rectangle())
                         .quickHelp(Self.dotTip)
                 }
             }
             .padding(.horizontal, 4)
-            .frame(height: 24 * k)
+            .frame(height: Self.height * k)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -355,8 +359,8 @@ final class DrawnButton: NSControl {
     var press: () -> Void = {}
     private var pressed = false { didSet { if pressed != oldValue { needsDisplay = true } } }
 
-    /// At text size 12.
-    static let height: CGFloat = 24
+    /// At text size 12: the Filter button's height.
+    static let height: CGFloat = FilterButton.height
     static let fontSize: CGFloat = 12
     static let sidePadding: CGFloat = 9
 

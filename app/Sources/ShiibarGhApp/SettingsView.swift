@@ -298,7 +298,7 @@ struct GeneralTab: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Label2(title: "Launch at login", sub: "Runs in the menu bar after you log in to your Mac", error: model.errors["launch_at_login"])
                     if model.launchStatus == .requiresApproval {
-                        Text("Allow \(MainMenu.appName) in System Settings › General › Login Items")
+                        Text(SettingsText.loginItemBlocked)
                             .font(.system(size: 11)).foregroundColor(Palette.caution.color)
                     }
                 }

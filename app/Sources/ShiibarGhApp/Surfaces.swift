@@ -103,13 +103,29 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         update()
     }
 
-    /// The Dock icon and ⌘Tab: the open windows come forward, a minimized
-    /// one back from the Dock (DESIGN.md, "Open in window").
-    func bringWindowsToFront() {
+    /// The open windows come forward: on the Dock icon a minimized one
+    /// comes back too (`restoringMinimized`); on other activations (⌘Tab,
+    /// another account's icon) a minimized one stays in the Dock (DESIGN.md,
+    /// "Open in window").
+    func bringWindowsToFront(restoringMinimized: Bool) {
         for panel in panels.values {
-            if panel.isMiniaturized { panel.deminiaturize(nil) }
-            panel.orderFront(nil)
+            switch Self.front(minimized: panel.isMiniaturized, restoring: restoringMinimized) {
+            case .restore:
+                panel.deminiaturize(nil)
+                panel.orderFront(nil)
+            case .order:
+                panel.orderFront(nil)
+            case .leave:
+                break
+            }
         }
+    }
+
+    enum Front: Equatable { case restore, order, leave }
+
+    static func front(minimized: Bool, restoring: Bool) -> Front {
+        guard minimized else { return .order }
+        return restoring ? .restore : .leave
     }
 
     // MARK: - Menu bar
@@ -533,12 +549,7 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         if flags.contains(.control) { modifiers.insert(.control) }
         let press = KeyPress(keyCode: event.keyCode, characters: event.charactersIgnoringModifiers ?? "", modifiers: modifiers)
         let model = account.map { app.viewModel($0).list(surface) }
-        let inSearch = (model?.searchFocused ?? false) || Self.isTyping(key?.firstResponder)
-        let decided = KeyRules.decide(
-            press, inSearch: inSearch, hasSearchText: !(model?.search.isEmpty ?? true), inDismissed: model?.showingDismissed ?? false,
-            hasSelection: model.map { $0.selection != nil || !$0.selectedCards.isEmpty } ?? false,
-            confirming: model?.confirmingDismiss != nil
-        )
+        let decided = Self.decide(press, model: model, typing: Self.isTyping(key?.firstResponder))
         switch decided {
         case .quit:
             onQuit?()
@@ -563,6 +574,17 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             key?.makeFirstResponder(nil)
         }
         return true
+    }
+
+    /// What a key does on a surface showing `model` (nil: the popover
+    /// without an account): `KeyRules.decide` with the surface's state.
+    static func decide(_ press: ShiibarGhCore.KeyPress, model: SurfaceListModel?, typing: Bool) -> KeyInput {
+        let inSearch = (model?.searchFocused ?? false) || typing
+        return KeyRules.decide(
+            press, inSearch: inSearch, hasSearchText: !(model?.search.isEmpty ?? true), inDismissed: model?.showingDismissed ?? false,
+            hasSelection: model.map { $0.selection != nil || !$0.selectedCards.isEmpty } ?? false,
+            sheet: model?.showsGrouping ?? false, confirming: model?.confirmingDismiss != nil
+        )
     }
 
     /// Edit › Copy chosen with the mouse while a popover or window has the

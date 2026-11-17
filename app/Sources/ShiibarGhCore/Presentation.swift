@@ -673,6 +673,9 @@ public enum CreateTokenURL {
 // MARK: - Settings: texts
 
 public enum SettingsText {
+    /// Launch at login's line when the registration failed (DESIGN.md,
+    /// "Settings").
+    public static let loginItemBlocked = "Allow \(MainMenu.appName) in System Settings › General › Login Items"
     public static let colorDetail = "Tints this account's icon and the square next to its name."
     public static let removeAccountDetail =
         "Deletes this account and its owners from \(MainMenu.appName): token, PRs, mutes and settings. Nothing changes on GitHub."

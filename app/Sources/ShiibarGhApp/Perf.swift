@@ -2010,6 +2010,15 @@ final class PerfRunner: NSObject {
                 app.changeTextSize(.larger)
                 await pause(0.4)
             }
+            if window === surfaces.popoverWindow {
+                // The popover: asked for 300 points, it keeps its least
+                // height for the text size.
+                let height = surfaces.resizePopover(to: 300)
+                await pause(1)
+                log("lowest popover at \(size): \(height) pt, list \(listHeight()) pt")
+                snapshot(window, directory + "/options-lowest-popover-\(size)\(suffix).png")
+                continue
+            }
             window.setFrame(NSRect(x: frame.minX, y: frame.maxY - 300, width: frame.width, height: 300), display: true)
             await pause(1)
             if let scroll = listScrollView(in: window) { scrollTo(scroll, y: 300) }

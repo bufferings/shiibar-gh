@@ -6,7 +6,7 @@
 
 import AppKit
 @testable import ShiibarGhApp
-import ShiibarGhCore
+@testable import ShiibarGhCore
 import SwiftUI
 import XCTest
 
@@ -16,7 +16,7 @@ final class HeaderAndWindowTests: XCTestCase {
         var actions = SurfaceActions(openWindow: {}, openSettings: { _ in }, about: {}, quit: {})
         if surface == .window { actions.openWindow = nil }
         return Header(
-            login: "bufferings-work", color: .red, updated: "Updated 1 min ago", usage: ApiUsage(nil), keepOnTop: true,
+            login: "example-user", color: .red, updated: "Updated 1 min ago", usage: ApiUsage(nil), keepOnTop: true,
             toggleKeepOnTop: {}, surface: surface, refreshing: false, actions: actions, refresh: {}
         )
     }
@@ -49,17 +49,17 @@ final class HeaderAndWindowTests: XCTestCase {
         XCTAssertEqual(window.contentRect(forFrameRect: window.frame).height, window.contentLayoutRect.height)
 
         let title = WindowTitle.install(in: window)
-        title.show(login: "bufferings-work", color: .red)
-        XCTAssertEqual(window.title, "bufferings-work", "Mission Control and the Window menu")
+        title.show(login: "example-user", color: .red)
+        XCTAssertEqual(window.title, "example-user", "Mission Control and the Window menu")
         XCTAssertEqual(window.titleVisibility, .hidden, "the mark and the name take the title's place")
         let close = try XCTUnwrap(window.standardWindowButton(.closeButton))
         XCTAssertTrue(title.stack.superview === close.superview, "in the title bar")
         XCTAssertFalse(title.mark.isHidden)
         XCTAssertEqual(title.mark.color, .red)
-        XCTAssertEqual(title.name.stringValue, "bufferings-work")
+        XCTAssertEqual(title.name.stringValue, "example-user")
         XCTAssertEqual(title.name.lineBreakMode, .byTruncatingTail, "a long name is cut with …")
         XCTAssertNil(title.stack.hitTest(NSPoint(x: 1, y: 1)), "presses go to the title bar")
-        title.show(login: "bufferings-work", color: .none)
+        title.show(login: "example-user", color: .none)
         XCTAssertTrue(title.mark.isHidden, "None: the name alone")
         close.superview?.layoutSubtreeIfNeeded()
         let bar = try XCTUnwrap(close.superview)
@@ -109,16 +109,16 @@ final class HeaderAndWindowTests: XCTestCase {
     /// points at text size 12, in proportion.
     func testTheBandCentersTheMarkAndTheName() throws {
         for k: CGFloat in [0.75, 1, 1.5] {
-            let band = AccountBand(login: "bufferings-work", color: .red).environment(\.textScale, k)
+            let band = AccountBand(login: "example-user", color: .red).environment(\.textScale, k)
             XCTAssertEqual(NSHostingView(rootView: band.frame(width: 460)).fittingSize.height, 34 * k, accuracy: 0.5, "k \(k)")
         }
         let width: CGFloat = 460
-        let marked = try XCTUnwrap(drawnExtent(AccountBand(login: "bufferings-work", color: .red), width: width, height: 34))
+        let marked = try XCTUnwrap(drawnExtent(AccountBand(login: "example-user", color: .red), width: width, height: 34))
         XCTAssertEqual((marked.min + marked.max) / 2, width / 2, accuracy: 2, "the mark and the name centered")
         let scale = CGFloat(marked.rep.pixelsWide) / width
         let markPixel = try XCTUnwrap(marked.rep.colorAt(x: Int((marked.min + 4) * scale), y: marked.rep.pixelsHigh / 2))
         XCTAssertGreaterThan(markPixel.redComponent, markPixel.blueComponent + 0.3, "the red square first")
-        let plain = try XCTUnwrap(drawnExtent(AccountBand(login: "bufferings-work", color: .none), width: width, height: 34))
+        let plain = try XCTUnwrap(drawnExtent(AccountBand(login: "example-user", color: .none), width: width, height: 34))
         XCTAssertEqual((plain.min + plain.max) / 2, width / 2, accuracy: 2, "the name alone, centered")
         XCTAssertEqual((marked.max - marked.min) - (plain.max - plain.min), 10 + 8, accuracy: 2, "no room kept for the mark")
         let long = try XCTUnwrap(drawnExtent(AccountBand(login: String(repeating: "a-very-long-login-", count: 10), color: .red), width: 300, height: 34))
@@ -133,9 +133,98 @@ final class HeaderAndWindowTests: XCTestCase {
             let popover = NSHostingView(rootView: header(.popover).environment(\.textScale, k).frame(width: 460)).fittingSize.height
             let window = NSHostingView(rootView: header(.window).environment(\.textScale, k).frame(width: 460)).fittingSize.height
             XCTAssertEqual(popover - window, 34 * k, accuracy: 0.5, "k \(k)")
-            XCTAssertEqual(window, Header.rowInsets.top + max(24, window - Header.rowInsets.top), accuracy: 0.5)
+            // The row is as tall as its 24-point buttons: the 11-point
+            // `Updated …` line is lower up to text size 18.
+            let line = NSLayoutManager().defaultLineHeight(for: NSFont.systemFont(ofSize: 11 * k))
+            XCTAssertLessThan(line, 24)
+            XCTAssertEqual(window, Header.rowInsets.top + 24, accuracy: 0.5, "k \(k)")
         }
         XCTAssertEqual(Header.rowInsets, EdgeInsets(top: 8, leading: 16, bottom: 0, trailing: 10))
+    }
+
+    /// DESIGN.md, "Screens" and "UI": the menu bar icon acts on either
+    /// button's release, so a right click opens the popover too.
+    func testTheStatusItemActsOnBothButtons() {
+        XCTAssertEqual(SurfaceController.clickEvents, [.leftMouseUp, .rightMouseUp])
+    }
+
+    /// DESIGN.md, "Open in window": a minimized window comes back only on the
+    /// Dock icon (and its own account's icon, which opens it); ⌘Tab and other
+    /// activations leave it in the Dock and bring the others forward.
+    func testOnlyTheDockAndTheOwnIconRestoreAMinimizedWindow() {
+        XCTAssertEqual(SurfaceController.front(minimized: true, restoring: true), .restore)
+        XCTAssertEqual(SurfaceController.front(minimized: true, restoring: false), .leave)
+        XCTAssertEqual(SurfaceController.front(minimized: false, restoring: false), .order)
+        XCTAssertEqual(SurfaceController.front(minimized: false, restoring: true), .order)
+    }
+
+    /// ⌘R through the surface's key handling: Refresh in the list, the
+    /// search field and the Dismissed list; nothing while the Grouping sheet
+    /// or the × confirmation shows (DESIGN.md, "Keyboard").
+    func testCommandRThroughTheSurfacesKeys() {
+        let socket = FileManager.default.temporaryDirectory.appendingPathComponent("no-daemon-\(UUID().uuidString).sock").path
+        let app = AppModel(
+            api: SocketDaemonAPI(socketPath: socket), store: UIStateStore(defaults: ScratchDefaults()), opener: FilterBoxTests.NoOpener(),
+            notifier: FilterBoxTests.NoNotifier()
+        )
+        let data = app.viewModel("1001")
+        Self.kept += [app, data]
+        let r = ShiibarGhCore.KeyPress(characters: "r", modifiers: [.command])
+        for surface in [Surface.popover, .window] {
+            let list = data.list(surface)
+            Self.kept.append(list)
+            XCTAssertEqual(SurfaceController.decide(r, model: list, typing: false), .refresh, "\(surface)")
+            XCTAssertEqual(SurfaceController.decide(r, model: list, typing: true), .refresh, "\(surface): the search field")
+            list.showsGrouping = true
+            XCTAssertEqual(SurfaceController.decide(r, model: list, typing: false), .ignore, "\(surface): the Grouping sheet")
+            XCTAssertEqual(SurfaceController.decide(r, model: list, typing: true), .ignore)
+            list.showsGrouping = false
+        }
+        XCTAssertEqual(SurfaceController.decide(r, model: nil, typing: false), .refresh, "no account: the handler does nothing with it")
+    }
+
+    static var kept: [AnyObject] = []
+
+    /// DESIGN.md, "Minimum height": the least height the surface reports
+    /// for text sizes 9, 12 and 18 (the Filter's options open, no band), laid
+    /// out offscreen: the popover with the header's band, the window's
+    /// content with the row only (the title bar is the band). The values
+    /// match the measurement mode's (`SHIIBAR_GH_PERF_SNAPSHOT`).
+    func testTheLeastHeights() async throws {
+        let want: [Int: (popover: CGFloat, window: CGFloat)] = [9: (339, 313), 12: (426, 392), 18: (598, 547)]
+        for (size, heights) in want.sorted(by: { $0.key < $1.key }) {
+            for surface in [Surface.popover, .window] {
+                let socket = FileManager.default.temporaryDirectory.appendingPathComponent("no-daemon-\(UUID().uuidString).sock").path
+                let app = AppModel(
+                    api: SocketDaemonAPI(socketPath: socket), store: UIStateStore(defaults: ScratchDefaults()),
+                    opener: FilterBoxTests.NoOpener(), notifier: FilterBoxTests.NoNotifier()
+                )
+                app.handle(.configChanged(key: TextSize.configKey, value: .int(Int64(size))))
+                let data = app.viewModel("1001")
+                let list = data.list(surface)
+                Self.kept += [app, data, list]
+                var actions = SurfaceActions(openWindow: {}, openSettings: { _ in }, about: {}, quit: {})
+                if surface == .window { actions.openWindow = nil }
+                let root = PopoverView.root(
+                    app: app, model: data, list: list, avatars: AvatarStore(loader: DismissedBandPressTests.PixelImages()),
+                    actions: actions, surface: surface
+                )
+                var reported: CGFloat?
+                root.onMinimumHeight = { reported = $0 }
+                let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 900), styleMask: [.borderless], backing: .buffered, defer: true)
+                window.contentView = root
+                root.frame = NSRect(x: 0, y: 0, width: 460, height: 900)
+                list.openTab(.all)
+                if !list.filterOpen { list.toggleFilterOpen() }
+                for _ in 0..<100 where reported == nil {
+                    root.layoutSubtreeIfNeeded()
+                    try await Task.sleep(nanoseconds: 20_000_000)
+                }
+                let expected = surface == .popover ? heights.popover : heights.window
+                XCTAssertEqual(try XCTUnwrap(reported, "\(size) \(surface)"), expected, accuracy: 0.5, "\(size) \(surface)")
+                XCTAssertFalse(window.isVisible)
+            }
+        }
     }
 }
 

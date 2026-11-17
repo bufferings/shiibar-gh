@@ -229,6 +229,9 @@ final class DismissedBandPressTests: XCTestCase {
         let shape = rowShape(rowLine(rowCard()))
         XCTAssertEqual(Set(shape.rows.map(\.chain.minX)).count, 1, "one place for the chain icon")
         XCTAssertEqual(Set(shape.rows.map(\.meta.maxX)).count, 1)
+        for row in shape.rows {
+            XCTAssertEqual(row.chain.minX - row.meta.maxX, 6, accuracy: 0.01, "6 points from the time to the chain icon")
+        }
         var times: [CGFloat] = []
         for (frame, row) in zip(shape.rows, rowCard().rows) {
             let p = RowPresentation(row, now: 600)
@@ -264,6 +267,23 @@ final class DismissedBandPressTests: XCTestCase {
         XCTAssertEqual(with.name?.minX ?? 0, (with.avatar?.maxX ?? 0) + 4, accuracy: 0.01)
         let large = LineLayout.rowLine(shape.rows[0].meta, p, avatar: true, k: 1.5)
         XCTAssertEqual(large.avatar?.width, 21, "in proportion to the text size")
+    }
+
+    /// The avatar is faint exactly when the row's text is gray: a muted
+    /// row, and a muted card's rows except a mention of you or your team.
+    func testTheAvatarIsFaintWhenTheTextIsGray() {
+        let url = "https://avatars.example/example-user"
+        let plain = RowPresentation(Row(id: "a", kind: .comment, text: "x", actor: "example-user", actorAvatarUrl: url), now: 0)
+        let muted = RowPresentation(Row(id: "b", kind: .comment, text: "x", actor: "example-user", actorAvatarUrl: url, muted: true), now: 0)
+        let inMutedCard = RowPresentation(Row(id: "c", kind: .merged, actor: "example-user", actorAvatarUrl: url), now: 0, cardMuted: true)
+        let mention = RowPresentation(Row(id: "d", kind: .teamMentioned, text: "x", actor: "example-user", actorAvatarUrl: url), now: 0, cardMuted: true)
+        XCTAssertEqual(CardLineView.avatarOpacity(plain), 1)
+        XCTAssertEqual(CardLineView.avatarOpacity(muted), 0.6)
+        XCTAssertEqual(CardLineView.avatarOpacity(inMutedCard), 0.6)
+        XCTAssertEqual(CardLineView.avatarOpacity(mention), 1, "a mention keeps its normal color in a muted card")
+        for p in [plain, muted, inMutedCard, mention] {
+            XCTAssertEqual(CardLineView.avatarOpacity(p) < 1, p.gray)
+        }
     }
 
     /// A row without a body (Merged, Approved…) is one line; the label line

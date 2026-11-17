@@ -116,6 +116,12 @@ final class FilterControlsTests: XCTestCase {
             widths.append(grouping.width)
         }
         XCTAssertEqual(widths, widths.sorted(), "wider with a larger text")
+        // As tall as the Filter button beside it, as laid out.
+        for size in [9, 12, 18] {
+            let k = CGFloat(TextSize.ratio(size))
+            let filter = NSHostingView(rootView: FilterButton(open: false, dot: false, toggle: {}).environment(\.textScale, k)).fittingSize
+            XCTAssertEqual(DrawnButton.size(PushButton.grouping, k: k).height, filter.height, accuracy: 0.5, "\(size)")
+        }
         // Pressing it runs its action, by the mouse or by an assistive app.
         var pressed = 0
         let button = DrawnButton(title: PushButton.grouping)

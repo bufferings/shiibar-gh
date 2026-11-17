@@ -54,11 +54,13 @@ public enum KeyInput: Equatable {
 public enum KeyRules {
     /// `inDismissed`: the Dismissed list shows, where Esc goes back to the
     /// tab. `hasSelection`: something is selected, which Esc clears in a
-    /// tab. `confirming`: the × confirmation sheet shows, which takes ⏎
+    /// tab. `sheet`: a sheet shows over the list (the Grouping sheet), where
+    /// ⌘R does nothing (DESIGN.md, "Keyboard"). `confirming`: the ×
+    /// confirmation sheet shows, which takes ⏎
     /// and Esc; the list takes no other key.
     public static func decide(
         _ press: KeyPress, inSearch: Bool, hasSearchText: Bool, inDismissed: Bool = false, hasSelection: Bool = false,
-        confirming: Bool = false
+        sheet: Bool = false, confirming: Bool = false
     ) -> KeyInput {
         let mods = press.modifiers
         let chars = press.characters
@@ -80,7 +82,7 @@ public enum KeyRules {
             case "-": return .textSize(.smaller)
             case "0": return .textSize(.reset)
             case "f" where mods == [.command]: return .key(.find)
-            case "r" where mods == [.command]: return .refresh
+            case "r" where mods == [.command]: return sheet ? .ignore : .refresh
             // ⌘A selects the field's text in the search field.
             case "a" where mods == [.command]: return inSearch ? .pass : .key(.selectAll)
             case "1" where mods == [.command]: return .key(.tab(.all))
