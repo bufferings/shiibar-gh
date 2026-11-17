@@ -18,8 +18,9 @@ classic personal access token (scopes `repo`, `notifications`, `read:org`).
 Under an account you add owners (organizations or personal accounts) and,
 if you like, Public.
 
-**Upgrading.** Version 0.5 keeps everything from 0.4. From 0.3 and 0.2 it
-keeps only the accounts (with their colors and order) and their tokens:
+**Upgrading.** Version 0.6 keeps everything from 0.5 and 0.4; the cards of
+Mine start in Todo. Version 0.5 cannot read the saved state once 0.6 has
+run. From 0.3 and 0.2 it keeps only the accounts (with their colors and order) and their tokens:
 owners, event tables, settings, PRs and rows start empty, so add your
 owners again. Version 0.2 and later do
 not read the saved state or tokens of 0.1: add your accounts again.
