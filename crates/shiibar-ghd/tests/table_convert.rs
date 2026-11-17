@@ -1461,8 +1461,8 @@ fn an_addition_to_the_merge_queue_by_the_account_is_an_event_inside_the_window()
 
 #[test]
 fn the_timeline_time_comes_from_timeline_items() {
-    // DESIGN.md, "API usage": `timelineItems { updatedAt }` of the status
-    // query; none when the answer lacks it.
+    // DESIGN.md, "API usage": `timelineItems { updatedAt }` the Timeline
+    // request put into the status node; none when it did not answer.
     let t = teams();
     let pr = convert::pr_values(
         &status_node(json!({"timelineItems":{"updatedAt":iso(T0 + 30)}})),

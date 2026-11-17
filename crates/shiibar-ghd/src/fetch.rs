@@ -37,6 +37,7 @@ const EVENT_BATCH: usize = 5;
 /// their query name, REST ones by `GET <path>` (DESIGN.md, "Logs").
 const SEARCH: &str = "Search";
 const STATUS: &str = "Status";
+const TIMELINE: &str = "Timeline";
 const COMPARE: &str = "Compare";
 const CONTEXTS: &str = "Contexts";
 const NOTIFICATIONS: &str = "GET /notifications";
@@ -88,16 +89,6 @@ fn timeline_nodes() -> String {
 }
 
 /// `assignees` is a `UserConnection` of `PullRequest` (public schema).
-/// `timelineItems { updatedAt }` is the timeline time
-/// (`PullRequestTimelineItemsConnection.updatedAt: DateTime!`); asking only
-/// for it needs neither `first` nor `last`. It leaves the points a request
-/// costs (`rateLimit.cost`) as they are, but GitHub takes longer to answer
-/// it: for 50 very large PRs (NixOS/nixpkgs) the request without it
-/// answered in 7 to 10 s or 502, and with it answered 502 or 504 after about
-/// 11 s every time, while 25 at a time answered in 6 to 10 s (read-only
-/// requests on public repositories, three times each, 2026-11-17). A 502 or
-/// 504 is split in halves (`split`), so such an owner costs one more round
-/// of requests. DESIGN.md, "API usage".
 fn pr_status_fields() -> String {
     format!(
         "id number url title state isDraft createdAt updatedAt isCrossRepository \
@@ -107,8 +98,7 @@ fn pr_status_fields() -> String {
          statusCheckRollup {{ state }} mergeable mergeStateStatus \
          reviewRequests(first: 100) {{ nodes {{ {REVIEWER} }} }} \
          reviews(last: 100) {{ nodes {{ state submittedAt createdAt author {{ login }} }} }} \
-         assignees(first: 100) {{ nodes {{ login }} }} \
-         timelineItems {{ updatedAt }}"
+         assignees(first: 100) {{ nodes {{ login }} }}"
     )
 }
 
@@ -118,6 +108,16 @@ fn request_events() -> String {
          {{ nodes {{ ... on ReviewRequestedEvent {{ id createdAt actor {ACTOR} {REVIEWER} }} }} }}"
     )
 }
+
+/// DESIGN.md, "API usage", "Timeline time": the timeline time of the PRs of
+/// the status fetch, `timelineItems { updatedAt }`
+/// (`PullRequestTimelineItemsConnection.updatedAt: DateTime!`; neither
+/// `first` nor `last` is needed), in a request of its own, 50 ids at a time
+/// like `Status`. For 50 very large PRs (NixOS/nixpkgs) `Status` with it
+/// answered 502 or 504 three times of three, while this request alone
+/// answered in 1.6 to 4.4 s at a cost of 1 point (read-only requests on
+/// public repositories, 2026-11-17).
+const TIMELINE_QUERY: &str = "query Timeline($ids: [ID!]!) { nodes(ids: $ids) { ... on PullRequest { id timelineItems { updatedAt } } } }";
 
 /// DESIGN.md, "API usage", "Timeline time": an addition to the merge queue
 /// leaves `updatedAt` where it was and moves only the timeline time. A PR
@@ -1273,6 +1273,47 @@ impl Run<'_> {
         true
     }
 
+    /// The timeline time of each of `ids` that answered (DESIGN.md, "API
+    /// usage", "Timeline time"): `NODES_PER_QUERY` ids a request, split in
+    /// halves on 502 and 504. A failed request is logged and leaves its PRs
+    /// out, without failing the owner: the next status fetch asks again.
+    /// `Err` only for an error that stops the run.
+    async fn timeline_times(
+        &mut self,
+        ids: &[String],
+    ) -> Result<BTreeMap<String, String>, CallError> {
+        let mut out = BTreeMap::new();
+        if ids.is_empty() {
+            return Ok(out);
+        }
+        let answer = self
+            .split(ids, NODES_PER_QUERY, |part| {
+                (TIMELINE_QUERY.to_string(), json!({"ids": part}))
+            })
+            .await?;
+        for ((part, answer), (ms, request_id)) in answer.ok.into_iter().zip(answer.ok_meta) {
+            if let Some(e) = answer
+                .errors
+                .iter()
+                .find(|e| !e.is_permission() && !e.is_not_found())
+            {
+                self.log_answered_error(
+                    &format!("GraphQL {TIMELINE} (ids: {})", part.len()),
+                    ms,
+                    &format!("timeline failed: {}", e.message),
+                    request_id.as_deref(),
+                );
+            }
+            let list = answer.data["nodes"].as_array().cloned().unwrap_or_default();
+            for (id, node) in part.iter().zip(list) {
+                if let Some(at) = node["timelineItems"]["updatedAt"].as_str() {
+                    out.insert(id.clone(), at.to_string());
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Status, base and failed check names of the owner's PRs, each request
     /// `NODES_PER_QUERY` ids. The status values of a PR are taken only when
     /// all three answered; a PR whose request failed even alone gets
@@ -1460,6 +1501,18 @@ impl Run<'_> {
             }
         }
         broken.extend(failed_items.iter().cloned());
+
+        // The timeline time of the PRs that answered, put into their nodes
+        // where the conversion and the event rule read it. A PR whose
+        // Timeline request failed has none: it keeps its saved value and
+        // the timeline rule fetches nothing for it this run; its status
+        // stays as answered.
+        let answered: Vec<String> = nodes.keys().cloned().collect();
+        for (id, at) in self.timeline_times(&answered).await? {
+            if let Some(node) = nodes.get_mut(&id) {
+                node["timelineItems"] = json!({ "updatedAt": at });
+            }
+        }
 
         for (id, node) in &nodes {
             if broken.contains(id) {

@@ -2940,6 +2940,9 @@ fn id_requests_carry_fifty_ids_and_events_five() {
     daemon.clock(T0 + 100);
     assert_eq!(daemon.cards().len(), 60);
     assert_eq!(id_counts(&github, "Status"), [50, 10]);
+    // DESIGN.md, "API usage": the timeline time of the same PRs in its own
+    // request, 50 ids at a time.
+    assert_eq!(id_counts(&github, "Timeline"), [50, 10]);
     let compare: Vec<usize> = ops(&github, "Compare")
         .iter()
         .map(|r| r.vars().as_object().unwrap().len() / 2)
@@ -4118,7 +4121,16 @@ fn the_timeline_time_fetches_the_events_of_an_addition_to_the_merge_queue() {
     setup(&daemon);
     daemon.clock(T0 + 100);
     let status = ops(&github, "Status").pop().unwrap();
-    assert!(status.query().contains("timelineItems { updatedAt }"));
+    assert!(!status.query().contains("timelineItems"), "not in Status");
+    let timeline = ops(&github, "Timeline").pop().unwrap();
+    assert!(timeline.query().starts_with("query Timeline($ids: [ID!]!)"));
+    assert!(
+        timeline.query().ends_with(
+            "nodes(ids: $ids) { ... on PullRequest { id timelineItems { updatedAt } } } }"
+        ),
+        "only the id and the timeline time"
+    );
+    assert!(carries(&timeline, "PR_1"));
     assert!(daemon.card("PR_1").is_some());
 
     // No saved value (as right after the update from 0.6): saved only.
@@ -4297,5 +4309,88 @@ fn a_run_stopped_during_the_events_fetch_fetches_them_again() {
     daemon.clock(T0 + 3000);
     assert!(ops(&github, "Events").iter().any(|r| carries(r, "PR_1")));
     assert_eq!(daemon.row("C_1").unwrap()["kind"], "mentioned");
+    daemon.stop();
+}
+
+/// DESIGN.md, "API usage" and "Fetch success and failure": a failed
+/// Timeline request leaves the saved timeline time as it was and fetches no
+/// events by the timeline rule, and the status of the same run is still
+/// taken; the next run asks again.
+#[test]
+fn a_failed_timeline_request_keeps_the_saved_value_and_the_status() {
+    let github = world();
+    github.with(|w| {
+        w.prs.push(pr_node(
+            "PR_1",
+            "org",
+            1,
+            "alice",
+            json!({"timelineItems": {"updatedAt": iso(T0)}}),
+        ))
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    github.with(|w| {
+        w.prs[0]["timelineItems"] = json!({"updatedAt": iso(T0 + 150)});
+        w.prs[0]["title"] = json!("Renamed");
+        w.timeline.insert(
+            "PR_1".into(),
+            vec![json!({"__typename":"AddedToMergeQueueEvent","id":"MQ_1",
+                        "createdAt":iso(T0 + 150),"actor":{"__typename":"User","login":"bob"}})],
+        );
+    });
+    github.intercept(|req| {
+        (req.op.as_deref() == Some("Timeline")).then(|| Resp::json(500, json!({})))
+    });
+    github.clear_requests();
+    daemon.clock(T0 + 200);
+    assert!(!ops(&github, "Timeline").is_empty());
+    assert!(!ops(&github, "Events").iter().any(|r| carries(r, "PR_1")));
+    assert_eq!(
+        daemon.card("PR_1").unwrap()["title"],
+        "Renamed",
+        "the status is taken"
+    );
+    assert!(daemon.row("MQ_1").is_none());
+    // The saved value stayed: once Timeline answers, the move is seen.
+    github.clear_overrides();
+    github.clear_requests();
+    daemon.clock(T0 + 300);
+    assert!(ops(&github, "Events").iter().any(|r| carries(r, "PR_1")));
+    assert_eq!(daemon.row("MQ_1").unwrap()["kind"], "merge_queue_added");
+    daemon.stop();
+}
+
+/// DESIGN.md, "Fetch success and failure": a Timeline request GitHub
+/// answers with 502 is split in halves.
+#[test]
+fn a_timeline_request_answered_with_502_is_split() {
+    let github = world();
+    github.with(|w| {
+        for n in 1..=4 {
+            w.prs
+                .push(pr_node(&format!("PR_{n}"), "org", n, "alice", json!({})));
+        }
+    });
+    github.intercept(|req| {
+        (req.op.as_deref() == Some("Timeline")
+            && req.vars()["ids"]
+                .as_array()
+                .is_some_and(|ids| ids.len() > 1))
+        .then(|| Resp::json(502, json!({})))
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    assert_eq!(id_counts(&github, "Timeline"), [4, 2, 1, 1, 2, 1, 1]);
+    assert_eq!(
+        id_counts(&github, "Status"),
+        [4],
+        "the status is not asked again"
+    );
+    assert_eq!(daemon.cards().len(), 4);
     daemon.stop();
 }

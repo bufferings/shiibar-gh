@@ -512,8 +512,24 @@ fn answer(world: &World, req: &Req) -> Resp {
                 with_errors(data, errors)
             }
             "Status" => {
-                let (nodes, errors) =
-                    nodes_of(&|id| pr_by_id(world, id).cloned().unwrap_or(Value::Null));
+                // The world's `timelineItems` is the Timeline request's: the
+                // status answer has none.
+                let (nodes, errors) = nodes_of(&|id| {
+                    let mut node = pr_by_id(world, id).cloned().unwrap_or(Value::Null);
+                    if let Some(map) = node.as_object_mut() {
+                        map.remove("timelineItems");
+                    }
+                    node
+                });
+                with_errors(json!({"nodes":nodes}), errors)
+            }
+            "Timeline" => {
+                let (nodes, errors) = nodes_of(&|id| match pr_by_id(world, id) {
+                    Some(pr) => {
+                        json!({"id": id, "timelineItems": pr.get("timelineItems").cloned().unwrap_or(Value::Null)})
+                    }
+                    None => Value::Null,
+                });
                 with_errors(json!({"nodes":nodes}), errors)
             }
             "Compare" => {
