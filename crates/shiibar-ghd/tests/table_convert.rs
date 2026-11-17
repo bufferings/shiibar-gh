@@ -855,7 +855,7 @@ fn merged_and_closed_carry_who_and_no_text() {
 #[test]
 fn the_closed_event_paired_with_a_merge_makes_no_row() {
     // DESIGN.md, "Merged, Closed and Reopened rows": GitHub makes both at
-    // the same time for a merge (0.3.0, bufferings/shiibar-gh #10).
+    // the same time for a merge.
     let mut pr = Pr::others();
     pr.timeline = vec![
         json!({"__typename":"ClosedEvent","id":"CE_0","createdAt":iso(T0 + 1),"url":"https://c0","actor":{"login":"bob"}}),
@@ -1259,8 +1259,7 @@ fn search_hits_carry_updated_at_and_state_and_public_leaves_out_registered_owner
 
 // ------------------------------------------- mentions from bodyHTML links
 
-/// The quote of a mention, as GitHub rendered it in a Quote reply on
-/// bufferings-hello/hello-merge-queue#10 (2026-11-05): no class.
+/// The quote of a mention, as GitHub renders it in a Quote reply: no class.
 fn quoted_link(login: &str) -> String {
     format!(
         "<blockquote><p><a href=\"https://github.com/{login}\">@{login}</a> test</p></blockquote>"
