@@ -23,7 +23,7 @@
 #                                      (for example a snapshot of an earlier
 #                                      working tree), summary as <label>
 #
-# The daemon is the working tree's (0.6) for the working tree and a
+# The daemon is the working tree's (0.7) for the working tree and a
 # --package copy, and the tag v0.4.0's for --before, unless
 # SHIIBAR_GH_PERF_DAEMON names a dev-ingest build. Builds go to
 # $SHIIBAR_GH_PERF_WORK (default: a directory under /tmp), never to the
@@ -57,7 +57,7 @@ if [ -z "$daemon" ]; then
         (cd "$src" && CARGO_TARGET_DIR="$work/target" cargo build --release -p shiibar-ghd --features dev-ingest)
         daemon="$work/target/release/shiibar-ghd"
     else
-        # The working tree's daemon (0.6), built out of the repository's
+        # The working tree's daemon (0.7), built out of the repository's
         # target/.
         (cd "$repo" && CARGO_TARGET_DIR="$work/target-wt" cargo build --release -p shiibar-ghd --features dev-ingest)
         daemon="$work/target-wt/release/shiibar-ghd"

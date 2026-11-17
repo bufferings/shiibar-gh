@@ -195,6 +195,177 @@ final class DismissedBandPressTests: XCTestCase {
         )!
     }
 
+    // MARK: Line 1 of a row (DESIGN.md, "How rows look")
+
+    /// A PNG of one pixel, the avatar a test loader hands out (no network).
+    nonisolated static let pixel = Data(
+        base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+    )!
+
+    final class PixelImages: ImageLoading, @unchecked Sendable {
+        func load(_ url: URL) async throws -> Data { DismissedBandPressTests.pixel }
+    }
+
+    func rowLine(_ card: Card) -> CardLine {
+        CardLine(card: card, section: "s", showsTag: false, indented: false, expanded: false, canDrag: true)
+    }
+
+    func rowShape(_ line: CardLine) -> CardGeometry {
+        LineLayout.card(line, width: 460, k: 1, now: 1_000_000)
+    }
+
+    func rowCard() -> Card {
+        Card(id: "c", rows: [
+            Row(id: "m", kind: .merged, actor: "al", actorAvatarUrl: "https://avatars.example/al", occurredAt: 0, unread: false),
+            Row(id: "n", kind: .comment, text: "pushed a fix", actor: String(repeating: "very-long-login-name-", count: 4), occurredAt: 0),
+            Row(id: "k", kind: .checksFailed, text: "build", occurredAt: 0),
+        ])
+    }
+
+    /// The time and the chain icon at the same place in every row, whether
+    /// the row shows an avatar and a name or not, and however long the
+    /// name; a long name is cut, never the time.
+    func testTheTimeStaysAtTheRightEndOfEveryRow() {
+        let shape = rowShape(rowLine(rowCard()))
+        XCTAssertEqual(Set(shape.rows.map(\.chain.minX)).count, 1, "one place for the chain icon")
+        XCTAssertEqual(Set(shape.rows.map(\.meta.maxX)).count, 1)
+        for row in shape.rows {
+            XCTAssertEqual(row.chain.minX - row.meta.maxX, 6, accuracy: 0.01, "6 points from the time to the chain icon")
+        }
+        var times: [CGFloat] = []
+        for (frame, row) in zip(shape.rows, rowCard().rows) {
+            let p = RowPresentation(row, now: 600)
+            for avatar in [false, true] {
+                let parts = LineLayout.rowLine(frame.meta, p, avatar: avatar, k: 1)
+                XCTAssertEqual(parts.time.maxX, frame.meta.maxX, accuracy: 0.01, row.id)
+                XCTAssertEqual(parts.time.width, Ink.width(p.time, Ink.font(11)), accuracy: 0.01, "the whole time: \(row.id)")
+                times.append(parts.time.maxX)
+                if let name = parts.name {
+                    XCTAssertLessThanOrEqual(name.maxX, parts.time.minX - 6 + 0.01, row.id)
+                }
+            }
+        }
+        XCTAssertEqual(Set(times).count, 1)
+        let long = RowPresentation(rowCard().rows[1], now: 600)
+        let cut = LineLayout.rowLine(shape.rows[1].meta, long, avatar: false, k: 1)
+        XCTAssertLessThan(cut.name!.width, Ink.width(long.actor!, Ink.font(11)), "the long name is cut")
+        XCTAssertNil(LineLayout.rowLine(shape.rows[2].meta, RowPresentation(rowCard().rows[2], now: 600), avatar: true, k: 1).name,
+                     "no name on a state change")
+    }
+
+    /// Without the image (no URL, or not loaded) the name takes the
+    /// avatar's place; with it, the avatar is 14 points and the name follows.
+    func testTheAvatarTakesNoRoomWithoutAnImage() {
+        let shape = rowShape(rowLine(rowCard()))
+        let p = RowPresentation(rowCard().rows[0], now: 600)
+        let without = LineLayout.rowLine(shape.rows[0].meta, p, avatar: false, k: 1)
+        let with = LineLayout.rowLine(shape.rows[0].meta, p, avatar: true, k: 1)
+        XCTAssertNil(without.avatar)
+        XCTAssertEqual(without.name?.minX, shape.rows[0].meta.minX)
+        XCTAssertEqual(with.avatar?.size, CGSize(width: 14, height: 14))
+        XCTAssertEqual(with.avatar?.minX, shape.rows[0].meta.minX)
+        XCTAssertEqual(with.name?.minX ?? 0, (with.avatar?.maxX ?? 0) + 4, accuracy: 0.01)
+        let large = LineLayout.rowLine(shape.rows[0].meta, p, avatar: true, k: 1.5)
+        XCTAssertEqual(large.avatar?.width, 21, "in proportion to the text size")
+    }
+
+    /// The avatar is faint exactly when the row's text is gray: a muted
+    /// row, and a muted card's rows except a mention of you or your team.
+    func testTheAvatarIsFaintWhenTheTextIsGray() {
+        let url = "https://avatars.example/example-user"
+        let plain = RowPresentation(Row(id: "a", kind: .comment, text: "x", actor: "example-user", actorAvatarUrl: url), now: 0)
+        let muted = RowPresentation(Row(id: "b", kind: .comment, text: "x", actor: "example-user", actorAvatarUrl: url, muted: true), now: 0)
+        let inMutedCard = RowPresentation(Row(id: "c", kind: .merged, actor: "example-user", actorAvatarUrl: url), now: 0, cardMuted: true)
+        let mention = RowPresentation(Row(id: "d", kind: .teamMentioned, text: "x", actor: "example-user", actorAvatarUrl: url), now: 0, cardMuted: true)
+        XCTAssertEqual(CardLineView.avatarOpacity(plain), 1)
+        XCTAssertEqual(CardLineView.avatarOpacity(muted), 0.6)
+        XCTAssertEqual(CardLineView.avatarOpacity(inMutedCard), 0.6)
+        XCTAssertEqual(CardLineView.avatarOpacity(mention), 1, "a mention keeps its normal color in a muted card")
+        for p in [plain, muted, inMutedCard, mention] {
+            XCTAssertEqual(CardLineView.avatarOpacity(p) < 1, p.gray)
+        }
+    }
+
+    /// A row without a body (Merged, Approved…) is one line; the label line
+    /// keeps the avatar's height.
+    func testARowWithoutABodyIsOneLine() {
+        let shape = rowShape(rowLine(rowCard()))
+        let merged = shape.rows[0]
+        let comment = shape.rows[1]
+        XCTAssertNil(merged.body)
+        XCTAssertNotNil(comment.body)
+        XCTAssertLessThan(merged.frame.height, comment.frame.height)
+        XCTAssertGreaterThanOrEqual(merged.meta.height, 14)
+        let parts = CardLineView.accessibilityParts(rowLine(rowCard()), shape, now: 600)
+        XCTAssertEqual(parts[1].1, "Merged, al, 10 min ago", "the name on line 1, no `by`")
+    }
+
+    /// The avatar and the name show the login as their tooltip; the image,
+    /// once loaded, moves the name and draws the card again.
+    func testTheActorsTooltipAndTheLoadedAvatar() async throws {
+        let socket = FileManager.default.temporaryDirectory.appendingPathComponent("no-daemon-\(UUID().uuidString).sock").path
+        let app = AppModel(
+            api: SocketDaemonAPI(socketPath: socket), store: UIStateStore(defaults: ScratchDefaults()), opener: NoOpener(),
+            notifier: NoNotifier()
+        )
+        let data = app.viewModel("1001")
+        let list = data.list(.popover)
+        let avatars = AvatarStore(loader: PixelImages())
+        Self.kept += [app, data, list, avatars]
+        let context = CardContext.of(list, avatars: avatars)
+        let env = LineEnvironment(k: 1, now: 600, autoDismissDays: 3, context: context)
+        let cardLine = rowLine(rowCard())
+        let shape = rowShape(cardLine)
+        let view = CardLineView(frame: NSRect(origin: .zero, size: shape.size))
+        view.configure(cardLine, geometry: shape, env: env, state: ItemState())
+        let frame = shape.rows[0]
+        let p = RowPresentation(rowCard().rows[0], now: 600)
+        let before = LineLayout.rowLine(frame.meta, p, avatar: false, k: 1)
+        XCTAssertEqual(view.tip(at: CGPoint(x: before.name!.midX, y: before.name!.midY)), "al")
+        let keyBefore = view.currentDrawKey()
+        for _ in 0..<50 where avatars.image(for: "https://avatars.example/al") == nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertNotNil(avatars.image(for: "https://avatars.example/al"), "requested when configured")
+        XCTAssertNotEqual(view.currentDrawKey(), keyBefore, "the loaded image draws the card again")
+        let after = LineLayout.rowLine(frame.meta, p, avatar: true, k: 1)
+        XCTAssertEqual(view.tip(at: CGPoint(x: after.avatar!.midX, y: after.avatar!.midY)), "al")
+        XCTAssertEqual(view.tip(at: CGPoint(x: after.name!.midX, y: after.name!.midY)), "al")
+        XCTAssertNil(view.tip(at: CGPoint(x: after.time.midX, y: after.time.midY)), "not the time")
+        let longFrame = shape.rows[1]
+        let long = LineLayout.rowLine(longFrame.meta, RowPresentation(rowCard().rows[1], now: 600), avatar: false, k: 1)
+        XCTAssertEqual(view.tip(at: CGPoint(x: long.name!.midX, y: long.name!.midY)), rowCard().rows[1].actor, "the whole login")
+    }
+
+    /// A collapsed heading draws its unread mark before the name and says
+    /// it to assistive apps; the mark is part of the heading's image.
+    func testACollapsedHeadingShowsItsMark() {
+        let socket = FileManager.default.temporaryDirectory.appendingPathComponent("no-daemon-\(UUID().uuidString).sock").path
+        let app = AppModel(
+            api: SocketDaemonAPI(socketPath: socket), store: UIStateStore(defaults: ScratchDefaults()), opener: NoOpener(),
+            notifier: NoNotifier()
+        )
+        let data = app.viewModel("1001")
+        let list = data.list(.popover)
+        Self.kept += [app, data, list]
+        let env = LineEnvironment(k: 1, now: 0, autoDismissDays: 3, context: CardContext.of(list, avatars: AvatarStore(loader: NoImages())))
+        var section = SectionLayout(
+            key: "review|done", title: "Done", level: 1, isLeaf: true, detail: "2 PRs", collapsed: true, cards: [], more: 0,
+            showLess: false, moreMark: .none, matching: [], accepts: true, isDone: true
+        )
+        let heading = HeadingLineView(frame: NSRect(x: 0, y: 0, width: 460, height: 31))
+        heading.configure(HeadingLine(section), env: env, state: ItemState())
+        let plain = heading.currentDrawKey()
+        XCTAssertEqual(heading.accessibilityLabel(), "Done, 2 PRs")
+        section.foldMark = .blue
+        heading.configure(HeadingLine(section), env: env, state: ItemState())
+        XCTAssertNotEqual(heading.currentDrawKey(), plain)
+        XCTAssertEqual(heading.accessibilityLabel(), "Done, 2 PRs, Unread")
+        section.foldMark = .ring
+        heading.configure(HeadingLine(section), env: env, state: ItemState())
+        XCTAssertEqual(heading.accessibilityLabel(), "Done, 2 PRs, Unread, muted")
+    }
+
     /// The models live as long as the process, as in the app: the list's
     /// views and the context they share hold them unowned, and work they
     /// scheduled may run after the test.

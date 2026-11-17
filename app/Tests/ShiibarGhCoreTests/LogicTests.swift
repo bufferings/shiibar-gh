@@ -121,11 +121,12 @@ final class PresentationTests: XCTestCase {
     /// DESIGN.md, "Screens" and MenuBarIcon.html.
     func testTheMenuBarIconsAccessibilityText() {
         XCTAssertEqual(MenuBarMarks.accessibilityLabel(Account(id: "a", login: "bufferings-work", unread: true, warnings: [Warning(kind: .fetchFailed)])),
-                       "shiibar-gh, bufferings-work, unread, needs attention")
-        XCTAssertEqual(MenuBarMarks.accessibilityLabel(Account(id: "a", login: "bufferings", unread: true)), "shiibar-gh, bufferings, unread")
-        XCTAssertEqual(MenuBarMarks.accessibilityLabel(Account(id: "a", login: "me", warnings: [Warning(kind: .noToken)])), "shiibar-gh, me, needs attention")
-        XCTAssertEqual(MenuBarMarks.accessibilityLabel(Account(id: "a", login: "me")), "shiibar-gh, me")
-        XCTAssertEqual(MenuBarMarks.noAccountsLabel, "shiibar-gh, no accounts")
+                       "Shiibar GH, bufferings-work, unread, needs attention")
+        XCTAssertEqual(MenuBarMarks.accessibilityLabel(Account(id: "a", login: "bufferings", unread: true)), "Shiibar GH, bufferings, unread")
+        XCTAssertEqual(MenuBarMarks.accessibilityLabel(Account(id: "a", login: "me", warnings: [Warning(kind: .noToken)])), "Shiibar GH, me, needs attention")
+        XCTAssertEqual(MenuBarMarks.accessibilityLabel(Account(id: "a", login: "me")), "Shiibar GH, me")
+        XCTAssertEqual(MenuBarMarks.noAccountsLabel, "Shiibar GH, no accounts")
+        XCTAssertEqual(MenuBarMarks.noAccountsToolTip, "Shiibar GH")
     }
 
     /// The fix of the 0.3.0 CPU loop (DESIGN.md, "UI"): the same
@@ -213,7 +214,9 @@ final class PresentationTests: XCTestCase {
         struct Case {
             var row: Row
             var label: String
-            var meta: String
+            /// The name on line 1: every row a person caused, not the state
+            /// changes or Reaction (DESIGN.md, "How rows look").
+            var actor: String?
             var body: String?
             var lines: Int
         }
@@ -221,44 +224,45 @@ final class PresentationTests: XCTestCase {
         // loses the dot (DESIGN.md, "How rows look").
         let cases = [
             Case(row: Row(id: "1", kind: .mentioned, text: "hi\nthere", actor: "alice", occurredAt: at),
-                 label: "Mentioned", meta: "alice · 9 min ago", body: "hi there", lines: 3),
+                 label: "Mentioned", actor: "alice", body: "hi there", lines: 3),
             Case(row: Row(id: "2", kind: .mentioned, text: "x", actor: "alice", occurredAt: at, unread: false),
-                 label: "Mentioned", meta: "alice · 9 min ago", body: "x", lines: 1),
+                 label: "Mentioned", actor: "alice", body: "x", lines: 1),
             Case(row: Row(id: "4", kind: .comment, text: "Coverage", actor: "codecov", occurredAt: at),
-                 label: "Comment", meta: "codecov · 9 min ago", body: "Coverage", lines: 1),
+                 label: "Comment", actor: "codecov", body: "Coverage", lines: 1),
             Case(row: Row(id: "5", kind: .merged, actor: "carol", occurredAt: at),
-                 label: "Merged", meta: "9 min ago", body: "by carol", lines: 1),
+                 label: "Merged", actor: "carol", body: nil, lines: 1),
             Case(row: Row(id: "6", kind: .teamReviewRequested, text: "for frontend team", actor: "dave", occurredAt: at),
-                 label: "Review requested", meta: "9 min ago", body: "for frontend team", lines: 1),
+                 label: "Review requested", actor: "dave", body: "for frontend team", lines: 1),
             Case(row: Row(id: "7", kind: .reviewRequested, text: "for you", actor: "dave", occurredAt: at, unread: false),
-                 label: "Review requested", meta: "9 min ago", body: "for you", lines: 1),
+                 label: "Review requested", actor: "dave", body: "for you", lines: 1),
             Case(row: Row(id: "8", kind: .reaction, text: "Merged", counts: ["HOORAY": 2], occurredAt: at, unread: false),
-                 label: "Reaction", meta: "9 min ago", body: "\u{201C}Merged\u{201D}", lines: 1),
+                 label: "Reaction", actor: nil, body: "\u{201C}Merged\u{201D}", lines: 1),
             Case(row: Row(id: "9", kind: .conflicts, occurredAt: at),
-                 label: "Conflicts", meta: "9 min ago", body: nil, lines: 1),
+                 label: "Conflicts", actor: nil, body: nil, lines: 1),
             Case(row: Row(id: "10", kind: .mergeQueueRemoved, text: "Checks failed · added by alice", actor: "github-merge-queue", occurredAt: at),
-                 label: "Removed from merge queue", meta: "github-merge-queue · 9 min ago", body: "Checks failed · added by alice", lines: 1),
+                 label: "Removed from merge queue", actor: "github-merge-queue", body: "Checks failed · added by alice", lines: 1),
             Case(row: Row(id: "10b", kind: .mergeQueueAdded, actor: "mk", occurredAt: at),
-                 label: "Added to merge queue", meta: "9 min ago", body: "by mk", lines: 1),
+                 label: "Added to merge queue", actor: "mk", body: nil, lines: 1),
             Case(row: Row(id: "11", kind: .approved, actor: "erin", occurredAt: at),
-                 label: "Approved", meta: "9 min ago", body: "by erin", lines: 1),
+                 label: "Approved", actor: "erin", body: nil, lines: 1),
             Case(row: Row(id: "12", kind: .replyMentioned, text: "ok", actor: "frank", occurredAt: at),
-                 label: "Reply", meta: "frank · 9 min ago", body: "ok", lines: 1),
+                 label: "Reply", actor: "frank", body: "ok", lines: 1),
             Case(row: Row(id: "14", kind: .commentOther, text: "lgtm", actor: "hal", occurredAt: at),
-                 label: "Comment", meta: "hal · 9 min ago", body: "lgtm", lines: 1),
+                 label: "Comment", actor: "hal", body: "lgtm", lines: 1),
             Case(row: Row(id: "15", kind: .checksPassed, occurredAt: at),
-                 label: "Checks passed", meta: "9 min ago", body: nil, lines: 1),
+                 label: "Checks passed", actor: nil, body: nil, lines: 1),
             Case(row: Row(id: "16", kind: .reopened, actor: "epage", occurredAt: at),
-                 label: "Reopened", meta: "9 min ago", body: "by epage", lines: 1),
+                 label: "Reopened", actor: "epage", body: nil, lines: 1),
             Case(row: Row(id: "17", kind: .closed, actor: "bw", occurredAt: at),
-                 label: "Closed", meta: "9 min ago", body: "by bw", lines: 1),
+                 label: "Closed", actor: "bw", body: nil, lines: 1),
             Case(row: Row(id: "13", kind: .teamMentioned, text: "@org/team look", actor: "gus", occurredAt: at),
-                 label: "My team mentioned", meta: "gus · 9 min ago", body: "@org/team look", lines: 3),
+                 label: "My team mentioned", actor: "gus", body: "@org/team look", lines: 3),
         ]
         for c in cases {
             let p = RowPresentation(c.row, now: T0)
             XCTAssertEqual(p.label, c.label, c.row.id)
-            XCTAssertEqual(p.meta, c.meta, c.row.id)
+            XCTAssertEqual(p.actor, c.actor, c.row.id)
+            XCTAssertEqual(p.time, "9 min ago", c.row.id)
             XCTAssertEqual(p.body, c.body, c.row.id)
             XCTAssertFalse(p.gray, c.row.id)
             XCTAssertEqual(p.mark, c.row.unread ? .blue : .none, c.row.id)
@@ -274,6 +278,24 @@ final class PresentationTests: XCTestCase {
         XCTAssertEqual(BoardIcons.row(.known(.checksPassed)), BoardIcons.kindPassed)
         XCTAssertEqual(BoardIcons.row(.known(.closed)), BoardIcons.kindChangesRequested)
         XCTAssertEqual(BoardIcons.row(.known(.reopened)), BoardIcons.kindReopened)
+    }
+
+    /// The avatar goes with the name: a row that shows no actor shows no
+    /// avatar, and an empty URL is none (DESIGN.md, "How rows look").
+    func testRowAvatarGoesWithTheName() {
+        let url = "https://avatars.example/alice"
+        let comment = RowPresentation(Row(id: "1", kind: .comment, text: "x", actor: "alice", actorAvatarUrl: url), now: T0)
+        XCTAssertEqual(comment.actor, "alice")
+        XCTAssertEqual(comment.actorAvatarUrl, url)
+        let noUrl = RowPresentation(Row(id: "2", kind: .merged, actor: "alice", actorAvatarUrl: ""), now: T0)
+        XCTAssertEqual(noUrl.actor, "alice")
+        XCTAssertNil(noUrl.actorAvatarUrl)
+        let checks = RowPresentation(Row(id: "3", kind: .checksFailed, text: "build", actor: "alice", actorAvatarUrl: url), now: T0)
+        XCTAssertNil(checks.actor)
+        XCTAssertNil(checks.actorAvatarUrl)
+        let noActor = RowPresentation(Row(id: "4", kind: .closed, actorAvatarUrl: url), now: T0)
+        XCTAssertNil(noActor.actor)
+        XCTAssertNil(noActor.actorAvatarUrl)
     }
 
     /// Muted rows show the gray ring; a muted card's rows are gray except
@@ -576,8 +598,8 @@ final class PresentationTests: XCTestCase {
         XCTAssertEqual(SettingsText.eventTitle(.checksPassed), "Checks passed")
         XCTAssertEqual(SettingsText.eventTitle(.reopened), "Reopened")
         XCTAssertEqual(SettingsText.removeAccountDetail,
-                       "Deletes this account and its owners from shiibar-gh: token, PRs, mutes and settings. Nothing changes on GitHub.")
-        XCTAssertEqual(SettingsText.removeOwnerDetail, "Deletes this owner from shiibar-gh: its PRs and settings. Nothing changes on GitHub.")
+                       "Deletes this account and its owners from Shiibar GH: token, PRs, mutes and settings. Nothing changes on GitHub.")
+        XCTAssertEqual(SettingsText.removeOwnerDetail, "Deletes this owner from Shiibar GH: its PRs and settings. Nothing changes on GitHub.")
         XCTAssertEqual(SettingsText.enabledDetail, "Off hides this owner's PRs and stops fetching.")
         XCTAssertEqual(SettingsText.copyNote("example-org"), "Replaces example-org's table. The switches stay as they are.")
         XCTAssertEqual(SettingsText.addOwnerNote("example-org"), "The account's token reads pull requests in example-org's repositories.")

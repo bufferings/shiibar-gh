@@ -14,17 +14,20 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// 0.6. Version 7 (0.5) moves to 8 at startup keeping everything; version 6
-/// (0.4) moves to 7 and then to 8, keeping everything; versions 5 (0.3) and 4
-/// (0.2) move to 8 keeping only the accounts. Versions 1 to 3 are the 0.1
-/// schema, which is not migrated: such a database is treated like an
-/// unreadable one (DESIGN.md, "Saved state").
-pub const SCHEMA_VERSION: i64 = 8;
-/// The 0.5 schema, moved to 8 at startup with all its data.
+/// 0.7. Version 8 (0.6) moves to 9 at startup keeping everything; version 7
+/// (0.5) moves to 8 and then to 9; version 6 (0.4) moves through 7 and 8 to
+/// 9, keeping everything; versions 5 (0.3) and 4 (0.2) move to 9 keeping only
+/// the accounts. Versions 1 to 3 are the 0.1 schema, which is not migrated:
+/// such a database is treated like an unreadable one (DESIGN.md, "Saved
+/// state").
+pub const SCHEMA_VERSION: i64 = 9;
+/// The 0.6 schema, moved to 9 at startup with all its data.
+const V06_VERSION: i64 = 8;
+/// The 0.5 schema, moved to 8 and then to 9 at startup with all its data.
 const V05_VERSION: i64 = 7;
-/// The 0.4 schema, moved to 7 and then to 8 at startup with all its data.
+/// The 0.4 schema, moved through 7 and 8 to 9 at startup with all its data.
 const V04_VERSION: i64 = 6;
-/// The 0.3 and 0.2 schemas, moved to 8 at startup with only the accounts.
+/// The 0.3 and 0.2 schemas, moved to 9 at startup with only the accounts.
 const MOVED_VERSIONS: [i64; 2] = [4, 5];
 /// The newest version of the 0.1 schema.
 const LAST_V01_VERSION: i64 = 3;
@@ -32,8 +35,9 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 const FILE_MODE: u32 = 0o600;
 const SIDE_FILES: [&str; 2] = ["-wal", "-shm"];
 
-/// The tables of versions 7 (0.5) and 8 (0.6), which differ only in the
-/// values of Mine's sections. A PR's placement, Dismiss state, Checks
+/// The tables of version 9 (0.7): the tables of versions 7 (0.5) and 8
+/// (0.6), which differ only in the values of Mine's sections, with
+/// `prs.timeline_updated_at` and `pr_rows.actor_avatar_url`. A PR's placement, Dismiss state, Checks
 /// results, newest review request and own Unmute are columns of `prs`; Mute
 /// lists hang off the account; deleted row ids and Dismiss records have
 /// their own tables. It is the 0.4 schema (version 6) with `prs.done_seq`
@@ -138,7 +142,8 @@ CREATE TABLE prs (
     merged_event_at INTEGER,
     collected INTEGER NOT NULL,
     done_seq INTEGER NOT NULL DEFAULT 0,
-    unmuted INTEGER NOT NULL DEFAULT 0
+    unmuted INTEGER NOT NULL DEFAULT 0,
+    timeline_updated_at INTEGER
 );
 CREATE TABLE pr_rows (
     id TEXT PRIMARY KEY,
@@ -154,7 +159,8 @@ CREATE TABLE pr_rows (
     unread INTEGER NOT NULL,
     listed INTEGER NOT NULL,
     made_at INTEGER NOT NULL,
-    notify TEXT NOT NULL
+    notify TEXT NOT NULL,
+    actor_avatar_url TEXT
 );
 CREATE TABLE deleted_rows (id TEXT PRIMARY KEY, pr TEXT NOT NULL);
 CREATE TABLE dismiss_records (
@@ -184,8 +190,7 @@ fn migrate_v6_to_v7(tx: &Transaction<'_>) -> rusqlite::Result<()> {
 }
 
 /// DESIGN.md, "Updating from 0.5": inside the caller's transaction, move
-/// Mine's single list (section `main` of version 7) to Mine's Todo and set
-/// `user_version`. The one column holds the section of an open card and
+/// Mine's single list (section `main` of version 7) to Mine's Todo. The one column holds the section of an open card and
 /// the section a card in Done had before Done, for every card, dismissed
 /// and muted ones included. Ranks keep their values, so the cards keep
 /// their order in Todo; Done's times and sequence and Review stay as they
@@ -196,12 +201,25 @@ fn migrate_v7_to_v8(tx: &Transaction<'_>) -> rusqlite::Result<()> {
          WHERE place_tab = 'mine' AND place_section = 'main'",
         [],
     )?;
-    tx.pragma_update(None, "user_version", SCHEMA_VERSION)
+    Ok(())
+}
+
+/// DESIGN.md, "Updating from 0.6": inside the caller's transaction, add the
+/// two columns of version 9, both without a value: a PR's timeline time is
+/// saved by its next status fetch, which then fetches no events for it, and
+/// a row made before 0.7 shows its actor's name without an avatar. Row
+/// texts and unread marks stay as they are. Any error leaves the
+/// transaction for the caller to roll back.
+fn migrate_v8_to_v9(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    tx.execute_batch(
+        "ALTER TABLE prs ADD COLUMN timeline_updated_at INTEGER;
+         ALTER TABLE pr_rows ADD COLUMN actor_avatar_url TEXT;",
+    )
 }
 
 /// DESIGN.md, "Updating from 0.3 and 0.2": inside the caller's transaction,
 /// keep each account's id, login, color and order, drop every table, create
-/// the version 8 tables, put the accounts back and set `user_version`. The
+/// the version 9 tables, put the accounts back and set `user_version`. The
 /// `accounts` table of versions 4 and 5 has the same four columns. Any error
 /// leaves the transaction for the caller to roll back.
 fn migrate_accounts_only(tx: &Transaction<'_>) -> rusqlite::Result<()> {
@@ -449,18 +467,29 @@ impl Store {
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         let accounts_only = MOVED_VERSIONS.contains(&version);
-        let migrating = accounts_only || version == V04_VERSION || version == V05_VERSION;
+        let migrating = accounts_only
+            || version == V04_VERSION
+            || version == V05_VERSION
+            || version == V06_VERSION;
         if migrating {
-            // DESIGN.md, "Updating from 0.5", "Updating from 0.4" and
-            // "Updating from 0.3 and 0.2": version 6 goes through 7 to 8 in
-            // the one transaction, and a failed move rolls back and leaves
-            // the database as it was, in the unreadable state.
+            // DESIGN.md, "Updating from 0.6", "Updating from 0.5", "Updating
+            // from 0.4" and "Updating from 0.3 and 0.2": every step from the
+            // stored version up to 9 runs in the one transaction, the
+            // version is written after the last one, and a failed move rolls
+            // back and leaves the database as it was, in the unreadable
+            // state.
             let moved = if accounts_only {
                 migrate_accounts_only(&tx)
-            } else if version == V04_VERSION {
-                migrate_v6_to_v7(&tx).and_then(|()| migrate_v7_to_v8(&tx))
             } else {
-                migrate_v7_to_v8(&tx)
+                let mut step = Ok(());
+                if version <= V04_VERSION {
+                    step = step.and_then(|()| migrate_v6_to_v7(&tx));
+                }
+                if version <= V05_VERSION {
+                    step = step.and_then(|()| migrate_v7_to_v8(&tx));
+                }
+                step.and_then(|()| migrate_v8_to_v9(&tx))
+                    .and_then(|()| tx.pragma_update(None, "user_version", SCHEMA_VERSION))
             };
             if let Err(e) = moved {
                 drop(tx);
@@ -800,11 +829,12 @@ fn save_pr(tx: &Transaction<'_>, pr: &PrRec) -> rusqlite::Result<()> {
           link_base, unreadable, added_at, prev_review, prev_checks, prev_base_status,
           prev_mergeable, settled, settled_head, watch_reset, place_tab, place_section,
           place_rank, closed_at, done_at, keep_after_close, dismissed_at, restored,
-          seen_closed, quiet_from, quiet_until, merged_event_at, collected, done_seq, unmuted)
+          seen_closed, quiet_from, quiet_until, merged_event_at, collected, done_seq, unmuted,
+          timeline_updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
                  ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32,
                  ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47,
-                 ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56)",
+                 ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57)",
         rusqlite::params_from_iter(pr_params(pr)),
     )?;
     Ok(())
@@ -874,6 +904,7 @@ fn pr_params(pr: &PrRec) -> Vec<rusqlite::types::Value> {
         flag(pr.collected),
         int(pr.done_seq),
         flag(pr.unmuted),
+        opt_int(pr.timeline_updated_at),
     ]
 }
 
@@ -881,8 +912,8 @@ fn save_row(tx: &Transaction<'_>, row: &RowRec) -> rusqlite::Result<()> {
     tx.execute(
         "INSERT OR REPLACE INTO pr_rows
          (id, account, pr, kind, text, counts, actor, url, occurred_at, comment_id, unread,
-          listed, made_at, notify)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+          listed, made_at, notify, actor_avatar_url)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
             row.id,
             row.account,
@@ -898,6 +929,7 @@ fn save_row(tx: &Transaction<'_>, row: &RowRec) -> rusqlite::Result<()> {
             row.listed,
             row.made_at,
             row.notify.as_str(),
+            row.actor_avatar_url,
         ],
     )?;
     Ok(())
@@ -1035,7 +1067,8 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
                 prev_checks, prev_base_status, prev_mergeable, settled, settled_head,
                 watch_reset, place_tab, place_section, place_rank, closed_at, done_at,
                 keep_after_close, dismissed_at, restored, seen_closed, quiet_from,
-                quiet_until, merged_event_at, collected, done_seq, unmuted
+                quiet_until, merged_event_at, collected, done_seq, unmuted,
+                timeline_updated_at
          FROM prs",
     )?;
     let prs = statement.query_map([], |row| {
@@ -1119,6 +1152,7 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
             collected: row.get(53)?,
             done_seq: row.get(54)?,
             unmuted: row.get(55)?,
+            timeline_updated_at: row.get(56)?,
         })
     })?;
     for pr in prs {
@@ -1128,7 +1162,7 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
 
     let mut statement = conn.prepare(
         "SELECT id, account, pr, kind, text, counts, actor, url, occurred_at, comment_id, unread,
-                listed, made_at, notify
+                listed, made_at, notify, actor_avatar_url
          FROM pr_rows",
     )?;
     let rows = statement.query_map([], |row| {
@@ -1148,6 +1182,7 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
             listed: row.get(11)?,
             made_at: row.get(12)?,
             notify: stored(13, &row.get::<_, String>(13)?, NotifyState::parse)?,
+            actor_avatar_url: row.get(14)?,
         })
     })?;
     for row in rows {

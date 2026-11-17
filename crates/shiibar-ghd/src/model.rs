@@ -314,6 +314,19 @@ impl RowKind {
         )
     }
 
+    /// DESIGN.md, "Rows of the account's own events": the kinds made read
+    /// and without a notification when their actor is the account.
+    pub fn is_own_action_kind(self) -> bool {
+        matches!(
+            self,
+            Self::Merged
+                | Self::Closed
+                | Self::Reopened
+                | Self::MergeQueueAdded
+                | Self::MergeQueueRemoved
+        )
+    }
+
     /// The mentions of the account and of its team: they pass Mute
     /// (DESIGN.md, "Mute").
     pub fn is_mention(self) -> bool {
@@ -721,6 +734,10 @@ pub struct PrRec {
     pub failed_check: Option<String>,
     pub changes_requested_by: Option<String>,
     pub updated_at: i64,
+    /// GraphQL `timelineItems { updatedAt }` of the last status fetch.
+    /// `None` until a status fetch saved it (a PR moved from 0.6, or one
+    /// whose watch started again). DESIGN.md, "API usage", "Timeline time".
+    pub timeline_updated_at: Option<i64>,
     /// GraphQL `createdAt`.
     pub created_at: Option<i64>,
     /// The newest review the account submitted on the PR, from the last
@@ -814,6 +831,9 @@ pub struct RowRec {
     pub text: Option<String>,
     pub counts: Option<BTreeMap<String, u32>>,
     pub actor: Option<String>,
+    /// The actor's `avatarUrl(size: 32)`; `None` for a row without an
+    /// actor and for a row saved before 0.7.
+    pub actor_avatar_url: Option<String>,
     pub url: String,
     pub occurred_at: i64,
     pub comment_id: Option<String>,

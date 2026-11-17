@@ -1422,11 +1422,12 @@ fn mine_sections_over_the_socket() {
             )
         })
         .collect();
+    // The screen's section order: Done, Waiting, Doing, Todo.
     let want: Vec<(String, String)> = [
-        ("org/app#2", "doing"),
-        ("org/app#3", "todo"),
         ("org/app#1", "done"),
         ("org/app#4", "done"),
+        ("org/app#2", "doing"),
+        ("org/app#3", "todo"),
     ]
     .iter()
     .map(|(p, s)| (p.to_string(), s.to_string()))

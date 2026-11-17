@@ -68,6 +68,7 @@ pub fn pr(id: &str) -> IngestPr {
         failed_check: None,
         changes_requested_by: None,
         updated_at: T0,
+        timeline_updated_at: None,
         created_at: T0 - DAY,
         my_review_at: None,
         is_private: false,
@@ -158,6 +159,7 @@ impl H {
             occurred_at: at,
             url: format!("https://github.example/{id}"),
             actor: Some("alice".into()),
+            actor_avatar_url: None,
             text: Some(format!("text {id}")),
             comment_id: None,
         }

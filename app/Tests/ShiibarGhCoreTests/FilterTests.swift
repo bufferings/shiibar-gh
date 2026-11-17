@@ -173,19 +173,19 @@ final class FilterListTests: XCTestCase {
     /// Headings, "+ N more PRs" and groups count what the Filter shows.
     func testHeadingsFoldsAndGroupsFollowTheFilter() {
         let open = ListFilter(muted: .show, statuses: [.open])
-        let todo = layout(.review, filter: open)[1]
+        let todo = layout(.review, filter: open)[3]
         XCTAssertEqual(todo.detail, "7 PRs")
         let merged = layout(.review, filter: ListFilter(muted: .show, statuses: [.merged, .closed]))
-        XCTAssertEqual(merged.map(\.detail), ["0 PRs", "0 PRs", "0 PRs", "1 PR"], "the empty sections stay for a drop")
-        XCTAssertEqual(merged.map(\.key), ["review|doing", "review|todo", "review|waiting", "review|done"])
-        XCTAssertNil(merged[1].foldLine)
+        XCTAssertEqual(merged.map(\.detail), ["1 PR", "0 PRs", "0 PRs", "0 PRs"], "the empty sections stay for a drop")
+        XCTAssertEqual(merged.map(\.key), ["review|done", "review|waiting", "review|doing", "review|todo"])
+        XCTAssertNil(merged[3].foldLine)
         // Mine: Review's four sections, the empty ones kept.
         let mine = layout(.mine, filter: ListFilter(statuses: [.closed]))
-        XCTAssertEqual(mine.map(\.key), ["mine|doing", "mine|todo", "mine|waiting", "mine|done"])
-        XCTAssertEqual(mine.map(\.matching.count), [0, 0, 0, 1])
+        XCTAssertEqual(mine.map(\.key), ["mine|done", "mine|waiting", "mine|doing", "mine|todo"])
+        XCTAssertEqual(mine.map(\.matching.count), [1, 0, 0, 0])
         // Unread only: Todo holds T1 alone; the other sections empty.
         let unread = layout(.review, filter: ListFilter(unreadOnly: true))
-        XCTAssertEqual(unread.map(\.detail), ["0 PRs", "1 PR", "0 PRs", "0 PRs"])
+        XCTAssertEqual(unread.map(\.detail), ["0 PRs", "0 PRs", "0 PRs", "1 PR"])
         // A Filter that leaves no card: no section at all.
         XCTAssertEqual(layout(.review, filter: ListFilter(muted: .hide, statuses: [.closed])).map(\.key), [])
         // All: groups without a card are not shown.
@@ -194,8 +194,8 @@ final class FilterListTests: XCTestCase {
         XCTAssertEqual(all.map(\.detail), ["1 PR", "1 PR"])
         // Six cards fold; with the Filter hiding two of them, they do not.
         let six = (0..<6).map { card("F\($0)", placement: review(.todo, $0), rows: $0 < 4 ? [row("f\($0)", pr: "example-org/api#F\($0)", unread: true)] : []) }
-        XCTAssertEqual(layout(.review, cards: six, filter: mutedHidden)[1].foldLine, "+ 1 more PR")
-        XCTAssertNil(layout(.review, cards: six, filter: ListFilter(unreadOnly: true))[1].foldLine)
+        XCTAssertEqual(layout(.review, cards: six, filter: mutedHidden)[3].foldLine, "+ 1 more PR")
+        XCTAssertNil(layout(.review, cards: six, filter: ListFilter(unreadOnly: true))[3].foldLine)
     }
 
     /// An empty tab: its own text only with no search and the default
@@ -243,13 +243,13 @@ final class FilterListTests: XCTestCase {
             card("E", placement: review(.todo, 4)),
         ]
         let s = layout(.review, cards: cards, filter: ListFilter(statuses: [.open]))
-        XCTAssertEqual(s[1].matching.map(\.id), ["A", "C", "E"])
+        XCTAssertEqual(s[3].matching.map(\.id), ["A", "C", "E"])
         XCTAssertEqual(CardDrop.target(.card("A", lowerHalf: false), sections: s)?.position, .top, "above B too")
         XCTAssertEqual(CardDrop.target(.card("C", lowerHalf: false), sections: s)?.position, .before("C"), "B stays above")
         XCTAssertEqual(CardDrop.target(.card("C", lowerHalf: true), sections: s)?.position, .before("E"), "D stays above")
         XCTAssertEqual(CardDrop.target(.card("E", lowerHalf: true), sections: s)?.position, .bottom)
-        XCTAssertEqual(CardDrop.reorder(cards[2], up: true, refs: s[1].matching)?.position, .top, "⌥↑ past V1")
-        XCTAssertEqual(CardDrop.reorder(cards[0], up: false, refs: s[1].matching)?.position, .before("E"))
+        XCTAssertEqual(CardDrop.reorder(cards[2], up: true, refs: s[3].matching)?.position, .top, "⌥↑ past V1")
+        XCTAssertEqual(CardDrop.reorder(cards[0], up: false, refs: s[3].matching)?.position, .before("E"))
         // Move to …: `at` by default, in the whole section.
         let plan = MultiRules.plan(.move(.review(.waiting)), cards: [cards[2]])
         XCTAssertEqual(plan.moves.map(\.position), [.bottom])
@@ -262,8 +262,8 @@ final class FilterListTests: XCTestCase {
         let cards = sampleCards()
         let filter = ListFilter(unreadOnly: true)
         let kept = layout(.review, cards: cards, filter: filter, kept: ["T2"])
-        XCTAssertEqual(kept[1].matching.map(\.id), ["T1", "T2"])
-        XCTAssertEqual(kept[1].detail, "2 PRs")
+        XCTAssertEqual(kept[3].matching.map(\.id), ["T1", "T2"])
+        XCTAssertEqual(kept[3].detail, "2 PRs")
         XCTAssertEqual(CardDrop.target(.card("T1", lowerHalf: true), sections: kept)?.position, .before("T2"))
         XCTAssertEqual(layout(.review, cards: cards, filter: ListFilter(statuses: [.merged], unreadOnly: true), kept: ["T2"]).flatMap(\.matching).map(\.id), [],
                        "kept only past Unread only: Status still hides it")
@@ -682,7 +682,7 @@ final class FilterModelTests: XCTestCase {
         XCTAssertEqual(list.search, "")
         XCTAssertEqual(list.filter, ListFilter(), "Open on again; nothing else changed")
         XCTAssertEqual(list.selection, .header(card: "T5"))
-        XCTAssertTrue(list.sections[1].cards.contains { $0.id == "T5" }, "Todo opened")
+        XCTAssertTrue(list.sections[3].cards.contains { $0.id == "T5" }, "Todo opened")
         assertSelectionConsistent(list)
     }
 
@@ -716,7 +716,7 @@ final class FilterModelTests: XCTestCase {
         XCTAssertEqual(list.selection, .row(id: "u2", card: "U2"), "the selection stays")
         clock.advance(60)
         XCTAssertEqual(ids(list), ["K", "U1", "U2", "U3"], "selected: never hides")
-        XCTAssertEqual(list.sections[1].detail, "3 PRs", "counted as shown")
+        XCTAssertEqual(list.sections[3].detail, "3 PRs", "counted as shown")
         // ↓ to U3's heading: U2 counts from now.
         list.press(.down)
         XCTAssertEqual(list.selection, .header(card: "U3"))
@@ -1069,20 +1069,22 @@ final class FilterModelTests: XCTestCase {
     /// account.
     func testSortFromTheGroupingSheetOrdersAll() async {
         let cards = [
-            card("A", pr: "example-org/api#1", added: T0 + 30, updated: T0 + 10),
-            card("B", pr: "example-org/api#2", added: T0 + 20, updated: T0 + 30),
-            card("C", pr: "example-org/api#3", added: T0 + 10, updated: T0 + 20),
+            card("A", pr: "example-org/api#1", added: T0 + 30, updated: T0 + 90,
+                 rows: [row("a", pr: "example-org/api#1", at: T0 + 35)]),
+            card("B", pr: "example-org/api#2", added: T0 + 20, updated: T0 + 30,
+                 rows: [row("b", pr: "example-org/api#2", at: T0 + 50)]),
+            card("C", pr: "example-org/api#3", added: T0 + 40, updated: T0 + 20),
         ]
         let list = await loaded(.all, cards: cards)
         list.data.setGroupBy(.none)
-        XCTAssertEqual(list.shownCards, ["B", "C", "A"], "Recently updated: the default")
+        XCTAssertEqual(list.shownCards, ["B", "C", "A"], "Recent activity: the default; `updatedAt` does not count")
         list.openGrouping()
         list.data.setSort(.recentlyAdded)
-        XCTAssertEqual(list.shownCards, ["A", "B", "C"], "applied at once, the sheet still open")
+        XCTAssertEqual(list.shownCards, ["C", "A", "B"], "applied at once, the sheet still open")
         XCTAssertTrue(list.showsGrouping)
         XCTAssertEqual(UIStateStore(defaults: defaults).options(account: "3407303").sort, .recentlyAdded)
         XCTAssertNil(list.filter.summary, "not in the Filter's summary")
-        list.data.setSort(.recentlyUpdated)
+        list.data.setSort(.recentActivity)
         XCTAssertEqual(list.shownCards, ["B", "C", "A"])
     }
 

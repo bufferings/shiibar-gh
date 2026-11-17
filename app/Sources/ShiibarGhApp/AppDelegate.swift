@@ -200,19 +200,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.setActivationPolicy(.accessory)
     }
 
-    /// The Dock icon: bring the open windows forward.
+    /// The Dock icon: bring the open windows forward, minimized ones too.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        bringWindowsToFront()
+        bringWindowsToFront(restoringMinimized: true)
         return true
     }
 
-    /// ⌘Tab and other activations while regular.
+    /// ⌘Tab and other activations while regular: the windows on screen come
+    /// forward; minimized ones stay in the Dock, as macOS does with ⌘Tab.
     func applicationDidBecomeActive(_ notification: Notification) {
-        if regularWindows.isRegular { bringWindowsToFront() }
+        if regularWindows.isRegular { bringWindowsToFront(restoringMinimized: false) }
     }
 
-    private func bringWindowsToFront() {
-        surfaces?.bringWindowsToFront()
+    private func bringWindowsToFront(restoringMinimized: Bool) {
+        surfaces?.bringWindowsToFront(restoringMinimized: restoringMinimized)
         if let window = settingsWindow, window.isVisible { window.orderFront(nil) }
     }
 

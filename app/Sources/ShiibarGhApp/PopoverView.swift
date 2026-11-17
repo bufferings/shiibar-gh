@@ -38,11 +38,12 @@ struct SurfaceActions {
     var menuHasSettings = false
 
     /// The ⌄ menu (DESIGN.md, "Screens"); nil is a separator. In an
-    /// account's header: About shiibar-gh, a separator, Quit shiibar-gh.
+    /// account's header: About Shiibar GH, a separator, Quit. Without an
+    /// account: About Shiibar GH, Settings…, a separator, Quit.
     var menuItems: [IconMenuItem?] {
-        var items: [IconMenuItem?] = [IconMenuItem("About shiibar-gh", action: about)]
+        var items: [IconMenuItem?] = [IconMenuItem(MainMenu.aboutTitle, action: about)]
         if menuHasSettings { items.append(IconMenuItem("Settings…") { openSettings(.general) }) }
-        return items + [nil, IconMenuItem("Quit shiibar-gh", action: quit)]
+        return items + [nil, IconMenuItem("Quit", action: quit)]
     }
 }
 
@@ -397,17 +398,66 @@ struct WindowDragArea: NSViewRepresentable {
     func updateNSView(_ view: WindowDragView, context: Context) {}
 }
 
-/// The account color's dot (Main.html `.adot`).
-struct AccountDot: View {
+/// The account color's mark (DESIGN.md, "Account color"; Main.html
+/// `.adot`): a rounded square, 10 points with a 2.5-point radius at text
+/// size 12. A square, because circles mark unread rows, avatars and the
+/// window's buttons.
+struct AccountMark: View {
     var color: AccountColor
-    var size: CGFloat = 10
+    var size: CGFloat = AccountMark.size
+
+    static let size: CGFloat = 10
+    static let radius: CGFloat = 2.5
 
     var body: some View {
-        Circle().fill(color.dotColor).frame(width: size, height: size)
+        RoundedRectangle(cornerRadius: Self.radius * size / Self.size, style: .continuous)
+            .fill(color.dotColor)
+            .frame(width: size, height: size)
+    }
+}
+
+/// Part 1 of the popover's header (DESIGN.md, "Screens"; Main.html
+/// `.pbar`): the account's mark and name, centered, alone in a band of the
+/// section bands' color with a separator under it, looking like the
+/// window's title bar, which is this band in the window. A name too long is
+/// cut with `…`; without a color the name alone is centered.
+struct AccountBand: View {
+    var login: String
+    var color: AccountColor
+
+    /// The window's title bar: its height, its title font and the mark and
+    /// spacing of its title (`WindowTitle`). None of them follows the text
+    /// size, as the window's title bar does not (DESIGN.md, "Constants").
+    static var height: CGFloat { WindowTitle.barHeight }
+    static var font: NSFont { WindowTitle.font }
+    static let gap: CGFloat = WindowTitle.gap
+    static let side: CGFloat = 16
+
+    var body: some View {
+        HStack(spacing: Self.gap) {
+            if color.showsDot { AccountMark(color: color, size: AccountMark.size) }
+            Text(login)
+                .font(Font(Self.font))
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .padding(.horizontal, Self.side)
+        .frame(maxWidth: .infinity)
+        .frame(height: Self.height)
+        .background(Palette.band.color)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Palette.border.color).frame(height: 1)
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 
 struct Header: View {
+    /// The Refresh button's tooltip: it names ⌘R (DESIGN.md, "Keyboard").
+    static let refreshHelp = "Refresh (\u{2318}R)"
+    /// Around part 2, the row (Main.html `.phead`).
+    static let rowInsets = EdgeInsets(top: 8, leading: 16, bottom: 0, trailing: 10)
+
     var login: String
     var color: AccountColor
     var updated: String?
@@ -420,13 +470,21 @@ struct Header: View {
     var refresh: () -> Void
     @Environment(\.textScale) var k
 
+    /// DESIGN.md, "Screens": two parts, the band with the account's name
+    /// and the row below it. The window's title bar is its band, so the
+    /// window shows the row only.
     var body: some View {
+        VStack(spacing: 0) {
+            if surface == .popover { AccountBand(login: login, color: color) }
+            row.padding(Self.rowInsets)
+        }
+    }
+
+    /// Part 2: `Updated …` and the API usage at the left, the buttons at
+    /// the right.
+    private var row: some View {
         HStack(spacing: 6) {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 8) {
-                    if color.showsDot { AccountDot(color: color, size: 10 * k) }
-                    Text(login).font(.system(size: 14 * k, weight: .semibold)).lineLimit(1)
-                }
+            Group {
                 if let updated {
                     // "Updated 1 min ago · API [25%]" (DESIGN.md, "Rate
                     // limits").
@@ -442,21 +500,36 @@ struct Header: View {
             // window, the drag area that moves it.
             .allowsHitTesting(false)
             Spacer(minLength: 0)
-            if surface == .window {
-                PinButton(on: keepOnTop, toggle: toggleKeepOnTop)
+            ForEach(Self.buttons(surface: surface, canOpenWindow: actions.openWindow != nil), id: \.self) { button in
+                switch button {
+                case .refresh:
+                    if refreshing {
+                        RefreshProgress()
+                    } else {
+                        HeaderButton(icon: BoardIcons.refresh, size: 16, label: "Refresh", help: Header.refreshHelp, action: refresh)
+                    }
+                case .pin:
+                    PinButton(on: keepOnTop, toggle: toggleKeepOnTop)
+                case .openWindow:
+                    HeaderButton(icon: BoardIcons.window, size: 15, label: "Open in window") { actions.openWindow?() }
+                case .settings:
+                    HeaderButton(icon: BoardIcons.settings, size: 16, label: "Settings") { actions.openSettings(.general) }
+                case .more:
+                    MenuIconButton(icon: BoardIcons.chevron, label: "More", items: actions.menuItems)
+                }
             }
-            if let openWindow = actions.openWindow {
-                HeaderButton(icon: BoardIcons.window, size: 15, label: "Open in window", action: openWindow)
-            }
-            if refreshing {
-                RefreshProgress()
-            } else {
-                HeaderButton(icon: BoardIcons.refresh, size: 16, label: "Refresh", action: refresh)
-            }
-            HeaderButton(icon: BoardIcons.settings, size: 16, label: "Settings") { actions.openSettings(.general) }
-            MenuIconButton(icon: BoardIcons.chevron, label: "More", items: actions.menuItems)
         }
-        .padding(EdgeInsets(top: 12, leading: 16, bottom: 0, trailing: 10))
+    }
+
+    enum Slot: Hashable { case refresh, openWindow, pin, settings, more }
+
+    /// DESIGN.md, "Screens": Refresh, Open in window (the pin in its place
+    /// in the window), Settings, ⌄, as shiibar-cc's header.
+    static func buttons(surface: Surface, canOpenWindow: Bool) -> [Slot] {
+        var out: [Slot] = [.refresh]
+        if surface == .window { out.append(.pin) }
+        if canOpenWindow { out.append(.openWindow) }
+        return out + [.settings, .more]
     }
 }
 
@@ -531,10 +604,10 @@ struct PinButton: View {
             }
             .frame(width: 14, height: 14)
             .frame(width: 24, height: 24)
-            .background(RoundedRectangle(cornerRadius: 6).fill(on ? Palette.selection.color : .clear))
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        // The hover fill of the other header buttons (Main.html `.pin.hov`).
+        .buttonStyle(HoverButtonStyle(idle: on ? Palette.selection.color : .clear))
         .quickHelp("Keep on top")
         .accessibilityLabel("Keep on top")
         .accessibilityValue(on ? "On" : "Off")
@@ -1121,7 +1194,7 @@ struct GroupOrderList: View {
 
 // MARK: - No accounts
 
-/// The popover of the shiibar-gh icon while there is no account
+/// The popover of the app's icon while there is no account
 /// (MenuBarIcon.html), or the unreadable state.
 struct NoAccountsView: View {
     static let height: CGFloat = 200

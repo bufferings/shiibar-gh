@@ -855,7 +855,7 @@ fn merged_and_closed_carry_who_and_no_text() {
 #[test]
 fn the_closed_event_paired_with_a_merge_makes_no_row() {
     // DESIGN.md, "Merged, Closed and Reopened rows": GitHub makes both at
-    // the same time for a merge (0.3.0, bufferings/shiibar-gh #10).
+    // the same time for a merge.
     let mut pr = Pr::others();
     pr.timeline = vec![
         json!({"__typename":"ClosedEvent","id":"CE_0","createdAt":iso(T0 + 1),"url":"https://c0","actor":{"login":"bob"}}),
@@ -1259,8 +1259,7 @@ fn search_hits_carry_updated_at_and_state_and_public_leaves_out_registered_owner
 
 // ------------------------------------------- mentions from bodyHTML links
 
-/// The quote of a mention, as GitHub rendered it in a Quote reply on
-/// bufferings-hello/hello-merge-queue#10 (2026-11-05): no class.
+/// The quote of a mention, as GitHub renders it in a Quote reply: no class.
 fn quoted_link(login: &str) -> String {
     format!(
         "<blockquote><p><a href=\"https://github.com/{login}\">@{login}</a> test</p></blockquote>"
@@ -1457,4 +1456,121 @@ fn an_addition_to_the_merge_queue_by_the_account_is_an_event_inside_the_window()
         .map(|e| (e.id.as_str(), e.kind, e.actor.as_deref()))
         .collect();
     assert_eq!(got, [("A_1", EventKind::MergeQueueAdded, Some(ME))]);
+}
+
+#[test]
+fn the_timeline_time_comes_from_timeline_items() {
+    // DESIGN.md, "API usage": `timelineItems { updatedAt }` the Timeline
+    // request put into the status node; none when it did not answer.
+    let t = teams();
+    let pr = convert::pr_values(
+        &status_node(json!({"timelineItems":{"updatedAt":iso(T0 + 30)}})),
+        &StatusExtra::default(),
+        ctx(&t),
+    )
+    .unwrap();
+    assert_eq!(pr.timeline_updated_at, Some(T0 + 30));
+    assert_eq!(pr.updated_at, T0, "`updatedAt` stays its own value");
+    let pr = convert::pr_values(&status_node(json!({})), &StatusExtra::default(), ctx(&t)).unwrap();
+    assert_eq!(pr.timeline_updated_at, None);
+}
+
+fn with_avatar(login: &str) -> Value {
+    json!({"__typename":"User","login":login,
+           "avatarUrl":format!("https://avatars.example/{login}")})
+}
+
+#[test]
+fn every_row_takes_its_actors_avatar() {
+    // DESIGN.md, "API usage": the row's actor (an event's `actor`, a
+    // comment's or review's `author`) with `avatarUrl(size: 32)`; the
+    // mention in the PR body uses the PR author's.
+    let mut pr = Pr::new(with_avatar("alice"));
+    pr.node["createdAt"] = json!(iso(T0 + 1));
+    pr.node["bodyHTML"] = json!(mention_link(ME));
+    pr.timeline = vec![
+        comment("C_1", with_avatar("bob"), T0 + 10, &mention_link(ME)),
+        comment("C_2", user("carol"), T0 + 11, &mention_link(ME)),
+        json!({"__typename":"MergedEvent","id":"M_1","createdAt":iso(T0 + 20),
+               "url":"https://m/M_1","actor":with_avatar("dave")}),
+        json!({"__typename":"ReopenedEvent","id":"RO_1","createdAt":iso(T0 + 15),
+               "actor":with_avatar("erin")}),
+        json!({"__typename":"AddedToMergeQueueEvent","id":"MQ_1","createdAt":iso(T0 + 16),
+               "actor":with_avatar("frank")}),
+        json!({"__typename":"ReviewRequestedEvent","id":"RR_1","createdAt":iso(T0 + 17),
+               "actor":with_avatar("grace"),
+               "requestedReviewer":{"__typename":"User","login":ME}}),
+    ];
+    pr.threads = vec![thread(
+        "T_1",
+        vec![inline(
+            "I_1",
+            with_avatar("heidi"),
+            T0 + 12,
+            &mention_link(ME),
+        )],
+    )];
+    let avatars: BTreeMap<String, Option<String>> = pr
+        .run()
+        .events
+        .into_iter()
+        .map(|e| (e.id, e.actor_avatar_url))
+        .collect();
+    let url = |login: &str| Some(format!("https://avatars.example/{login}"));
+    assert_eq!(avatars["PR_1:mention"], url("alice"));
+    assert_eq!(avatars["C_1"], url("bob"));
+    assert_eq!(avatars["C_2"], None, "no avatarUrl in the answer");
+    assert_eq!(avatars["M_1"], url("dave"));
+    assert_eq!(avatars["RO_1"], url("erin"));
+    assert_eq!(avatars["MQ_1"], url("frank"));
+    assert_eq!(avatars["RR_1"], url("grace"));
+    assert_eq!(avatars["I_1"], url("heidi"));
+
+    // An approval on the account's PR.
+    let mut mine = Pr::mine();
+    mine.timeline = vec![review("R_1", with_avatar("ivan"), T0 + 10, "APPROVED", "")];
+    let approved = mine.run().events.remove(0);
+    assert_eq!(approved.kind, EventKind::Approved);
+    assert_eq!(approved.actor_avatar_url, url("ivan"));
+}
+
+#[test]
+fn the_rows_that_show_their_actor_on_line_1_have_no_text() {
+    // DESIGN.md, "Row text and targets" and "Wire format": Merged, Closed,
+    // Reopened, Approved and Added to merge queue have no body; who caused
+    // them is the actor.
+    let mut pr = Pr::others();
+    pr.timeline = vec![
+        json!({"__typename":"ClosedEvent","id":"CL_1","createdAt":iso(T0 + 10),
+               "url":"https://c/CL_1","actor":user("example-user")}),
+        json!({"__typename":"ReopenedEvent","id":"RO_1","createdAt":iso(T0 + 20),
+               "actor":user("example-user")}),
+        json!({"__typename":"AddedToMergeQueueEvent","id":"MQ_1","createdAt":iso(T0 + 30),
+               "actor":user("example-user")}),
+        json!({"__typename":"MergedEvent","id":"M_1","createdAt":iso(T0 + 40),
+               "url":"https://m/M_1","actor":user("example-user")}),
+    ];
+    let mut mine = Pr::mine();
+    mine.timeline = vec![review("R_1", user("example-user"), T0 + 10, "APPROVED", "")];
+    let events: Vec<_> = pr
+        .run()
+        .events
+        .into_iter()
+        .chain(mine.run().events)
+        .collect();
+    let kinds: Vec<(String, EventKind)> = events.iter().map(|e| (e.id.clone(), e.kind)).collect();
+    assert_eq!(
+        kinds,
+        [
+            ("CL_1".to_string(), EventKind::Closed),
+            ("RO_1".to_string(), EventKind::Reopened),
+            ("MQ_1".to_string(), EventKind::MergeQueueAdded),
+            ("M_1".to_string(), EventKind::Merged),
+            ("R_1".to_string(), EventKind::Approved),
+        ]
+    );
+    for e in &events {
+        assert_eq!(e.text, None, "{}", e.id);
+        assert_eq!(e.actor.as_deref(), Some("example-user"), "{}", e.id);
+    }
 }

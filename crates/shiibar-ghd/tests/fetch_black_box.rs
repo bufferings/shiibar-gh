@@ -2940,6 +2940,9 @@ fn id_requests_carry_fifty_ids_and_events_five() {
     daemon.clock(T0 + 100);
     assert_eq!(daemon.cards().len(), 60);
     assert_eq!(id_counts(&github, "Status"), [50, 10]);
+    // DESIGN.md, "API usage": the timeline time of the same PRs in its own
+    // request, 50 ids at a time.
+    assert_eq!(id_counts(&github, "Timeline"), [50, 10]);
     let compare: Vec<usize> = ops(&github, "Compare")
         .iter()
         .map(|r| r.vars().as_object().unwrap().len() / 2)
@@ -3376,11 +3379,9 @@ fn reopened_and_merged_events_make_rows_without_the_paired_closed() {
     assert_eq!(daemon.row("CL_1").unwrap()["kind"], "closed");
     let events = ops(&github, "Events").pop().unwrap();
     assert!(events.query().contains("REOPENED_EVENT"));
-    assert!(
-        events
-            .query()
-            .contains("... on ReopenedEvent { id createdAt actor { login } }")
-    );
+    assert!(events.query().contains(
+        "... on ReopenedEvent { id createdAt actor { __typename login avatarUrl(size: 32) } }"
+    ));
 
     github.with(|w| {
         w.prs[0]["state"] = json!("MERGED");
@@ -4104,5 +4105,292 @@ fn a_team_search_that_keeps_failing_is_no_failure_and_starts_no_fast_retries() {
         last - (T0 + 100) > 300,
         "past the five minutes of fetch_failed"
     );
+    daemon.stop();
+}
+
+/// DESIGN.md, "API usage", "Timeline time": an addition to the merge queue
+/// moves only the timeline time, not `updatedAt`. A PR without a saved
+/// timeline time only has it saved; one whose timeline time moved past the
+/// saved value has its events fetched; one where neither moved has none.
+#[test]
+fn the_timeline_time_fetches_the_events_of_an_addition_to_the_merge_queue() {
+    let github = world();
+    github.with(|w| w.prs.push(pr_node("PR_1", "org", 1, "alice", json!({}))));
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    let status = ops(&github, "Status").pop().unwrap();
+    assert!(!status.query().contains("timelineItems"), "not in Status");
+    let timeline = ops(&github, "Timeline").pop().unwrap();
+    assert!(timeline.query().starts_with("query Timeline($ids: [ID!]!)"));
+    assert!(
+        timeline.query().ends_with(
+            "nodes(ids: $ids) { ... on PullRequest { id timelineItems { updatedAt } } } }"
+        ),
+        "only the id and the timeline time"
+    );
+    assert!(carries(&timeline, "PR_1"));
+    assert!(daemon.card("PR_1").is_some());
+
+    // No saved value (as right after the update from 0.6): saved only.
+    github.with(|w| w.prs[0]["timelineItems"] = json!({"updatedAt": iso(T0 + 150)}));
+    github.clear_requests();
+    daemon.clock(T0 + 200);
+    assert!(ops(&github, "Status").iter().any(|r| carries(r, "PR_1")));
+    assert!(
+        !ops(&github, "Events").iter().any(|r| carries(r, "PR_1")),
+        "nothing fetched again for a PR without a saved timeline time"
+    );
+
+    // Only the timeline time moves: the events are fetched.
+    github.with(|w| {
+        w.prs[0]["timelineItems"] = json!({"updatedAt": iso(T0 + 250)});
+        w.timeline.insert(
+            "PR_1".into(),
+            vec![json!({"__typename":"AddedToMergeQueueEvent","id":"MQ_1",
+                        "createdAt":iso(T0 + 250),
+                        "actor":{"__typename":"User","login":"bob",
+                                 "avatarUrl":"https://avatars.example/bob"}})],
+        );
+    });
+    github.clear_requests();
+    daemon.clock(T0 + 300);
+    assert!(ops(&github, "Events").iter().any(|r| carries(r, "PR_1")));
+    let row = daemon.row("MQ_1").expect("the addition makes a row");
+    assert_eq!(row["kind"], "merge_queue_added");
+    assert_eq!(row["actor"], "bob");
+    assert_eq!(row["actor_avatar_url"], "https://avatars.example/bob");
+    assert_eq!(row["text"], Value::Null);
+    assert_eq!(row["unread"], true);
+
+    // Neither moved: no events.
+    github.clear_requests();
+    daemon.clock(T0 + 400);
+    assert!(ops(&github, "Status").iter().any(|r| carries(r, "PR_1")));
+    assert!(!ops(&github, "Events").iter().any(|r| carries(r, "PR_1")));
+    daemon.stop();
+}
+
+/// DESIGN.md, "Rows of the account's own events": the account's own merge
+/// is made read; the queue's removal after the account's addition is not.
+#[test]
+fn rows_of_the_accounts_own_merge_queue_events_are_read() {
+    let github = world();
+    github.with(|w| w.prs.push(pr_node("PR_1", "org", 1, "me", json!({}))));
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    github.with(|w| {
+        w.prs[0]["updatedAt"] = json!(iso(T0 + 160));
+        let me = json!({"__typename":"User","login":"me","avatarUrl":"https://avatars.example/me"});
+        w.timeline.insert(
+            "PR_1".into(),
+            vec![
+                json!({"__typename":"AddedToMergeQueueEvent","id":"MQ_1",
+                       "createdAt":iso(T0 + 110),"actor":me}),
+                json!({"__typename":"RemovedFromMergeQueueEvent","id":"MQ_2",
+                       "createdAt":iso(T0 + 120),"reason":"manual",
+                       "actor":{"__typename":"Bot","login":"github-merge-queue"},
+                       "enqueuer":{"login":"me"}}),
+                json!({"__typename":"AddedToMergeQueueEvent","id":"MQ_3",
+                       "createdAt":iso(T0 + 130),"actor":me}),
+            ],
+        );
+    });
+    daemon.clock(T0 + 200);
+    assert_eq!(daemon.row("MQ_1").unwrap()["unread"], false);
+    assert_eq!(daemon.row("MQ_3").unwrap()["unread"], false);
+    let removed = daemon.row("MQ_2").expect("the removal makes a row");
+    assert_eq!(removed["unread"], true);
+    assert_eq!(removed["actor"], "github-merge-queue");
+    daemon.stop();
+}
+
+/// DESIGN.md, "API usage", "Timeline time": a dismissed card has no status
+/// fetch, so its timeline time moving alone fetches no events.
+#[test]
+fn a_dismissed_card_whose_timeline_time_alone_moves_fetches_no_events() {
+    let github = world();
+    github.with(|w| {
+        w.prs.push(pr_node(
+            "PR_1",
+            "org",
+            1,
+            "alice",
+            json!({"timelineItems": {"updatedAt": iso(T0)}}),
+        ))
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    daemon.ok(json!({"cmd":"dismiss","account":ME,"pr":"org/app#1"}));
+    github.with(|w| w.prs[0]["timelineItems"] = json!({"updatedAt": iso(T0 + 150)}));
+    github.clear_requests();
+    daemon.clock(T0 + 200);
+    assert!(!ops(&github, "Status").iter().any(|r| carries(r, "PR_1")));
+    assert!(!ops(&github, "Events").iter().any(|r| carries(r, "PR_1")));
+    daemon.stop();
+}
+
+/// DESIGN.md, "Fetch success and failure": the events of a PR fetched
+/// because its timeline time moved are fetched again from their window
+/// when that fetch fails, so the addition to the merge queue is not lost.
+#[test]
+fn a_failed_events_fetch_after_a_timeline_move_is_retried() {
+    let github = world();
+    github.with(|w| {
+        w.prs.push(pr_node(
+            "PR_1",
+            "org",
+            1,
+            "alice",
+            json!({"timelineItems": {"updatedAt": iso(T0)}}),
+        ))
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    github.with(|w| {
+        w.prs[0]["timelineItems"] = json!({"updatedAt": iso(T0 + 150)});
+        w.timeline.insert(
+            "PR_1".into(),
+            vec![json!({"__typename":"AddedToMergeQueueEvent","id":"MQ_1",
+                        "createdAt":iso(T0 + 150),"actor":{"__typename":"User","login":"bob"}})],
+        );
+    });
+    github
+        .intercept(|req| (req.op.as_deref() == Some("Events")).then(|| Resp::json(500, json!({}))));
+    daemon.clock(T0 + 200);
+    assert!(daemon.row("MQ_1").is_none(), "the fetch failed");
+    github.clear_overrides();
+    github.clear_requests();
+    // The timeline time does not move again: only the retry fetches it.
+    daemon.clock(T0 + 2000);
+    assert!(ops(&github, "Events").iter().any(|r| carries(r, "PR_1")));
+    assert_eq!(daemon.row("MQ_1").unwrap()["kind"], "merge_queue_added");
+    daemon.stop();
+}
+
+/// DESIGN.md, "Fetch success and failure": a run stopped by the rate limit
+/// during the events fetch saves the PRs' new `updatedAt`; the PRs it did
+/// not reach are fetched again by the next run, so their events are not
+/// lost.
+#[test]
+fn a_run_stopped_during_the_events_fetch_fetches_them_again() {
+    let github = world();
+    github.with(|w| w.prs.push(pr_node("PR_1", "org", 1, "alice", json!({}))));
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    github.with(|w| {
+        w.prs[0]["updatedAt"] = json!(iso(T0 + 150));
+        w.timeline.insert(
+            "PR_1".into(),
+            vec![issue_comment("C_1", "bob", T0 + 150, &mention_link("me"))],
+        );
+    });
+    github.intercept(|req| {
+        (req.op.as_deref() == Some("Events")).then(|| {
+            Resp::json(403, json!({"message":"API rate limit exceeded"}))
+                .header("x-ratelimit-remaining", "0")
+                .header("x-ratelimit-reset", (T0 + 900).to_string())
+        })
+    });
+    daemon.clock(T0 + 200);
+    assert!(daemon.row("C_1").is_none(), "stopped before the events");
+    github.clear_overrides();
+    github.clear_requests();
+    // `updatedAt` does not move again.
+    daemon.clock(T0 + 3000);
+    assert!(ops(&github, "Events").iter().any(|r| carries(r, "PR_1")));
+    assert_eq!(daemon.row("C_1").unwrap()["kind"], "mentioned");
+    daemon.stop();
+}
+
+/// DESIGN.md, "API usage" and "Fetch success and failure": a failed
+/// Timeline request leaves the saved timeline time as it was and fetches no
+/// events by the timeline rule, and the status of the same run is still
+/// taken; the next run asks again.
+#[test]
+fn a_failed_timeline_request_keeps_the_saved_value_and_the_status() {
+    let github = world();
+    github.with(|w| {
+        w.prs.push(pr_node(
+            "PR_1",
+            "org",
+            1,
+            "alice",
+            json!({"timelineItems": {"updatedAt": iso(T0)}}),
+        ))
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    github.with(|w| {
+        w.prs[0]["timelineItems"] = json!({"updatedAt": iso(T0 + 150)});
+        w.prs[0]["title"] = json!("Renamed");
+        w.timeline.insert(
+            "PR_1".into(),
+            vec![json!({"__typename":"AddedToMergeQueueEvent","id":"MQ_1",
+                        "createdAt":iso(T0 + 150),"actor":{"__typename":"User","login":"bob"}})],
+        );
+    });
+    github.intercept(|req| {
+        (req.op.as_deref() == Some("Timeline")).then(|| Resp::json(500, json!({})))
+    });
+    github.clear_requests();
+    daemon.clock(T0 + 200);
+    assert!(!ops(&github, "Timeline").is_empty());
+    assert!(!ops(&github, "Events").iter().any(|r| carries(r, "PR_1")));
+    assert_eq!(
+        daemon.card("PR_1").unwrap()["title"],
+        "Renamed",
+        "the status is taken"
+    );
+    assert!(daemon.row("MQ_1").is_none());
+    // The saved value stayed: once Timeline answers, the move is seen.
+    github.clear_overrides();
+    github.clear_requests();
+    daemon.clock(T0 + 300);
+    assert!(ops(&github, "Events").iter().any(|r| carries(r, "PR_1")));
+    assert_eq!(daemon.row("MQ_1").unwrap()["kind"], "merge_queue_added");
+    daemon.stop();
+}
+
+/// DESIGN.md, "Fetch success and failure": a Timeline request GitHub
+/// answers with 502 is split in halves.
+#[test]
+fn a_timeline_request_answered_with_502_is_split() {
+    let github = world();
+    github.with(|w| {
+        for n in 1..=4 {
+            w.prs
+                .push(pr_node(&format!("PR_{n}"), "org", n, "alice", json!({})));
+        }
+    });
+    github.intercept(|req| {
+        (req.op.as_deref() == Some("Timeline")
+            && req.vars()["ids"]
+                .as_array()
+                .is_some_and(|ids| ids.len() > 1))
+        .then(|| Resp::json(502, json!({})))
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    assert_eq!(id_counts(&github, "Timeline"), [4, 2, 1, 1, 2, 1, 1]);
+    assert_eq!(
+        id_counts(&github, "Status"),
+        [4],
+        "the status is not asked again"
+    );
+    assert_eq!(daemon.cards().len(), 4);
     daemon.stop();
 }

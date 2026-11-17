@@ -490,6 +490,11 @@ pub struct IngestPr {
     pub failed_check: Option<String>,
     pub changes_requested_by: Option<String>,
     pub updated_at: i64,
+    /// GraphQL `timelineItems { updatedAt }`: moves when an event joins the
+    /// timeline, also when `updatedAt` does not (an addition to the merge
+    /// queue). DESIGN.md, "API usage", "Timeline time".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline_updated_at: Option<i64>,
     /// GraphQL `createdAt`.
     pub created_at: i64,
     /// The newest review the account submitted, if any (`reviews` of the
@@ -517,6 +522,9 @@ pub struct IngestEvent {
     pub url: String,
     /// Who caused the event; a muted user is compared with it.
     pub actor: Option<String>,
+    /// The actor's `avatarUrl(size: 32)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor_avatar_url: Option<String>,
     pub text: Option<String>,
     pub comment_id: Option<String>,
 }
@@ -908,6 +916,10 @@ pub struct Row {
     pub text: Option<String>,
     pub counts: Option<BTreeMap<String, u32>>,
     pub actor: Option<String>,
+    /// The actor's `avatarUrl(size: 32)`; `null` for a row without an actor
+    /// and for a row saved without it (DESIGN.md, "Wire format").
+    #[serde(default)]
+    pub actor_avatar_url: Option<String>,
     pub url: String,
     pub occurred_at: i64,
     pub unread: bool,

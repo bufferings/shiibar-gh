@@ -207,26 +207,85 @@ fn state_label_table() {
 }
 
 #[test]
-fn list_puts_open_prs_first_then_the_newest_update_with_ties_by_id() {
-    // DESIGN.md, "CLI": `Recently updated` within an owner, open PRs first.
+fn list_all_is_in_recent_activity_order_with_ties_by_id() {
+    // DESIGN.md, "All", "Order" and "CLI": `Recent activity` within an
+    // owner. The newest row of a kind whose List is on and that is not
+    // muted, read or not; else the time the card was added. `updatedAt`
+    // does not count, and a merged or closed card does not go last.
     let mut h = H::new();
-    let at = |id: &str, updated_at| IngestPr {
-        updated_at,
-        ..pr(id)
+    let added = h.at();
+    h.prs(vec![
+        IngestPr {
+            updated_at: T0 + 999,
+            ..other("PR_1")
+        },
+        other("PR_2"),
+        other("PR_3"),
+        IngestPr {
+            author: "dave".into(),
+            ..pr("PR_4")
+        },
+        IngestPr {
+            author: "mallory".into(),
+            ..pr("PR_5")
+        },
+        other("PR_6"),
+    ]);
+    h.table(EventKind::Reply, EventColumn::List, false);
+    h.mute(MuteKind::User, "eve");
+    h.mute(MuteKind::User, "mallory");
+    h.set_time(T0 + 100);
+    let by = |e: IngestEvent, actor: &str| IngestEvent {
+        actor: Some(actor.into()),
+        ..e
     };
-    h.prs(vec![at("PR_2", T0 + 5), at("PR_1", T0 + 5)]);
-    h.prs(vec![at("PR_3", T0 + 1), at("PR_4", T0 + 9)]);
-    h.prs(vec![at("PR_5", T0)]);
-    let merged = IngestPr {
-        state: PrState::Merged,
-        updated_at: T0 + 20,
-        ..pr("PR_5")
-    };
-    let e = h.ev("E_5", "PR_5", IngestKind::Merged);
-    h.push(vec![merged], vec![e], vec![]);
+    let events = vec![
+        h.ev_at("E_2", "PR_2", IngestKind::CommentOther, T0 + 50),
+        h.ev_at("M_2", "PR_2", IngestKind::Merged, T0 + 60),
+        // List off: not counted.
+        h.ev_at("E_3", "PR_3", IngestKind::Reply, T0 + 70),
+        // A muted actor: not counted.
+        by(
+            h.ev_at("E_4", "PR_4", IngestKind::CommentOther, T0 + 80),
+            "eve",
+        ),
+        // A muted card: only its mention counts.
+        h.ev_at("E_5", "PR_5", IngestKind::CommentOther, T0 + 90),
+        h.ev_at("N_5", "PR_5", IngestKind::Mentioned, T0 + 40),
+        // The account's own close: a read row, counted.
+        by(h.ev_at("C_6", "PR_6", IngestKind::Closed, T0 + 55), ME),
+    ];
+    h.push(
+        vec![
+            IngestPr {
+                state: PrState::Merged,
+                ..other("PR_2")
+            },
+            IngestPr {
+                state: PrState::Closed,
+                ..other("PR_6")
+            },
+        ],
+        events,
+        vec![],
+    );
+    assert!(!h.row("C_6").unread);
+    assert!(added < T0 + 40);
     assert_eq!(
         h.card_ids(ListArgs::default()),
-        ["PR_4", "PR_1", "PR_2", "PR_3", "PR_5"]
+        ["PR_2", "PR_6", "PR_5", "PR_1", "PR_3", "PR_4"]
+    );
+    // Reading rows does not move a card.
+    h.read_all();
+    assert_eq!(
+        h.card_ids(ListArgs::default()),
+        ["PR_2", "PR_6", "PR_5", "PR_1", "PR_3", "PR_4"]
+    );
+    // Turning List back on counts the row again.
+    h.table(EventKind::Reply, EventColumn::List, true);
+    assert_eq!(
+        h.card_ids(ListArgs::default()),
+        ["PR_3", "PR_2", "PR_6", "PR_5", "PR_1", "PR_4"]
     );
 }
 
@@ -410,4 +469,14 @@ fn search_follows_the_examples_of_the_design() {
     assert_eq!(rows("api #407"), ["E_1"]);
     assert_eq!(rows("bob"), ["E_1"]);
     assert!(rows("bob PR_2").is_empty());
+}
+
+#[test]
+fn ties_go_by_the_key_as_a_string() {
+    // DESIGN.md, "All", "Order": cards added at once without rows go by
+    // their PR key as a string (`PR_10` before `PR_9`), as the app sorts
+    // them (ShiibarGhCoreTests, RecentActivityTests, the same values).
+    let mut h = H::new();
+    h.prs(vec![other("PR_9"), other("PR_10"), other("PR_2")]);
+    assert_eq!(h.card_ids(ListArgs::default()), ["PR_10", "PR_2", "PR_9"]);
 }

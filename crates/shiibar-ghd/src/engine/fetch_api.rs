@@ -212,6 +212,7 @@ impl Engine {
                         number: pr.number,
                         owner_id: self.enabled_owner_of(pr).map(|o| o.id.clone()),
                         updated_at: pr.updated_at,
+                        timeline_updated_at: pr.timeline_updated_at,
                         state: pr.state,
                         mine: self.authored_by_me(pr),
                         checks: pr.checks,

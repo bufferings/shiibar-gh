@@ -377,6 +377,9 @@ public struct Row: Equatable, Decodable, Identifiable {
     public var text: String?
     public var counts: [String: Int]?
     public var actor: String?
+    /// The actor's avatar (`avatarUrl(size: 32)`); nil for a row without an actor
+    /// and for a row saved before 0.7 (DESIGN.md, "Wire format").
+    public var actorAvatarUrl: String?
     public var url: String
     public var occurredAt: Int64
     public var unread: Bool
@@ -388,12 +391,14 @@ public struct Row: Equatable, Decodable, Identifiable {
         case id, pr, account, owner, kind, text, counts, actor, url, unread, muted
         case prTitle = "pr_title"
         case occurredAt = "occurred_at"
+        case actorAvatarUrl = "actor_avatar_url"
     }
 
     public init(
         id: String, pr: String = "o/r#1", prTitle: String = "Title", account: String = "3407303",
         owner: String = "o1", kind: RowKind,
         text: String? = nil, counts: [String: Int]? = nil, actor: String? = nil,
+        actorAvatarUrl: String? = nil,
         url: String = "https://github.com/o/r/pull/1", occurredAt: Int64 = 0, unread: Bool = true, muted: Bool = false
     ) {
         self.id = id
@@ -405,6 +410,7 @@ public struct Row: Equatable, Decodable, Identifiable {
         self.text = text
         self.counts = counts
         self.actor = actor
+        self.actorAvatarUrl = actorAvatarUrl
         self.url = url
         self.occurredAt = occurredAt
         self.unread = unread
@@ -422,6 +428,7 @@ public struct Row: Equatable, Decodable, Identifiable {
         text = try c.decodeIfPresent(String.self, forKey: .text)
         counts = try c.decodeIfPresent([String: Int].self, forKey: .counts)
         actor = try c.decodeIfPresent(String.self, forKey: .actor)
+        actorAvatarUrl = try c.decodeIfPresent(String.self, forKey: .actorAvatarUrl)
         url = try c.decode(String.self, forKey: .url)
         occurredAt = try c.decode(Int64.self, forKey: .occurredAt)
         unread = try c.decode(Bool.self, forKey: .unread)

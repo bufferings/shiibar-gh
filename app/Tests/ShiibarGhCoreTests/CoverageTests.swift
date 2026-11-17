@@ -58,7 +58,7 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(store.expanded(account: "583231"), ["mine|done"])
         // Mine's new sections start from the defaults.
         let sections = layout(.mine, collapsed: store.collapsed(account: "1001"), expanded: store.expanded(account: "1001"))
-        XCTAssertEqual(sections.map(\.collapsed), [false, false, false, true])
+        XCTAssertEqual(sections.map(\.collapsed), [true, false, false, false], "Done, at the top, stays collapsed")
     }
 
     /// DESIGN.md, "Account color": no dot (nor its room) for None.
@@ -659,7 +659,7 @@ final class MainMenuTests: XCTestCase {
         let menu = MainMenu.make(MainMenu.Actions(about: { ran.append("about") }, settings: { ran.append("settings") }))
         let app = try XCTUnwrap(menu.items.first?.submenu)
         let items = app.items.filter { !$0.isSeparatorItem }
-        XCTAssertEqual(items.map(\.title), ["About shiibar-gh", "Settings…", "Close Window", "Quit shiibar-gh"])
+        XCTAssertEqual(items.map(\.title), ["About Shiibar GH", "Settings…", "Close Window", "Quit Shiibar GH"])
         XCTAssertEqual(items.map(\.keyEquivalent), ["", ",", "w", "q"])
         XCTAssertEqual(items[2].action, #selector(NSWindow.performClose(_:)))
         XCTAssertNil(items[2].target, "the key window closes; none, and it is disabled")

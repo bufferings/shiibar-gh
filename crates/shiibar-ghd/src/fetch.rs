@@ -37,20 +37,25 @@ const EVENT_BATCH: usize = 5;
 /// their query name, REST ones by `GET <path>` (DESIGN.md, "Logs").
 const SEARCH: &str = "Search";
 const STATUS: &str = "Status";
+const TIMELINE: &str = "Timeline";
 const COMPARE: &str = "Compare";
 const CONTEXTS: &str = "Contexts";
 const NOTIFICATIONS: &str = "GET /notifications";
 const TEAMS: &str = "GET /user/teams";
 
 const RATE: &str = "rateLimit { cost limit remaining resetAt }";
-const ACTOR: &str = "{ __typename login }";
-/// The PR author with the avatar the card shows. `size` is the pixel width of
-/// the square image (`Actor.avatarUrl(size:)` in the public schema): the card
-/// draws it at 16 points, 32 pixels on a Retina display.
-const AUTHOR: &str = "{ __typename login avatarUrl(size: 32) }";
+/// The actor of a row (an event's `actor`, a comment's or review's
+/// `author`) with the avatar the row shows. `size` is the pixel width of the
+/// square image (`Actor.avatarUrl(size:)` in the public schema, `URI!`): the
+/// row draws it at 14 points at text size 12, the card at 16 points, both
+/// within 32 pixels on a Retina display. DESIGN.md, "API usage".
+const ACTOR: &str = "{ __typename login avatarUrl(size: 32) }";
+/// The PR author with the avatar the card shows.
+const AUTHOR: &str = ACTOR;
 const REVIEWER: &str =
     "requestedReviewer { __typename ... on User { login } ... on Team { databaseId slug } }";
-const COMMENT: &str = "id url createdAt bodyText bodyHTML author { __typename login }";
+const COMMENT: &str =
+    "id url createdAt bodyText bodyHTML author { __typename login avatarUrl(size: 32) }";
 /// DESIGN.md, "API usage": each hit carries its `updatedAt` and state.
 const SEARCH_NODES: &str = "pageInfo { hasNextPage endCursor } nodes { ... on PullRequest { id updatedAt state repository { owner { login } } } }";
 const ITEM_TYPES: &str = "[ISSUE_COMMENT, PULL_REQUEST_REVIEW, REVIEW_REQUESTED_EVENT, \
@@ -74,12 +79,12 @@ fn timeline_nodes() -> String {
         "__typename \
          ... on IssueComment {{ {COMMENT} }} \
          ... on PullRequestReview {{ id url createdAt submittedAt state bodyText bodyHTML author {ACTOR} }} \
-         ... on ReviewRequestedEvent {{ id createdAt actor {{ login }} {REVIEWER} }} \
-         ... on MergedEvent {{ id createdAt url actor {{ login }} }} \
-         ... on ClosedEvent {{ id createdAt url actor {{ login }} }} \
-         ... on ReopenedEvent {{ id createdAt actor {{ login }} }} \
-         ... on AddedToMergeQueueEvent {{ id createdAt actor {{ login }} }} \
-         ... on RemovedFromMergeQueueEvent {{ id createdAt actor {{ login }} enqueuer {{ login }} reason }}"
+         ... on ReviewRequestedEvent {{ id createdAt actor {ACTOR} {REVIEWER} }} \
+         ... on MergedEvent {{ id createdAt url actor {ACTOR} }} \
+         ... on ClosedEvent {{ id createdAt url actor {ACTOR} }} \
+         ... on ReopenedEvent {{ id createdAt actor {ACTOR} }} \
+         ... on AddedToMergeQueueEvent {{ id createdAt actor {ACTOR} }} \
+         ... on RemovedFromMergeQueueEvent {{ id createdAt actor {ACTOR} enqueuer {{ login }} reason }}"
     )
 }
 
@@ -100,8 +105,27 @@ fn pr_status_fields() -> String {
 fn request_events() -> String {
     format!(
         "requestEvents: timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], last: 100) \
-         {{ nodes {{ ... on ReviewRequestedEvent {{ id createdAt actor {{ login }} {REVIEWER} }} }} }}"
+         {{ nodes {{ ... on ReviewRequestedEvent {{ id createdAt actor {ACTOR} {REVIEWER} }} }} }}"
     )
+}
+
+/// DESIGN.md, "API usage", "Timeline time": the timeline time of the PRs of
+/// the status fetch, `timelineItems { updatedAt }`
+/// (`PullRequestTimelineItemsConnection.updatedAt: DateTime!`; neither
+/// `first` nor `last` is needed), in a request of its own, 50 ids at a time
+/// like `Status`. For 50 very large PRs (NixOS/nixpkgs) `Status` with it
+/// answered 502 or 504 three times of three, while this request alone
+/// answered in 1.6 to 4.4 s at a cost of 1 point (read-only requests on
+/// public repositories, 2026-11-17).
+const TIMELINE_QUERY: &str = "query Timeline($ids: [ID!]!) { nodes(ids: $ids) { ... on PullRequest { id timelineItems { updatedAt } } } }";
+
+/// DESIGN.md, "API usage", "Timeline time": an addition to the merge queue
+/// leaves `updatedAt` where it was and moves only the timeline time. A PR
+/// without a saved timeline time (moved from 0.6, or whose watch started
+/// again) only has it saved: right after the update every PR would
+/// otherwise have its events fetched again.
+fn timeline_moved(saved: Option<i64>, now: Option<i64>) -> bool {
+    matches!((saved, now), (Some(saved), Some(now)) if now > saved)
 }
 
 /// The `YYYY-MM-DD` (UTC) of `days` before `now`.
@@ -995,8 +1019,8 @@ impl Run<'_> {
         };
 
         // Events: notified PRs, PRs to fetch again, dismissed cards that
-        // moved, PRs updated since the last status, newly found ones and
-        // candidates.
+        // moved, PRs updated since the last status (by `updatedAt` or by the
+        // timeline time), newly found ones and candidates.
         let mut wanted: BTreeSet<String> = work.events.clone();
         for (id, node) in &nodes {
             if broken.contains(id) {
@@ -1004,11 +1028,21 @@ impl Run<'_> {
             }
             let updated = crate::github::parse_time(node["updatedAt"].as_str().unwrap_or_default())
                 .unwrap_or(0);
+            let timeline = node["timelineItems"]["updatedAt"]
+                .as_str()
+                .and_then(crate::github::parse_time);
             match plan.prs.get(id) {
                 None => {
                     wanted.insert(id.clone());
                 }
-                Some(pr) if pr.updated_at != updated || (!pr.collected && pr.watched) => {
+                Some(pr)
+                    if pr.updated_at != updated
+                        // A dismissed card has no status fetch, so its
+                        // timeline time is never compared (DESIGN.md, "API
+                        // usage", "Timeline time").
+                        || (!pr.dismissed && timeline_moved(pr.timeline_updated_at, timeline))
+                        || (!pr.collected && pr.watched) =>
+                {
                     wanted.insert(id.clone());
                 }
                 _ => {}
@@ -1239,6 +1273,47 @@ impl Run<'_> {
         true
     }
 
+    /// The timeline time of each of `ids` that answered (DESIGN.md, "API
+    /// usage", "Timeline time"): `NODES_PER_QUERY` ids a request, split in
+    /// halves on 502 and 504. A failed request is logged and leaves its PRs
+    /// out, without failing the owner: the next status fetch asks again.
+    /// `Err` only for an error that stops the run.
+    async fn timeline_times(
+        &mut self,
+        ids: &[String],
+    ) -> Result<BTreeMap<String, String>, CallError> {
+        let mut out = BTreeMap::new();
+        if ids.is_empty() {
+            return Ok(out);
+        }
+        let answer = self
+            .split(ids, NODES_PER_QUERY, |part| {
+                (TIMELINE_QUERY.to_string(), json!({"ids": part}))
+            })
+            .await?;
+        for ((part, answer), (ms, request_id)) in answer.ok.into_iter().zip(answer.ok_meta) {
+            if let Some(e) = answer
+                .errors
+                .iter()
+                .find(|e| !e.is_permission() && !e.is_not_found())
+            {
+                self.log_answered_error(
+                    &format!("GraphQL {TIMELINE} (ids: {})", part.len()),
+                    ms,
+                    &format!("timeline failed: {}", e.message),
+                    request_id.as_deref(),
+                );
+            }
+            let list = answer.data["nodes"].as_array().cloned().unwrap_or_default();
+            for (id, node) in part.iter().zip(list) {
+                if let Some(at) = node["timelineItems"]["updatedAt"].as_str() {
+                    out.insert(id.clone(), at.to_string());
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Status, base and failed check names of the owner's PRs, each request
     /// `NODES_PER_QUERY` ids. The status values of a PR are taken only when
     /// all three answered; a PR whose request failed even alone gets
@@ -1427,6 +1502,18 @@ impl Run<'_> {
         }
         broken.extend(failed_items.iter().cloned());
 
+        // The timeline time of the PRs that answered, put into their nodes
+        // where the conversion and the event rule read it. A PR whose
+        // Timeline request failed has none: it keeps its saved value and
+        // the timeline rule fetches nothing for it this run; its status
+        // stays as answered.
+        let answered: Vec<String> = nodes.keys().cloned().collect();
+        for (id, at) in self.timeline_times(&answered).await? {
+            if let Some(node) = nodes.get_mut(&id) {
+                node["timelineItems"] = json!({ "updatedAt": at });
+            }
+        }
+
         for (id, node) in &nodes {
             if broken.contains(id) {
                 continue;
@@ -1507,7 +1594,43 @@ impl Run<'_> {
         Ok(convert::failed_check_name(&runs, &jobs, contexts))
     }
 
+    /// The events of `wanted`. A run that stops on the way (rate limit,
+    /// 401) leaves the known PRs it did not reach to be fetched again from
+    /// their window: their new `updatedAt` and timeline time are saved with
+    /// the run, so the next run would otherwise see nothing moved and skip
+    /// them (DESIGN.md, "Fetch success and failure").
     async fn events_of(
+        &mut self,
+        op: &OwnerPlan,
+        wanted: &BTreeSet<String>,
+        candidates: &BTreeSet<String>,
+        ctx: Ctx<'_>,
+    ) -> Result<(), CallError> {
+        let result = self.events_of_inner(op, wanted, candidates, ctx).await;
+        if let Err(e) = &result
+            && stops_the_run(e)
+        {
+            let owner_since = op.since();
+            let retried: BTreeSet<String> = self
+                .out
+                .retries_failed
+                .iter()
+                .map(|(id, _)| id.clone())
+                .collect();
+            for id in wanted {
+                if self.plan.prs.contains_key(id)
+                    && !self.events_ok.contains(id)
+                    && !retried.contains(id)
+                {
+                    let since = self.since_of(id, owner_since);
+                    self.out.retries_failed.push((id.clone(), since));
+                }
+            }
+        }
+        result
+    }
+
+    async fn events_of_inner(
         &mut self,
         op: &OwnerPlan,
         wanted: &BTreeSet<String>,
@@ -1714,8 +1837,8 @@ impl Run<'_> {
         let text = format!(
             "query MergeQueue($id: ID!, $number: Int!) {{ node(id: $id) {{ ... on PullRequest {{ \
              timelineItems(first: 100, itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT, REMOVED_FROM_MERGE_QUEUE_EVENT]) {{ nodes {{ __typename \
-             ... on AddedToMergeQueueEvent {{ id createdAt actor {{ login }} }} \
-             ... on RemovedFromMergeQueueEvent {{ id createdAt actor {{ login }} enqueuer {{ login }} reason {BEFORE_COMMIT} }} \
+             ... on AddedToMergeQueueEvent {{ id createdAt actor {ACTOR} }} \
+             ... on RemovedFromMergeQueueEvent {{ id createdAt actor {ACTOR} enqueuer {{ login }} reason {BEFORE_COMMIT} }} \
              }} }} }} }} }}"
         );
         let number = node["number"].as_i64().unwrap_or_default();

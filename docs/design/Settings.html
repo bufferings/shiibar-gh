@@ -138,7 +138,7 @@ a{color:var(--accent)}a:hover{color:var(--accent)}
 .seg span.on{background:var(--card);color:var(--label);box-shadow:0 1px 2px rgba(0,0,0,.12)}
 .bar3{display:flex;gap:8px;padding:8px 12px 4px;align-items:center}
 .bar3.second{padding:0 12px 8px}
-.adot{width:10px;height:10px;border-radius:5px;background:#C7420D;flex:0 0 10px}
+.adot{width:10px;height:10px;border-radius:2.5px;background:#C7420D;flex:0 0 10px}
 .pop{width:460px}
 .side{width:170px;flex:0 0 170px;border-right:1px solid var(--separator);background:var(--window);padding:10px 8px;display:flex;flex-direction:column;gap:2px;box-sizing:border-box}
 .srow{padding:6px 8px;border-radius:6px;font-size:12px;display:flex;gap:8px;align-items:center}
@@ -265,7 +265,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
   </section>
 <section class="scene">
     <div class="cap">Settings › Accounts: an account selected</div>
-    <div class="desc" style="width: 760px">Account list: an account whose color is <b>None</b> (here example-user) has no dot before its name and no room kept for one. Muted: a framed list, below it a field with <b>Add</b> and − (removes the selected row). Enter in the field also adds. <b>Add</b> stays off for an empty value, a name already in the list, and (Repositories) a value that is not <b>owner/repo</b>; above, example-org/sandbox is typed and example-bot is selected. Names are compared without case. <b>Pull requests</b> lists single PRs muted from a card (<b>owner/repo#number</b>); removing one there unmutes it, as does <b>Unmute this pull request</b> in the card’s menu (on a PR whose repository or author is muted, that keeps the PR unmuted; such a PR is not listed). Muted PRs are hidden in the popover unless the Filter shows muted pull requests (Muted: <b>Show</b> or <b>Only</b>). <b>API usage</b>: GraphQL and REST, each with the usage and limit of the last response (warning color at 80% or more) and the reset time; <b>–</b> before the first value. The popover header shows only the higher rate as a percentage.</div>
+    <div class="desc" style="width: 760px">Account list: an account whose color is <b>None</b> (here example-user) has no color square before its name and no room kept for one. Muted: a framed list, below it a field with <b>Add</b> and − (removes the selected row). Enter in the field also adds. <b>Add</b> stays off for an empty value, a name already in the list, and (Repositories) a value that is not <b>owner/repo</b>; above, example-org/sandbox is typed and example-bot is selected. Names are compared without case. <b>Pull requests</b> lists single PRs muted from a card (<b>owner/repo#number</b>); removing one there unmutes it, as does <b>Unmute this pull request</b> in the card’s menu (on a PR whose repository or author is muted, that keeps the PR unmuted; such a PR is not listed). Muted PRs are hidden in the popover unless the Filter shows muted pull requests (Muted: <b>Show</b> or <b>Only</b>). <b>API usage</b>: GraphQL and REST, each with the usage and limit of the last response (warning color at 80% or more) and the reset time; <b>–</b> before the first value. The popover header shows only the higher rate as a percentage.</div>
     <div class="win" style="width: 760px">
       <div class="titlebar">
         <div class="tl"><div class="dots" aria-hidden="true"><span style="background: #EC6A5E"></span><span style="background: #F4BF4F"></span><span style="background: #61C554"></span></div><div class="wt">Accounts</div><div style="width: 50px"></div></div>
@@ -284,7 +284,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
         <div class="pane">
           <div><div class="gh">Account</div><div class="group">
             <div class="item"><div class="lbl"><span style="font-weight: 600">Token</span><span class="sub">Expires 2026-11-12</span></div><div class="ctl"><span class="st2 warn">Expires in 5 days</span><button class="btn">Edit…</button></div></div>
-            <div class="item"><div class="lbl"><span style="font-weight: 600">Menu bar icon color</span><span class="sub">Tints this account's icon and the dot next to its name.</span></div><div class="ctl"><span class="sel"><span class="sw" style="background: #C7420D"></span>Red &#8964;</span></div></div>
+            <div class="item"><div class="lbl"><span style="font-weight: 600">Menu bar icon color</span><span class="sub">Tints this account's icon and the square next to its name.</span></div><div class="ctl"><span class="sel"><span class="sw" style="background: #C7420D"></span>Red &#8964;</span></div></div>
           </div></div>
           <div><div class="gh">Owners</div><div class="group">
             <div class="item"><div class="lbl"><span style="font-weight: 600">example-org</span><span class="sub">Organization</span></div><div class="ctl"><span class="gray">&rsaquo;</span></div></div>
@@ -301,7 +301,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
             <div class="item top"><div class="lbl"><span style="font-weight: 600">Users</span><span class="sub">Their PRs (not yours) and their events. Bots are users too.</span></div><div class="ctl"><div class="mlist"><div class="listbox"><div class="lrow on">example-bot</div><div class="lrow">octo-release-bot</div></div><div class="madd"><span class="fld ph">&nbsp;</span><button class="btn" disabled>Add</button><button class="sq" aria-label="Remove">&minus;</button></div></div></div></div>
             <div class="item top"><div class="lbl"><span style="font-weight: 600">Pull requests</span><span class="sub">Single pull requests you muted.</span></div><div class="ctl"><div class="mlist"><div class="listbox"><div class="lrow">example-org/api#402</div></div><div class="madd"><span class="fld ph">&nbsp;</span><button class="btn" disabled>Add</button><button class="sq" disabled aria-label="Remove">&minus;</button></div></div></div></div>
           </div></div>
-          <div><div class="gh">Remove</div><div class="group"><div class="item"><div class="lbl"><span style="font-weight: 600">Remove this account</span><span class="sub">Deletes this account and its owners from shiibar-gh: token, PRs, mutes and settings. Nothing changes on GitHub.</span></div><div class="ctl"><button class="btn">Remove…</button></div></div></div></div>
+          <div><div class="gh">Remove</div><div class="group"><div class="item"><div class="lbl"><span style="font-weight: 600">Remove this account</span><span class="sub">Deletes this account and its owners from Shiibar GH: token, PRs, mutes and settings. Nothing changes on GitHub.</span></div><div class="ctl"><button class="btn">Remove…</button></div></div></div></div>
         </div>
       </div>
     </div>

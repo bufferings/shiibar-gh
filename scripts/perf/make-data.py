@@ -11,7 +11,9 @@ the Filter the PRs have the four statuses (open, draft, merged,
 closed), and a quarter of the cards are read (the rest have unread rows).
 30 more PRs are dismissed, for the Dismissed list by repository; they are not
 among the 200.
-The avatars are PNG files in the state directory, referenced by file:// URLs.
+The avatars are PNG files in the state directory, referenced by file:// URLs:
+the authors' and the rows' actors' (every fourth row has no avatar URL, as
+a row saved before 0.7, and one actor has a long login).
 
 No token is ever passed (a dev-ingest daemon without SHIIBAR_GH_DEV_KEYCHAIN
 has no Keychain at all) and nothing reaches GitHub (no
@@ -31,8 +33,11 @@ and gray on the muted cards: what the Filter sorts out), and
 rows with bodies of every length (unread mentions of 1, 3, 6 and 12 and more
 lines, read rows, long single lines, team mentions, cards with more than
 three rows), an own PR in the muted repository, a PR of it taken out of Mute
-by itself (Unmute), and team mentions on the muted user's cards. It needs a
-0.6 daemon or later (the working tree's: Mine's sections).
+by itself (Unmute), and team mentions on the muted user's cards. The rows
+show their actors' avatars, some without one and some with a long login; the
+account's own merges, closes and merge queue additions are read rows, a
+removal by the merge queue an unread one, and approvals of your PRs carry no
+body. It needs a 0.7 daemon (the working tree's: the rows' avatars).
 """
 
 import json
@@ -50,6 +55,9 @@ OWNER = "org"
 REPOS = [f"repo-{i:02d}" for i in range(1, 21)]
 USERS = [f"user{i:02d}" for i in range(1, 12)]
 MUTED_USER = "example-bot"
+# An actor whose login does not fit line 1 of a row: it is cut with "…".
+LONG_USER = "a-contributor-with-a-really-long-login-name"
+MERGE_QUEUE = "github-merge-queue"
 # 200 for the measurement of docs/tasks/M7.md; SHIIBAR_GH_PERF_CARDS for a
 # smaller run.
 CARDS = int(os.environ.get("SHIIBAR_GH_PERF_CARDS", "200"))
@@ -200,11 +208,24 @@ def demo(daemon, colors, start):
         if n % 3 == 0:
             # More than three rows: "+ N more".
             kinds += [("comment_other", f"Follow-up {k}: " + SENTENCES[k % len(SENTENCES)]) for k in range(1, 4)]
-        for j, (kind, text) in enumerate(kinds):
+        if author == ME and n % 4 == 0:
+            # An approval of your PR: the approver on line 1, no body.
+            kinds.append(("approved", None))
+        rows = [(kind, text, LONG_USER if n % 8 == 1 and j == 0 else actor) for j, (kind, text) in enumerate(kinds)]
+        if author == ME and (merged or closed):
+            # Your own merge or close, after your addition to the merge queue:
+            # read rows, without a notification.
+            rows = [("merged" if merged else "closed", None, ME), ("merge_queue_added", None, ME)] + rows
+        elif author == ME and n % 12 == 6:
+            # The queue removed your PR: an unread row by the queue.
+            rows = [("merge_queue_removed", f"Checks failed · added by {ME}", MERGE_QUEUE), ("merge_queue_added", None, ME)] + rows
+        for j, (kind, text, who) in enumerate(rows):
             events.append({
                 "id": f"E_{n}_{j}", "pr_id": pr_id, "kind": kind, "occurred_at": updated - j * 30,
                 "url": f"https://github.example/{OWNER}/{repo}/pull/{n}#e{j}",
-                "actor": actor, "text": text, "comment_id": None,
+                "actor": who, "text": text, "comment_id": None,
+                # Every fourth row without an avatar, as a row saved before 0.7.
+                "actor_avatar_url": None if (n + j) % 4 == 3 else colors.get(who),
             })
         key = f"{OWNER}/{repo}#{n}"
         if requested:
@@ -222,6 +243,10 @@ def demo(daemon, colors, start):
         if not requested and author != ME and (n % 24 in (7, 9, 14) and n <= 120 or n in (151, 163)):
             dismissed.append(key)
 
+    # Your merged and closed PRs were seen open first, so their merge or
+    # close makes a row.
+    finished_own = [dict(p, state="open") for p in prs if p["author"] == ME and p["state"] != "open"]
+    daemon.ok({"cmd": "dev_ingest", "account": ME, "ingest": {"prs": finished_own, "events": []}})
     for i in range(0, len(prs), 40):
         ids = {p["id"] for p in prs[i:i + 40]}
         daemon.ok({"cmd": "dev_ingest", "account": ME, "ingest": {
@@ -280,7 +305,7 @@ def main():
     avatars = os.path.join(state, "avatars")
     os.makedirs(avatars)
     colors = {}
-    for i, user in enumerate(USERS + [MUTED_USER, ME]):
+    for i, user in enumerate(USERS + [MUTED_USER, ME, LONG_USER, MERGE_QUEUE]):
         path = os.path.join(avatars, user + ".png")
         png(path, ((i * 47) % 256, (i * 91 + 60) % 256, (i * 23 + 120) % 256))
         colors[user] = "file://" + path
@@ -352,10 +377,13 @@ def main():
                 # moved to an empty Waiting).
                 kinds = [first] * 3 if requested else [("reopened", f"{actor} reopened it")] * 3
         for j, (kind, text) in enumerate(kinds):
+            who = LONG_USER if n % 8 == 1 and j == 0 else actor
             events.append({
                 "id": f"E_{n}_{j}", "pr_id": pr_id, "kind": kind, "occurred_at": updated - j * 5,
                 "url": f"https://github.example/{OWNER}/{repo}/pull/{n}#e{j}",
-                "actor": actor, "text": text, "comment_id": None,
+                "actor": who, "text": text, "comment_id": None,
+                # Every fourth row without an avatar, as a row saved before 0.7.
+                "actor_avatar_url": None if (n + j) % 4 == 3 else colors[who],
             })
         if requested:
             review.append(f"{OWNER}/{repo}#{n}")

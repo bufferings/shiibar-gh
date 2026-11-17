@@ -51,6 +51,10 @@ struct HeadingLine: Equatable {
     /// `Dismiss all` shows (the Done of Review and Mine, with cards to
     /// dismiss, not collapsed). Part of the heading's image.
     var dismissAll = false
+    /// The unread mark before the name of a collapsed heading (DESIGN.md,
+    /// "Section size"). Part of the heading's image, so a change of what it
+    /// shows draws the heading again.
+    var mark: UnreadMark = .none
     /// A section heading: it folds, has its chevron and takes the
     /// selection. A repository of the Dismissed list does none of these
     /// (DESIGN.md, "Dismissed list").
@@ -67,6 +71,7 @@ struct HeadingLine: Equatable {
         collapsed = section.collapsed
         showLess = section.showLess
         dismissAll = section.dismissAllCards != nil
+        mark = section.foldMark
     }
 
     /// The band of a repository of the Dismissed list; `first` right under

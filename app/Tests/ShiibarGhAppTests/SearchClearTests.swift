@@ -55,9 +55,9 @@ final class HeaderMenuTests: XCTestCase {
     func testTheMenuItems() {
         var opened: [SettingsDestination] = []
         var actions = SurfaceActions(openWindow: nil, openSettings: { opened.append($0) }, about: {}, quit: {})
-        XCTAssertEqual(actions.menuItems.map { $0?.title ?? "-" }, ["About shiibar-gh", "-", "Quit shiibar-gh"])
+        XCTAssertEqual(actions.menuItems.map { $0?.title ?? "-" }, ["About Shiibar GH", "-", "Quit"])
         actions.menuHasSettings = true
-        XCTAssertEqual(actions.menuItems.map { $0?.title ?? "-" }, ["About shiibar-gh", "Settings…", "-", "Quit shiibar-gh"])
+        XCTAssertEqual(actions.menuItems.map { $0?.title ?? "-" }, ["About Shiibar GH", "Settings…", "-", "Quit"])
         actions.menuItems[1]?.action()
         XCTAssertEqual(opened, [.general])
     }

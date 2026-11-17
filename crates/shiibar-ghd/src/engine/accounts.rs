@@ -335,6 +335,9 @@ impl Engine {
         for (key, _, _) in &prs {
             if let Some(pr) = self.pr_mut(key) {
                 pr.prev = None;
+                // DESIGN.md, "API usage", "Timeline time": a new watch
+                // start forgets the timeline time with the other values.
+                pr.timeline_updated_at = None;
                 pr.watch_reset = true;
             }
         }

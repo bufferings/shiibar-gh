@@ -181,7 +181,7 @@ public struct KeychainDialog: Equatable {
 
     public static let unavailable = KeychainDialog(
         state: .unavailable, title: "Couldn't read tokens from Keychain",
-        message: "If macOS asked whether shiibar-gh may use the Keychain, allow it, then retry.", action: "Retry"
+        message: "If macOS asked whether \(MainMenu.appName) may use the Keychain, allow it, then retry.", action: "Retry"
     )
     public static let unreadable = KeychainDialog(
         state: .unreadable, title: "Saved tokens are unreadable",
@@ -327,8 +327,16 @@ public struct RowPresentation: Equatable {
     public var label: String
     /// Reaction counts next to the label, such as "👍3".
     public var counts: String?
-    /// "alice · 9 min ago" or "5 min ago".
-    public var meta: String
+    /// The actor's name (login) on line 1, after the label (DESIGN.md, "How
+    /// rows look"): for the rows a person (a bot included) caused. nil for
+    /// the state change rows and Reaction, and for a row without an actor.
+    public var actor: String?
+    /// The actor's avatar, shown before the name; nil shows the name alone
+    /// without keeping its room.
+    public var actorAvatarUrl: String?
+    /// "9 min ago": at the right end of line 1, before the chain icon, at
+    /// the same place in every row.
+    public var time: String
     /// The body under the label line, already normalized.
     public var body: String?
     /// The lines the body shows now.
@@ -358,6 +366,18 @@ public struct RowPresentation: Equatable {
     public static let unreadMentionLines = 3
     public static let expandedLines = 5
 
+    /// The kinds that show who caused them on line 1 (DESIGN.md, "How rows
+    /// look"): every row a person caused. The state change rows and
+    /// Reaction show no one.
+    public static func showsActor(_ kind: RowKind?) -> Bool {
+        switch kind {
+        case .checksFailed, .checksPassed, .changesRequested, .conflicts, .mergeable, .reaction, nil:
+            return false
+        default:
+            return true
+        }
+    }
+
     /// `cardMuted`: the row's card is muted. Its rows are gray except a
     /// mention of you or your team, which keeps the normal color and the
     /// accent-colored dot (DESIGN.md, "Card"). `expanded`: `more` was pressed on the
@@ -365,21 +385,14 @@ public struct RowPresentation: Equatable {
     public init(_ row: Row, now: Int64, cardMuted: Bool = false, expanded: Bool = false) {
         let kind = row.kind.value
         label = RowText.label(row.kind)
-        let time = RelativeTime.ago(now - row.occurredAt)
-        let actor = row.actor.flatMap { $0.isEmpty ? nil : $0 }
+        time = RelativeTime.ago(now - row.occurredAt)
         let text = row.text.map(RowText.normalize).flatMap { $0.isEmpty ? nil : $0 }
+        actor = Self.showsActor(kind) ? row.actor.flatMap { $0.isEmpty ? nil : $0 } : nil
+        actorAvatarUrl = actor == nil ? nil : row.actorAvatarUrl.flatMap { $0.isEmpty ? nil : $0 }
         switch kind {
-        case .merged, .closed, .reopened, .mergeQueueAdded, .approved:
-            meta = time
-            body = text ?? actor.map { "by \($0)" }
-        case .reviewRequested, .teamReviewRequested, .checksFailed, .checksPassed, .changesRequested, .conflicts, .mergeable:
-            meta = time
-            body = text
         case .reaction:
-            meta = time
             body = text.map { "\u{201C}\($0)\u{201D}" }
         default:
-            meta = actor.map { "\($0) · \(time)" } ?? time
             body = text
         }
         counts = kind == .reaction ? row.counts.map(RowText.counts).flatMap { $0.isEmpty ? nil : $0 } : nil
@@ -660,11 +673,14 @@ public enum CreateTokenURL {
 // MARK: - Settings: texts
 
 public enum SettingsText {
-    public static let colorDetail = "Tints this account's icon and the dot next to its name."
+    /// Launch at login's line when the registration failed (DESIGN.md,
+    /// "Settings").
+    public static let loginItemBlocked = "Allow \(MainMenu.appName) in System Settings › General › Login Items"
+    public static let colorDetail = "Tints this account's icon and the square next to its name."
     public static let removeAccountDetail =
-        "Deletes this account and its owners from shiibar-gh: token, PRs, mutes and settings. Nothing changes on GitHub."
+        "Deletes this account and its owners from \(MainMenu.appName): token, PRs, mutes and settings. Nothing changes on GitHub."
     public static let removeOwnerDetail =
-        "Deletes this owner from shiibar-gh: its PRs and settings. Nothing changes on GitHub."
+        "Deletes this owner from \(MainMenu.appName): its PRs and settings. Nothing changes on GitHub."
     public static let enabledDetail = "Off hides this owner's PRs and stops fetching."
     public static let notifyDetail = "Off keeps the table below but sends no notifications for this owner."
     public static let skipDraftsDetail = "Events on draft PRs stay in the list but never notify."

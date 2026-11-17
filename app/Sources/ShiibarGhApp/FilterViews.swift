@@ -109,6 +109,10 @@ struct FilterRowState: Equatable {
 /// dot when there is one (Main.html `.flt`). Any press on it opens or closes
 /// the options; the dot has no action of its own.
 struct FilterButton: View {
+    /// At text size 12, in proportion to the text size; `Grouping…` beside
+    /// it is as tall (DESIGN.md, "Constants").
+    static let height: CGFloat = 24
+
     var open: Bool
     var dot: Bool
     var toggle: () -> Void
@@ -128,13 +132,13 @@ struct FilterButton: View {
                     Circle()
                         .fill(Palette.accent.color)
                         .frame(width: 7 * k, height: 7 * k)
-                        .frame(height: 24 * k)
+                        .frame(height: Self.height * k)
                         .contentShape(Rectangle())
                         .quickHelp(Self.dotTip)
                 }
             }
             .padding(.horizontal, 4)
-            .frame(height: 24 * k)
+            .frame(height: Self.height * k)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -179,7 +183,7 @@ struct FilterRow: View {
             // `Grouping…`.
             Spacer(minLength: 0)
             if value.showsGrouping {
-                PushButton(title: PushButton.grouping, press: openGrouping)
+                GroupingButton(press: openGrouping)
                     .fixedSize()
                     .layoutPriority(1)
             }
@@ -340,6 +344,116 @@ final class NoFocusButton: NSButton {
     override var acceptsFirstResponder: Bool { false }
     override var canBecomeKeyView: Bool { false }
     override func becomeFirstResponder() -> Bool { false }
+}
+
+/// `Grouping…` (DESIGN.md, "All", "Grouping settings", and "Constants"):
+/// as tall as the Filter button beside it (24 points), its text 12 points,
+/// both at text size 12 and in proportion to the text size. A standard push
+/// button's height is fixed, so the app draws this one (Main.html `.frow
+/// .gbtn`: the board's `.btn` with a 1-point border in the separator color,
+/// a 6-point radius and 9 points of room on either side). Mouse only and an
+/// accessibility button, as the push button it replaces.
+final class DrawnButton: NSControl {
+    var title: String { didSet { if title != oldValue { invalidateIntrinsicContentSize(); needsDisplay = true } } }
+    var k: CGFloat = 1 { didSet { if k != oldValue { invalidateIntrinsicContentSize(); needsDisplay = true } } }
+    var press: () -> Void = {}
+    private var pressed = false { didSet { if pressed != oldValue { needsDisplay = true } } }
+
+    /// At text size 12: the Filter button's height.
+    static let height: CGFloat = FilterButton.height
+    static let fontSize: CGFloat = 12
+    static let sidePadding: CGFloat = 9
+
+    init(title: String) {
+        self.title = title
+        super.init(frame: .zero)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override var isFlipped: Bool { true }
+    override var acceptsFirstResponder: Bool { false }
+    override var canBecomeKeyView: Bool { false }
+    override func becomeFirstResponder() -> Bool { false }
+
+    static func size(_ title: String, k: CGFloat) -> CGSize {
+        let width = (title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: fontSize * k)]).width
+        return CGSize(width: (width + 2 * sidePadding * k).rounded(.up), height: (height * k).rounded())
+    }
+
+    override var intrinsicContentSize: NSSize { Self.size(title, k: k) }
+
+    override func accessibilityLabel() -> String? { title }
+
+    override func accessibilityPerformPress() -> Bool {
+        press()
+        return true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        pressed = true
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        pressed = bounds.contains(convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        let inside = bounds.contains(convert(event.locationInWindow, from: nil))
+        pressed = false
+        if inside { press() }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let box = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let path = NSBezierPath(roundedRect: box, xRadius: 6, yRadius: 6)
+        (pressed ? Palette.fill.nsColor : Palette.surface.nsColor).setFill()
+        path.fill()
+        Palette.border.nsColor.setStroke()
+        path.lineWidth = 1
+        path.stroke()
+        let font = NSFont.systemFont(ofSize: Self.fontSize * k)
+        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: Palette.text.nsColor]
+        let size = (title as NSString).size(withAttributes: attributes)
+        let origin = CGPoint(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2)
+        (title as NSString).draw(at: origin, withAttributes: attributes)
+    }
+}
+
+/// `Grouping…` at the right end of All's Filter row, which opens the
+/// Grouping sheet (DESIGN.md, "All", "Grouping settings").
+struct GroupingButton: NSViewRepresentable {
+    var press: () -> Void
+    @Environment(\.textScale) var k
+
+    func makeNSView(context: Context) -> DrawnButton {
+        let button = DrawnButton(title: PushButton.grouping)
+        button.setContentHuggingPriority(.required, for: .horizontal)
+        button.setContentCompressionResistancePriority(.required, for: .horizontal)
+        update(button)
+        return button
+    }
+
+    func updateNSView(_ button: DrawnButton, context: Context) {
+        update(button)
+    }
+
+    private func update(_ button: DrawnButton) {
+        button.press = press
+        button.k = k
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: DrawnButton, context: Context) -> CGSize? {
+        nsView.intrinsicContentSize
+    }
 }
 
 /// A standard small push button, mouse only like the Filter's options:

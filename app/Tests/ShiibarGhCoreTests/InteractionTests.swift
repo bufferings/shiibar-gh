@@ -196,7 +196,8 @@ final class MultiRulesTests: XCTestCase {
         for id in ["W1", "T5", "R1"] { selected.toggle(id) }
         let sections = layout(.review)
         let tabCards = Listing.cards(cards, tab: .review)
-        XCTAssertEqual(MultiRules.ordered(selected, sections: sections, tabCards: tabCards).map(\.id), ["R1", "T5", "W1"])
+        // The order shown: Waiting (W1), Doing (R1), Todo (T5).
+        XCTAssertEqual(MultiRules.ordered(selected, sections: sections, tabCards: tabCards).map(\.id), ["W1", "R1", "T5"])
     }
 
     func testOptionArrowsMoveSeveralSelectedCardsTogether() {
@@ -271,13 +272,14 @@ final class SelectedCardsTests: XCTestCase {
 
     func testShiftClickTakesTheShownCardsFromTheAnchor() async {
         let list = await loaded(.review)
-        // Todo shows T1–T5; T6 and T7 are folded into "+ 2 more PRs".
+        // From the top: Done D1, Waiting W1, Doing R1, Todo T1–T5; T6 and
+        // T7 are folded into "+ 2 more PRs".
         list.click(.item(.header(card: "T4")), count: 1)
         list.click(card: "W1", extent: .range)
-        XCTAssertEqual(list.selectedCards.cards, ["T4", "T5", "W1"])
+        XCTAssertEqual(list.selectedCards.cards, ["W1", "R1", "T1", "T2", "T3", "T4"])
         XCTAssertEqual(list.selection, .header(card: "W1"))
         list.click(card: "T2", extent: .toggle)
-        XCTAssertEqual(list.selectedCards.cards, ["T2", "T4", "T5", "W1"])
+        XCTAssertEqual(list.selectedCards.cards, ["W1", "R1", "T1", "T3", "T4"])
         list.click(.item(.row(id: "A", card: "T1")), count: 1)
         XCTAssertEqual(list.selectedCards.cards, ["T1"], "a plain click selects that card alone")
         XCTAssertEqual(list.selection, .row(id: "A", card: "T1"))
@@ -306,7 +308,7 @@ final class SelectedCardsTests: XCTestCase {
         list.click(card: "T2", extent: .toggle)
         api.refuseContaining["example-org/web#230"] = DaemonError(code: .notFound, message: "not found: PR example-org/web#230")
         list.press(.delete)
-        XCTAssertEqual(list.sections[1].matching.first?.id, "T4", "shown at once")
+        XCTAssertEqual(list.sections[3].matching.first?.id, "T4", "shown at once")
         await settle()
         await settle()
         XCTAssertEqual(calls("dismiss"), [
@@ -324,9 +326,10 @@ final class SelectedCardsTests: XCTestCase {
         list.press(.moveTo(.doing))
         await settle()
         await settle()
+        // In the order shown: Done first.
         XCTAssertEqual(calls("place"), [
-            "place bufferings-work example-org/api#407 review doing bottom",
             "place bufferings-work acme-corp/infra#58 review doing bottom",
+            "place bufferings-work example-org/api#407 review doing bottom",
         ])
         XCTAssertEqual(list.selectedCards.cards, ["T1", "D1"], "the moved cards stay selected")
         api.clearCalls()
@@ -392,12 +395,13 @@ final class SelectedCardsTests: XCTestCase {
         list.beginDrag("W1")
         XCTAssertEqual(list.draggingCount, 2)
         XCTAssertTrue(list.drop(.card("T2", lowerHalf: false)))
-        XCTAssertEqual(list.sections[1].cards.map(\.id), ["T1", "R1", "W1", "T2", "T3"], "shown at once, in the order shown")
+        // Waiting (W1) shows above Doing (R1).
+        XCTAssertEqual(list.sections[3].cards.map(\.id), ["T1", "W1", "R1", "T2", "T3"], "shown at once, in the order shown")
         await settle()
         await settle()
         XCTAssertEqual(calls("place"), [
-            "place bufferings-work example-org/web#212 review todo before example-org/web#230",
             "place bufferings-work acme-corp/infra#61 review todo before example-org/web#230",
+            "place bufferings-work example-org/web#212 review todo before example-org/web#230",
         ])
         XCTAssertEqual(list.selectedCards.cards, ["R1", "W1"], "the moved cards are the selection")
         api.clearCalls()
@@ -439,12 +443,12 @@ final class SelectedCardsTests: XCTestCase {
     /// its top (DESIGN.md, "What a press does").
     func testADropOnTheUpperHalfOfMinesFirstCardGoesToTheTop() async {
         let list = await loaded(.mine)
-        XCTAssertEqual(list.sections.map(\.key), ["mine|doing", "mine|todo", "mine|waiting", "mine|done"])
-        XCTAssertEqual(list.sections[1].cards.map(\.id), ["M1", "M2"])
+        XCTAssertEqual(list.sections.map(\.key), ["mine|done", "mine|waiting", "mine|doing", "mine|todo"])
+        XCTAssertEqual(list.sections[3].cards.map(\.id), ["M1", "M2"])
         list.beginDrag("M2")
         XCTAssertEqual(list.dragOver(.card("M1", lowerHalf: false)), DropTarget(section: "mine|todo", position: .top))
         XCTAssertTrue(list.drop(.card("M1", lowerHalf: false)))
-        XCTAssertEqual(list.sections[1].cards.map(\.id), ["M2", "M1"], "shown at once")
+        XCTAssertEqual(list.sections[3].cards.map(\.id), ["M2", "M1"], "shown at once")
         await settle()
         await settle()
         XCTAssertEqual(calls("place"), ["place bufferings-work acme-corp/web#77 mine todo top"])
@@ -456,7 +460,7 @@ final class SelectedCardsTests: XCTestCase {
         list.beginDrag("M2")
         XCTAssertEqual(list.dragOver(.header("mine|doing")), DropTarget(section: "mine|doing", position: .top))
         XCTAssertTrue(list.drop(.header("mine|doing")))
-        XCTAssertEqual(list.sections[0].cards.map(\.id), ["M2"], "shown at once")
+        XCTAssertEqual(list.sections[2].cards.map(\.id), ["M2"], "shown at once")
         await settle()
         await settle()
         XCTAssertEqual(calls("place"), ["place bufferings-work acme-corp/web#77 mine doing top"])
@@ -472,7 +476,7 @@ final class SelectedCardsTests: XCTestCase {
         let list = await loaded(.mine)
         list.select(.header(card: "M2"))
         list.press(.reorder(up: true))
-        XCTAssertEqual(list.sections[1].cards.map(\.id), ["M2", "M1"])
+        XCTAssertEqual(list.sections[3].cards.map(\.id), ["M2", "M1"])
         await settle()
         await settle()
         XCTAssertEqual(calls("place"), ["place bufferings-work acme-corp/web#77 mine todo top"])
@@ -484,10 +488,10 @@ final class SelectedCardsTests: XCTestCase {
         let list = await loaded(.mine)
         list.select(.header(card: "M2"))
         list.press(.moveTo(.doing))
-        XCTAssertEqual(list.sections[0].cards.map(\.id), ["M2"])
+        XCTAssertEqual(list.sections[2].cards.map(\.id), ["M2"])
         XCTAssertEqual(list.selection, .header(card: "M2"), "the moved card stays selected")
         list.press(.moveTo(.todo))
-        XCTAssertEqual(list.sections[1].cards.map(\.id), ["M2", "M1"], "from Doing: the top of Todo")
+        XCTAssertEqual(list.sections[3].cards.map(\.id), ["M2", "M1"], "from Doing: the top of Todo")
         await settle()
         await settle()
         XCTAssertEqual(calls("place"), ["place bufferings-work acme-corp/web#77 mine doing", "place bufferings-work acme-corp/web#77 mine todo"])
@@ -496,7 +500,7 @@ final class SelectedCardsTests: XCTestCase {
         list.select(.header(card: "M2"))
         list.click(card: "M1", extent: .toggle)
         list.press(.moveTo(.waiting))
-        XCTAssertEqual(list.sections[2].cards.map(\.id), ["M1", "M2"], "in the order shown")
+        XCTAssertEqual(list.sections[1].cards.map(\.id), ["M1", "M2"], "in the order shown")
         await settle()
         await settle()
         XCTAssertEqual(calls("place").count, 2)
@@ -521,7 +525,7 @@ final class SelectedCardsTests: XCTestCase {
         list.beginDrag("M3")
         XCTAssertEqual(list.draggingCount, 2)
         XCTAssertTrue(list.drop(.card("M1", lowerHalf: false)))
-        XCTAssertEqual(list.sections[1].cards.map(\.id), ["M2", "M3", "M1"], "in the order shown")
+        XCTAssertEqual(list.sections[3].cards.map(\.id), ["M3", "M2", "M1"], "in the order shown: Done's M3 first")
         await settle()
         await settle()
         XCTAssertEqual(calls("place").count, 2)

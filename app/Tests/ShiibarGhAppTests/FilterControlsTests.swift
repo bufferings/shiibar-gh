@@ -18,8 +18,7 @@ final class FilterControlsTests: XCTestCase {
         checkbox.refusesFirstResponder = true
         let segmented = NoFocusSegmentedControl(labels: ["Hide", "Show", "Only"], trackingMode: .selectOne, target: nil, action: nil)
         segmented.refusesFirstResponder = true
-        let grouping = NoFocusButton(title: PushButton.grouping, target: nil, action: nil)
-        grouping.refusesFirstResponder = true
+        let grouping = DrawnButton(title: PushButton.grouping)
         let reset = NoFocusButton(title: PushButton.reset, target: nil, action: nil)
         reset.refusesFirstResponder = true
         return [checkbox, segmented, grouping, reset]
@@ -69,8 +68,8 @@ final class FilterControlsTests: XCTestCase {
     /// choosing one sets it.
     func testTheGroupingSheetSortMenu() {
         var chosen: [ShiibarGhCore.SortOrder] = []
-        let items = GroupingSheet.sortItems(ListOptions(sort: .recentlyUpdated)) { chosen.append($0) }.compactMap { $0 }
-        XCTAssertEqual(items.map(\.title), ["Recently updated", "Recently added"])
+        let items = GroupingSheet.sortItems(ListOptions(sort: .recentActivity)) { chosen.append($0) }.compactMap { $0 }
+        XCTAssertEqual(items.map(\.title), ["Recent activity", "Recently added"])
         XCTAssertEqual(items.map(\.checked), [true, false])
         items[1].action()
         XCTAssertEqual(chosen, [.recentlyAdded])
@@ -93,6 +92,44 @@ final class FilterControlsTests: XCTestCase {
         XCTAssertEqual(narrow?.maxX ?? 0, 300 - 12 - 8, accuracy: 4)
     }
 
+    /// DESIGN.md, "Constants": `Grouping…` is as tall as the Filter button
+    /// (24 points) with 12-point text, and Restore 22 points with 12-point
+    /// text and 10 points of room on either side, at text size 12; both in
+    /// proportion to the text size.
+    func testGroupingAndRestoreFollowTheTextSize() {
+        var widths: [CGFloat] = []
+        for size in [9, 12, 18] {
+            let k = CGFloat(TextSize.ratio(size))
+            let grouping = DrawnButton.size(PushButton.grouping, k: k)
+            XCTAssertEqual(grouping.height, (24 * k).rounded(), "\(size)")
+            let text = (PushButton.grouping as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12 * k)]).width
+            XCTAssertEqual(grouping.width, (text + 18 * k).rounded(.up), "\(size)")
+            let button = DrawnButton(title: PushButton.grouping)
+            button.k = k
+            XCTAssertEqual(button.intrinsicContentSize, grouping)
+            XCTAssertEqual(button.accessibilityRole(), .button)
+            XCTAssertEqual(button.accessibilityLabel(), PushButton.grouping)
+            let restore = ListButton.restoreSize(k: k)
+            XCTAssertEqual(restore.height, (22 * k).rounded(), "\(size)")
+            let restoreText = Ink.width("Restore", Ink.font(12 * k))
+            XCTAssertEqual(restore.width, (restoreText + 20 * k).rounded(.up), "\(size)")
+            widths.append(grouping.width)
+        }
+        XCTAssertEqual(widths, widths.sorted(), "wider with a larger text")
+        // As tall as the Filter button beside it, as laid out.
+        for size in [9, 12, 18] {
+            let k = CGFloat(TextSize.ratio(size))
+            let filter = NSHostingView(rootView: FilterButton(open: false, dot: false, toggle: {}).environment(\.textScale, k)).fittingSize
+            XCTAssertEqual(DrawnButton.size(PushButton.grouping, k: k).height, filter.height, accuracy: 0.5, "\(size)")
+        }
+        // Pressing it runs its action, by the mouse or by an assistive app.
+        var pressed = 0
+        let button = DrawnButton(title: PushButton.grouping)
+        button.press = { pressed += 1 }
+        XCTAssertTrue(button.accessibilityPerformPress())
+        XCTAssertEqual(pressed, 1)
+    }
+
     /// The Filter row (DESIGN.md, "Filter"): `Filter` and the summary at
     /// the left, in All `Grouping…` at the right end, no `Reset`. When
     /// narrow, only the summary gives way: `Grouping…` keeps its size and
@@ -107,10 +144,7 @@ final class FilterControlsTests: XCTestCase {
             let all = FilterRowProbe.buttons(row("Muted shown", grouping: true), k: k, width: width)
             guard let grouping = all.grouping else { return XCTFail("k \(k): \(all)") }
             XCTAssertNil(all.reset, "Reset is not in the row")
-            // A push button's frame is wider than what it draws by a margin
-            // that depends on the macOS version (up to 7 points), so the
-            // edges are compared loosely.
-            XCTAssertEqual(grouping.maxX, width - 12, accuracy: 8, "Grouping… at the right end")
+            XCTAssertEqual(grouping.maxX, width - 12, accuracy: 1, "Grouping… at the right end")
             XCTAssertLessThanOrEqual(grouping.maxX, width)
             let review = FilterRowProbe.buttons(row("Muted shown", grouping: false), k: k, width: width)
             XCTAssertNil(review.grouping)
@@ -125,7 +159,7 @@ final class FilterControlsTests: XCTestCase {
         guard let grouping = narrow.grouping else { return XCTFail("\(narrow)") }
         XCTAssertEqual(grouping.width, wide.grouping?.width ?? 0, accuracy: 0.5, "Grouping… is not cut")
         XCTAssertLessThanOrEqual(grouping.maxX, 300)
-        XCTAssertEqual(grouping.maxX, 300 - 12, accuracy: 8)
+        XCTAssertEqual(grouping.maxX, 300 - 12, accuracy: 1)
 
         let full = (long as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11)]).width.rounded(.up)
         XCTAssertFalse(FilterSummary.isCut(long, shownWidth: full, k: 1), "all of it shows")
@@ -203,10 +237,11 @@ enum FilterRowProbe {
         var reset: NSRect?
         var grouping: NSRect?
         Probe.walk(hosting) { view in
+            if let button = view as? DrawnButton, button.title == PushButton.grouping {
+                grouping = button.convert(button.bounds, to: hosting)
+            }
             guard let button = view as? NoFocusButton else { return }
-            let frame = button.convert(button.bounds, to: hosting)
-            if button.title == PushButton.reset { reset = frame }
-            if button.title == PushButton.grouping { grouping = frame }
+            if button.title == PushButton.reset { reset = button.convert(button.bounds, to: hosting) }
         }
         return (reset, grouping)
     }

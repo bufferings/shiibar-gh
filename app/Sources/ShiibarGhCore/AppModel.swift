@@ -384,6 +384,13 @@ public final class AppModel: ObservableObject {
         }
     }
 
+    /// ⌘R (DESIGN.md, "Keyboard"): the header's Refresh, except while the
+    /// account's refresh is still running (the button shows its progress).
+    public func refreshByKey(_ account: String) {
+        guard !refreshing.contains(account) else { return }
+        refresh(account)
+    }
+
     public func reset() {
         send { try await $0.reset() }
     }
