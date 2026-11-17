@@ -446,10 +446,12 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
     /// (`NSWindowCollectionBehaviorFullScreenNone`, NSWindow.h: "The window
     /// can not be made fullscreen when this bit is set"); the other
     /// collection behaviors stay as 0.6's panel had them (none).
+    static let windowStyle: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
+
     static func makeWindow(width: CGFloat, height: CGFloat) -> NSWindow {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: width, height: height),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: windowStyle,
             backing: .buffered, defer: false
         )
         window.isReleasedWhenClosed = false
@@ -640,6 +642,15 @@ final class WindowTitle {
     static let side: CGFloat = 76
     /// Between the mark and the name.
     static let gap: CGFloat = 7
+    /// The title's font: AppKit's title bar font at its standard size.
+    static var font: NSFont { NSFont.titleBarFont(ofSize: 0) }
+    /// The height of the standard title bar of the window's style
+    /// (`NSWindow.frameRect(forContentRect:styleMask:)`, NSWindow.h): the
+    /// frame less its content.
+    static var barHeight: CGFloat {
+        let content = NSRect(x: 0, y: 0, width: 400, height: 400)
+        return NSWindow.frameRect(forContentRect: content, styleMask: SurfaceController.windowStyle).height - content.height
+    }
 
     let stack: PassThroughStack
     let mark: AccountMarkView
@@ -649,7 +660,7 @@ final class WindowTitle {
     private init() {
         mark = AccountMarkView()
         name = NSTextField(labelWithString: "")
-        name.font = NSFont.titleBarFont(ofSize: 0)
+        name.font = Self.font
         name.lineBreakMode = .byTruncatingTail
         name.cell?.truncatesLastVisibleLine = true
         name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)

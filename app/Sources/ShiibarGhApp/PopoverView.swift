@@ -418,32 +418,32 @@ struct AccountMark: View {
 
 /// Part 1 of the popover's header (DESIGN.md, "Screens"; Main.html
 /// `.pbar`): the account's mark and name, centered, alone in a band of the
-/// section bands' color with a separator under it. A name too long is cut
-/// with `…`; without a color the name alone is centered. In the window the
-/// standard title bar is this band.
+/// section bands' color with a separator under it, looking like the
+/// window's title bar, which is this band in the window. A name too long is
+/// cut with `…`; without a color the name alone is centered.
 struct AccountBand: View {
     var login: String
     var color: AccountColor
-    @Environment(\.textScale) var k
 
-    /// At text size 12, in proportion to the text size (DESIGN.md,
-    /// "Constants").
-    static let height: CGFloat = 34
-    static let fontSize: CGFloat = 14
-    static let gap: CGFloat = 8
+    /// The window's title bar: its height, its title font and the mark and
+    /// spacing of its title (`WindowTitle`). None of them follows the text
+    /// size, as the window's title bar does not (DESIGN.md, "Constants").
+    static var height: CGFloat { WindowTitle.barHeight }
+    static var font: NSFont { WindowTitle.font }
+    static let gap: CGFloat = WindowTitle.gap
     static let side: CGFloat = 16
 
     var body: some View {
         HStack(spacing: Self.gap) {
-            if color.showsDot { AccountMark(color: color, size: AccountMark.size * k) }
+            if color.showsDot { AccountMark(color: color, size: AccountMark.size) }
             Text(login)
-                .font(.system(size: Self.fontSize * k, weight: .semibold))
+                .font(Font(Self.font))
                 .lineLimit(1)
                 .truncationMode(.tail)
         }
         .padding(.horizontal, Self.side)
         .frame(maxWidth: .infinity)
-        .frame(height: Self.height * k)
+        .frame(height: Self.height)
         .background(Palette.band.color)
         .overlay(alignment: .bottom) {
             Rectangle().fill(Palette.border.color).frame(height: 1)

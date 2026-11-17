@@ -105,25 +105,52 @@ final class HeaderAndWindowTests: XCTestCase {
     }
 
     /// Part 1 of the popover's header: the mark and the name centered, the
-    /// name alone for None, a long name cut inside the band's sides; 34
-    /// points at text size 12, in proportion.
+    /// name alone for None, a long name cut inside the band's sides.
     func testTheBandCentersTheMarkAndTheName() throws {
-        for k: CGFloat in [0.75, 1, 1.5] {
-            let band = AccountBand(login: "example-user", color: .red).environment(\.textScale, k)
-            XCTAssertEqual(NSHostingView(rootView: band.frame(width: 460)).fittingSize.height, 34 * k, accuracy: 0.5, "k \(k)")
-        }
+        let h = AccountBand.height
         let width: CGFloat = 460
-        let marked = try XCTUnwrap(drawnExtent(AccountBand(login: "example-user", color: .red), width: width, height: 34))
+        let marked = try XCTUnwrap(drawnExtent(AccountBand(login: "example-user", color: .red), width: width, height: h))
         XCTAssertEqual((marked.min + marked.max) / 2, width / 2, accuracy: 2, "the mark and the name centered")
         let scale = CGFloat(marked.rep.pixelsWide) / width
         let markPixel = try XCTUnwrap(marked.rep.colorAt(x: Int((marked.min + 4) * scale), y: marked.rep.pixelsHigh / 2))
         XCTAssertGreaterThan(markPixel.redComponent, markPixel.blueComponent + 0.3, "the red square first")
-        let plain = try XCTUnwrap(drawnExtent(AccountBand(login: "example-user", color: .none), width: width, height: 34))
+        let plain = try XCTUnwrap(drawnExtent(AccountBand(login: "example-user", color: .none), width: width, height: h))
         XCTAssertEqual((plain.min + plain.max) / 2, width / 2, accuracy: 2, "the name alone, centered")
-        XCTAssertEqual((marked.max - marked.min) - (plain.max - plain.min), 10 + 8, accuracy: 2, "no room kept for the mark")
-        let long = try XCTUnwrap(drawnExtent(AccountBand(login: String(repeating: "a-very-long-login-", count: 10), color: .red), width: 300, height: 34))
+        XCTAssertEqual((marked.max - marked.min) - (plain.max - plain.min), 10 + WindowTitle.gap, accuracy: 2, "no room kept for the mark")
+        let long = try XCTUnwrap(drawnExtent(AccountBand(login: String(repeating: "a-very-long-login-", count: 10), color: .red), width: 300, height: h))
         XCTAssertGreaterThanOrEqual(long.min, 16 - 1, "cut inside the band's sides")
         XCTAssertLessThanOrEqual(long.max, 300 - 16 + 1)
+    }
+
+    /// The popover's band looks like the window's title bar: as high as the
+    /// standard title bar of the window's style (a real window's frame less
+    /// its content), the title bar font, the window title's 10-point square
+    /// and spacing; none of it follows the text size.
+    func testTheBandIsTheWindowsTitleBar() throws {
+        let window = SurfaceController.makeWindow(width: 460, height: 620)
+        XCTAssertFalse(window.isVisible)
+        let bar = window.frame.height - window.contentLayoutRect.height
+        XCTAssertGreaterThan(bar, 0)
+        XCTAssertEqual(AccountBand.height, bar, accuracy: 0.01)
+        XCTAssertEqual(WindowTitle.barHeight, bar, accuracy: 0.01)
+        let title = WindowTitle.install(in: window)
+        XCTAssertEqual(AccountBand.font, title.name.font)
+        XCTAssertEqual(AccountBand.font, NSFont.titleBarFont(ofSize: 0))
+        XCTAssertEqual(AccountBand.gap, title.stack.spacing)
+        XCTAssertEqual(AccountMark.size, AccountMarkView.size)
+        XCTAssertEqual(AccountMark.radius, AccountMarkView.radius)
+        var heights: [CGFloat] = []
+        var extents: [CGFloat] = []
+        for k: CGFloat in [0.75, 1, 1.5] {
+            let band = AccountBand(login: "example-user", color: .red).environment(\.textScale, k)
+            heights.append(NSHostingView(rootView: band.frame(width: 460)).fittingSize.height)
+            let drawn = try XCTUnwrap(drawnExtent(band, width: 460, height: AccountBand.height))
+            extents.append(drawn.max - drawn.min)
+        }
+        for height in heights {
+            XCTAssertEqual(height, bar, accuracy: 0.5, "the same at every text size")
+        }
+        XCTAssertEqual(extents.max()! - extents.min()!, 0, accuracy: 1, "the mark and the name keep their size")
     }
 
     /// The popover's header is the band and the row; the window's the row
@@ -132,7 +159,7 @@ final class HeaderAndWindowTests: XCTestCase {
         for k: CGFloat in [0.75, 1, 1.5] {
             let popover = NSHostingView(rootView: header(.popover).environment(\.textScale, k).frame(width: 460)).fittingSize.height
             let window = NSHostingView(rootView: header(.window).environment(\.textScale, k).frame(width: 460)).fittingSize.height
-            XCTAssertEqual(popover - window, 34 * k, accuracy: 0.5, "k \(k)")
+            XCTAssertEqual(popover - window, AccountBand.height, accuracy: 0.5, "k \(k): the band does not follow the text size")
             // The row is as tall as its 24-point buttons: the 11-point
             // `Updated …` line is lower up to text size 18.
             let line = NSLayoutManager().defaultLineHeight(for: NSFont.systemFont(ofSize: 11 * k))
@@ -191,7 +218,12 @@ final class HeaderAndWindowTests: XCTestCase {
     /// content with the row only (the title bar is the band). The values
     /// match the measurement mode's (`SHIIBAR_GH_PERF_SNAPSHOT`).
     func testTheLeastHeights() async throws {
-        let want: [Int: (popover: CGFloat, window: CGFloat)] = [9: (339, 313), 12: (426, 392), 18: (598, 547)]
+        // The popover: the window's content and the band, which does not
+        // follow the text size.
+        let band = AccountBand.height
+        let want: [Int: (popover: CGFloat, window: CGFloat)] = [
+            9: (313 + band, 313), 12: (392 + band, 392), 18: (547 + band, 547),
+        ]
         for (size, heights) in want.sorted(by: { $0.key < $1.key }) {
             for surface in [Surface.popover, .window] {
                 let socket = FileManager.default.temporaryDirectory.appendingPathComponent("no-daemon-\(UUID().uuidString).sock").path
