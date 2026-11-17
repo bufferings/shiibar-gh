@@ -1458,3 +1458,79 @@ fn an_addition_to_the_merge_queue_by_the_account_is_an_event_inside_the_window()
         .collect();
     assert_eq!(got, [("A_1", EventKind::MergeQueueAdded, Some(ME))]);
 }
+
+#[test]
+fn the_timeline_time_comes_from_timeline_items() {
+    // DESIGN.md, "API usage": `timelineItems { updatedAt }` of the status
+    // query; none when the answer lacks it.
+    let t = teams();
+    let pr = convert::pr_values(
+        &status_node(json!({"timelineItems":{"updatedAt":iso(T0 + 30)}})),
+        &StatusExtra::default(),
+        ctx(&t),
+    )
+    .unwrap();
+    assert_eq!(pr.timeline_updated_at, Some(T0 + 30));
+    assert_eq!(pr.updated_at, T0, "`updatedAt` stays its own value");
+    let pr = convert::pr_values(&status_node(json!({})), &StatusExtra::default(), ctx(&t)).unwrap();
+    assert_eq!(pr.timeline_updated_at, None);
+}
+
+fn with_avatar(login: &str) -> Value {
+    json!({"__typename":"User","login":login,
+           "avatarUrl":format!("https://avatars.example/{login}")})
+}
+
+#[test]
+fn every_row_takes_its_actors_avatar() {
+    // DESIGN.md, "API usage": the row's actor (an event's `actor`, a
+    // comment's or review's `author`) with `avatarUrl(size: 32)`; the
+    // mention in the PR body uses the PR author's.
+    let mut pr = Pr::new(with_avatar("alice"));
+    pr.node["createdAt"] = json!(iso(T0 + 1));
+    pr.node["bodyHTML"] = json!(mention_link(ME));
+    pr.timeline = vec![
+        comment("C_1", with_avatar("bob"), T0 + 10, &mention_link(ME)),
+        comment("C_2", user("carol"), T0 + 11, &mention_link(ME)),
+        json!({"__typename":"MergedEvent","id":"M_1","createdAt":iso(T0 + 20),
+               "url":"https://m/M_1","actor":with_avatar("dave")}),
+        json!({"__typename":"ReopenedEvent","id":"RO_1","createdAt":iso(T0 + 15),
+               "actor":with_avatar("erin")}),
+        json!({"__typename":"AddedToMergeQueueEvent","id":"MQ_1","createdAt":iso(T0 + 16),
+               "actor":with_avatar("frank")}),
+        json!({"__typename":"ReviewRequestedEvent","id":"RR_1","createdAt":iso(T0 + 17),
+               "actor":with_avatar("grace"),
+               "requestedReviewer":{"__typename":"User","login":ME}}),
+    ];
+    pr.threads = vec![thread(
+        "T_1",
+        vec![inline(
+            "I_1",
+            with_avatar("heidi"),
+            T0 + 12,
+            &mention_link(ME),
+        )],
+    )];
+    let avatars: BTreeMap<String, Option<String>> = pr
+        .run()
+        .events
+        .into_iter()
+        .map(|e| (e.id, e.actor_avatar_url))
+        .collect();
+    let url = |login: &str| Some(format!("https://avatars.example/{login}"));
+    assert_eq!(avatars["PR_1:mention"], url("alice"));
+    assert_eq!(avatars["C_1"], url("bob"));
+    assert_eq!(avatars["C_2"], None, "no avatarUrl in the answer");
+    assert_eq!(avatars["M_1"], url("dave"));
+    assert_eq!(avatars["RO_1"], url("erin"));
+    assert_eq!(avatars["MQ_1"], url("frank"));
+    assert_eq!(avatars["RR_1"], url("grace"));
+    assert_eq!(avatars["I_1"], url("heidi"));
+
+    // An approval on the account's PR.
+    let mut mine = Pr::mine();
+    mine.timeline = vec![review("R_1", with_avatar("ivan"), T0 + 10, "APPROVED", "")];
+    let approved = mine.run().events.remove(0);
+    assert_eq!(approved.kind, EventKind::Approved);
+    assert_eq!(approved.actor_avatar_url, url("ivan"));
+}

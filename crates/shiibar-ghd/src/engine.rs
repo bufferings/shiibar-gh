@@ -163,13 +163,14 @@ fn view_of(pr: &PrRec) -> Option<(PlacedTab, proto::Section)> {
     Some((place.tab, section))
 }
 
-/// The order of sections in `list` of a tab.
+/// The order of sections in `list` of a tab, the order the screen shows
+/// them (DESIGN.md, "Review" and "Mine"): Done, Waiting, Doing, Todo.
 fn section_index(section: proto::Section) -> u8 {
     match section {
-        proto::Section::Doing => 0,
-        proto::Section::Todo => 1,
-        proto::Section::Waiting => 2,
-        proto::Section::Done => 3,
+        proto::Section::Done => 0,
+        proto::Section::Waiting => 1,
+        proto::Section::Doing => 2,
+        proto::Section::Todo => 3,
     }
 }
 
@@ -598,6 +599,7 @@ impl Engine {
             text: row.text.clone(),
             counts: row.counts.clone(),
             actor: row.actor.clone(),
+            actor_avatar_url: row.actor.as_ref().and(row.actor_avatar_url.clone()),
             url: row.url.clone(),
             occurred_at: row.occurred_at,
             unread: row.unread,
@@ -729,9 +731,23 @@ impl Engine {
         self.data.accounts.get(id).map_or(0, |a| a.seq)
     }
 
-    /// `list`. DESIGN.md, "CLI (AI integration)": `all` in owner order, open
-    /// PRs first, then the newest `updatedAt`; `review` and `mine` in
-    /// section order and position; the Dismissed list newest Dismiss first.
+    /// DESIGN.md, "All", "Order": the time `Recent activity` sorts a card
+    /// by. The newest row of a kind whose List is on and that is not muted
+    /// (read or not, `+ N more` included); a card without such a row uses
+    /// the time it was added, and a card without that 0.
+    fn activity_at(&self, pr: &PrRec, owner: &OwnerRec) -> i64 {
+        self.rows_of(&pr.key)
+            .filter(|row| self.row_shown(row, owner) && !self.row_muted(row, pr))
+            .map(|row| row.occurred_at)
+            .max()
+            .or(pr.added_at)
+            .unwrap_or(0)
+    }
+
+    /// `list`. DESIGN.md, "CLI (AI integration)": `all` in owner order, each
+    /// owner in `Recent activity` order; `review` and `mine` in the screen's
+    /// section order (Done, Waiting, Doing, Todo) and position; the
+    /// Dismissed list newest Dismiss first.
     pub fn list(&self, args: &ListArgs, _now: &Now) -> Result<Vec<proto::Card>> {
         let accounts = self.accounts_named(args.account.as_deref())?;
         let owners = args
@@ -770,13 +786,18 @@ impl Engine {
             }
         }
         match args.tab {
-            Tab::All => active.sort_by(|(a, ao), (b, bo)| {
-                (self.account_seq(&a.account), ao.is_public(), ao.seq)
-                    .cmp(&(self.account_seq(&b.account), bo.is_public(), bo.seq))
-                    .then_with(|| (a.state != PrState::Open).cmp(&(b.state != PrState::Open)))
-                    .then_with(|| b.updated_at.cmp(&a.updated_at))
-                    .then_with(|| a.key.cmp(&b.key))
-            }),
+            Tab::All => {
+                let at: BTreeMap<&str, i64> = active
+                    .iter()
+                    .map(|(pr, owner)| (pr.key.as_str(), self.activity_at(pr, owner)))
+                    .collect();
+                active.sort_by(|(a, ao), (b, bo)| {
+                    (self.account_seq(&a.account), ao.is_public(), ao.seq)
+                        .cmp(&(self.account_seq(&b.account), bo.is_public(), bo.seq))
+                        .then_with(|| at[b.key.as_str()].cmp(&at[a.key.as_str()]))
+                        .then_with(|| a.key.cmp(&b.key))
+                })
+            }
             Tab::Review | Tab::Mine => active.sort_by_key(|(pr, _)| {
                 let section = view_of(pr).map_or(0, |(_, s)| section_index(s));
                 (
@@ -1408,7 +1429,11 @@ impl Engine {
             }
             making.silent = true;
         }
-        if kind == RowKind::Reopened && self.is_me(account, event.actor.as_deref()) {
+        // DESIGN.md, "Rows of the account's own events": the result of the
+        // account's own action is made read and not notified. Judged per
+        // event by its `actor`; a removal from the merge queue counts the
+        // one who removed the PR, not the one who added it.
+        if kind.is_own_action_kind() && self.is_me(account, event.actor.as_deref()) {
             making.silent = true;
             making.read = true;
         }
@@ -1419,6 +1444,7 @@ impl Engine {
             kind,
             text: event.text,
             actor: event.actor,
+            actor_avatar_url: event.actor_avatar_url,
             url: event.url,
             occurred_at: event.occurred_at,
             comment_id: event.comment_id,
@@ -2038,6 +2064,11 @@ fn pr_from(account: &str, p: IngestPr, existing: Option<&PrRec>) -> PrRec {
         failed_check: p.failed_check,
         changes_requested_by: p.changes_requested_by,
         updated_at: p.updated_at,
+        // A PR record from an answer without the timeline time keeps the
+        // saved one.
+        timeline_updated_at: p
+            .timeline_updated_at
+            .or_else(|| existing.and_then(|e| e.timeline_updated_at)),
         created_at: Some(p.created_at),
         my_review_at: p.my_review_at,
         is_private: p.is_private,
@@ -2083,6 +2114,7 @@ fn row_defaults() -> RowRec {
         text: None,
         counts: None,
         actor: None,
+        actor_avatar_url: None,
         url: String::new(),
         occurred_at: 0,
         comment_id: None,

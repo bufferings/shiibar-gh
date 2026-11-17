@@ -194,6 +194,9 @@ fn every_command_has_help_with_exit_0_and_needs_no_daemon() {
             "keep_watching_days",
             "[mine]",
             "mine [--top",
+            "Doing, Todo, Waiting",
+            "open PRs first",
+            "most recently updated",
         ] {
             assert!(!result.stdout.contains(gone), "{args:?}: {gone}");
         }
@@ -220,6 +223,8 @@ fn every_command_has_help_with_exit_0_and_needs_no_daemon() {
         "[unmuted]",
         "Show muted",
         "not the PRs set to Unmute",
+        "review and mine: Done, Waiting, Doing, Todo in order",
+        "Recent\n      activity",
     ] {
         assert!(help.contains(wanted), "{wanted}: {help}");
     }
@@ -1004,7 +1009,7 @@ mod with_events {
     }
 
     #[test]
-    fn list_prints_open_prs_first_then_recently_updated_and_marks_review_requests() {
+    fn list_prints_recent_activity_order_and_marks_review_requests() {
         let daemon = Daemon::start_with_keychain("keychain.json", |_| {});
         daemon.setup();
         daemon.ok(json!({"cmd":"dev_ingest","account":"me","ingest":{
@@ -1028,9 +1033,11 @@ mod with_events {
             .filter(|l| !l.starts_with(' '))
             .map(|l| l.split(' ').next().unwrap())
             .collect();
+        // The newest row first, a merged PR among the open ones; PR_1 has
+        // no row and uses the time it was added.
         assert_eq!(
             order,
-            ["org/app#3", "org/app#1", "org/app#2", "elsewhere/app#4"]
+            ["org/app#3", "org/app#2", "org/app#1", "elsewhere/app#4"]
         );
         assert!(
             text.contains("org/app#3 [open] [review:todo] [review requested] review="),
@@ -1230,29 +1237,129 @@ mod with_events {
                 "org/app#1 [mine:todo]"
             ]
         );
-        // Section order: Doing, Todo, Waiting, Done.
-        place(&["place", "org/app#1", "mine", "done", "--account", "me"]);
-        place(&["place", "org/app#2", "mine", "waiting", "--account", "me"]);
-        place(&["place", "org/app#3", "mine", "doing", "--account", "me"]);
-        let json = json_of(daemon.cli(&["list", "--tab", "mine", "--json"]));
-        let sections: Vec<(String, String)> = json["cards"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|c| {
-                (
-                    c["pr"].as_str().unwrap().to_string(),
-                    c["placement"]["section"].as_str().unwrap().to_string(),
-                )
-            })
-            .collect();
+        // Section order, the screen's: Done, Waiting, Doing, Todo.
+        daemon.ok(json!({"cmd":"dev_ingest","account":"me","ingest":{
+            "missing_pr_ids":[],
+            "prs":[pr("PR_4", 4, "dave", json!({})), pr("PR_5", 5, "dave", json!({}))],
+            "events":[],
+            "reactions":[]
+        }}));
+        let cases = [
+            (
+                "mine",
+                [
+                    ("org/app#4", "todo"),
+                    ("org/app#1", "doing"),
+                    ("org/app#2", "done"),
+                    ("org/app#3", "waiting"),
+                ],
+            ),
+            (
+                "review",
+                [
+                    ("org/app#5", "todo"),
+                    ("org/app#4", "doing"),
+                    ("org/app#2", "done"),
+                    ("org/app#3", "waiting"),
+                ],
+            ),
+        ];
+        for (tab, places) in cases {
+            for (pr, section) in places {
+                place(&["place", pr, tab, section, "--account", "me"]);
+            }
+            let json = json_of(daemon.cli(&["list", "--tab", tab, "--json"]));
+            let sections: Vec<(String, String)> = json["cards"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|c| {
+                    (
+                        c["pr"].as_str().unwrap().to_string(),
+                        c["placement"]["section"].as_str().unwrap().to_string(),
+                    )
+                })
+                .collect();
+            let want: Vec<(String, String)> = [2, 3, 1, 0]
+                .iter()
+                .map(|&i| (places[i].0.to_string(), places[i].1.to_string()))
+                .collect();
+            assert_eq!(sections, want, "{tab}");
+            let text = daemon.cli(&["list", "--tab", tab]).stdout;
+            let marks: Vec<&str> = text
+                .lines()
+                .filter(|l| !l.starts_with(' '))
+                .filter_map(|l| l.split(' ').find(|w| w.starts_with(&format!("[{tab}:"))))
+                .collect();
+            assert_eq!(
+                marks,
+                ["done", "waiting", "doing", "todo"].map(|s| format!("[{tab}:{s}]")),
+                "{tab}: {text}"
+            );
+        }
+    }
+
+    /// DESIGN.md, "CLI (AI integration)" and "All", "Order": `list --tab
+    /// all` is in `Recent activity` order: the newest row shown, else the
+    /// time the card was added; a merged card does not go last, and a row
+    /// of a kind whose List is off or a muted row does not count.
+    #[test]
+    fn list_all_is_in_recent_activity_order() {
+        let daemon = Daemon::start_with_keychain("keychain.json", |_| {});
+        daemon.setup();
+        let result = daemon.cli(&[
+            "owner",
+            "events",
+            "set",
+            "org",
+            "reply",
+            "list",
+            "off",
+            "--account",
+            "me",
+        ]);
+        assert_eq!(result.code, 0, "{}", result.stderr);
+        // A merged PR the daemon knows while it was open.
+        daemon.ok(json!({"cmd":"dev_ingest","account":"me","ingest":{
+            "prs":[pr("PR_2", 2, "alice", json!({}))]
+        }}));
+        daemon.ok(json!({"cmd":"dev_ingest","account":"me","ingest":{
+            "missing_pr_ids":[],
+            "prs":[
+                pr("PR_1", 1, "alice", json!({"updated_at": 1_800_000_900})),
+                pr("PR_2", 2, "alice", json!({"state":"merged"})),
+                pr("PR_3", 3, "bob", json!({})),
+                pr("PR_4", 4, "carol", json!({})),
+            ],
+            "events":[
+                event("E_2", "PR_2", "comment_other", 1_800_000_050),
+                event("E_3", "PR_3", "reply", 1_800_000_090),
+                event("E_4", "PR_4", "comment_other", 1_800_000_080),
+            ],
+            "reactions":[]
+        }}));
+        let order = || -> Vec<String> {
+            json_of(daemon.cli(&["list", "--json"]))["cards"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|c| c["pr"].as_str().unwrap().to_string())
+                .collect()
+        };
+        // PR_3's only row is of a kind whose List is off, so PR_3 and PR_1
+        // (no rows; its newer `updatedAt` does not count) use the time they
+        // were added, the same for both: the PR key breaks the tie. The
+        // merged PR_2 does not go last.
         assert_eq!(
-            sections,
-            [
-                ("org/app#3".to_string(), "doing".to_string()),
-                ("org/app#2".to_string(), "waiting".to_string()),
-                ("org/app#1".to_string(), "done".to_string()),
-            ]
+            order(),
+            ["org/app#4", "org/app#2", "org/app#1", "org/app#3"]
+        );
+        // A muted card's rows (other than mentions) do not count.
+        let result = daemon.cli(&["mute", "user", "carol", "--account", "me"]);
+        assert_eq!(result.code, 0, "{}", result.stderr);
+        assert_eq!(
+            order(),
+            ["org/app#2", "org/app#1", "org/app#3", "org/app#4"]
         );
     }
 

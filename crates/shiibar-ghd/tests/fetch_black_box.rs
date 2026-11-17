@@ -3376,11 +3376,9 @@ fn reopened_and_merged_events_make_rows_without_the_paired_closed() {
     assert_eq!(daemon.row("CL_1").unwrap()["kind"], "closed");
     let events = ops(&github, "Events").pop().unwrap();
     assert!(events.query().contains("REOPENED_EVENT"));
-    assert!(
-        events
-            .query()
-            .contains("... on ReopenedEvent { id createdAt actor { login } }")
-    );
+    assert!(events.query().contains(
+        "... on ReopenedEvent { id createdAt actor { __typename login avatarUrl(size: 32) } }"
+    ));
 
     github.with(|w| {
         w.prs[0]["state"] = json!("MERGED");
@@ -4104,5 +4102,96 @@ fn a_team_search_that_keeps_failing_is_no_failure_and_starts_no_fast_retries() {
         last - (T0 + 100) > 300,
         "past the five minutes of fetch_failed"
     );
+    daemon.stop();
+}
+
+/// DESIGN.md, "API usage", "Timeline time": an addition to the merge queue
+/// moves only the timeline time, not `updatedAt`. A PR without a saved
+/// timeline time only has it saved; one whose timeline time moved past the
+/// saved value has its events fetched; one where neither moved has none.
+#[test]
+fn the_timeline_time_fetches_the_events_of_an_addition_to_the_merge_queue() {
+    let github = world();
+    github.with(|w| w.prs.push(pr_node("PR_1", "org", 1, "alice", json!({}))));
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    let status = ops(&github, "Status").pop().unwrap();
+    assert!(status.query().contains("timelineItems { updatedAt }"));
+    assert!(daemon.card("PR_1").is_some());
+
+    // No saved value (as right after the update from 0.6): saved only.
+    github.with(|w| w.prs[0]["timelineItems"] = json!({"updatedAt": iso(T0 + 150)}));
+    github.clear_requests();
+    daemon.clock(T0 + 200);
+    assert!(ops(&github, "Status").iter().any(|r| carries(r, "PR_1")));
+    assert!(
+        !ops(&github, "Events").iter().any(|r| carries(r, "PR_1")),
+        "nothing fetched again for a PR without a saved timeline time"
+    );
+
+    // Only the timeline time moves: the events are fetched.
+    github.with(|w| {
+        w.prs[0]["timelineItems"] = json!({"updatedAt": iso(T0 + 250)});
+        w.timeline.insert(
+            "PR_1".into(),
+            vec![json!({"__typename":"AddedToMergeQueueEvent","id":"MQ_1",
+                        "createdAt":iso(T0 + 250),
+                        "actor":{"__typename":"User","login":"bob",
+                                 "avatarUrl":"https://avatars.example/bob"}})],
+        );
+    });
+    github.clear_requests();
+    daemon.clock(T0 + 300);
+    assert!(ops(&github, "Events").iter().any(|r| carries(r, "PR_1")));
+    let row = daemon.row("MQ_1").expect("the addition makes a row");
+    assert_eq!(row["kind"], "merge_queue_added");
+    assert_eq!(row["actor"], "bob");
+    assert_eq!(row["actor_avatar_url"], "https://avatars.example/bob");
+    assert_eq!(row["text"], Value::Null);
+    assert_eq!(row["unread"], true);
+
+    // Neither moved: no events.
+    github.clear_requests();
+    daemon.clock(T0 + 400);
+    assert!(ops(&github, "Status").iter().any(|r| carries(r, "PR_1")));
+    assert!(!ops(&github, "Events").iter().any(|r| carries(r, "PR_1")));
+    daemon.stop();
+}
+
+/// DESIGN.md, "Rows of the account's own events": the account's own merge
+/// is made read; the queue's removal after the account's addition is not.
+#[test]
+fn rows_of_the_accounts_own_merge_queue_events_are_read() {
+    let github = world();
+    github.with(|w| w.prs.push(pr_node("PR_1", "org", 1, "me", json!({}))));
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &github);
+    setup(&daemon);
+    daemon.clock(T0 + 100);
+    github.with(|w| {
+        w.prs[0]["updatedAt"] = json!(iso(T0 + 160));
+        let me = json!({"__typename":"User","login":"me","avatarUrl":"https://avatars.example/me"});
+        w.timeline.insert(
+            "PR_1".into(),
+            vec![
+                json!({"__typename":"AddedToMergeQueueEvent","id":"MQ_1",
+                       "createdAt":iso(T0 + 110),"actor":me}),
+                json!({"__typename":"RemovedFromMergeQueueEvent","id":"MQ_2",
+                       "createdAt":iso(T0 + 120),"reason":"manual",
+                       "actor":{"__typename":"Bot","login":"github-merge-queue"},
+                       "enqueuer":{"login":"me"}}),
+                json!({"__typename":"AddedToMergeQueueEvent","id":"MQ_3",
+                       "createdAt":iso(T0 + 130),"actor":me}),
+            ],
+        );
+    });
+    daemon.clock(T0 + 200);
+    assert_eq!(daemon.row("MQ_1").unwrap()["unread"], false);
+    assert_eq!(daemon.row("MQ_3").unwrap()["unread"], false);
+    let removed = daemon.row("MQ_2").expect("the removal makes a row");
+    assert_eq!(removed["unread"], true);
+    assert_eq!(removed["actor"], "github-merge-queue");
     daemon.stop();
 }

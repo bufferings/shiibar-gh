@@ -131,6 +131,9 @@ pub struct PrInfo {
     /// The enabled owner it belongs to.
     pub owner_id: Option<String>,
     pub updated_at: i64,
+    /// The timeline time of the last status fetch; `None` until one saved
+    /// it.
+    pub timeline_updated_at: Option<i64>,
     pub state: PrState,
     pub mine: bool,
     pub checks: Checks,

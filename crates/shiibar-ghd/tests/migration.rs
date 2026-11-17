@@ -1,10 +1,12 @@
-//! The move of a 0.5 database (schema version 7) to version 8 and of a 0.4
-//! database (version 6) through 7 to 8, keeping everything, and of a 0.3
-//! database (version 5) and a 0.2 database (version 4) to version 8, keeping
-//! only the accounts. docs/tasks/M7.md and docs/tasks/M9.md, "Database and
-//! migration" and "How to test"; DESIGN.md, "Updating from 0.5", "Updating
-//! from 0.4" and "Updating from 0.3 and 0.2". The schemas come from tags
-//! v0.5.0 (`data/schema_v05.sql`), v0.4.0 (`data/schema_v04.sql`), v0.3.0
+//! The move of a 0.6 database (schema version 8) to version 9, of a 0.5
+//! database (version 7) through 8 to 9 and of a 0.4 database (version 6)
+//! through 7 and 8 to 9, keeping everything, and of a 0.3 database (version
+//! 5) and a 0.2 database (version 4) to version 9, keeping only the
+//! accounts. docs/tasks/M7.md, docs/tasks/M9.md and docs/tasks/M10.md,
+//! "Database and migration" and "How to test"; DESIGN.md, "Updating from
+//! 0.6", "Updating from 0.5", "Updating from 0.4" and "Updating from 0.3 and
+//! 0.2". The schemas come from tags v0.6.0 (`data/schema_v06.sql`), v0.5.0
+//! (`data/schema_v05.sql`), v0.4.0 (`data/schema_v04.sql`), v0.3.0
 //! (`data/schema_v03.sql`) and v0.2.0 (`data/schema_v02.sql`); the rows
 //! below are what those daemons write.
 
@@ -295,6 +297,7 @@ fn old_database(dir: &Path, version: i64, extra: &str) -> PathBuf {
     let db = dir.join("state.db");
     let conn = Connection::open(&db).unwrap();
     let (schema, seed) = match version {
+        8 => (include_str!("data/schema_v06.sql"), SEED_V8),
         7 => (include_str!("data/schema_v05.sql"), SEED_V7),
         6 => (include_str!("data/schema_v04.sql"), SEED_V6),
         5 => (include_str!("data/schema_v03.sql"), SEED_V5),
@@ -305,6 +308,9 @@ fn old_database(dir: &Path, version: i64, extra: &str) -> PathBuf {
     conn.execute_batch(seed).unwrap();
     if version == 7 {
         conn.execute_batch(&cards_v7()).unwrap();
+    }
+    if version == 8 {
+        conn.execute_batch(&cards_v8()).unwrap();
     }
     conn.execute_batch(extra).unwrap();
     drop(conn);
@@ -347,7 +353,7 @@ fn open(db: &Path) -> (Store, Data) {
 /// What every move leaves: the accounts and nothing else.
 fn only_the_accounts_are_left(db: &Path, data: &Data) {
     assert_eq!(version(db), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 8);
+    assert_eq!(SCHEMA_VERSION, 9);
     let mut names = tables(db);
     names.sort();
     assert_eq!(
@@ -402,7 +408,7 @@ fn only_the_accounts_are_left(db: &Path, data: &Data) {
 }
 
 #[test]
-fn a_0_3_database_moves_to_version_8_keeping_only_the_accounts() {
+fn a_0_3_database_moves_to_version_9_keeping_only_the_accounts() {
     let dir = tempfile::tempdir().unwrap();
     let db = old_database(dir.path(), 5, "");
     let (store, data) = open(&db);
@@ -426,7 +432,7 @@ fn a_0_3_database_moves_to_version_8_keeping_only_the_accounts() {
 }
 
 #[test]
-fn a_0_2_database_moves_to_version_8_keeping_only_the_accounts() {
+fn a_0_2_database_moves_to_version_9_keeping_only_the_accounts() {
     let dir = tempfile::tempdir().unwrap();
     let db = old_database(dir.path(), 4, "");
     let (store, data) = open(&db);
@@ -440,7 +446,7 @@ fn a_0_2_database_moves_to_version_8_keeping_only_the_accounts() {
 }
 
 #[test]
-fn a_moved_database_saves_and_opens_again_as_version_8() {
+fn a_moved_database_saves_and_opens_again_as_version_9() {
     let dir = tempfile::tempdir().unwrap();
     let db = old_database(dir.path(), 5, "");
     let (mut store, data) = open(&db);
@@ -466,7 +472,7 @@ fn a_moved_database_saves_and_opens_again_as_version_8() {
 
 #[test]
 fn a_failed_move_rolls_back_and_leaves_the_old_database_unreadable() {
-    // A view named like a version 8 table survives the drop of the old
+    // A view named like a version 9 table survives the drop of the old
     // tables, so creating that table fails after the drops already ran
     // inside the transaction.
     for old in [5, 4] {
@@ -516,7 +522,7 @@ fn a_0_1_database_stays_unreadable_and_a_newer_one_is_an_error() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("state.db");
     let conn = Connection::open(&db).unwrap();
-    conn.execute_batch("CREATE TABLE t (x); PRAGMA user_version = 9;")
+    conn.execute_batch("CREATE TABLE t (x); PRAGMA user_version = 10;")
         .unwrap();
     drop(conn);
     assert!(Store::open(&db).is_err());
@@ -575,7 +581,7 @@ fn the_daemon_starts_on_a_0_3_state_directory() {
 // ------------------------------------------------------------- from 0.4
 
 #[test]
-fn a_0_4_database_moves_to_version_8_keeping_everything() {
+fn a_0_4_database_moves_to_version_9_keeping_everything() {
     let dir = tempfile::tempdir().unwrap();
     let db = old_database(dir.path(), 6, "");
     let counts: Vec<i64> = [
@@ -596,7 +602,7 @@ fn a_0_4_database_moves_to_version_8_keeping_everything() {
     .collect();
     let (store, data) = open(&db);
     drop(store);
-    assert_eq!(version(&db), 8);
+    assert_eq!(version(&db), 9);
     let after: Vec<i64> = [
         "accounts",
         "owners",
@@ -723,12 +729,13 @@ fn a_0_4_database_shows_its_ranks_and_done_order_after_the_move() {
             )
         })
         .collect();
+    // The screen's section order: Done before Todo.
     let want = [
+        ("org/app#4", "done", 0, false),
+        ("org/app#5", "done", 1, false),
         ("org/app#1", "todo", 0, false),
         ("org/app#2", "todo", 1, true),
         ("org/app#3", "todo", 2, false),
-        ("org/app#4", "done", 0, false),
-        ("org/app#5", "done", 1, false),
     ];
     let want: Vec<(String, String, u32, bool)> = want
         .iter()
@@ -848,19 +855,20 @@ fn the_daemon_starts_on_a_0_4_state_directory() {
         .iter()
         .map(|c| c["pr"].as_str().unwrap())
         .collect();
+    // Done (#4, #5) before Todo (#1, #2, #3).
     assert_eq!(
         prs,
         [
+            "org/app#4",
+            "org/app#5",
             "org/app#1",
             "org/app#2",
-            "org/app#3",
-            "org/app#4",
-            "org/app#5"
+            "org/app#3"
         ]
     );
-    assert_eq!(cards[1]["muted"], json!(["pr"]));
-    assert_eq!(cards[1]["pr_mute"], "mute");
-    assert_eq!(cards[0]["pr_mute"], "none");
+    assert_eq!(cards[3]["muted"], json!(["pr"]));
+    assert_eq!(cards[3]["pr_mute"], "mute");
+    assert_eq!(cards[2]["pr_mute"], "none");
     let mutes = daemon.ok(json!({"cmd":"mutes_get","account":"me"}))["mutes"].clone();
     assert_eq!(mutes["prs"], json!(["org/app#2"]));
     assert_eq!(
@@ -887,13 +895,13 @@ const TABLES: [&str; 11] = [
 ];
 
 #[test]
-fn a_0_5_database_moves_to_version_8_keeping_everything() {
+fn a_0_5_database_moves_to_version_9_keeping_everything() {
     let dir = tempfile::tempdir().unwrap();
     let db = old_database(dir.path(), 7, "");
     let counts: Vec<i64> = TABLES.iter().map(|t| count(&db, t)).collect();
     let (store, data) = open(&db);
     drop(store);
-    assert_eq!(version(&db), 8);
+    assert_eq!(version(&db), 9);
     let after: Vec<i64> = TABLES.iter().map(|t| count(&db, t)).collect();
     assert_eq!(after, counts, "every row stays");
 
@@ -982,11 +990,11 @@ fn a_0_5_database_lists_mine_in_the_same_order_after_the_move() {
     assert_eq!(
         order(shiibar_gh_proto::Tab::Mine),
         want(&[
+            ("org/app#6", "done", 0, false, false),
+            ("org/app#5", "done", 1, false, false),
             ("org/app#1", "todo", 0, false, false),
             ("org/app#2", "todo", 1, true, false),
             ("org/app#4", "todo", 2, false, false),
-            ("org/app#6", "done", 0, false, false),
-            ("org/app#5", "done", 1, false, false),
             // Dismissed: where it would come back, between #2 and #4.
             ("org/app#3", "todo", 2, false, true),
         ])
@@ -994,10 +1002,10 @@ fn a_0_5_database_lists_mine_in_the_same_order_after_the_move() {
     assert_eq!(
         order(shiibar_gh_proto::Tab::Review),
         want(&[
+            ("org/app#10", "done", 0, false, false),
+            ("org/app#9", "waiting", 0, false, false),
             ("org/app#7", "doing", 0, false, false),
             ("org/app#8", "todo", 0, false, false),
-            ("org/app#9", "waiting", 0, false, false),
-            ("org/app#10", "done", 0, false, false),
         ])
     );
 }
@@ -1106,11 +1114,11 @@ fn the_daemon_starts_on_a_0_5_state_directory() {
     assert_eq!(
         mine(),
         [
+            at("org/app#6", "done", 0),
+            at("org/app#5", "done", 1),
             at("org/app#1", "todo", 0),
             at("org/app#2", "todo", 1),
             at("org/app#4", "todo", 2),
-            at("org/app#6", "done", 0),
-            at("org/app#5", "done", 1),
         ]
     );
     // A reopen of the cards in Done: back to their ranks in Todo.
@@ -1135,5 +1143,355 @@ fn the_daemon_starts_on_a_0_5_state_directory() {
     // The dismissed card comes back to its rank in Todo too.
     daemon.ok(json!({"cmd":"restore","account":"me","pr":"org/app#3"}));
     assert_eq!(mine()[4], at("org/app#3", "todo", 4));
+    daemon.stop();
+}
+
+// ------------------------------------------------------------- from 0.6
+
+/// One of everything 0.6 saves (DESIGN.md, "Updating from 0.6"): Mine's and
+/// Review's four sections, a dismissed card, a muted card, Mute lists, an
+/// event table, settings, rows of every kind (unread and read, the actor
+/// kinds without a text), a deleted row, a Dismiss record and a Reaction
+/// baseline.
+const SEED_V8: &str = r#"
+INSERT INTO meta (key, value) VALUES ('seq', '5'), ('restore_accounts', 'false');
+INSERT INTO config (key, value) VALUES ('text_size', '15'), ('appearance', '"dark"');
+INSERT INTO accounts (id, login, color, seq, token, updated_at, dot, teams, graphql_limit,
+    rest_limit, stopped_until, fetch) VALUES (
+    '1001', 'me', 'green', 1, '{"registered":true}', 1799999000, 1,
+    '[{"database_id":42,"slug":"core","org":"org"}]', NULL, NULL, NULL, '{}');
+INSERT INTO mutes (account, kind, position, name) VALUES
+    ('1001', 'pr', 0, 'org/app#2'), ('1001', 'user', 0, 'example-bot'),
+    ('1001', 'repo', 0, 'org/legacy');
+INSERT INTO owners (id, account, name, kind, github_id, seq, enabled, notify, skip_drafts,
+    watch_started_at, fetched_at) VALUES
+    ('o2', '1001', 'org', 'org', 100, 2, 1, 1, 1, 1799000000, 1799999000);
+INSERT INTO owner_events (owner, event, list, notify) VALUES
+    ('o2', 'comment', 1, 0), ('o2', 'checks_passed', 0, 0);
+INSERT INTO pr_rows (id, account, pr, kind, text, counts, actor, url, occurred_at, comment_id,
+    unread, listed, made_at, notify) VALUES
+    ('1001:R_1', '1001', '1001:PR_1', 'review_requested', 'for you', NULL, 'bob', 'u1',
+     1799999101, NULL, 1, 1, 1799999102, 'delivered'),
+    ('1001:R_2', '1001', '1001:PR_1', 'team_review_requested', 'for core team', NULL, 'bob',
+     'u2', 1799999102, NULL, 0, 1, 1799999103, 'none'),
+    ('1001:R_3', '1001', '1001:PR_1', 'mentioned', 'hi @me', NULL, 'carol', 'u3', 1799999103,
+     'C_3', 1, 1, 1799999104, 'pending'),
+    ('1001:R_4', '1001', '1001:PR_1', 'team_mentioned', 'hi @org/core', NULL, 'carol', 'u4',
+     1799999104, 'C_4', 0, 0, 1799999105, 'delivered'),
+    ('1001:R_5', '1001', '1001:PR_1', 'comment', 'hello', NULL, 'alice', 'u5', 1799999105,
+     'C_5', 1, 1, 1799999106, 'pending'),
+    ('1001:R_6', '1001', '1001:PR_1', 'comment_other', 'hey', NULL, 'alice', 'u6', 1799999106,
+     'C_6', 0, 1, 1799999107, 'none'),
+    ('1001:R_7', '1001', '1001:PR_1', 'reply', 'yes', NULL, 'dave', 'u7', 1799999107, 'C_7', 1,
+     1, 1799999108, 'delivered'),
+    ('1001:R_8', '1001', '1001:PR_1', 'reply_mentioned', 'and you', NULL, 'dave', 'u8',
+     1799999108, 'C_8', 0, 1, 1799999109, 'none'),
+    ('1001:R_9', '1001', '1001:PR_1', 'reaction', 'my comment', '{"THUMBS_UP":2}', NULL, 'u9',
+     1799999109, 'C_1', 1, 1, 1799999110, 'none'),
+    ('1001:R_10', '1001', '1001:PR_1', 'approved', NULL, NULL, 'erin', 'u10', 1799999110, NULL,
+     1, 1, 1799999111, 'delivered'),
+    ('1001:R_11', '1001', '1001:PR_1', 'changes_requested', NULL, NULL, NULL, 'u11',
+     1799999111, NULL, 0, 1, 1799999112, 'none'),
+    ('1001:R_12', '1001', '1001:PR_1', 'checks_failed', 'build', NULL, NULL, 'u12',
+     1799999112, NULL, 1, 1, 1799999113, 'delivered'),
+    ('1001:R_13', '1001', '1001:PR_1', 'checks_passed', NULL, NULL, NULL, 'u13', 1799999113,
+     NULL, 0, 0, 1799999114, 'none'),
+    ('1001:R_14', '1001', '1001:PR_1', 'conflicts', NULL, NULL, NULL, 'u14', 1799999114, NULL,
+     1, 1, 1799999115, 'none'),
+    ('1001:R_15', '1001', '1001:PR_1', 'mergeable', NULL, NULL, NULL, 'u15', 1799999115, NULL,
+     0, 1, 1799999116, 'none'),
+    ('1001:R_16', '1001', '1001:PR_1', 'merge_queue_added', NULL, NULL, 'me', 'u16',
+     1799999116, NULL, 1, 1, 1799999117, 'delivered'),
+    ('1001:R_17', '1001', '1001:PR_1', 'merge_queue_removed', 'Checks failed · added by me',
+     NULL, 'github-merge-queue', 'u17', 1799999117, NULL, 1, 1, 1799999118, 'pending'),
+    ('1001:R_18', '1001', '1001:PR_5', 'merged', NULL, NULL, 'me', 'u18', 1799999118, NULL, 1,
+     1, 1799999119, 'delivered'),
+    ('1001:R_19', '1001', '1001:PR_6', 'closed', NULL, NULL, 'bob', 'u19', 1799999119, NULL,
+     0, 1, 1799999120, 'none'),
+    ('1001:R_20', '1001', '1001:PR_1', 'reopened', NULL, NULL, 'me', 'u20', 1799999120, NULL,
+     0, 1, 1799999121, 'none');
+INSERT INTO deleted_rows (id, pr) VALUES ('1001:R_0', '1001:PR_1');
+INSERT INTO dismiss_records (key, account, pr_id, owner, updated_at) VALUES
+    ('1001:PR_R', '1001', 'PR_R', 'o2', 1799990000);
+INSERT INTO reaction_baselines (key, pr, counts) VALUES
+    ('1001:C_1', '1001:PR_1', '{"THUMBS_UP":2}');
+"#;
+
+/// The cards of [`SEED_V8`]: the 0.6 `prs` layout is the 0.5 one.
+fn cards_v8() -> String {
+    [
+        pr_v7(1, "me", "open", "mine", "doing", 0, None, None),
+        pr_v7(2, "alice", "open", "mine", "todo", 0, None, None),
+        pr_v7(
+            3,
+            "me",
+            "open",
+            "mine",
+            "todo",
+            1,
+            None,
+            Some(1_799_999_900),
+        ),
+        pr_v7(4, "me", "open", "mine", "waiting", 0, None, None),
+        pr_v7(
+            5,
+            "me",
+            "merged",
+            "mine",
+            "todo",
+            2,
+            Some((1_799_999_000, 3)),
+            None,
+        ),
+        pr_v7(
+            6,
+            "bob",
+            "closed",
+            "review",
+            "waiting",
+            1,
+            Some((1_799_998_000, 1)),
+            None,
+        ),
+        pr_v7(7, "bob", "open", "review", "doing", 0, None, None),
+        pr_v7(8, "bob", "open", "review", "todo", 0, None, None),
+        pr_v7(9, "bob", "open", "review", "waiting", 0, None, None),
+    ]
+    .concat()
+}
+
+/// The names of a table's columns.
+fn columns(db: &Path, table: &str) -> Vec<String> {
+    let conn = Connection::open(db).unwrap();
+    let mut statement = conn
+        .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))
+        .unwrap();
+    statement
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+}
+
+#[test]
+fn a_0_6_database_moves_to_version_9_keeping_everything() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = old_database(dir.path(), 8, "");
+    let counts: Vec<i64> = TABLES.iter().map(|t| count(&db, t)).collect();
+    let before = {
+        let conn = Connection::open(&db).unwrap();
+        let mut statement = conn
+            .prepare("SELECT id, kind, text, actor, unread, notify FROM pr_rows ORDER BY id")
+            .unwrap();
+        statement
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, bool>(4)?,
+                    r.get::<_, String>(5)?,
+                ))
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .collect::<Vec<_>>()
+    };
+    let (store, data) = open(&db);
+    drop(store);
+    assert_eq!(version(&db), 9);
+    let after: Vec<i64> = TABLES.iter().map(|t| count(&db, t)).collect();
+    assert_eq!(after, counts, "every row stays");
+    assert!(columns(&db, "prs").contains(&"timeline_updated_at".to_string()));
+    assert!(columns(&db, "pr_rows").contains(&"actor_avatar_url".to_string()));
+
+    // Every row keeps its kind, text, actor, unread mark and delivery, and
+    // has no avatar: the rows of the account's own events made by 0.6 stay
+    // unread.
+    let mut rows: Vec<_> = data.rows.values().collect();
+    rows.sort_by(|a, b| a.id.cmp(&b.id));
+    let now: Vec<_> = rows
+        .iter()
+        .map(|r| {
+            (
+                r.id.clone(),
+                r.kind.as_str().to_string(),
+                r.text.clone(),
+                r.actor.clone(),
+                r.unread,
+                r.notify.as_str().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(now, before);
+    assert_eq!(rows.len(), 20, "one of every kind");
+    assert!(rows.iter().all(|r| r.actor_avatar_url.is_none()));
+    assert!(data.rows["1001:R_16"].unread, "own merge queue addition");
+    assert!(data.rows["1001:R_18"].unread, "own merge");
+    assert_eq!(data.rows["1001:R_10"].text, None, "Approved has no text");
+    assert!(data.deleted_rows.contains_key("1001:R_0"));
+
+    // Placements, Done entries, Dismiss and Mute stay; no PR has a
+    // timeline time yet.
+    let place = |n: u32| {
+        let pr = &data.prs[&format!("1001:PR_{n}")];
+        let p = pr.place.unwrap();
+        (p.tab, p.section, p.rank, pr.done_at, pr.done_seq)
+    };
+    let want = [
+        (1, PlacedTab::Mine, Section::Doing, 0, None, 0),
+        (2, PlacedTab::Mine, Section::Todo, 0, None, 0),
+        (3, PlacedTab::Mine, Section::Todo, 1, None, 0),
+        (4, PlacedTab::Mine, Section::Waiting, 0, None, 0),
+        (5, PlacedTab::Mine, Section::Todo, 2, Some(1_799_999_000), 3),
+        (
+            6,
+            PlacedTab::Review,
+            Section::Waiting,
+            1,
+            Some(1_799_998_000),
+            1,
+        ),
+        (7, PlacedTab::Review, Section::Doing, 0, None, 0),
+        (8, PlacedTab::Review, Section::Todo, 0, None, 0),
+        (9, PlacedTab::Review, Section::Waiting, 0, None, 0),
+    ];
+    for (n, tab, section, rank, done_at, done_seq) in want {
+        assert_eq!(place(n), (tab, section, rank, done_at, done_seq), "PR_{n}");
+    }
+    assert!(data.prs.values().all(|p| p.timeline_updated_at.is_none()));
+    assert_eq!(data.prs["1001:PR_3"].dismissed_at, Some(1_799_999_900));
+    let mutes = &data.accounts["1001"].mutes;
+    assert_eq!(mutes.prs, vec!["org/app#2".to_string()]);
+    assert_eq!(mutes.users, vec!["example-bot".to_string()]);
+    assert_eq!(mutes.repos, vec!["org/legacy".to_string()]);
+    assert_eq!(data.config.text_size, 15);
+    assert_eq!(data.records.len(), 1);
+    assert_eq!(data.baselines.len(), 1);
+}
+
+#[test]
+fn a_moved_0_6_database_saves_and_opens_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = old_database(dir.path(), 8, "");
+    let (mut store, mut data) = open(&db);
+    data.prs.get_mut("1001:PR_1").unwrap().timeline_updated_at = Some(1_799_999_500);
+    data.rows.get_mut("1001:R_3").unwrap().actor_avatar_url =
+        Some("https://avatars.example/carol".into());
+    let engine = shiibar_ghd::engine::Engine::restore(data.clone());
+    let mut dirty = engine.dirty().clone();
+    dirty.prs.insert("1001:PR_1".into());
+    dirty.rows.insert("1001:R_3".into());
+    store.save(engine.data(), &dirty).unwrap();
+    drop(store);
+    let (_, again) = open(&db);
+    assert_eq!(&again, engine.data(), "nothing lost");
+    assert_eq!(
+        again.prs["1001:PR_1"].timeline_updated_at,
+        Some(1_799_999_500)
+    );
+    assert_eq!(
+        again.rows["1001:R_3"].actor_avatar_url.as_deref(),
+        Some("https://avatars.example/carol")
+    );
+}
+
+#[test]
+fn a_failed_move_from_0_6_rolls_back_and_leaves_version_8_unreadable() {
+    // The second column cannot be added after the first one was, or the
+    // moved state cannot be read (a section no build knows in Review):
+    // either way the move fails inside its transaction and nothing changes.
+    for extra in [
+        "ALTER TABLE pr_rows ADD COLUMN actor_avatar_url TEXT;",
+        "UPDATE prs SET place_section = 'main' WHERE key = '1001:PR_7';",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let db = old_database(dir.path(), 8, extra);
+        let rows = count(&db, "pr_rows");
+        for start in 1..=2 {
+            assert!(
+                matches!(Store::open(&db).unwrap(), OpenOutcome::Unreadable),
+                "{extra}: start {start}"
+            );
+            assert_eq!(version(&db), 8, "{extra}: start {start}: old version");
+            assert!(
+                !columns(&db, "prs").contains(&"timeline_updated_at".to_string()),
+                "{extra}: start {start}: rolled back"
+            );
+            assert_eq!(count(&db, "pr_rows"), rows);
+        }
+    }
+}
+
+/// The daemon on a 0.6 state directory, with a test Keychain file and no
+/// GitHub: the sections list in the new order with the same cards, and the
+/// rows keep their unread marks, without avatars and without a `by` text.
+#[cfg(feature = "dev-ingest")]
+#[test]
+fn the_daemon_starts_on_a_0_6_state_directory() {
+    use common::*;
+    use serde_json::{Value, json};
+    let dir = tempfile::tempdir().unwrap();
+    old_database(dir.path(), 8, "");
+    let item = dir.path().join("keychain.json");
+    std::fs::write(
+        &item,
+        r#"{"version":2,"accounts":[{"id":"1001","login":"me","token":"ghp_test_only"}]}"#,
+    )
+    .unwrap();
+    let mut command = command(dir.path());
+    command
+        .env("SHIIBAR_GH_DEV_NOW", T0.to_string())
+        .env("SHIIBAR_GH_DEV_TZ", TZ)
+        .env("SHIIBAR_GH_DEV_KEYCHAIN", &item);
+    let daemon = TestDaemon::spawn(dir.path(), command);
+    assert_eq!(daemon.subscribe("cli").snapshot()["db_unreadable"], false);
+    let list = |tab: &str| -> Vec<(String, Value)> {
+        daemon.ok(json!({"cmd":"list","account":"me","tab":tab}))["cards"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| {
+                (
+                    c["pr"].as_str().unwrap().to_string(),
+                    c["placement"]["section"].clone(),
+                )
+            })
+            .collect()
+    };
+    let at = |pr: &str, section: &str| (pr.to_string(), json!(section));
+    assert_eq!(
+        list("mine"),
+        [
+            at("org/app#5", "done"),
+            at("org/app#4", "waiting"),
+            at("org/app#1", "doing"),
+            at("org/app#2", "todo"),
+        ]
+    );
+    assert_eq!(
+        list("review"),
+        [
+            at("org/app#6", "done"),
+            at("org/app#9", "waiting"),
+            at("org/app#7", "doing"),
+            at("org/app#8", "todo"),
+        ]
+    );
+    let cards = daemon.ok(json!({"cmd":"list","account":"me","tab":"all"}))["cards"].clone();
+    let card = cards
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["pr"] == "org/app#5")
+        .unwrap()
+        .clone();
+    let merged = &card["rows"][0];
+    assert_eq!(merged["kind"], "merged");
+    assert_eq!(merged["text"], Value::Null);
+    assert_eq!(merged["actor"], "me");
+    assert_eq!(merged["actor_avatar_url"], Value::Null);
+    assert_eq!(merged["unread"], true, "a 0.6 row keeps its unread mark");
     daemon.stop();
 }

@@ -339,16 +339,99 @@ fn the_defaults_of_the_new_kinds() {
 }
 
 #[test]
-fn the_accounts_own_addition_to_the_merge_queue_makes_an_unread_row() {
-    // DESIGN.md, "Row kinds": the row is made whoever added the PR; only the
-    // account's own reopen is made read.
+fn rows_of_the_accounts_own_events_are_read_and_quiet() {
+    // DESIGN.md, "Rows of the account's own events": Merged, Closed,
+    // Reopened, Added to and Removed from merge queue whose `actor` is the
+    // account are made read without a notification; the same events of
+    // someone else are unread and notified by the table.
+    let kinds = [
+        IngestKind::Merged,
+        IngestKind::Closed,
+        IngestKind::Reopened,
+        IngestKind::MergeQueueAdded,
+        IngestKind::MergeQueueRemoved,
+    ];
+    let mut h = H::new();
+    let prs: Vec<IngestPr> = (1..=kinds.len() * 2)
+        .map(|n| other(&format!("PR_{n}")))
+        .collect();
+    h.prs(prs);
+    let mut events = Vec::new();
+    for (i, kind) in kinds.iter().enumerate() {
+        let mut own = h.ev(&format!("OWN_{i}"), &format!("PR_{}", i * 2 + 1), *kind);
+        // The login compares without regard to case.
+        own.actor = Some("Me".into());
+        events.push(own);
+        events.push(h.ev(&format!("THEIRS_{i}"), &format!("PR_{}", i * 2 + 2), *kind));
+    }
+    h.events(events);
+    let table = h.engine.owner_events(&h.owner_id(ORG));
+    let mut notified: Vec<String> = h.delivered().into_iter().flat_map(|n| n.rows).collect();
+    notified.sort();
+    let mut want_notified = Vec::new();
+    for (i, kind) in kinds.iter().enumerate() {
+        let own = h.row(&format!("OWN_{i}"));
+        assert!(!own.unread, "{kind:?}: own");
+        let theirs = h.row(&format!("THEIRS_{i}"));
+        assert!(theirs.unread, "{kind:?}: theirs");
+        let event = theirs.kind.event().as_str();
+        if table[event].notify {
+            want_notified.push(full(&format!("THEIRS_{i}")));
+        }
+    }
+    want_notified.sort();
+    assert_eq!(notified, want_notified);
+    assert!(!want_notified.is_empty(), "the default table notifies some");
+}
+
+#[test]
+fn an_own_addition_to_the_merge_queue_removed_by_the_queue_makes_two_rows() {
+    // DESIGN.md, "Rows of the account's own events": the removal is judged
+    // by who removed the PR (github-merge-queue), not by who added it.
     let mut h = H::new();
     h.prs(vec![pr("PR_1")]);
-    let mut added = h.ev("MQ_1", "PR_1", IngestKind::MergeQueueAdded);
+    let mut added = h.ev_at("MQ_1", "PR_1", IngestKind::MergeQueueAdded, T0 + 5);
     added.actor = Some(ME.into());
-    h.events(vec![added]);
-    assert!(h.has_row("MQ_1"));
-    assert!(h.row("MQ_1").unread);
+    let mut removed = h.ev_at("MQ_2", "PR_1", IngestKind::MergeQueueRemoved, T0 + 8);
+    removed.actor = Some("github-merge-queue".into());
+    removed.text = Some(format!("Checks failed · added by {ME}"));
+    h.events(vec![added, removed]);
+    assert!(!h.row("MQ_1").unread);
+    assert!(h.row("MQ_2").unread);
+    let notified: Vec<String> = h.delivered().into_iter().flat_map(|n| n.rows).collect();
+    assert_eq!(notified, [full("MQ_2")]);
     let card = h.card(&key("PR_1")).unwrap();
-    assert_eq!(card.rows[0].kind, Lenient::Known(RowKind::MergeQueueAdded));
+    let kinds: Vec<_> = card.rows.iter().map(|r| r.kind.clone()).collect();
+    assert_eq!(
+        kinds,
+        [
+            Lenient::Known(RowKind::MergeQueueRemoved),
+            Lenient::Known(RowKind::MergeQueueAdded)
+        ]
+    );
+}
+
+#[test]
+fn a_row_carries_its_actors_avatar_and_the_actor_kinds_have_no_text() {
+    // DESIGN.md, "Wire format": `actor_avatar_url` of the row's actor;
+    // `null` for a row without an actor. Merged, Closed, Reopened, Approved
+    // and Added to merge queue have no text.
+    let mut h = H::new();
+    h.prs(vec![other("PR_1")]);
+    let mut comment = h.ev_at("C_1", "PR_1", IngestKind::CommentOther, T0 + 5);
+    comment.actor_avatar_url = Some("https://avatars.example/alice".into());
+    let mut no_actor = h.ev_at("C_2", "PR_1", IngestKind::CommentOther, T0 + 6);
+    no_actor.actor = None;
+    no_actor.actor_avatar_url = Some("https://avatars.example/ghost".into());
+    h.events(vec![comment, no_actor]);
+    let row = h.wire_row("C_1").unwrap();
+    assert_eq!(
+        row.actor_avatar_url.as_deref(),
+        Some("https://avatars.example/alice")
+    );
+    assert_eq!(h.wire_row("C_2").unwrap().actor_avatar_url, None);
+    let value = serde_json::to_value(&row).unwrap();
+    assert_eq!(value["actor_avatar_url"], "https://avatars.example/alice");
+    let value = serde_json::to_value(h.wire_row("C_2").unwrap()).unwrap();
+    assert!(value["actor_avatar_url"].is_null());
 }

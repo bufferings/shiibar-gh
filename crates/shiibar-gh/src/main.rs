@@ -23,13 +23,14 @@ const COMMANDS: [(&str, &str, &str); 33] = [
     (
         "list",
         "[--account <a>] [--tab all|review|mine] [--owner <o>] [--authored|--assigned|--review-requested] [--search <text>] [--dismissed] [--json]",
-        "Print the PR cards of a tab (default all). all: by owner, open PRs first,\n      \
-         then the most recently updated; review and mine: Doing, Todo, Waiting,\n      \
-         Done in order. --dismissed prints the Dismissed list instead, newest\n      \
-         first (--tab is ignored). Marks: [review:todo] or [mine:doing] for the\n      \
-         place, [review requested] for a PR awaiting your review, [muted],\n      \
-         [unmuted] for a PR whose own setting is Unmute, and the days left of a\n      \
-         dismissed card. Muted PRs are listed too. --search keeps the PRs where\n      \
+        "Print the PR cards of a tab (default all). all: by owner, then Recent\n      \
+         activity (the newest row shown, else when the card was added, newest\n      \
+         first); review and mine: Done, Waiting, Doing, Todo in order.\n      \
+         --dismissed prints the Dismissed list instead, newest first (--tab is\n      \
+         ignored). Marks: [review:todo] or [mine:doing] for the place,\n      \
+         [review requested] for a PR awaiting your review, [muted], [unmuted]\n      \
+         for a PR whose own setting is Unmute, and the days left of a dismissed\n      \
+         card. Muted PRs are listed too. --search keeps the PRs where\n      \
          every word of <text> matches",
     ),
     (

@@ -47,6 +47,15 @@ fn login(actor: &Value) -> &str {
     text(&actor["login"])
 }
 
+/// The `avatarUrl(size: 32)` of an `Actor`, `None` for a deleted account or
+/// an answer without it.
+fn avatar(actor: &Value) -> Option<String> {
+    actor["avatarUrl"]
+        .as_str()
+        .filter(|u| !u.is_empty())
+        .map(str::to_string)
+}
+
 fn nodes(connection: &Value) -> &[Value] {
     connection["nodes"].as_array().map_or(&[], Vec::as_slice)
 }
@@ -216,6 +225,9 @@ pub fn pr_values(node: &Value, extra: &StatusExtra, ctx: Ctx<'_>) -> Option<Inge
         failed_check: extra.failed_check.clone(),
         changes_requested_by: changes_requested_by(latest),
         updated_at: time(&node["updatedAt"]),
+        timeline_updated_at: node["timelineItems"]["updatedAt"]
+            .as_str()
+            .and_then(parse_time),
         created_at: time(&node["createdAt"]),
         my_review_at: my_review_at(&node["reviews"], ctx),
         is_private: node["repository"]["isPrivate"].as_bool().unwrap_or(false),
@@ -360,6 +372,8 @@ struct Post<'a> {
     url: &'a str,
     at: i64,
     author: &'a str,
+    /// The author's avatar URL.
+    avatar: Option<String>,
     html: &'a str,
     body: &'a str,
     /// The review thread of a review comment.
@@ -385,6 +399,7 @@ impl<'a> Post<'a> {
             url: text(&node["url"]),
             at,
             author: login(&node["author"]),
+            avatar: avatar(&node["author"]),
             html: text(&node["bodyHTML"]),
             body: text(&node["bodyText"]),
             thread,
@@ -542,6 +557,7 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
                 occurred_at: post.at,
                 url: post.url.to_string(),
                 actor: actor.clone(),
+                actor_avatar_url: post.avatar.clone(),
                 text: None,
                 comment_id: None,
             });
@@ -577,6 +593,7 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
                 occurred_at: post.at,
                 url: post.url.to_string(),
                 actor,
+                actor_avatar_url: post.avatar.clone(),
                 text: Some(post.body.to_string()),
                 comment_id: Some(post.id.to_string()),
             });
@@ -596,6 +613,9 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
             occurred_at: opened,
             url: pr_url.clone(),
             actor: Some(login(&pr["author"]).to_string()).filter(|a| !a.is_empty()),
+            // DESIGN.md, "API usage": the mention in the PR body shows the
+            // PR author's avatar.
+            actor_avatar_url: avatar(&pr["author"]),
             text: Some(text(&pr["bodyText"]).to_string()),
             comment_id: None,
         });
@@ -614,6 +634,7 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
         }
         let id = text(&item["id"]).to_string();
         let actor = Some(login(&item["actor"]).to_string()).filter(|a| !a.is_empty());
+        let actor_avatar_url = avatar(&item["actor"]);
         let event = |kind, url: String, actor: Option<String>, body: Option<String>| IngestEvent {
             id: id.clone(),
             pr_id: pr_id.clone(),
@@ -621,6 +642,7 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
             occurred_at: at,
             url,
             actor,
+            actor_avatar_url: actor_avatar_url.clone(),
             text: body,
             comment_id: None,
         };
@@ -806,6 +828,7 @@ fn review_request_event(
         occurred_at: time(&item["createdAt"]),
         url: pr_url.to_string(),
         actor: Some(login(&item["actor"]).to_string()).filter(|a| !a.is_empty()),
+        actor_avatar_url: avatar(&item["actor"]),
         text: Some(body),
         comment_id: None,
     })

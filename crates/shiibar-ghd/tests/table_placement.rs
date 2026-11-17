@@ -370,10 +370,11 @@ fn place_positions_and_their_defaults() {
         h.section(Tab::Review, Section::Todo).last().unwrap(),
         "PR_3"
     );
-    // Review lists its sections in order.
+    // Review lists its sections in the screen's order: Done, Waiting,
+    // Doing, Todo.
     to(&mut h, "PR_1", Section::Waiting, None, None);
     to(&mut h, "PR_4", Section::Doing, None, None);
-    assert_eq!(h.tab(Tab::Review), ["PR_4", "PR_2", "PR_3", "PR_1"]);
+    assert_eq!(h.tab(Tab::Review), ["PR_1", "PR_4", "PR_2", "PR_3"]);
     // None takes it out; the PR stays in All.
     h.place(&key("PR_4"), PlaceTab::None, None, None, None)
         .unwrap();
@@ -747,11 +748,11 @@ fn list_of_review_and_mine_in_section_order() {
     h.prs(vec![closed("PR_1", true)]);
     assert_eq!(
         h.tab(Tab::Mine),
-        ["PR_2", "PR_4", "PR_5", "PR_1"],
-        "todo, then done"
+        ["PR_1", "PR_2", "PR_4", "PR_5"],
+        "done, then todo"
     );
     assert_eq!(h.placement("PR_1"), place("mine", "done", 0));
-    // Mine lists Doing, Todo, Waiting and Done in that order, as Review.
+    // Mine lists Done, Waiting, Doing and Todo in that order, as Review.
     h.place(
         &key("PR_5"),
         PlaceTab::Mine,
@@ -768,7 +769,7 @@ fn list_of_review_and_mine_in_section_order() {
         None,
     )
     .unwrap();
-    assert_eq!(h.tab(Tab::Mine), ["PR_5", "PR_4", "PR_2", "PR_1"]);
+    assert_eq!(h.tab(Tab::Mine), ["PR_1", "PR_2", "PR_5", "PR_4"]);
     assert_eq!(h.placement("PR_5"), place("mine", "doing", 0));
     assert_eq!(h.placement("PR_4"), place("mine", "todo", 0));
     assert_eq!(h.placement("PR_2"), place("mine", "waiting", 0));
