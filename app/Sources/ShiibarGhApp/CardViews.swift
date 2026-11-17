@@ -216,7 +216,7 @@ struct CardDragPreview: View {
     var k: CGFloat
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3 * k) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 7) {
                 StateLabelView(label: card.stateLabel)
                 Text(Warnings.prLabel(card.pr))
@@ -237,10 +237,12 @@ struct CardDragPreview: View {
                 .font(.system(size: 12 * k, weight: .semibold))
                 .foregroundColor(Palette.text.color)
                 .lineLimit(1)
+                .padding(.top, 3 * k)
             Text("\(card.base) \u{2190} \(card.head)")
                 .font(.system(size: 11 * k))
                 .foregroundColor(Palette.secondary.color)
                 .lineLimit(1)
+                .padding(.top, 5 * k)
         }
         .environment(\.textScale, k)
         .padding(EdgeInsets(top: 6 * k, leading: 12, bottom: 6 * k, trailing: 10))

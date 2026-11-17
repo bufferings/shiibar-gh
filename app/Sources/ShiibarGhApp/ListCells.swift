@@ -862,7 +862,7 @@ enum LineLayout {
         let leftHeight = max(tagSize?.height ?? 0, lh11)
         let room3 = right - left
         let fits = line3Fits(line, width: cellWidth, k: k, now: now)
-        let top3 = row2.maxY + 3 * k
+        let top3 = row2.maxY + 5 * k
         let line3: CGFloat
         let leftRow: CGRect
         let rightRow: CGRect
@@ -871,9 +871,9 @@ enum LineLayout {
             leftRow = CGRect(x: left, y: top3, width: room3, height: line3)
             rightRow = CGRect(x: left, y: top3, width: room3, height: line3)
         } else {
-            line3 = leftHeight + 2 + lh11
+            line3 = leftHeight + 4 * k + lh11
             leftRow = CGRect(x: left, y: top3, width: room3, height: leftHeight)
-            rightRow = CGRect(x: left, y: top3 + leftHeight + 2, width: room3, height: lh11)
+            rightRow = CGRect(x: left, y: top3 + leftHeight + 4 * k, width: room3, height: lh11)
         }
         var lx = leftRow.minX
         var tag: CGRect?
@@ -882,7 +882,7 @@ enum LineLayout {
             lx += tagSize.width + 6
         }
         let baseHead = CGRect(x: lx, y: center(lh11, in: leftRow), width: max(0, min(baseHeadWidth, leftRow.maxX - lx)), height: lh11)
-        let headerHeight = top3 + line3 + 5 * k
+        let headerHeight = top3 + line3 + 6 * k
         let header = CGRect(x: 0, y: 0, width: width, height: headerHeight)
 
         // Rows.
@@ -1022,12 +1022,12 @@ enum LineLayout {
         let avatar = CGRect(x: left, y: center(16 * k, in: row2), width: 16 * k, height: 16 * k)
         let title = CGRect(x: avatar.maxX + 6, y: center(lh12, in: row2), width: max(0, right - 6 - avatar.maxX - 6), height: lh12)
         let restoreSize = ListButton.restoreSize
-        let row3 = CGRect(x: 0, y: row2.maxY + 3 * k, width: width, height: max(lh11, restoreSize.height))
+        let row3 = CGRect(x: 0, y: row2.maxY + 5 * k, width: width, height: max(lh11, restoreSize.height))
         let restore = CGRect(x: right - restoreSize.width, y: center(restoreSize.height, in: row3), width: restoreSize.width, height: restoreSize.height)
         let daysWidth = Ink.width(DismissedText.daysLeft(card.dismissExpiresAt, now: now), f11)
         let daysLeft = CGRect(x: restore.minX - 8 - daysWidth, y: center(lh11, in: row3), width: daysWidth, height: lh11)
         return DismissedGeometry(
-            size: CGSize(width: width, height: row3.maxY + 5 * k), stateLabel: stateRect, prLabel: prLabel, chain: chain,
+            size: CGSize(width: width, height: row3.maxY + 6 * k), stateLabel: stateRect, prLabel: prLabel, chain: chain,
             avatar: avatar, title: title, daysLeft: daysLeft, restore: restore
         )
     }
