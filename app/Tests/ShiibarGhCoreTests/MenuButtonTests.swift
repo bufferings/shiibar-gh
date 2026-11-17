@@ -40,11 +40,11 @@ final class MenuButtonTests: XCTestCase {
     func testTheMenuRunsTheChosenItem() {
         var ran: [String] = []
         let menu = IconMenu.make([
-            IconMenuItem("About shiibar-gh") { ran.append("about") },
+            IconMenuItem("About Shiibar GH") { ran.append("about") },
             nil,
-            IconMenuItem("Quit shiibar-gh") { ran.append("quit") },
+            IconMenuItem("Quit") { ran.append("quit") },
         ])
-        XCTAssertEqual(menu.items.map(\.title), ["About shiibar-gh", "", "Quit shiibar-gh"])
+        XCTAssertEqual(menu.items.map(\.title), ["About Shiibar GH", "", "Quit"])
         XCTAssertTrue(menu.items[1].isSeparatorItem)
         menu.performActionForItem(at: 2)
         XCTAssertEqual(ran, ["quit"])

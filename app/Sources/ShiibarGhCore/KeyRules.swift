@@ -38,6 +38,9 @@ public enum KeyInput: Equatable {
     /// text if there is any.
     case leaveSearch(clearing: Bool)
     case textSize(TextSize.Change)
+    /// ⌘R: Refresh, as the header's button (DESIGN.md, "Keyboard"); in the
+    /// search field and the Dismissed list too.
+    case refresh
     case quit
     /// The × confirmation's answer: ⏎ `Dismiss`, Esc `Cancel`.
     case answerDismiss(Bool)
@@ -77,6 +80,7 @@ public enum KeyRules {
             case "-": return .textSize(.smaller)
             case "0": return .textSize(.reset)
             case "f" where mods == [.command]: return .key(.find)
+            case "r" where mods == [.command]: return .refresh
             // ⌘A selects the field's text in the search field.
             case "a" where mods == [.command]: return inSearch ? .pass : .key(.selectAll)
             case "1" where mods == [.command]: return .key(.tab(.all))

@@ -52,7 +52,22 @@ func mine(_ section: PlacementSection = .todo, _ position: Int) -> Placement {
 ///   (closed); Doing and Waiting empty.
 /// - All only: N1 (acme-corp, gray unread row by a muted user).
 /// - Dismissed: X1 (older), X2 (newer, merged).
+/// Each card's rows happened at its `updated` time, and a card without
+/// rows was added then, so `Recent activity` orders All by those times.
 func sampleCards() -> [Card] {
+    sampleCardsAsListed().map { card in
+        var card = card
+        card.addedAt = card.updatedAt
+        card.rows = card.rows.map { row in
+            var row = row
+            row.occurredAt = card.updatedAt
+            return row
+        }
+        return card
+    }
+}
+
+private func sampleCardsAsListed() -> [Card] {
     [
         card("R1", pr: "example-org/web#212", author: "mk", reviewRequested: true, placement: review(.doing, 0), updated: T0 - 100,
              rows: [row("r1", pr: "example-org/web#212", kind: .teamReviewRequested, text: "for frontend team")]),

@@ -135,10 +135,10 @@ public enum MultiRules {
         case .all:
             return [MultiItem(title: "Add to Review", operation: .add(.review(.todo))), MultiItem(title: "Add to Mine", operation: .add(.mine(.todo)))]
         case .review:
-            return PlacementSection.order.map { MultiItem(title: "Move to " + $0.title, operation: .move(.review($0))) }
+            return PlacementSection.menuOrder.map { MultiItem(title: "Move to " + $0.title, operation: .move(.review($0))) }
                 + [MultiItem(title: "Remove from Review", operation: .remove)]
         case .mine:
-            return PlacementSection.order.map { MultiItem(title: "Move to " + $0.title, operation: .move(.mine($0))) }
+            return PlacementSection.menuOrder.map { MultiItem(title: "Move to " + $0.title, operation: .move(.mine($0))) }
                 + [MultiItem(title: "Remove from Mine", operation: .remove)]
         }
     }

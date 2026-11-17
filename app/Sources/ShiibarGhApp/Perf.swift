@@ -1190,6 +1190,16 @@ final class PerfRunner: NSObject {
             await place()
             await run("\(pass): collapse Todo") { list.perform(.toggleSection(todo)) }
             await run("\(pass): expand Todo") { list.perform(.toggleSection(todo)) }
+            // The unread mark of a collapsed heading (DESIGN.md, "Section
+            // size"): it shows on collapsing and goes on expanding.
+            await run("\(pass): collapse Done and Waiting") {
+                list.perform(.toggleSection(done))
+                list.perform(.toggleSection(waiting))
+            }
+            await run("\(pass): expand Done and Waiting") {
+                list.perform(.toggleSection(done))
+                list.perform(.toggleSection(waiting))
+            }
             await run("\(pass): + N more PRs of Todo") { list.perform(.toggleMore(todo)) }
             await run("\(pass): Show less of Todo") { list.perform(.toggleMore(todo)) }
             await run("\(pass): tab All and back") {
@@ -1220,13 +1230,13 @@ final class PerfRunner: NSObject {
         await run("All Compact: Group by Status") { data.setGroupBy(.status) }
         await run("All Compact: Group by Repository") { data.setGroupBy(.repository) }
         await run("All Compact: sort by added") { data.setSort(.recentlyAdded) }
-        await run("All Compact: sort by updated") { data.setSort(.recentlyUpdated) }
+        await run("All Compact: sort by recent activity") { data.setSort(.recentActivity) }
         // Sort from the Grouping sheet (opened by `Grouping…`): the list
         // behind it changes at once.
         list.openGrouping()
         await pause(0.6)
         await run("All Compact: Grouping sheet, sort by added") { data.setSort(.recentlyAdded) }
-        await run("All Compact: Grouping sheet, sort by updated") { data.setSort(.recentlyUpdated) }
+        await run("All Compact: Grouping sheet, sort by recent activity") { data.setSort(.recentActivity) }
         await run("All Compact: Grouping sheet, Group by Owner") { data.setGroupBy(.owner) }
         await run("All Compact: Grouping sheet, Group by Repository") { data.setGroupBy(.repository) }
         await run("All Compact: Grouping sheet closed") { list.showsGrouping = false }
@@ -1249,6 +1259,14 @@ final class PerfRunner: NSObject {
         await run("All: Group by Owner, Then by Repository") {
             data.setGroupBy(.owner)
             data.setThenBy(.repository)
+        }
+        // The marks of collapsed groups of both levels.
+        let firstGroups = list.sections.filter { $0.level == 1 }.prefix(2).map(\.key)
+        let innerGroups = list.sections.filter { $0.level == 2 }.prefix(2).map(\.key)
+        await run("All: collapse groups of the second level") { for key in innerGroups { list.perform(.toggleSection(key)) } }
+        await run("All: collapse groups of the first level") { for key in firstGroups { list.perform(.toggleSection(key)) } }
+        await run("All: expand the groups") {
+            for key in firstGroups + innerGroups { list.perform(.toggleSection(key)) }
         }
         await run("All: Group by Repository") {
             data.setThenBy(.none)
@@ -1996,7 +2014,7 @@ final class PerfRunner: NSObject {
             await pause(1)
             if let scroll = listScrollView(in: window) { scrollTo(scroll, y: 300) }
             await pause(0.8)
-            log("lowest window at \(size): \(window.frame.height) pt, content minimum \((window as? NSPanel)?.contentMinSize.height ?? 0), list \(listHeight()) pt")
+            log("lowest window at \(size): \(window.frame.height) pt, content minimum \(window.contentMinSize.height), list \(listHeight()) pt")
             snapshot(window, directory + "/options-lowest-\(size)\(suffix).png")
             guard size == 12 else { continue }
             // A failure band: a Restore the daemon refuses (the card is not

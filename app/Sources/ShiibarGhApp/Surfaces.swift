@@ -2,7 +2,7 @@
 //
 // AppKit, not MenuBarExtra: the menu bar shows one icon per account and the
 // number changes as accounts come and go. NSStatusItem (one per account) with
-// NSPopover and NSPanel give the dynamic icons, the marks drawn into the
+// NSPopover and NSWindow give the dynamic icons, the marks drawn into the
 // image, and key handling through an event monitor (DESIGN.md, "UI").
 
 import AppKit
@@ -28,7 +28,9 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
     private var looks = StatusItemLooks()
     private let popover = NSPopover()
     private var popoverAccount: String?
-    private var panels: [String: NSPanel] = [:]
+    private var panels: [String: NSWindow] = [:]
+    /// The title of each window: the account's mark and name.
+    private var titles: [String: WindowTitle] = [:]
     private var keyMonitor: Any?
     private var cancellables: Set<AnyCancellable> = []
     /// Keep on top of each window follows its account's value.
@@ -76,7 +78,22 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             guard let self else { return event }
             return self.handleKey(event) ? nil : event
         }
+        // DESIGN.md, "UI": once a menu (NSMenu) was opened from a
+        // `.transient` popover, AppKit no longer closes the popover when the
+        // app stops being active, and `popoverShouldClose` is not called;
+        // this notification is still sent.
+        NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)
+            .sink { [weak self] _ in MainActor.assumeIsolated { self?.appResignedActive() } }
+            .store(in: &cancellables)
         update()
+    }
+
+    /// The app lost the focus: the popover closes, as it would by itself
+    /// before a menu was opened in it. The measurement mode's popover
+    /// (`.applicationDefined`) stays; a window is not a popover and stays.
+    func appResignedActive() {
+        guard SurfaceRules.closesPopoverOnResign(shown: popover.isShown, measuring: popover.behavior == .applicationDefined) else { return }
+        popover.performClose(nil)
     }
 
     func applyAppearance(_ name: NSAppearance.Name) {
@@ -86,8 +103,13 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         update()
     }
 
+    /// The Dock icon and ⌘Tab: the open windows come forward, a minimized
+    /// one back from the Dock (DESIGN.md, "Open in window").
     func bringWindowsToFront() {
-        for panel in panels.values { panel.orderFront(nil) }
+        for panel in panels.values {
+            if panel.isMiniaturized { panel.deminiaturize(nil) }
+            panel.orderFront(nil)
+        }
     }
 
     // MARK: - Menu bar
@@ -101,6 +123,10 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         }
         for id in panels.keys where !ids.contains(id) {
             panels[id]?.close()
+        }
+        // The window's title follows the account's name and color.
+        for account in accounts {
+            titles[account.id]?.show(login: account.login, color: account.accountColor)
         }
         if ids != order {
             // Recreate in order so the icons keep the order of the accounts.
@@ -120,13 +146,14 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
                 let item = NSStatusBar.system.statusItem(withLength: MenuBarImage.width)
                 item.button?.target = self
                 item.button?.action = #selector(clickedFallback(_:))
+                item.button?.sendAction(on: Self.clickEvents)
                 watchAppearance(item)
                 fallback = item
             }
             if let fallback {
                 show(
                     fallback, color: .none, marks: MenuBarMarks(dot: false, triangle: app.dbUnreadable || app.keychain != .ok),
-                    label: MenuBarMarks.noAccountsLabel, toolTip: "shiibar-gh"
+                    label: MenuBarMarks.noAccountsLabel, toolTip: MenuBarMarks.noAccountsToolTip
                 )
             }
         } else if let fallback {
@@ -168,10 +195,15 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         }
     }
 
+    /// DESIGN.md, "Screens" and "UI": the right button does what the left
+    /// one does (the icon has no menu); either acts when released.
+    static let clickEvents: NSEvent.EventTypeMask = [.leftMouseUp, .rightMouseUp]
+
     private func makeItem(_ id: String) -> NSStatusItem {
         let item = NSStatusBar.system.statusItem(withLength: MenuBarImage.width)
         item.button?.target = self
         item.button?.action = #selector(clicked(_:))
+        item.button?.sendAction(on: Self.clickEvents)
         item.button?.identifier = NSUserInterfaceItemIdentifier(id)
         items[id] = item
         watchAppearance(item)
@@ -333,13 +365,16 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
     // MARK: - Window
 
     /// The account's window while it is open (the measurement mode).
-    func window(account: String) -> NSPanel? {
+    func window(account: String) -> NSWindow? {
         panels[account]
     }
 
     func openWindow(account: String) {
         popover.performClose(nil)
         if let panel = panels[account] {
+            // A minimized window comes back from the Dock (DESIGN.md, "Open
+            // in window").
+            if panel.isMiniaturized { panel.deminiaturize(nil) }
             NSApp.activate(ignoringOtherApps: true)
             panel.makeKeyAndOrderFront(nil)
             return
@@ -347,19 +382,11 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         var surface = actions(account)
         surface.openWindow = nil
         let model = app.viewModel(account)
+        let panel = Self.makeWindow(width: popoverWidth, height: Self.popoverHeight)
         let root = PopoverView.root(app: app, model: model, list: model.list(.window), avatars: avatars, actions: surface, surface: .window)
-        root.movesWindowByTitleStrip = true
-        let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: popoverWidth, height: Self.popoverHeight),
-            styleMask: [.titled, .closable, .resizable, .utilityWindow, .fullSizeContentView],
-            backing: .buffered, defer: false
-        )
-        panel.title = app.account(account)?.login ?? ""
-        panel.titleVisibility = .hidden
-        panel.titlebarAppearsTransparent = true
-        panel.hidesOnDeactivate = false
-        panel.becomesKeyOnlyIfNeeded = false
-        panel.isReleasedWhenClosed = false
+        let title = WindowTitle.install(in: panel)
+        title.show(login: app.account(account)?.login ?? "", color: app.account(account)?.accountColor ?? .none)
+        titles[account] = title
         panel.appearance = surfaceAppearance
         panel.contentViewController = SurfaceViewController(root)
         panel.setContentSize(NSSize(width: popoverWidth, height: Self.popoverHeight))
@@ -384,7 +411,6 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         // (NSWindow.level; .floating is in front of every normal-level
         // window). Applied now and whenever the pin is pressed.
         pinWatch[account] = app.viewModel(account).$keepOnTop.sink { [weak panel] on in
-            panel?.isFloatingPanel = on
             panel?.level = on ? .floating : .normal
         }
         onWindowOpened?(account)
@@ -396,9 +422,28 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         DispatchQueue.main.async { [weak panel] in panel?.makeFirstResponder(nil) }
     }
 
+    /// DESIGN.md, "Open in window" and "UI": a window with the standard
+    /// title bar, which is part 1 of the header: the close, minimize and
+    /// zoom buttons and, as its centered title, the account's color mark and
+    /// name (`WindowTitle`). The content starts at part 2. The green button
+    /// zooms instead of going full screen
+    /// (`NSWindowCollectionBehaviorFullScreenNone`, NSWindow.h: "The window
+    /// can not be made fullscreen when this bit is set"); the other
+    /// collection behaviors stay as 0.6's panel had them (none).
+    static func makeWindow(width: CGFloat, height: CGFloat) -> NSWindow {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.collectionBehavior.insert(.fullScreenNone)
+        return window
+    }
+
     /// The window's least content height: its minimum size, and its
     /// height raised to it (the top edge stays; within the screen's room).
-    private func window(_ panel: NSPanel, needs minimum: CGFloat) {
+    private func window(_ panel: NSWindow, needs minimum: CGFloat) {
         panel.contentMinSize = NSSize(width: 300, height: minimum)
         let content = panel.contentRect(forFrameRect: panel.frame).height
         guard content < minimum - 0.5 else { return }
@@ -451,6 +496,7 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             app.surfaceClosed(.window, account: account)
             app.surfaceDisplayed(.window, account: account, false)
             panels[account] = nil
+            titles[account] = nil
             pinWatch[account] = nil
             onWindowClosed?(account)
         }
@@ -505,6 +551,9 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         case .textSize(let change):
             guard model != nil else { return false }
             app.changeTextSize(change)
+        case .refresh:
+            guard let account else { return false }
+            app.refreshByKey(account)
         case .key(let key):
             guard let model else { return false }
             model.press(key)
@@ -543,5 +592,111 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         if model.searchFocused || Self.isTyping(key?.firstResponder) { return false }
         model.press(press)
         return true
+    }
+}
+
+/// The title of an account's window (DESIGN.md, "Open in window"): in the
+/// standard title bar, centered, the account's color mark (a rounded square;
+/// none for the color None, without its room) and the account's name, cut
+/// with `…` when it does not fit. Neither follows the text size setting.
+///
+/// AppKit's title is text only: `NSWindow` has `title` and `subtitle`
+/// (strings), and its document icon (`representedURL` with
+/// `standardWindowButton(.documentIconButton)`) is a proxy with a path menu
+/// and drag. A titlebar accessory (NSTitlebarAccessoryViewController.h) is
+/// placed under the title bar or beside the buttons, and at the top only
+/// with `fullSizeContentView`, without the normal title bar. So the window
+/// keeps its standard title bar and buttons, hides only its title text
+/// (`titleVisibility`; `title` stays the login, for Mission Control and the
+/// Window menu), and this view takes the title's place in the title bar
+/// (the close button's superview), centered on the buttons' line. Presses
+/// go through it to the title bar, which moves and zooms the window.
+@MainActor
+final class WindowTitle {
+    /// Room kept on either side, past the three buttons (Main.html
+    /// `.win2 .tbar .ttl`).
+    static let side: CGFloat = 76
+    /// Between the mark and the name.
+    static let gap: CGFloat = 7
+
+    let stack: PassThroughStack
+    let mark: AccountMarkView
+    let name: NSTextField
+    private var watch: [NSObjectProtocol] = []
+
+    private init() {
+        mark = AccountMarkView()
+        name = NSTextField(labelWithString: "")
+        name.font = NSFont.titleBarFont(ofSize: 0)
+        name.lineBreakMode = .byTruncatingTail
+        name.cell?.truncatesLastVisibleLine = true
+        name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        stack = PassThroughStack(views: [mark, name])
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.spacing = Self.gap
+        stack.detachesHiddenViews = true
+        stack.translatesAutoresizingMaskIntoConstraints = false
+    }
+
+    /// Puts the title in the window's title bar.
+    static func install(in window: NSWindow) -> WindowTitle {
+        let title = WindowTitle()
+        window.titleVisibility = .hidden
+        guard let close = window.standardWindowButton(.closeButton), let bar = close.superview else { return title }
+        bar.addSubview(title.stack)
+        NSLayoutConstraint.activate([
+            title.stack.centerXAnchor.constraint(equalTo: bar.centerXAnchor),
+            title.stack.centerYAnchor.constraint(equalTo: close.centerYAnchor),
+            title.stack.leadingAnchor.constraint(greaterThanOrEqualTo: bar.leadingAnchor, constant: side),
+            title.stack.trailingAnchor.constraint(lessThanOrEqualTo: bar.trailingAnchor, constant: -side),
+            title.mark.widthAnchor.constraint(equalToConstant: AccountMarkView.size),
+            title.mark.heightAnchor.constraint(equalToConstant: AccountMarkView.size),
+        ])
+        // The title dims while the window is not key, as AppKit's own.
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            title.watch.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak title, weak window] _ in
+                MainActor.assumeIsolated { title?.dim(window?.isKeyWindow != true) }
+            })
+        }
+        title.dim(!window.isKeyWindow)
+        return title
+    }
+
+    func show(login: String, color: AccountColor) {
+        if name.stringValue != login {
+            name.stringValue = login
+            stack.window?.title = login
+        }
+        mark.color = color
+        mark.isHidden = !color.showsDot
+    }
+
+    private func dim(_ dimmed: Bool) {
+        name.textColor = dimmed ? .tertiaryLabelColor : .labelColor
+    }
+}
+
+/// A stack the pointer goes through: a press on the title is the title
+/// bar's (it moves the window; a double click zooms it).
+final class PassThroughStack: NSStackView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+/// The account color's mark, drawn in the color it resolves to for the
+/// view's appearance (DESIGN.md, "Account color": a 10-point square with a
+/// 2.5-point radius).
+final class AccountMarkView: NSView {
+    static let size: CGFloat = 10
+    static let radius: CGFloat = 2.5
+
+    var color: AccountColor = .none { didSet { if color != oldValue { needsDisplay = true } } }
+
+    override var intrinsicContentSize: NSSize { NSSize(width: Self.size, height: Self.size) }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let fill = color.nsColor else { return }
+        fill.setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: Self.radius, yRadius: Self.radius).fill()
     }
 }

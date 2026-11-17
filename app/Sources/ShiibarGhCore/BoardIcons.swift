@@ -243,17 +243,19 @@ public struct MenuBarMarks: Equatable {
         self.init(dot: account.unread, triangle: Warnings.hasTriangle(account))
     }
 
-    /// `shiibar-gh, <login>`, then `, unread` with the dot and `, needs
+    /// `Shiibar GH, <login>`, then `, unread` with the dot and `, needs
     /// attention` with the triangle (DESIGN.md, "Screens").
     public static func accessibilityLabel(_ account: Account) -> String {
-        var text = "shiibar-gh, " + account.login
+        var text = MainMenu.appName + ", " + account.login
         if account.unread { text += ", unread" }
         if Warnings.hasTriangle(account) { text += ", needs attention" }
         return text
     }
 
-    /// The shiibar-gh icon shown while there is no account.
-    public static let noAccountsLabel = "shiibar-gh, no accounts"
+    /// The app's icon shown while there is no account.
+    public static let noAccountsLabel = MainMenu.appName + ", no accounts"
+    /// Its tooltip.
+    public static let noAccountsToolTip = MainMenu.appName
 }
 
 /// What a status item shows. The image is set again only when this changes

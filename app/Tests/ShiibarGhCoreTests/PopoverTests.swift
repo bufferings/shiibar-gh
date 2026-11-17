@@ -380,7 +380,7 @@ final class AppModelTests: XCTestCase {
         view.select(.header(card: "M2"))
         view.press(.moveTo(.doing))
         view.press(.moveTo(.todo))
-        XCTAssertEqual(view.sections[1].cards.map(\.id), ["M2", "M1"], "shown at once: back at the top of Todo")
+        XCTAssertEqual(view.sections[3].cards.map(\.id), ["M2", "M1"], "shown at once: back at the top of Todo")
         view.perform(.dismiss(card: "N1"))
         view.perform(.restore(card: "X1"))
         view.perform(.mute(.repo, "acme-corp/web"))
@@ -444,14 +444,14 @@ final class AppModelTests: XCTestCase {
         api.refuse["dismiss"] = DaemonError.unreachable(SocketError.closed)
         view.select(.header(card: "T1"))
         view.press(.delete)
-        XCTAssertFalse(view.sections[1].matching.contains { $0.id == "T1" }, "gone from Todo at once")
+        XCTAssertFalse(view.sections[3].matching.contains { $0.id == "T1" }, "gone from Todo at once")
         XCTAssertEqual(view.dismissedCount, 3)
         XCTAssertEqual(view.data.cards.first { $0.id == "T1" }?.dismissExpiresAt, T0 + 7 * 86_400)
         XCTAssertNil(view.selection)
         try? await Task.sleep(nanoseconds: 200_000_000)
         await settle()
         XCTAssertEqual(calls("dismiss"), ["dismiss bufferings-work example-org/api#407"])
-        XCTAssertTrue(view.sections[1].matching.contains { $0.id == "T1" }, "back where it was")
+        XCTAssertTrue(view.sections[3].matching.contains { $0.id == "T1" }, "back where it was")
         XCTAssertEqual(view.data.failure, "Couldn't dismiss: daemon not running")
         // The next operation clears the band.
         api.refuse = [:]
@@ -468,12 +468,12 @@ final class AppModelTests: XCTestCase {
         api.operationDelay = 200_000_000
         view.select(.header(card: "T3"))
         view.press(.moveTo(.doing))
-        XCTAssertEqual(view.sections[0].cards.map(\.id), ["R1", "T3"], "at once, at the end of Doing")
+        XCTAssertEqual(view.sections[2].cards.map(\.id), ["R1", "T3"], "at once, at the end of Doing")
         XCTAssertEqual(view.selection, .header(card: "T3"), "the selection follows the card")
         // A list read meanwhile (an account_changed) does not take it back.
         view.data.reload()
         await settle()
-        XCTAssertEqual(view.sections[0].cards.map(\.id), ["R1", "T3"])
+        XCTAssertEqual(view.sections[2].cards.map(\.id), ["R1", "T3"])
         // The daemon moved it: the list after the answer has it there.
         var moved = sampleCards()
         moved[3].placement = review(.doing, 1)
@@ -482,7 +482,7 @@ final class AppModelTests: XCTestCase {
         await settle()
         XCTAssertEqual(calls("place"), ["place bufferings-work example-org/docs#88 review doing"])
         XCTAssertEqual(lists().count, 3, "read again after the answer")
-        XCTAssertEqual(view.sections[0].cards.map(\.id), ["R1", "T3"])
+        XCTAssertEqual(view.sections[2].cards.map(\.id), ["R1", "T3"])
         api.clearCalls()
         api.operationDelay = 0
         view.select(.header(card: "T4"))
@@ -505,14 +505,14 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(popover.dragOver(.header("review|done")), DropTarget(section: "review|done", position: .byDefault))
         XCTAssertEqual(popover.dragOver(.card("D1", lowerHalf: true)), DropTarget(section: "review|done", position: .byDefault))
         XCTAssertTrue(popover.drop(.card("D1", lowerHalf: true)))
-        XCTAssertEqual(window.sections[3].cards.map(\.id), ["T4", "D1"], "newest entry first, in the window too")
+        XCTAssertEqual(window.sections[0].cards.map(\.id), ["T4", "D1"], "newest entry first, in the window too")
         try? await Task.sleep(nanoseconds: 200_000_000)
         await settle()
         // And out of Done again, onto a heading: the top of the section.
         popover.beginDrag("T4")
         XCTAssertTrue(popover.drop(.header("review|doing")))
         XCTAssertNil(popover.dragging)
-        XCTAssertEqual(window.sections[0].cards.map(\.id), ["T4", "R1"], "the window shows it too")
+        XCTAssertEqual(window.sections[2].cards.map(\.id), ["T4", "R1"], "the window shows it too")
         try? await Task.sleep(nanoseconds: 200_000_000)
         await settle()
         XCTAssertEqual(calls("place"), [
@@ -759,21 +759,21 @@ final class AppModelTests: XCTestCase {
         popover.data.setFilter(ListFilter(muted: .show), tab: .review)
         popover.openTab(.review)
         popover.perform(.toggleMore("review|todo"))
-        XCTAssertEqual(popover.sections[1].foldLine, "Show less")
+        XCTAssertEqual(popover.sections[3].foldLine, "Show less")
         popover.perform(.toggleSection("review|waiting"))
         let window = popover.data.list(.window)
         window.openTab(.review)
-        XCTAssertEqual(window.sections[1].cards.count, 7, "the expansion is the account's")
-        XCTAssertTrue(window.sections[2].collapsed)
+        XCTAssertEqual(window.sections[3].cards.count, 7, "the expansion is the account's")
+        XCTAssertTrue(window.sections[1].collapsed)
         model.surfaceOpened(.popover, account: "3407303")
         model.surfaceClosed(.popover, account: "3407303")
-        XCTAssertEqual(popover.sections[1].foldLine, "Show less", "kept across openings")
+        XCTAssertEqual(popover.sections[3].foldLine, "Show less", "kept across openings")
         let store = UIStateStore(defaults: defaults)
         XCTAssertEqual(store.expanded(account: "3407303"), ["review|todo"])
         XCTAssertEqual(store.collapsed(account: "3407303"), ["review|waiting"])
         popover.select(.more("review|todo"))
         popover.press(.open)
-        XCTAssertEqual(popover.sections[1].foldLine, "+ 2 more PRs")
+        XCTAssertEqual(popover.sections[3].foldLine, "+ 2 more PRs")
         XCTAssertEqual(popover.selection, .more("review|todo"))
         XCTAssertEqual(store.expanded(account: "3407303"), [])
     }
@@ -848,15 +848,18 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(data.repositories, ["acme-corp/infra", "acme-corp/web", "example-org/api", "example-org/docs", "example-org/web"])
         data.moveGroups(.repository, from: [4], to: 0)
         XCTAssertEqual(data.groups(.repository).first?.title, "example-org/web")
-        data.moveGroups(.status, from: [3], to: 0)
-        XCTAssertEqual(data.groups(.status).map(\.title), ["Closed", "Open", "Draft", "Merged"])
+        // DESIGN.md, "All", "Group by": Status starts as Merged, Closed,
+        // Open, Draft until the user changes it.
+        XCTAssertEqual(data.groups(.status).map(\.title), ["Merged", "Closed", "Open", "Draft"])
+        data.moveGroups(.status, from: [1], to: 0)
+        XCTAssertEqual(data.groups(.status).map(\.title), ["Closed", "Merged", "Open", "Draft"])
         api.cards = sampleCards() + [card("Q", pr: "aaa/first#1")]
         data.reload()
         await settle()
         XCTAssertEqual(data.repositories.last, "aaa/first", "a new repository comes at the end")
         let store = UIStateStore(defaults: defaults)
         XCTAssertEqual(store.repositories(account: "3407303").first, "example-org/web")
-        XCTAssertEqual(store.groupOrders(account: "3407303")[.status], ["closed", "open", "draft", "merged"])
+        XCTAssertEqual(store.groupOrders(account: "3407303")[.status], ["closed", "merged", "open", "draft"])
         XCTAssertEqual(AccountViewModel(account: "3407303", app: model).groups(.status).first?.title, "Closed")
     }
 
@@ -903,7 +906,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(UIStateStore(defaults: defaults).searches(account: "3407303"), [.tab(.mine): "keep"], "and the saved one")
         XCTAssertEqual(view.data.search(.tab(.mine)), "keep", "the other tabs' texts stay")
         XCTAssertEqual(view.selection, .header(card: "T7"))
-        XCTAssertTrue(view.sections[1].cards.contains { $0.id == "T7" }, "unfolded and expanded")
+        XCTAssertTrue(view.sections[3].cards.contains { $0.id == "T7" }, "unfolded and expanded")
         XCTAssertEqual(opener.opened, [], "no browser, no read")
         XCTAssertEqual(calls("read"), [])
         // A PR without a placement opens All; a dismissed one only its tab.
@@ -954,6 +957,20 @@ final class AppModelTests: XCTestCase {
         await settle()
         XCTAssertEqual(model.refreshing, [])
         XCTAssertEqual(api.calls.last, "refresh bufferings-work")
+    }
+
+    /// ⌘R (DESIGN.md, "Keyboard"): Refresh, but nothing while the account's
+    /// refresh still runs.
+    func testCommandRRefreshesUnlessARefreshRuns() async {
+        api.clearCalls()
+        model.refreshByKey("3407303")
+        XCTAssertEqual(model.refreshing, ["3407303"])
+        model.refreshByKey("3407303")
+        await settle()
+        XCTAssertEqual(api.calls.filter { $0.hasPrefix("refresh") }, ["refresh bufferings-work"], "once")
+        model.refreshByKey("3407303")
+        await settle()
+        XCTAssertEqual(api.calls.filter { $0.hasPrefix("refresh") }.count, 2, "again once the first answered")
     }
 
     func testTheDaysToKeepFollowTheSetting() async {

@@ -22,12 +22,15 @@ public enum GroupBy: String, Equatable, Codable, CaseIterable {
     }
 }
 
+/// All's order (DESIGN.md, "All", "Order"). `Recent activity` keeps the raw
+/// value 0.6 saved for `Recently updated`, so a remembered 0.6 choice reads
+/// as `Recent activity` (DESIGN.md, "Updating from 0.6").
 public enum SortOrder: String, Equatable, Codable, CaseIterable {
-    case recentlyUpdated = "recently_updated", recentlyAdded = "recently_added"
+    case recentActivity = "recently_updated", recentlyAdded = "recently_added"
 
     public var title: String {
         switch self {
-        case .recentlyUpdated: return "Recently updated"
+        case .recentActivity: return "Recent activity"
         case .recentlyAdded: return "Recently added"
         }
     }
@@ -41,7 +44,7 @@ public struct ListOptions: Equatable, Codable {
     public private(set) var thenBy: GroupBy
     public var sort: SortOrder
 
-    public init(groupBy: GroupBy = .repository, thenBy: GroupBy = .none, sort: SortOrder = .recentlyUpdated) {
+    public init(groupBy: GroupBy = .repository, thenBy: GroupBy = .none, sort: SortOrder = .recentActivity) {
         self.groupBy = groupBy
         self.thenBy = .none
         self.sort = sort
@@ -55,7 +58,7 @@ public struct ListOptions: Equatable, Codable {
         self.init(
             groupBy: (try? c.decodeIfPresent(GroupBy.self, forKey: .groupBy)) ?? .repository,
             thenBy: (try? c.decodeIfPresent(GroupBy.self, forKey: .thenBy)) ?? .none,
-            sort: (try? c.decodeIfPresent(SortOrder.self, forKey: .sort)) ?? .recentlyUpdated
+            sort: (try? c.decodeIfPresent(SortOrder.self, forKey: .sort)) ?? .recentActivity
         )
     }
 
@@ -228,20 +231,18 @@ public enum Highlight {
         return shifted(ranges(words, in: author), by: times[..<at.lowerBound].utf16.count + 3)
     }
 
-    /// The matches in a row's displayed meta (`alice · 9 min ago`: the actor
-    /// only, not the time) and body (the text; `by alice`: the actor only;
-    /// a reaction's quoted text: the text only).
+    /// The matches in a row's actor name on line 1 (not the time) and in its
+    /// body (the text; a reaction's quoted text: the text only).
     public struct RowMatches: Equatable {
-        public var meta: [Range<Int>] = []
+        public var actor: [Range<Int>] = []
         public var body: [Range<Int>] = []
     }
 
     public static func row(_ words: [String], _ row: Row, _ p: RowPresentation) -> RowMatches {
         var out = RowMatches()
         guard !words.isEmpty else { return out }
-        let actor = row.actor.flatMap { $0.isEmpty ? nil : $0 }
-        if let actor, p.meta.hasPrefix(actor + " \u{00B7} ") {
-            out.meta = ranges(words, in: actor)
+        if let actor = p.actor {
+            out.actor = ranges(words, in: actor)
         }
         guard let body = p.body else { return out }
         let text = row.text.map(RowText.normalize).flatMap { $0.isEmpty ? nil : $0 }
@@ -249,8 +250,6 @@ public enum Highlight {
             out.body = ranges(words, in: text)
         } else if let text, body == "\u{201C}\(text)\u{201D}" {
             out.body = shifted(ranges(words, in: text), by: 1)
-        } else if text == nil, let actor, body == "by \(actor)" {
-            out.body = shifted(ranges(words, in: actor), by: 3)
         }
         return out
     }
@@ -304,7 +303,8 @@ public enum Highlight {
     }
 
     public struct RowMarks: Equatable {
-        public var meta: [Range<Int>] = []
+        /// The matches in the actor's name on line 1.
+        public var actor: [Range<Int>] = []
         public var body = TextMarks()
         /// The row's `more` (collapsed, with a match in the part it hides).
         public var more = false
@@ -325,7 +325,7 @@ public enum Highlight {
         /// by what its heading does not show.
         public var anyYellow: Bool {
             prLabel.yellow || title.yellow || baseHead.yellow || !author.isEmpty || moreRows
-                || rows.values.contains { !$0.meta.isEmpty || $0.body.yellow || $0.more }
+                || rows.values.contains { !$0.actor.isEmpty || $0.body.yellow || $0.more }
         }
     }
 
@@ -350,7 +350,7 @@ public enum Highlight {
             let open = expandedBodies.contains(row.id)
             let p = RowPresentation(row, now: now, cardMuted: card.isMuted, expanded: open)
             let found = self.row(words, row, p)
-            var rowMarks = RowMarks(meta: found.meta)
+            var rowMarks = RowMarks(actor: found.actor)
             if let body = p.body {
                 rowMarks.body = TextMarks(found.body) { shownEnd(.body(row: row.id), body) }
                 rowMarks.more = !open && rowMarks.body.ellipsis
@@ -386,9 +386,15 @@ extension PlacementSection {
         }
     }
 
-    /// The sections of Review and of Mine from the top (DESIGN.md,
-    /// "Review", "Mine").
-    public static let order: [PlacementSection] = [.doing, .todo, .waiting, .done]
+    /// The sections of Review and of Mine from the top of the list (DESIGN.md,
+    /// "Review", "Mine"): the long Todo last, Done first so it can stay
+    /// folded.
+    public static let displayOrder: [PlacementSection] = [.done, .waiting, .doing, .todo]
+
+    /// The order of the `Move to …` items of the context menus, for one card
+    /// and for several (DESIGN.md, "Context menu"). It is not the order the
+    /// sections show in.
+    public static let menuOrder: [PlacementSection] = [.doing, .todo, .waiting, .done]
 }
 
 extension Card {
@@ -484,6 +490,9 @@ public struct SectionLayout: Equatable, Identifiable {
     /// Review or Mine, Done included: cards move by drag, keys and menus.
     public var accepts: Bool
     public var isDone: Bool
+    /// The unread mark before the name of a collapsed heading (DESIGN.md,
+    /// "Section size"); `.none` while the heading is open.
+    public var foldMark: UnreadMark = .none
 
     public var id: String { key }
 
@@ -626,16 +635,26 @@ public enum Listing {
 
     // MARK: Order
 
-    /// All's order inside the innermost group (DESIGN.md, "All"): open PRs
-    /// (Draft included) first, then Merged and Closed, each newest first by
-    /// the chosen order; muted cards the Filter shows are placed by the
-    /// same rule.
+    /// The time `Recent activity` sorts a card by (DESIGN.md, "All", "Order"):
+    /// the newest of its rows that are not muted, read or not. The wire `rows`
+    /// leave out the kinds whose List is off. A card without such a row uses
+    /// the time it was added, and a card without that 0. The daemon sorts
+    /// `list --tab all` by the same rule.
+    public static func activityAt(_ card: Card) -> Int64 {
+        card.rows.lazy.filter { !$0.muted }.map(\.occurredAt).max() ?? card.addedAt ?? 0
+    }
+
+    /// All's order inside the innermost group (DESIGN.md, "All", "Order"):
+    /// newest first by the chosen order, whether the PR is open, merged or
+    /// closed; muted cards the Filter shows are placed by the same rule. A tie
+    /// goes by the PR key, as in the daemon.
     public static func sorted(_ cards: [Card], by order: SortOrder) -> [Card] {
-        cards.sorted { a, b in
-            if a.isFinished != b.isFinished { return !a.isFinished }
-            let (ka, kb): (Int64, Int64) = order == .recentlyUpdated
-                ? (a.updatedAt, b.updatedAt)
-                : (a.addedAt ?? 0, b.addedAt ?? 0)
+        let keys: [String: Int64] = Dictionary(
+            cards.map { ($0.id, order == .recentActivity ? activityAt($0) : ($0.addedAt ?? 0)) },
+            uniquingKeysWith: { a, _ in a }
+        )
+        return cards.sorted { a, b in
+            let (ka, kb) = (keys[a.id] ?? 0, keys[b.id] ?? 0)
             if ka != kb { return ka > kb }
             return a.id < b.id
         }
@@ -652,7 +671,11 @@ public enum Listing {
 
     // MARK: Groups
 
-    static let statusGroups = PRStatus.allCases.map { ($0.rawValue, $0.title) }
+    /// The default order of the Status groups (DESIGN.md, "All", "Group by"):
+    /// its own list, so `PRStatus`'s order (the Filter's checkboxes, the
+    /// summary, the saved form) stays as it is.
+    static let statusGroupOrder: [PRStatus] = [.merged, .closed, .open, .draft]
+    static let statusGroups = statusGroupOrder.map { ($0.rawValue, $0.title) }
     static let involvementGroups = [
         ("review_requested", "Review requested"), ("authored", "Authored by me"),
         ("assigned", "Assigned to me"), ("others", "Others"),
@@ -748,8 +771,18 @@ public enum Listing {
         return SectionLayout(
             key: key, title: title, level: level, isLeaf: true, detail: count(all.count), collapsed: isCollapsed,
             cards: shown, more: folded.count, showLess: !isCollapsed && expanded, moreMark: UnreadMark.of(cards: folded),
-            matching: matching, accepts: accepts, isDone: isDone
+            matching: matching, accepts: accepts, isDone: isDone, foldMark: foldMark(collapsed: isCollapsed, cards: all)
         )
+    }
+
+    /// DESIGN.md, "Section size": a collapsed heading shows the accent-colored
+    /// dot when one of its cards has a colored unread row, the gray ring when
+    /// only gray unread rows are left, as "+ N more PRs" does; an open
+    /// heading shows none (its cards show their own marks). `cards` are the
+    /// ones its count counts: those the Filter shows, whatever the search; for
+    /// a first-level group of All, the cards of all its second-level groups.
+    public static func foldMark(collapsed: Bool, cards: [Card]) -> UnreadMark {
+        collapsed ? UnreadMark.of(cards: cards) : .none
     }
 
     /// The sections of a tab. `cards` are every card as the daemon sent
@@ -770,7 +803,7 @@ public enum Listing {
         switch tab {
         case .review, .mine:
             let placementTab: PlacementTab = tab == .review ? .review : .mine
-            return PlacementSection.order.compactMap { section in
+            return PlacementSection.displayOrder.compactMap { section in
                 let all = ranked(tabCards.filter { $0.placement?.section.value == section })
                 let matching = all.filter { found.contains($0.id) }
                 let keepsEmpty = !searching && !tabCards.isEmpty
@@ -804,7 +837,8 @@ public enum Listing {
                 out.append(SectionLayout(
                     key: headerKey, title: group.title, level: 1, isLeaf: false, detail: count(all.count),
                     collapsed: isCollapsed, cards: [], more: 0, showLess: false, moreMark: .none,
-                    matching: sorted(matching, by: options.sort), accepts: false, isDone: false
+                    matching: sorted(matching, by: options.sort), accepts: false, isDone: false,
+                    foldMark: foldMark(collapsed: isCollapsed, cards: all)
                 ))
                 guard !isCollapsed else { continue }
                 for sub in second {

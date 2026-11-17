@@ -280,32 +280,8 @@ final class SurfaceRoot: NSView {
         controller.cardViews.map { (self.convert($0.bounds, from: $0), $0.line?.indented ?? false) }
     }
 
-    /// The window's title strip, over the SwiftUI content: a press there
-    /// moves the window. The content (with `fullSizeContentView`) reaches
-    /// under the title bar, and the hosting view took presses in the strip
-    /// (the measurement mode's drag map): the window moved only now and
-    /// then. Set by the window's owner; a popover has none.
-    var movesWindowByTitleStrip = false {
-        didSet {
-            if movesWindowByTitleStrip, titleStrip == nil {
-                let strip = WindowDragView()
-                addSubview(strip, positioned: .below, relativeTo: overlay)
-                titleStrip = strip
-                needsLayout = true
-            }
-        }
-    }
-
-    private var titleStrip: WindowDragView?
-
     override func layout() {
         super.layout()
-        if let titleStrip, let window {
-            // The title bar's height: the window's frame less its content
-            // layout rect (NSWindow.h, `contentLayoutRect`).
-            let height = max(0, window.frame.height - window.contentLayoutRect.height)
-            titleStrip.frame = CGRect(x: 0, y: 0, width: bounds.width, height: height)
-        }
         placeList()
         if let resizer { resizer.frame = CGRect(x: 0, y: bounds.height - BottomEdgeResizer.height, width: bounds.width, height: BottomEdgeResizer.height) }
     }
@@ -411,7 +387,7 @@ enum ImageCompare {
     }
 }
 
-/// The view controller of a surface (NSPopover and NSPanel take one).
+/// The view controller of a surface (NSPopover and NSWindow take one).
 final class SurfaceViewController: NSViewController {
     private let root: SurfaceRoot
 

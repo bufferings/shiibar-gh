@@ -100,12 +100,15 @@ public struct HeaderButton: View {
     public var icon: BoardIcon
     public var size: CGFloat
     public var label: String
+    /// The tooltip, when it says more than the label (`Refresh (⌘R)`).
+    public var help: String?
     public var action: () -> Void
 
-    public init(icon: BoardIcon, size: CGFloat, label: String, action: @escaping () -> Void) {
+    public init(icon: BoardIcon, size: CGFloat, label: String, help: String? = nil, action: @escaping () -> Void) {
         self.icon = icon
         self.size = size
         self.label = label
+        self.help = help
         self.action = action
     }
 
@@ -116,20 +119,24 @@ public struct HeaderButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(HoverButtonStyle())
-        .quickHelp(label)
+        .quickHelp(help ?? label)
         .accessibilityLabel(label)
     }
 }
 
 public struct HoverButtonStyle: ButtonStyle {
     @State private var hovering = false
+    /// The fill while the pointer is away (the pin's tint while on).
+    public var idle: Color
 
-    public init() {}
+    public init(idle: Color = .clear) {
+        self.idle = idle
+    }
 
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .foregroundColor(Palette.secondary.color)
-            .background(RoundedRectangle(cornerRadius: 6).fill(hovering || configuration.isPressed ? Palette.fill.color : .clear))
+            .background(RoundedRectangle(cornerRadius: 6).fill(hovering || configuration.isPressed ? Palette.fill.color : idle))
             .onHover { hovering = $0 }
     }
 }

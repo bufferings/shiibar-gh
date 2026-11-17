@@ -58,18 +58,23 @@ final class HighlightTests: XCTestCase {
         XCTAssertEqual(Highlight.baseHead(Search.words("ma fix"), base: "main", head: "fix/main"), [0..<2, 7..<10, 11..<13])
     }
 
-    /// The row's displayed strings: the actor in the meta (not the time),
-    /// the body, `by <actor>`, a reaction's quoted text; the author in line
-    /// 3's times.
+    /// The row's displayed strings: the actor's name on line 1 (not the
+    /// time), the body, a reaction's quoted text; the author in line 3's
+    /// times. No row has a `by <actor>` body.
     func testTheFieldsAsDisplayed() {
         let words = Search.words("al min")
         let comment = row("c", pr: "p#1", kind: .comment, text: "Mini  change\nfor all", actor: "alice", at: 0)
         let p = RowPresentation(comment, now: 120)
-        XCTAssertEqual(p.meta, "alice · 2 min ago")
-        XCTAssertEqual(Highlight.row(words, comment, p), Highlight.RowMatches(meta: [0..<2], body: [0..<3, 16..<18]),
+        XCTAssertEqual(p.actor, "alice")
+        XCTAssertEqual(p.time, "2 min ago")
+        XCTAssertEqual(Highlight.row(words, comment, p), Highlight.RowMatches(actor: [0..<2], body: [0..<3, 16..<18]),
                        "not the `min` of the time; the body as normalized")
         let merged = row("m", pr: "p#1", kind: .merged, actor: "alice")
-        XCTAssertEqual(Highlight.row(words, merged, RowPresentation(merged, now: 0)).body, [3..<5], "by alice")
+        let mp = RowPresentation(merged, now: 0)
+        XCTAssertNil(mp.body)
+        XCTAssertEqual(Highlight.row(words, merged, mp), Highlight.RowMatches(actor: [0..<2]), "the name on line 1")
+        let checks = row("k", pr: "p#1", kind: .checksFailed, text: "build", actor: "alice")
+        XCTAssertEqual(Highlight.row(words, checks, RowPresentation(checks, now: 0)).actor, [], "no name on a state change")
         let author = Highlight.author(words, author: "alice", times: "opened 3 days ago by alice · updated 2 min ago")
         XCTAssertEqual(author, [21..<23], "the login only")
     }
@@ -223,8 +228,8 @@ final class SectionTests: XCTestCase {
     func testReviewKeepsItsEmptySectionsAsDropPlaces() {
         let one = sampleCards().filter { $0.id == "T1" }
         let sections = layout(.review, cards: one)
-        XCTAssertEqual(sections.map(\.title), ["Doing", "Todo", "Waiting", "Done"])
-        XCTAssertEqual(sections.map(\.detail), ["0 PRs", "1 PR", "0 PRs", "0 PRs"])
+        XCTAssertEqual(sections.map(\.title), ["Done", "Waiting", "Doing", "Todo"])
+        XCTAssertEqual(sections.map(\.detail), ["0 PRs", "0 PRs", "0 PRs", "1 PR"])
         XCTAssertEqual(
             CardDrop.target(.header("review|doing"), sections: sections),
             DropTarget(section: "review|doing", position: .top)
@@ -242,29 +247,29 @@ final class SectionTests: XCTestCase {
     /// and nothing is searched (DESIGN.md, "Mine").
     func testMineKeepsItsEmptySectionsAsDropPlaces() {
         let m1 = sampleCards().filter { $0.id == "M1" }
-        XCTAssertEqual(layout(.mine, cards: m1).map(\.key), ["mine|doing", "mine|todo", "mine|waiting", "mine|done"])
-        XCTAssertEqual(layout(.mine, cards: m1).map(\.detail), ["0 PRs", "1 PR", "0 PRs", "0 PRs"])
+        XCTAssertEqual(layout(.mine, cards: m1).map(\.key), ["mine|done", "mine|waiting", "mine|doing", "mine|todo"])
+        XCTAssertEqual(layout(.mine, cards: m1).map(\.detail), ["0 PRs", "0 PRs", "0 PRs", "1 PR"])
         XCTAssertEqual(layout(.mine, cards: m1).map(\.level), [1, 1, 1, 1], "every section has its heading")
         let m3 = sampleCards().filter { $0.id == "M3" }
-        XCTAssertEqual(layout(.mine, cards: m3).map(\.key), ["mine|doing", "mine|todo", "mine|waiting", "mine|done"])
+        XCTAssertEqual(layout(.mine, cards: m3).map(\.key), ["mine|done", "mine|waiting", "mine|doing", "mine|todo"])
         XCTAssertEqual(layout(.mine, cards: m1, search: "zzz").map(\.key), [])
         XCTAssertEqual(layout(.mine, cards: []).map(\.key), [])
     }
 
     func testReviewHasItsFourSectionsAndFoldsPastFive() {
         let sections = layout(.review)
-        XCTAssertEqual(sections.map(\.title), ["Doing", "Todo", "Waiting", "Done"])
-        XCTAssertEqual(sections.map(\.key), ["review|doing", "review|todo", "review|waiting", "review|done"])
+        XCTAssertEqual(sections.map(\.title), ["Done", "Waiting", "Doing", "Todo"])
+        XCTAssertEqual(sections.map(\.key), ["review|done", "review|waiting", "review|doing", "review|todo"])
         XCTAssertEqual(sections.map(\.accepts), [true, true, true, true])
-        XCTAssertEqual(sections.map(\.isDone), [false, false, false, true])
-        let todo = sections[1]
+        XCTAssertEqual(sections.map(\.isDone), [true, false, false, false])
+        let todo = sections[3]
         XCTAssertEqual(todo.cards.map(\.id), ["T1", "T2", "T3", "T4", "T5"])
         XCTAssertEqual(todo.more, 2)
         XCTAssertEqual(todo.foldLine, "+ 2 more PRs")
         XCTAssertEqual(todo.moreMark, .blue, "T7's mention is blue though T7 is muted")
         XCTAssertEqual(todo.detail, "7 PRs")
-        XCTAssertEqual(sections[0].detail, "1 PR")
-        XCTAssertNil(sections[0].foldLine)
+        XCTAssertEqual(sections[2].detail, "1 PR", "Doing")
+        XCTAssertNil(sections[2].foldLine)
     }
 
     /// 0.5: a muted card the Filter shows is at its own rank, not
@@ -272,28 +277,28 @@ final class SectionTests: XCTestCase {
     func testMutedCardsShowAtTheirRankAndAGrayFoldGetsTheRing() {
         var ranked = sampleCards()
         ranked[6].placement?.position = -1
-        XCTAssertEqual(layout(.review, cards: ranked)[1].matching.map(\.id), ["T6", "T1", "T2", "T3", "T4", "T5", "T7"])
+        XCTAssertEqual(layout(.review, cards: ranked)[3].matching.map(\.id), ["T6", "T1", "T2", "T3", "T4", "T5", "T7"])
         var cards = sampleCards()
         cards[7].rows[0].unread = false
-        XCTAssertEqual(layout(.review, cards: cards)[1].moreMark, .ring, "only gray unread left in the fold")
+        XCTAssertEqual(layout(.review, cards: cards)[3].moreMark, .ring, "only gray unread left in the fold")
         cards[6].rows[0].unread = false
-        XCTAssertEqual(layout(.review, cards: cards)[1].moreMark, .none)
-        XCTAssertEqual(layout(.review, cards: cards)[1].foldLine, "+ 2 more PRs")
+        XCTAssertEqual(layout(.review, cards: cards)[3].moreMark, .none)
+        XCTAssertEqual(layout(.review, cards: cards)[3].foldLine, "+ 2 more PRs")
     }
 
     func testOneMorePRAndExpandingAndTheSearch() {
         let cards = sampleCards().filter { $0.id != "T7" }
-        XCTAssertEqual(layout(.review, cards: cards)[1].foldLine, "+ 1 more PR")
-        let open = layout(.review, expanded: ["review|todo"])[1]
+        XCTAssertEqual(layout(.review, cards: cards)[3].foldLine, "+ 1 more PR")
+        let open = layout(.review, expanded: ["review|todo"])[3]
         XCTAssertEqual(open.cards.count, 7)
         XCTAssertTrue(open.showLess)
         XCTAssertEqual(open.foldLine, "Show less")
-        let searched = layout(.review, expanded: [], search: "Title")[1]
+        let searched = layout(.review, expanded: [], search: "Title")[3]
         XCTAssertEqual(searched.cards.count, 7, "no fold with a search")
         XCTAssertNil(searched.foldLine)
         XCTAssertEqual(layout(.review, search: "example-bot").map(\.title), ["Todo"], "sections without a match go")
         XCTAssertEqual(layout(.review, search: "example-bot")[0].detail, "7 PRs", "counts ignore the search")
-        let collapsed = layout(.review, collapsed: ["review|todo"])[1]
+        let collapsed = layout(.review, collapsed: ["review|todo"])[3]
         XCTAssertTrue(collapsed.collapsed)
         XCTAssertEqual(collapsed.cards, [])
         XCTAssertNil(collapsed.foldLine)
@@ -302,13 +307,13 @@ final class SectionTests: XCTestCase {
 
     func testMineHasReviewsFourSections() {
         let sections = layout(.mine)
-        XCTAssertEqual(sections.map(\.title), ["Doing", "Todo", "Waiting", "Done"])
-        XCTAssertEqual(sections.map(\.key), ["mine|doing", "mine|todo", "mine|waiting", "mine|done"])
+        XCTAssertEqual(sections.map(\.title), ["Done", "Waiting", "Doing", "Todo"])
+        XCTAssertEqual(sections.map(\.key), ["mine|done", "mine|waiting", "mine|doing", "mine|todo"])
         XCTAssertEqual(sections.map(\.showsHeader), [true, true, true, true])
         XCTAssertEqual(sections.map(\.accepts), [true, true, true, true])
-        XCTAssertEqual(sections.map(\.isDone), [false, false, false, true])
-        XCTAssertEqual(sections[1].cards.map(\.id), ["M1", "M2"])
-        XCTAssertEqual(sections[3].cards.map(\.id), ["M3"])
+        XCTAssertEqual(sections.map(\.isDone), [true, false, false, false])
+        XCTAssertEqual(sections[3].cards.map(\.id), ["M1", "M2"])
+        XCTAssertEqual(sections[0].cards.map(\.id), ["M3"])
     }
 
     /// "+ N more PRs" and the collapse of Mine's sections, each by its own
@@ -317,18 +322,18 @@ final class SectionTests: XCTestCase {
         let todo = (0..<7).map { card("Q\($0)", authored: true, placement: mine(.todo, $0)) }
         let waiting = (0..<2).map { card("V\($0)", placement: mine(.waiting, $0)) }
         let sections = layout(.mine, cards: todo + waiting, collapsed: ["mine|waiting"])
-        XCTAssertEqual(sections[1].cards.count, 5)
-        XCTAssertEqual(sections[1].foldLine, "+ 2 more PRs")
-        XCTAssertTrue(sections[2].collapsed)
-        XCTAssertEqual(sections[2].cards, [])
+        XCTAssertEqual(sections[3].cards.count, 5)
+        XCTAssertEqual(sections[3].foldLine, "+ 2 more PRs")
+        XCTAssertTrue(sections[1].collapsed)
+        XCTAssertEqual(sections[1].cards, [])
         let open = layout(.mine, cards: todo + waiting, expanded: ["mine|todo"])
-        XCTAssertEqual(open[1].cards.count, 7)
-        XCTAssertEqual(open[1].foldLine, "Show less")
+        XCTAssertEqual(open[3].cards.count, 7)
+        XCTAssertEqual(open[3].foldLine, "Show less")
     }
 
-    /// Open first, then Merged and Closed; muted cards the Filter shows
-    /// by the same rule (DESIGN.md, "All").
-    func testAllGroupsByRepositoryAndSortsOpenFirst() {
+    /// `Recent activity`, open or not; muted cards the Filter shows by the
+    /// same rule (DESIGN.md, "All").
+    func testAllGroupsByRepositoryInRecentActivityOrder() {
         let sections = layout(.all)
         XCTAssertEqual(sections.map(\.title), ["acme-corp/infra", "acme-corp/web", "example-org/api", "example-org/docs", "example-org/web"])
         XCTAssertEqual(sections.map(\.level), [1, 1, 1, 1, 1])
@@ -337,6 +342,14 @@ final class SectionTests: XCTestCase {
         XCTAssertEqual(sections[0].cards.map(\.id), ["W1", "D1"])
         XCTAssertEqual(sections[2].key, "all|repository|none|example-org/api|")
         XCTAssertTrue(sections.allSatisfy { !$0.accepts })
+        // A closed card with the newest row goes first.
+        let cards = sampleCards().map { card -> Card in
+            guard card.id == "M3" else { return card }
+            var closed = card
+            closed.rows = [row("m3", pr: card.pr, kind: .closed, actor: "rk", at: T0)]
+            return closed
+        }
+        XCTAssertEqual(layout(.all, cards: cards)[2].cards.map(\.id), ["M3", "T7", "T4", "T1", "M1"])
         let added = layout(.all, options: ListOptions(groupBy: .none, sort: .recentlyAdded))
         XCTAssertEqual(added.count, 1)
         XCTAssertFalse(added[0].showsHeader)
@@ -348,12 +361,13 @@ final class SectionTests: XCTestCase {
         let options = ListOptions(groupBy: .repository, thenBy: .status)
         let sections = layout(.all, options: options)
         let api = sections.filter { $0.key.hasPrefix("all|repository|status|example-org/api|") }
-        XCTAssertEqual(api.map(\.title), ["example-org/api", "Open", "Closed"])
+        // Status in its default order: Merged, Closed, Open, Draft.
+        XCTAssertEqual(api.map(\.title), ["example-org/api", "Closed", "Open"])
         XCTAssertEqual(api.map(\.level), [1, 2, 2])
         XCTAssertEqual(api.map(\.isLeaf), [false, true, true])
         XCTAssertEqual(api[0].detail, "5 PRs")
-        XCTAssertEqual(api[1].cards.map(\.id), ["T7", "T4", "T1", "M1"])
-        XCTAssertEqual(api[2].key, "all|repository|status|example-org/api|closed")
+        XCTAssertEqual(api[2].cards.map(\.id), ["T7", "T4", "T1", "M1"])
+        XCTAssertEqual(api[1].key, "all|repository|status|example-org/api|closed")
         // Folding the first level hides its groups; the key has no second
         // part.
         let folded = layout(.all, options: options, collapsed: ["all|repository|status|example-org/api|"])
@@ -416,7 +430,10 @@ final class SectionTests: XCTestCase {
 final class SelectionAndHintTests: XCTestCase {
     func testTheSelectionWalksHeadingsCardsRowsAndFoldLines() {
         let items = PopoverLogic.items(view(.review))
-        XCTAssertEqual(Array(items.prefix(9)), [
+        // From the top: Done, Waiting, Doing, Todo.
+        XCTAssertEqual(Array(items.prefix(13)), [
+            .section("review|done"), .header(card: "D1"),
+            .section("review|waiting"), .header(card: "W1"),
             .section("review|doing"), .header(card: "R1"), .row(id: "r1", card: "R1"),
             .section("review|todo"), .header(card: "T1"), .row(id: "A", card: "T1"), .row(id: "B", card: "T1"),
             .row(id: "C", card: "T1"), .moreRows(card: "T1"),
@@ -426,7 +443,8 @@ final class SelectionAndHintTests: XCTestCase {
         XCTAssertTrue(expanded.contains(.row(id: "E", card: "T1")))
         XCTAssertTrue(expanded.contains(.olderActivity(card: "T1")))
         XCTAssertFalse(expanded.contains(.moreRows(card: "T1")))
-        XCTAssertEqual(Array(PopoverLogic.items(view(.mine)).prefix(3)), [.section("mine|doing"), .section("mine|todo"), .header(card: "M1")],
+        XCTAssertEqual(Array(PopoverLogic.items(view(.mine)).prefix(5)),
+                       [.section("mine|done"), .header(card: "M3"), .section("mine|waiting"), .section("mine|doing"), .section("mine|todo")],
                        "every section of Mine has its heading")
         XCTAssertEqual(PopoverLogic.items(view(nil)), [.header(card: "X2"), .header(card: "X1")], "card headers only, no repository")
         XCTAssertEqual(PopoverLogic.move(nil, up: false, in: items), items.first)
@@ -639,7 +657,7 @@ final class CardMoveTests: XCTestCase {
         XCTAssertEqual(CardDrop.target(.card("T7", lowerHalf: true), sections: sections), DropTarget(section: "review|todo", position: .bottom))
         XCTAssertEqual(CardDrop.target(.header("review|doing"), sections: sections), DropTarget(section: "review|doing", position: .top),
                        "a heading: the top")
-        let first = sections[1].matching[0].id
+        let first = sections[3].matching[0].id
         XCTAssertEqual(CardDrop.target(.card(first, lowerHalf: false), sections: sections), DropTarget(section: "review|todo", position: .top),
                        "the first card's upper half: the top")
         XCTAssertEqual(CardDrop.target(.more("review|todo"), sections: sections), DropTarget(section: "review|todo", position: .before("T6")),
@@ -660,15 +678,15 @@ final class CardMoveTests: XCTestCase {
     }
 
     func testTheLine() {
-        let todo = layout(.review)[1]
+        let todo = layout(.review)[3]
         XCTAssertEqual(CardDrop.lineAbove(DropTarget(section: todo.key, position: .before("T3")), in: todo), "T3")
         XCTAssertNil(CardDrop.lineAbove(DropTarget(section: todo.key, position: .bottom), in: todo), "above + 2 more PRs")
         XCTAssertEqual(CardDrop.lineAbove(DropTarget(section: todo.key, position: .top), in: todo), todo.cards.first?.id, "the top")
-        let open = layout(.review, expanded: ["review|todo"])[1]
+        let open = layout(.review, expanded: ["review|todo"])[3]
         XCTAssertNil(CardDrop.lineAbove(DropTarget(section: open.key, position: .bottom), in: open), "below the last card")
         XCTAssertEqual(CardDrop.lineAbove(DropTarget(section: open.key, position: .before("T6")), in: open), "T6")
         XCTAssertNil(CardDrop.lineAbove(DropTarget(section: todo.key, position: .before("T6")), in: todo), "a folded card: the end")
-        let done = layout(.review)[3]
+        let done = layout(.review)[0]
         XCTAssertEqual(CardDrop.lineAbove(DropTarget(section: done.key, position: .byDefault), in: done), "D1", "Done: the top")
     }
 
@@ -886,7 +904,7 @@ final class DismissAllTargetTests: XCTestCase {
         XCTAssertNotNil(done(filter: ListFilter(statuses: [.open])), "the empty Done still shows")
         XCTAssertNil(done(search: "zzz"), "no match: no section")
         let sections = layout(.review, cards: doneCards())
-        XCTAssertEqual(sections.map { $0.dismissAllCards != nil }, [false, false, false, true], "Done only")
+        XCTAssertEqual(sections.map { $0.dismissAllCards != nil }, [true, false, false, false], "Done only")
         XCTAssertNil(layout(.all, cards: doneCards()).first { $0.dismissAllCards != nil }, "not in All")
         XCTAssertNil(done(.mine, cards: sampleCards())?.dismissAllCards, "Mine's Done with one card")
         let m4 = card("M4", authored: true, state: .merged, placement: mine(.done, 1))

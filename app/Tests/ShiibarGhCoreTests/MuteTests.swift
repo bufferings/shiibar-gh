@@ -12,16 +12,16 @@ final class MutedFilterTests: XCTestCase {
     /// (DESIGN.md, "Mute", "Filter", "Section size").
     func testMutedCardsHideWithMutedHide() {
         let review = layout(.review, filter: mutedHidden)
-        let todo = review[1]
+        let todo = review[3]
         XCTAssertEqual(todo.matching.map(\.id), ["T1", "T2", "T3", "T4", "T5"])
         XCTAssertEqual(todo.detail, "5 PRs", "the muted cards are not counted")
         XCTAssertNil(todo.foldLine, "5 cards do not fold")
-        let on = layout(.review, filter: mutedShown)[1]
+        let on = layout(.review, filter: mutedShown)[3]
         XCTAssertEqual(on.detail, "7 PRs")
         XCTAssertEqual(on.foldLine, "+ 2 more PRs")
         // A section whose cards are all muted is an empty section.
         let onlyMuted = sampleCards().filter { ["T6", "T7", "R1"].contains($0.id) }
-        XCTAssertEqual(layout(.review, cards: onlyMuted, filter: mutedHidden).map(\.detail), ["1 PR", "0 PRs", "0 PRs", "0 PRs"])
+        XCTAssertEqual(layout(.review, cards: onlyMuted, filter: mutedHidden).map(\.detail), ["0 PRs", "0 PRs", "1 PR", "0 PRs"])
         // A tab whose cards are all muted shows none, and its empty text.
         let mutedOnly = sampleCards().filter { ["T6", "T7"].contains($0.id) }
         XCTAssertEqual(layout(.review, cards: mutedOnly, filter: mutedHidden).map(\.key), [])
@@ -93,7 +93,7 @@ final class HiddenPlaceTests: XCTestCase {
     func testFoldedCardsAreReferenceCards() {
         let cards = (0..<7).map { card("F\($0)", placement: review(.todo, $0)) }
         let s = layout(.review, cards: cards, filter: mutedHidden)
-        XCTAssertEqual(s[1].cards.count, 5)
+        XCTAssertEqual(s[3].cards.count, 5)
         XCTAssertEqual(CardDrop.target(.card("F4", lowerHalf: true), sections: s)?.position, .before("F5"),
                        "the last shown card's lower half: before the first folded one")
         XCTAssertEqual(CardDrop.target(.more("review|todo"), sections: s)?.position, .before("F5"),

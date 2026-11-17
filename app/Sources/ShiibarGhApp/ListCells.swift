@@ -679,7 +679,7 @@ final class ListButton: NSView {
         case .restore:
             let box = bounds.insetBy(dx: 0.5, dy: 0.5)
             Shapes.rounded(box, radius: 6, fill: Palette.surface.nsColor, stroke: Palette.border.nsColor)
-            Ink.drawLine("Restore", Ink.font(11), Palette.text.nsColor, in: bounds.insetBy(dx: 8, dy: 0))
+            Ink.drawLine("Restore", Ink.font(Self.restoreFont * k), Palette.text.nsColor, in: bounds.insetBy(dx: Self.restorePadding * k, dy: 0))
         }
     }
 
@@ -693,8 +693,15 @@ final class ListButton: NSView {
         CGSize(width: Ink.width(text, Ink.font(10 * k, .semibold)) + 12 * k, height: 14 * k)
     }
 
-    @MainActor static var restoreSize: CGSize {
-        CGSize(width: Ink.width("Restore", Ink.font(11)) + 16, height: Ink.lineHeight(Ink.font(11)) + 4)
+    /// Restore of the Dismissed list (DESIGN.md, "Constants"; Main.html
+    /// `.btn.rst`): its text 12 points, 22 points high, 10 points of room on
+    /// either side, at text size 12 and in proportion to the text size.
+    static let restoreFont: CGFloat = 12
+    static let restoreHeight: CGFloat = 22
+    static let restorePadding: CGFloat = 10
+
+    @MainActor static func restoreSize(k: CGFloat) -> CGSize {
+        CGSize(width: (Ink.width("Restore", Ink.font(restoreFont * k)) + 2 * restorePadding * k).rounded(.up), height: (restoreHeight * k).rounded())
     }
 }
 
@@ -710,6 +717,10 @@ struct CardGeometry {
         var icon: CGRect
         var label: CGRect
         var counts: CGRect?
+        /// The band of line 1 after the label (and the counts) up to the
+        /// chain icon: the actor's avatar and name at its left, the time at
+        /// its right end (`LineLayout.rowLine`, worked out when drawn, as
+        /// the time and the avatar change).
         var meta: CGRect
         var body: CGRect?
         var bodyLines: Int
@@ -898,6 +909,9 @@ enum LineLayout {
             let textWidth = max(0, rowRight - textX)
             var lineA = max(Ink.lineHeight(f11b), lh11)
             if p.counts != nil { lineA = max(lineA, lh12) }
+            // A row with an actor keeps the avatar's height whether its
+            // image has loaded or not, so the row does not move when it does.
+            if p.actor != nil { lineA = max(lineA, rowAvatar * k) }
             let labelWidth = Ink.width(p.label, f11b)
             let labelRect = CGRect(x: textX, y: 0, width: min(labelWidth, textWidth), height: lineA)
             var mx = labelRect.maxX + 6
@@ -907,9 +921,11 @@ enum LineLayout {
                 countsRect = CGRect(x: mx, y: 0, width: w, height: lineA)
                 mx += w + 6
             }
-            // The chain icon follows the time (worked out when drawn, as the
-            // time changes): its room is kept at the end of the line.
-            let metaRect = CGRect(x: mx, y: 0, width: max(0, textX + textWidth - mx - 2 - op), height: lineA)
+            // DESIGN.md, "How rows look": the chain icon at the right end of
+            // line 1 and the time right before it, at the same place in every
+            // row.
+            let chainRect = CGRect(x: textX + textWidth - op, y: (lineA - op) / 2, width: op, height: op)
+            let metaRect = CGRect(x: mx, y: 0, width: max(0, chainRect.minX - timeGap - mx), height: lineA)
             var content = lineA
             var bodyRect: CGRect?
             var toggleRect: CGRect?
@@ -940,7 +956,7 @@ enum LineLayout {
                 icon: shift(CGRect(x: rowLeft + 7 * k + 8, y: 2 * k, width: 14 * k, height: 14 * k)),
                 label: shift(labelRect), counts: countsRect.map(shift), meta: shift(metaRect),
                 body: bodyRect.map(shift), bodyLines: bodyLines, toggle: toggleRect.map(shift),
-                chain: shift(CGRect(x: metaRect.maxX + 2, y: (lineA - op) / 2, width: op, height: op))
+                chain: shift(chainRect)
             ))
             y += rowHeight
         }
@@ -967,6 +983,40 @@ enum LineLayout {
             marks: markRects, status: status, chain: chain, dismiss: dismiss, avatar: avatar, title: title, tag: tag,
             baseHead: baseHead, timesBand: rightRow, line3Fits: fits, rows: rows, feet: feet, unreadDot: unreadDot
         )
+    }
+
+    /// The size of a row's avatar at text size 12 (DESIGN.md, "Constants").
+    static let rowAvatar: CGFloat = 14
+    /// From the end of the time to the chain icon (Main.html `.evl`).
+    static let timeGap: CGFloat = 4
+
+    /// Where a row's line 1 puts the actor and the time in its band
+    /// (`RowFrame.meta`): the time at the right end, always shown in full;
+    /// the avatar (when its image is there) and the name from the left, the
+    /// name cut with "…" to the room left before the time. Without an image
+    /// the name takes the avatar's place.
+    struct RowLine: Equatable {
+        var avatar: CGRect?
+        var name: CGRect?
+        var time: CGRect
+    }
+
+    static func rowLine(_ band: CGRect, _ p: RowPresentation, avatar: Bool, k: CGFloat) -> RowLine {
+        let f11 = Ink.font(11 * k)
+        let lh11 = Ink.lineHeight(f11)
+        let timeWidth = Ink.width(p.time, f11)
+        let time = CGRect(x: band.maxX - timeWidth, y: center(lh11, in: band), width: timeWidth, height: lh11)
+        guard let actor = p.actor else { return RowLine(avatar: nil, name: nil, time: time) }
+        var x = band.minX
+        var avatarRect: CGRect?
+        if avatar {
+            let size = rowAvatar * k
+            avatarRect = CGRect(x: x, y: center(size, in: band), width: size, height: size)
+            x += size + 4
+        }
+        let room = max(0, time.minX - 6 - x)
+        let name = CGRect(x: x, y: center(lh11, in: band), width: min(Ink.width(actor, f11), room), height: lh11)
+        return RowLine(avatar: avatarRect, name: name, time: time)
     }
 
     /// Whether line 3 of a card holds its left part and the times (else the
@@ -1021,7 +1071,7 @@ enum LineLayout {
         let row2 = CGRect(x: 0, y: row1.maxY + 3 * k, width: width, height: max(16 * k, lh12))
         let avatar = CGRect(x: left, y: center(16 * k, in: row2), width: 16 * k, height: 16 * k)
         let title = CGRect(x: avatar.maxX + 6, y: center(lh12, in: row2), width: max(0, right - 6 - avatar.maxX - 6), height: lh12)
-        let restoreSize = ListButton.restoreSize
+        let restoreSize = ListButton.restoreSize(k: k)
         let row3 = CGRect(x: 0, y: row2.maxY + 5 * k, width: width, height: max(lh11, restoreSize.height))
         let restore = CGRect(x: right - restoreSize.width, y: center(restoreSize.height, in: row3), width: restoreSize.width, height: restoreSize.height)
         let daysWidth = Ink.width(DismissedText.daysLeft(card.dismissExpiresAt, now: now), f11)
@@ -1466,7 +1516,9 @@ final class HeadingLineView: LineView {
         bind(state)
         setAccessibilityElement(true)
         setAccessibilityRole(heading.folds ? .button : .staticText)
-        setAccessibilityLabel("\(heading.title), \(heading.detail)")
+        var label = [heading.title, heading.detail]
+        if heading.mark != .none { label.append(heading.mark == .blue ? "Unread" : "Unread, muted") }
+        setAccessibilityLabel(label.joined(separator: ", "))
         setAccessibilityValue(heading.folds ? (heading.collapsed ? "Collapsed" : "Expanded") : nil)
         layoutControls()
         if changed { needsDisplay = true }
@@ -1480,6 +1532,8 @@ final class HeadingLineView: LineView {
 
     private struct Parts {
         var chevron: CGRect?
+        /// The unread mark of a collapsed heading, before its name.
+        var mark: CGRect?
         var title: CGRect
         var showLess: CGRect?
         var detail: CGRect
@@ -1521,8 +1575,15 @@ final class HeadingLineView: LineView {
                 less = CGRect(x: titleRight - lessSize.width, y: LineLayout.center(lessSize.height, in: line), width: lessSize.width, height: lessSize.height)
                 titleRight = less!.minX - spacing
             }
-            let title = CGRect(x: left, y: LineLayout.center(Ink.lineHeight(titleFont), in: line), width: max(0, titleRight - left), height: Ink.lineHeight(titleFont))
-            return Parts(chevron: chevron, title: title, showLess: less, detail: detail, dismissAll: dismissAll)
+            // Main.html `.band > .dot`: the band's gap less 2 points.
+            var titleX = left
+            var mark: CGRect?
+            if heading.mark != .none {
+                mark = CGRect(x: left, y: LineLayout.center(7 * k, in: line), width: 7 * k, height: 7 * k)
+                titleX = mark!.maxX + spacing - 2
+            }
+            let title = CGRect(x: titleX, y: LineLayout.center(Ink.lineHeight(titleFont), in: line), width: max(0, titleRight - titleX), height: Ink.lineHeight(titleFont))
+            return Parts(chevron: chevron, mark: mark, title: title, showLess: less, detail: detail, dismissAll: dismissAll)
         }
         let chevron = CGRect(x: left, y: LineLayout.center(chevronSize, in: line), width: chevronSize, height: chevronSize)
         let detail = CGRect(x: right - detailWidth, y: LineLayout.center(Ink.lineHeight(detailFont), in: line), width: detailWidth, height: Ink.lineHeight(detailFont))
@@ -1532,9 +1593,15 @@ final class HeadingLineView: LineView {
             less = CGRect(x: titleRight - lessSize.width, y: LineLayout.center(lessSize.height, in: line), width: lessSize.width, height: lessSize.height)
             titleRight = less!.minX - spacing
         }
-        let titleX = chevron.maxX + spacing
+        // Main.html `.grp2 > .dot`: after the chevron, before the name.
+        var titleX = chevron.maxX + spacing
+        var mark: CGRect?
+        if heading.mark != .none {
+            mark = CGRect(x: titleX, y: LineLayout.center(7 * k, in: line), width: 7 * k, height: 7 * k)
+            titleX = mark!.maxX + spacing - 2
+        }
         let title = CGRect(x: titleX, y: LineLayout.center(Ink.lineHeight(titleFont), in: line), width: max(0, titleRight - titleX), height: Ink.lineHeight(titleFont))
-        return Parts(chevron: chevron, title: title, showLess: less, detail: detail)
+        return Parts(chevron: chevron, mark: mark, title: title, showLess: less, detail: detail)
     }
 
     private func layoutControls() {
@@ -1577,6 +1644,7 @@ final class HeadingLineView: LineView {
             Ink.draw(heading.title, Ink.font(11 * k, .semibold), Palette.text.nsColor, in: parts.title)
             Ink.draw(heading.detail, Ink.font(11 * k), Palette.secondary.nsColor, in: parts.detail)
         }
+        if let mark = parts.mark { Shapes.dot(heading.mark, in: mark) }
         guard let chevron = parts.chevron else { return }
         let icon = CGRect(x: chevron.midX - 6 * k, y: chevron.midY - 6 * k, width: 12 * k, height: 12 * k)
         Shapes.icon(chevronIcon, in: icon, color: Palette.secondary.nsColor)
@@ -1684,14 +1752,38 @@ final class CardLineView: LineView {
         var k: CGFloat
         var now: Int64
         var avatar: Bool
+        /// Which shown rows have their actor's avatar image: one arriving
+        /// moves the name, so the card draws again.
+        var rowAvatars: [Bool]
     }
 
     override func drawInputs() -> AnyEquatable? {
         let url = line?.card.authorAvatarUrl
         return AnyEquatable(Inputs(
             line: line, size: geometry?.size, line3Fits: geometry?.line3Fits, k: env?.k ?? 1, now: env?.now ?? 0,
-            avatar: env?.context.avatars.image(for: url) != nil
+            avatar: env?.context.avatars.image(for: url) != nil,
+            rowAvatars: shownRows().map { rowImage($0) != nil }
         ))
+    }
+
+    /// The rows the geometry lays out, in order.
+    private func shownRows() -> [Row] {
+        guard let line, let geometry else { return [] }
+        return geometry.rows.compactMap { frame in line.card.rows.first { $0.id == frame.id } }
+    }
+
+    /// The decoded avatar of a row's actor, nil while it has not loaded,
+    /// failed, or the row shows no actor or has no URL.
+    private func rowImage(_ row: Row) -> NSImage? {
+        guard RowPresentation.showsActor(row.kind.value), let url = row.actorAvatarUrl, let avatars = env?.context.avatars else {
+            return nil
+        }
+        return DecodedAvatars.image(url, data: avatars.image(for: url))
+    }
+
+    /// Line 1 of a row as it is drawn now.
+    private func rowLine(_ frame: CardGeometry.RowFrame, _ row: Row, _ p: RowPresentation) -> LineLayout.RowLine {
+        LineLayout.rowLine(frame.meta, p, avatar: rowImage(row) != nil, k: k)
     }
 
     func configure(_ line: CardLine, geometry: CardGeometry, env: LineEnvironment, state: ItemState) {
@@ -1713,6 +1805,9 @@ final class CardLineView: LineView {
         setAccessibilityLabel("\(Warnings.prLabel(line.card.pr)), \(line.card.title)")
         setAccessibilityValue(line.card.isMuted ? "Muted" : nil)
         env.context.avatars.request(line.card.authorAvatarUrl)
+        for row in shownRows() where RowPresentation.showsActor(row.kind.value) {
+            env.context.avatars.request(row.actorAvatarUrl)
+        }
         layoutContent()
         needsDisplay = true
     }
@@ -1755,7 +1850,7 @@ final class CardLineView: LineView {
         // reused view keeps its buttons.
         for (i, row) in geometry.rows.enumerated() {
             let data = card.rows.first { $0.id == row.id }
-            chainControl("chain:\(i)", url: data?.url ?? card.url, frame: rowChain(row, data, card: card, env: env))
+            chainControl("chain:\(i)", url: data?.url ?? card.url, frame: row.chain)
             if let toggle = row.toggle {
                 let expanded = line.expandedBodies.contains(row.id)
                 let rowId = row.id
@@ -1832,7 +1927,8 @@ final class CardLineView: LineView {
             let p = RowPresentation(row, now: now, cardMuted: card.isMuted, expanded: line.expandedBodies.contains(row.id))
             var text = [p.label]
             if let counts = p.counts { text.append(counts) }
-            text.append(p.meta)
+            if let actor = p.actor { text.append(actor) }
+            text.append(p.time)
             if let body = p.body { text.append(body) }
             if p.mark != .none { text.append(p.mark == .blue ? "Unread" : "Unread, muted") }
             parts.append((.group, text.joined(separator: ", "), frame.frame))
@@ -1852,17 +1948,6 @@ final class CardLineView: LineView {
         }
     }
 
-    /// A row's chain icon: right after its time (the end of the meta text,
-    /// which changes with the time).
-    private func rowChain(_ frame: CardGeometry.RowFrame, _ row: Row?, card: Card, env: LineEnvironment) -> CGRect {
-        guard let row else { return frame.chain }
-        let p = RowPresentation(row, now: env.now, cardMuted: card.isMuted, expanded: line?.expandedBodies.contains(row.id) == true)
-        let width = min(Ink.width(p.meta, Ink.font(11 * env.k)), frame.meta.width)
-        var rect = frame.chain
-        rect.origin.x = frame.meta.minX + width + 2
-        return rect
-    }
-
     override func layout() {
         super.layout()
         layoutContent()
@@ -1870,11 +1955,19 @@ final class CardLineView: LineView {
 
     override var hasTips: Bool { true }
 
-    /// The avatar: the author; `Dismissed in N days`: when and why; the
-    /// times: the exact times.
+    /// The avatar: the author; a row's avatar and name: the actor's login
+    /// (DESIGN.md, "How rows look"); `Dismissed in N days`: when and why;
+    /// the times: the exact times.
     override func tip(at point: CGPoint) -> String? {
         guard let line, let geometry, let env else { return nil }
         if geometry.avatar.contains(point) { return line.card.author }
+        for frame in geometry.rows where frame.meta.contains(point) {
+            guard let row = line.card.rows.first(where: { $0.id == frame.id }) else { continue }
+            let p = RowPresentation(row, now: env.now, cardMuted: line.card.isMuted)
+            guard let actor = p.actor else { continue }
+            let parts = rowLine(frame, row, p)
+            if parts.avatar?.contains(point) == true || parts.name?.contains(point) == true { return actor }
+        }
         let parts = geometry.timeParts(line.card, k: env.k, now: env.now)
         if let rect = parts.dismissedIn, rect.contains(point) {
             return DismissedText.dismissedInHelp(autoDismissDays: env.autoDismissDays, inDone: line.card.placement?.isDone == true)
@@ -1957,8 +2050,15 @@ final class CardLineView: LineView {
                 Ink.drawLine(counts, f12, Palette.text.nsColor, in: rect)
             }
             let found = matches?.rows[row.id]
-            if let found { Ink.drawLineMatches(p.meta, f11, found.meta, in: frame.meta) }
-            Ink.drawLine(p.meta, f11, p.gray ? Palette.secondary.nsColor : Palette.secondary.nsColor, in: frame.meta)
+            let parts = rowLine(frame, row, p)
+            if let rect = parts.avatar, let image = rowImage(row) {
+                drawRound(image, in: rect, muted: p.gray)
+            }
+            if let actor = p.actor, let rect = parts.name {
+                if let found { Ink.drawLineMatches(actor, f11, found.actor, in: rect) }
+                Ink.drawLine(actor, f11, Palette.secondary.nsColor, in: rect)
+            }
+            Ink.drawLine(p.time, f11, Palette.secondary.nsColor, in: parts.time)
             if let body = p.body, let rect = frame.body, frame.bodyLines > 0 {
                 if let found {
                     Ink.drawMatches(body, f12, found.body.found, in: rect, lines: frame.bodyLines)
@@ -2031,13 +2131,18 @@ final class CardLineView: LineView {
         Ink.draw(times, f11, muted ? Palette.secondary.nsColor : Palette.secondary.nsColor, in: timesRect)
     }
 
+    /// An avatar image in a circle; faint for a muted card or row.
+    private func drawRound(_ image: NSImage, in rect: CGRect, muted: Bool) {
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(ovalIn: rect).addClip()
+        image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: muted ? 0.6 : 1, respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high.rawValue])
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
     private func drawAvatar(_ card: Card, in rect: CGRect, muted: Bool) {
         guard let avatars = env?.context.avatars else { return }
         if let image = DecodedAvatars.image(card.authorAvatarUrl, data: avatars.image(for: card.authorAvatarUrl)) {
-            NSGraphicsContext.saveGraphicsState()
-            NSBezierPath(ovalIn: rect).addClip()
-            image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: muted ? 0.6 : 1, respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high.rawValue])
-            NSGraphicsContext.restoreGraphicsState()
+            drawRound(image, in: rect, muted: muted)
         } else {
             Palette.quaternary.nsColor.setFill()
             NSBezierPath(ovalIn: rect).fill()

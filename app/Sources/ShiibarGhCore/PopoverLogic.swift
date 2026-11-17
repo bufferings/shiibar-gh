@@ -418,7 +418,7 @@ public enum PopoverLogic {
             MenuEntry("Move to " + title, .place(PlaceMove(card: card.id, target: target, position: .byDefault, verb: .move)))
         }
         let remove = PlaceMove(card: card.id, target: .none, position: .byDefault, verb: .remove)
-        var entries = PlacementSection.order.filter { $0 != placement.section.value }.map { move($0.title, PlaceTarget(tab, $0)) }
+        var entries = PlacementSection.menuOrder.filter { $0 != placement.section.value }.map { move($0.title, PlaceTarget(tab, $0)) }
         switch tab {
         case .review:
             entries.append(MenuEntry("Remove from Review", .place(remove)))
@@ -547,7 +547,15 @@ public enum SurfaceRules {
         windowOpen ? .window : .popover
     }
 
-    /// The shiibar-gh icon shows when there is no account (DESIGN.md,
+    /// DESIGN.md, "Screens" and "UI": the popover closes when the app
+    /// stops being active (`NSApplication.didResignActiveNotification`),
+    /// except the measurement mode's (`measuring`, its behavior
+    /// `.applicationDefined`), which stays until closed in code.
+    public static func closesPopoverOnResign(shown: Bool, measuring: Bool) -> Bool {
+        shown && !measuring
+    }
+
+    /// The app's icon shows when there is no account (DESIGN.md,
     /// "Screens").
     public static func showsAppIcon(_ accounts: [Account]) -> Bool {
         accounts.isEmpty

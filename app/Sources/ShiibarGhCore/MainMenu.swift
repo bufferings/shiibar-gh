@@ -1,8 +1,8 @@
 // The app's main menu. While the app is a regular app (a pinned window or
 // Settings is open) the menu bar shows it; while it is an accessory app it
 // is not shown but its key equivalents still work. DESIGN.md, "Switching to
-// a regular app": the app menu has About shiibar-gh, Settings… (⌘,), Close
-// Window (⌘W) and Quit shiibar-gh (⌘Q); Edit has the text commands. AppKit
+// a regular app": the app menu has About Shiibar GH, Settings… (⌘,), Close
+// Window (⌘W) and Quit Shiibar GH (⌘Q); Edit has the text commands. AppKit
 // gives a key equivalent to the key window's views first, and "if no
 // object in the view hierarchy handles the key equivalent, NSApp then sends
 // performKeyEquivalent: to the menus in the menu bar" (Apple, Event
@@ -13,6 +13,12 @@ import AppKit
 
 @MainActor
 public enum MainMenu {
+    /// The app's name on screen (DESIGN.md, "Overview and scope"). The CLI,
+    /// the repository, the state directory, the logs and the token's
+    /// description keep `shiibar-gh`.
+    public nonisolated static let appName = "Shiibar GH"
+    public nonisolated static let aboutTitle = "About \(appName)"
+
     public struct EditItem: Equatable {
         public var title: String
         public var key: String
@@ -46,8 +52,8 @@ public enum MainMenu {
     public static func make(_ actions: Actions = Actions(about: {}, settings: {})) -> NSMenu {
         let menu = NSMenu()
         let appItem = NSMenuItem()
-        let app = NSMenu(title: "shiibar-gh")
-        app.addItem(closureItem("About shiibar-gh", key: "", actions.about))
+        let app = NSMenu(title: appName)
+        app.addItem(closureItem(aboutTitle, key: "", actions.about))
         app.addItem(.separator())
         app.addItem(closureItem("Settings…", key: ",", actions.settings))
         app.addItem(.separator())
@@ -55,7 +61,7 @@ public enum MainMenu {
         // with nothing to close the item is disabled by menu validation.
         app.addItem(NSMenuItem(title: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w"))
         app.addItem(.separator())
-        app.addItem(NSMenuItem(title: "Quit shiibar-gh", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        app.addItem(NSMenuItem(title: "Quit \(appName)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         appItem.submenu = app
         menu.addItem(appItem)
         let editItem = NSMenuItem()

@@ -113,7 +113,7 @@ final class RealDaemonTests: XCTestCase {
             "succeeded_owners": ["example-org"],
         ]])
         try await wait { model.account("3407303")?.unread == true }
-        XCTAssertEqual(MenuBarMarks.accessibilityLabel(try XCTUnwrap(model.account("3407303"))), "shiibar-gh, me, unread")
+        XCTAssertEqual(MenuBarMarks.accessibilityLabel(try XCTUnwrap(model.account("3407303"))), "Shiibar GH, me, unread")
         try await wait { !notifier.shown.isEmpty }
         XCTAssertEqual(notifier.shown.first?.title, "me · Review requested")
         XCTAssertEqual(notifier.shown.first?.account, "3407303")
@@ -228,7 +228,7 @@ final class RealDaemonTests: XCTestCase {
         var mine = try await daemonCard("example-org/api#3") { $0.placement?.tab == .known(.mine) }
         XCTAssertEqual(mine?.placement, Placement(tab: .mine, section: .todo, position: 0), "Add to Mine: Todo")
         view.openTab(.mine)
-        XCTAssertEqual(view.sections.map(\.key), ["mine|doing", "mine|todo", "mine|waiting", "mine|done"])
+        XCTAssertEqual(view.sections.map(\.key), ["mine|done", "mine|waiting", "mine|doing", "mine|todo"])
         view.select(.header(card: "3407303:PR_3"))
         view.press(.moveTo(.doing))
         mine = try await daemonCard("example-org/api#3") { $0.placement?.section == .known(.doing) }
