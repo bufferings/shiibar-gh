@@ -202,7 +202,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
 <div class="ab">
 <section class="scene">
     <div class="cap">Settings › Accounts: owner example-org selected</div>
-    <div class="desc" style="width: 760px">One page without tabs. Boxes from the top: <b>Owner</b> (Enabled), <b>Notifications</b> (Notify for example-org, Skip draft pull requests), <b>Events</b> (the List / Notify table and Copy table from another owner) and <b>Remove</b>. When the page is taller than the window, the right side scrolls.</div>
+    <div class="desc" style="width: 760px">One page without tabs. Boxes from the top: <b>Owner</b> (Enabled), <b>Notifications</b> (Notify for example-org, Skip draft pull requests), <b>Events</b> (the List / Notify table and Copy table from another owner) and <b>Remove</b>. When the page is taller than the window, the right side scrolls. <b>Any pull request</b> starts with <b>Ready for review</b> (List and Notify on by default) and <b>Converted to draft</b> (List on, Notify off by default), which apply to every PR you are involved in, like Merged / Closed.</div>
     <div class="win" style="width: 760px">
       <div class="titlebar">
         <div class="tl"><div class="dots" aria-hidden="true"><span style="background: #EC6A5E"></span><span style="background: #F4BF4F"></span><span style="background: #61C554"></span></div><div class="wt">Accounts</div><div style="width: 50px"></div></div>
@@ -247,6 +247,8 @@ body{margin:0;padding:24px;background:#e9e9ee}
 <tr><td>Conflicts</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
 <tr><td>Mergeable</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
 <tr class="g"><td colspan="3">Any pull request</td></tr>
+<tr><td>Ready for review</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
+<tr><td>Converted to draft</td><td><input type="checkbox" checked></td><td><input type="checkbox"></td></tr>
 <tr><td>Added to merge queue</td><td><input type="checkbox" checked></td><td><input type="checkbox"></td></tr>
 <tr><td>Removed from merge queue</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
 <tr><td>Merged / Closed</td><td><input type="checkbox" checked></td><td><input type="checkbox"></td></tr>
@@ -285,6 +287,8 @@ body{margin:0;padding:24px;background:#e9e9ee}
 <tr><td>Conflicts</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
 <tr><td>Mergeable</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
 <tr class="g"><td colspan="3">Any pull request</td></tr>
+<tr><td>Ready for review</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
+<tr><td>Converted to draft</td><td><span class="on">&#10003;</span></td><td><span class="off">&ndash;</span></td></tr>
 <tr><td>Added to merge queue</td><td><span class="off">&ndash;</span></td><td><span class="off">&ndash;</span></td></tr>
 <tr><td>Removed from merge queue</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
 <tr><td>Merged / Closed</td><td><span class="off">&ndash;</span></td><td><span class="off">&ndash;</span></td></tr>
