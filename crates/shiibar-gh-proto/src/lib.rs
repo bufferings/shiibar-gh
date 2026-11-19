@@ -111,6 +111,7 @@ pub enum BaseStatus {
 pub enum EventKind {
     ReviewRequested,
     TeamReviewRequested,
+    MyReview,
     Mentioned,
     TeamMentioned,
     Comment,
@@ -133,9 +134,10 @@ pub enum EventKind {
 }
 
 impl EventKind {
-    pub const ALL: [EventKind; 21] = [
+    pub const ALL: [EventKind; 22] = [
         EventKind::ReviewRequested,
         EventKind::TeamReviewRequested,
+        EventKind::MyReview,
         EventKind::Mentioned,
         EventKind::TeamMentioned,
         EventKind::Comment,
@@ -166,6 +168,8 @@ impl EventKind {
 pub enum IngestKind {
     ReviewRequested,
     TeamReviewRequested,
+    MyReviewApproved,
+    MyReviewChangesRequested,
     Mentioned,
     TeamMentioned,
     Comment,
@@ -188,6 +192,8 @@ pub enum IngestKind {
 pub enum RowKind {
     ReviewRequested,
     TeamReviewRequested,
+    MyReviewApproved,
+    MyReviewChangesRequested,
     Mentioned,
     TeamMentioned,
     Comment,
@@ -208,6 +214,27 @@ pub enum RowKind {
     Merged,
     Closed,
     Reopened,
+}
+
+/// `card.my_review`: the verdict the mark shows (DESIGN.md, "My review
+/// mark"); `null` on the wire when the mark shows no verdict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MyReview {
+    Approved,
+    ChangesRequested,
+}
+
+/// The `state` of the account's newest review with a verdict
+/// (`reviews(author:, states: [APPROVED, CHANGES_REQUESTED, DISMISSED],
+/// last: 1)`), `none` when there is no such review.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewVerdict {
+    Approved,
+    ChangesRequested,
+    Dismissed,
+    None,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -528,6 +555,10 @@ pub struct IngestPr {
     /// when left out with `labels` given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub labels_more: Option<u32>,
+    /// The account's newest review with a verdict on the PR. `None` keeps
+    /// the saved value (DESIGN.md, "My review mark").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub my_review: Option<ReviewVerdict>,
     pub links: Links,
 }
 
@@ -761,6 +792,9 @@ pub enum Request {
         login: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         token: Option<String>,
+        /// The account's own avatar, as a fetch's `viewer` gives it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        avatar_url: Option<String>,
     },
     /// An owner without asking GitHub. `kind` `public` adds Public.
     #[cfg(feature = "dev-ingest")]
@@ -849,6 +883,10 @@ pub struct Account {
     pub id: String,
     pub login: String,
     pub color: Lenient<AccountColor>,
+    /// The account's own avatar (`viewer.avatarUrl(size: 32)`); `null` until
+    /// a fetch saved it.
+    #[serde(default)]
+    pub avatar_url: Option<String>,
     pub token: TokenInfo,
     pub updated_at: Option<i64>,
     /// The blue dot of the menu bar icon.
@@ -913,6 +951,13 @@ pub struct Card {
     /// The labels not fetched beyond the 20.
     #[serde(default)]
     pub labels_more: u32,
+    /// The verdict of the account's own review mark: `approved`,
+    /// `changes_requested` or `null`. `null` while the PR awaits the
+    /// account's review (`awaiting_review` shows that state), on a merged or
+    /// closed PR, on the account's own PR and on a dismissed card
+    /// (DESIGN.md, "My review mark" and "Wire format").
+    #[serde(default)]
+    pub my_review: Option<Lenient<MyReview>>,
     pub links: Links,
     /// Every row kept, newest first, at most 20.
     pub rows: Vec<Row>,
@@ -1267,6 +1312,7 @@ mod tests {
             [
                 "review_requested",
                 "team_review_requested",
+                "my_review",
                 "mentioned",
                 "team_mentioned",
                 "comment",

@@ -56,6 +56,15 @@ public enum IconPath {
         return path
     }
 
+    /// The icon's filled elements (`BoardIcon.fills`), scaled as
+    /// `cgPath`.
+    public static func fillPath(_ icon: BoardIcon, in rect: CGRect, flipY: Bool) -> CGPath? {
+        guard !icon.fills.isEmpty else { return nil }
+        var filled = icon
+        filled.elements = icon.fills
+        return cgPath(filled, in: rect, flipY: flipY)
+    }
+
     public static func stroke(_ icon: BoardIcon, scale: CGFloat) -> StrokeStyle {
         StrokeStyle(
             lineWidth: icon.lineWidth * scale,
@@ -90,9 +99,28 @@ public struct IconView: View {
     }
 
     public var body: some View {
-        IconShape(icon: icon)
-            .stroke(color, style: IconPath.stroke(icon, scale: size / 16))
-            .frame(width: size, height: size)
+        ZStack {
+            IconShape(icon: icon)
+                .stroke(color, style: IconPath.stroke(icon, scale: size / 16))
+            // The filled elements (the eye's pupil).
+            if !icon.fills.isEmpty {
+                IconFillShape(icon: icon).fill(color)
+            }
+        }
+        .frame(width: size, height: size)
+    }
+}
+
+/// The filled elements of a board icon (`BoardIcon.fills`).
+public struct IconFillShape: Shape {
+    public var icon: BoardIcon
+
+    public init(icon: BoardIcon) {
+        self.icon = icon
+    }
+
+    public func path(in rect: CGRect) -> Path {
+        IconPath.fillPath(icon, in: rect, flipY: false).map { Path($0) } ?? Path()
     }
 }
 

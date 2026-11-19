@@ -15,17 +15,33 @@ public enum IconElement: Equatable, Sendable {
 }
 
 public struct BoardIcon: Equatable, Sendable {
+    /// The stroked elements.
     public var elements: [IconElement]
     public var lineWidth: Double
     /// Round line caps.
     public var roundCaps: Bool
     public var roundJoins: Bool
+    /// The elements filled in the same color, without a line (the eye's
+    /// pupil).
+    public var fills: [IconElement]
 
-    public init(_ elements: [IconElement], lineWidth: Double, roundCaps: Bool = false, roundJoins: Bool = false) {
+    public init(
+        _ elements: [IconElement], lineWidth: Double, roundCaps: Bool = false, roundJoins: Bool = false, fills: [IconElement] = []
+    ) {
         self.elements = elements
         self.lineWidth = lineWidth
         self.roundCaps = roundCaps
         self.roundJoins = roundJoins
+        self.fills = fills
+    }
+
+    /// The same picture with another line width (in grid units): the eye
+    /// of the my review mark is the rows' eye drawn smaller with a thicker
+    /// line, so the lines look as thick (DESIGN.md, "Constants").
+    public func withLineWidth(_ width: Double) -> BoardIcon {
+        var icon = self
+        icon.lineWidth = width
+        return icon
     }
 }
 
@@ -146,10 +162,6 @@ public enum BoardIcons {
     // from (11, 9.5) is the lower half of the circle around (12.5, 9.5), and
     // `a6 6 0 1 0-2.3 4.7` from (14, 8) the large arc of the circle around
     // (8, 8) through the top to (11.7, 12.7), at 51.8°.
-    public static let kindReviewRequest = BoardIcon(
-        [.circle(cx: 6, cy: 5, r: 2.5, dash: nil), .path("M1.5 13c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4M10.5 6.5h4M12.5 4.5l2 2-2 2")],
-        lineWidth: 1.4, roundCaps: true, roundJoins: true
-    )
     public static let kindMention = BoardIcon(
         [
             .circle(cx: 8, cy: 8, r: 3, dash: nil), .path("M11 8v1.5"),
@@ -177,16 +189,32 @@ public enum BoardIcons {
         lineWidth: 1.4, roundCaps: true, roundJoins: true
     )
 
-    /// Ready for review (Main.html, "Rows Ready for review and Converted to
-    /// draft"): an eye.
-    public static let kindReadyForReview = BoardIcon(
-        [.path("M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8s-2.4 4.5-6.5 4.5S1.5 8 1.5 8z"), .circle(cx: 8, cy: 8, r: 2, dash: nil)],
+    /// The one eye of the app (DESIGN.md, "Card", "My review mark", and
+    /// "Constants"; GitHub's octicon eye-16): an almond outline stroked,
+    /// from 1 to 15 across and 2.75 to 13.25 down, and a filled pupil of
+    /// radius 2 at the center. The rows Review requested, Review requested
+    /// to my team and Ready for review draw it at 14 pt with a 1.4 line,
+    /// the waiting state of the my review mark at 12 pt with a 1.63 line.
+    public static let eye = BoardIcon(
+        [.path("M1 8C2.6 4.9 5 2.75 8 2.75S13.4 4.9 15 8C13.4 11.1 11 13.25 8 13.25S2.6 11.1 1 8z")],
+        lineWidth: 1.4, roundCaps: true, roundJoins: true, fills: [.circle(cx: 8, cy: 8, r: 2, dash: nil)]
+    )
+    /// Converted to draft: GitHub's draft pull request (octicon
+    /// git-pull-request-draft), a pull request whose right line is dashed
+    /// (Main.html, "Rows Ready for review and Converted to draft").
+    public static let kindConvertedToDraft = BoardIcon(
+        [
+            .circle(cx: 4, cy: 3.5, r: 1.7, dash: nil), .circle(cx: 4, cy: 12.5, r: 1.7, dash: nil), .path("M4 5.2v5.6"),
+            .circle(cx: 12, cy: 12.5, r: 1.7, dash: nil), .path("M12 2.6v1.2M12 5.9v1.2M12 9.2v1.2"),
+        ],
         lineWidth: 1.4, roundCaps: true, roundJoins: true
     )
-    /// Converted to draft (the same scene): a pencil.
-    public static let kindConvertedToDraft = BoardIcon(
-        [.path("M10.5 2.5l3 3-7.5 7.5H3v-3z"), .path("M9 4l3 3")], lineWidth: 1.4, roundCaps: true, roundJoins: true
-    )
+    /// The signs of the my review mark (Main.html `.myrv`), on a 10 by 10
+    /// grid: ✓ for Approved and × for Changes requested, 1.8 lines.
+    public static let myReviewApproved = BoardIcon([.path("M2 5.3l2 2L8.2 3")], lineWidth: 1.8, roundCaps: true, roundJoins: true)
+    public static let myReviewChangesRequested = BoardIcon([.path("M2.6 2.6l4.8 4.8M7.4 2.6l-4.8 4.8")], lineWidth: 1.8, roundCaps: true)
+    /// The waiting state's eye: `eye` with the line of the mark.
+    public static let myReviewWaiting = eye.withLineWidth(1.63)
 
     /// Keep on top (Main.html `.pin`): filled while on, outlined while off.
     public static let pin = BoardIcon(
@@ -222,18 +250,19 @@ extension BoardIcons {
     /// Conflicts and Removed from merge queue.
     public static func row(_ kind: Lenient<RowKind>) -> BoardIcon {
         switch kind.value {
-        case .reviewRequested, .teamReviewRequested: return kindReviewRequest
+        // GitHub's icons (DESIGN.md, "Card", "My review mark"): the eye
+        // for a review request and for a draft made ready.
+        case .reviewRequested, .teamReviewRequested, .readyForReview: return eye
         case .mentioned, .teamMentioned: return kindMention
         // Main.html draws Reaction with the comment icon too.
         case .comment, .commentOther, .reply, .replyMentioned, .reaction, nil: return kindComment
-        case .changesRequested, .closed: return kindChangesRequested
+        case .changesRequested, .closed, .myReviewChangesRequested: return kindChangesRequested
         case .merged: return kindMerged
-        case .approved, .checksPassed: return kindPassed
+        case .approved, .checksPassed, .myReviewApproved: return kindPassed
         case .reopened: return kindReopened
         case .checksFailed, .conflicts, .mergeQueueRemoved: return rowCross
         case .mergeable: return rowCheck
         case .mergeQueueAdded: return mergeQueue
-        case .readyForReview: return kindReadyForReview
         case .convertedToDraft: return kindConvertedToDraft
         }
     }

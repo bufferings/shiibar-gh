@@ -224,6 +224,9 @@ fn every_command_has_help_with_exit_0_and_needs_no_daemon() {
         "labels=[bug, good first issue]",
         "--json always\n      carries labels and labels_more",
         "[review:inbox]",
+        "[my review: approved]",
+        "[my review: changes requested]",
+        "my_review has no Notify",
         "[mine:doing]",
         "[muted]",
         "[unmuted]",
@@ -1114,6 +1117,104 @@ mod with_events {
                 .cli(&["list", "--dismissed", "--search", "bug"])
                 .stdout
                 .is_empty()
+        );
+    }
+
+    /// DESIGN.md, "CLI (AI integration)": the verdict of the My review mark
+    /// in the text of `list` and `my_review` in its JSON.
+    #[test]
+    fn list_prints_the_my_review_mark() {
+        let daemon = seeded();
+        daemon.ok(json!({"cmd":"dev_ingest","account":"me","ingest":{
+            "missing_pr_ids":[],
+            "prs":[
+                pr("PR_2", 2, "alice", json!({"assignees":["me"],"my_review":"approved"})),
+                pr("PR_4", 4, "alice", json!({"my_review":"changes_requested"})),
+                pr("PR_5", 5, "alice", json!({"my_review":"dismissed"})),
+                pr("PR_1", 1, "me", json!({"checks":"failed","my_review":"approved"})),
+            ],
+            "events":[], "reactions":[]
+        }}));
+        let text = daemon.cli(&["list"]).stdout;
+        let line = |pr: &str| -> String {
+            text.lines()
+                .find(|l| l.starts_with(pr))
+                .unwrap_or_else(|| panic!("no {pr} in {text}"))
+                .to_string()
+        };
+        assert!(
+            line("org/app#2 ").contains("] [my review: approved] review="),
+            "{text}"
+        );
+        assert!(
+            line("org/app#4 ").contains(" [my review: changes requested] review="),
+            "{text}"
+        );
+        assert!(!line("org/app#5 ").contains("my review"), "{text}");
+        assert!(
+            !line("org/app#1 ").contains("my review"),
+            "the account's own PR: {text}"
+        );
+        let cards = json_of(daemon.cli(&["list", "--json"]));
+        let mark = |pr: &str| -> Value {
+            cards["cards"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["pr"] == pr)
+                .unwrap()["my_review"]
+                .clone()
+        };
+        assert_eq!(mark("org/app#2"), "approved");
+        assert_eq!(mark("org/app#4"), "changes_requested");
+        assert_eq!(mark("org/app#5"), Value::Null);
+        assert_eq!(mark("org/app#1"), Value::Null);
+    }
+
+    /// DESIGN.md, "Applying the table": My review has no Notify column.
+    #[test]
+    fn owner_events_print_my_review_without_notify() {
+        let daemon = seeded();
+        let events = daemon
+            .cli(&["owner", "events", "org", "--account", "me"])
+            .stdout;
+        assert!(
+            events.starts_with(
+                "review_requested list=on notify=on\n\
+                 team_review_requested list=on notify=on\n\
+                 my_review list=on notify=-\nmentioned list=on notify=on\n"
+            ),
+            "{events}"
+        );
+        let on = daemon.cli(&[
+            "owner",
+            "events",
+            "set",
+            "org",
+            "my_review",
+            "notify",
+            "on",
+            "--account",
+            "me",
+        ]);
+        assert_eq!(on.code, 1, "{}", on.stderr);
+        let off = daemon.cli(&[
+            "owner",
+            "events",
+            "set",
+            "org",
+            "my_review",
+            "list",
+            "off",
+            "--account",
+            "me",
+        ]);
+        assert_eq!(off.code, 0, "{}", off.stderr);
+        assert!(off.stdout.contains("my_review list=off notify=-"));
+        let json = json_of(daemon.cli(&["owner", "events", "org", "--account", "me", "--json"]));
+        assert_eq!(
+            json["events"]["my_review"],
+            json!({"list":false,"notify":false})
         );
     }
 

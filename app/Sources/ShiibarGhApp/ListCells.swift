@@ -533,10 +533,14 @@ enum LabelInk {
 
 @MainActor
 enum Shapes {
-    static func icon(_ icon: BoardIcon, in rect: CGRect, color: NSColor) {
+    /// `icon` drawn in `rect`; `grid` is the side of the grid its picture
+    /// is drawn on (16 for the boards' icons, 10 for the my review mark's
+    /// ✓ and ×).
+    static func icon(_ icon: BoardIcon, in rect: CGRect, color: NSColor, grid: CGFloat = 16) {
         guard let context = NSGraphicsContext.current?.cgContext else { return }
-        let size = min(rect.width, rect.height)
-        let square = CGRect(x: rect.midX - size / 2, y: rect.midY - size / 2, width: size, height: size)
+        let side = min(rect.width, rect.height)
+        let size = side * 16 / grid
+        let square = CGRect(x: rect.midX - side / 2, y: rect.midY - side / 2, width: size, height: size)
         context.saveGState()
         context.addPath(IconPath.cgPath(icon, in: square, flipY: false))
         context.setStrokeColor(color.cgColor)
@@ -544,6 +548,11 @@ enum Shapes {
         context.setLineCap(icon.roundCaps ? .round : .butt)
         context.setLineJoin(icon.roundJoins ? .round : .miter)
         context.strokePath()
+        if let fill = IconPath.fillPath(icon, in: square, flipY: false) {
+            context.addPath(fill)
+            context.setFillColor(color.cgColor)
+            context.fillPath()
+        }
         context.restoreGState()
     }
 
@@ -909,6 +918,8 @@ struct CardGeometry {
     var labels: [LabelFrame] = []
     /// `+N` after the last label, for a PR with more than 20 labels.
     var labelsMore: CGRect?
+    /// The my review mark at the left of the status icons.
+    var myReview: MyReviewFrame?
     var rows: [RowFrame]
 
     /// Where the times and `Dismissed in N days` are now. Worked out when
@@ -927,6 +938,42 @@ struct CardGeometry {
     var feet: [FootFrame]
     /// Compact: the card's unread mark at the left of line 1.
     var unreadDot: CGRect?
+}
+
+/// The my review mark (DESIGN.md, "Card", "My review mark", and
+/// "Constants", at text size 12): a capsule 18 high with round ends, 2 to
+/// the left (6 without the avatar) and 6 to the right; the account's
+/// avatar of 14, 3, then the sign (the eye at 12, ✓ or × at 10).
+struct MyReviewFrame: Equatable {
+    var mark: MyReviewMark
+    var capsule: CGRect
+    var avatar: CGRect?
+    var sign: CGRect
+
+    /// The diameter of a status icon's circle (`Shapes.status`).
+    static let circle: CGFloat = 12.25
+    static let height: CGFloat = 18
+    static let avatarSize: CGFloat = 14
+    static let gap: CGFloat = 3
+
+    static func size(_ mark: MyReviewMark, avatar: Bool, k: CGFloat) -> CGSize {
+        let left: CGFloat = avatar ? 2 : 6
+        let inner = (avatar ? avatarSize + gap : 0) + CGFloat(mark.signSize)
+        return CGSize(width: (left + inner + 6) * k, height: height * k)
+    }
+
+    static func layout(_ mark: MyReviewMark, avatar: Bool, k: CGFloat, in capsule: CGRect) -> MyReviewFrame {
+        var x = capsule.minX + (avatar ? 2 : 6) * k
+        var avatarRect: CGRect?
+        if avatar {
+            avatarRect = CGRect(x: x, y: capsule.midY - avatarSize * k / 2, width: avatarSize * k, height: avatarSize * k)
+            x += (avatarSize + gap) * k
+        }
+        let sign = CGFloat(mark.signSize) * k
+        return MyReviewFrame(
+            mark: mark, capsule: capsule, avatar: avatarRect, sign: CGRect(x: x, y: capsule.midY - sign / 2, width: sign, height: sign)
+        )
+    }
 }
 
 /// A label of a card's label line: the label (`index` in `card.labels`),
@@ -975,12 +1022,11 @@ enum LineLayout {
         let lh12 = Ink.lineHeight(f12)
 
         // Line 1: the state label, owner/repo #number with the chain icon
-        // right after it, the marks; at the right end the status icons and
-        // ×.
+        // right after it, the marks; at the right end the my review mark,
+        // the status icons and ×.
         let state = StateStyle.of(card.stateLabel)
         let stateWidth = state.map { Ink.width($0.text, Ink.font(10 * k, .semibold)) + 12 * k }
         var marks: [(String, CGFloat, Bool)] = []
-        if card.awaitingReview { marks.append((CardText.reviewRequestedMark, Ink.width(CardText.reviewRequestedMark, Ink.font(10 * k, .bold)) + 12 * k, true)) }
         if card.assignedToMe { marks.append(("Assigned", Ink.width("Assigned", Ink.font(10 * k, .semibold)) + 10 * k, false)) }
         if card.isMuted { marks.append(("Muted", Ink.width("Muted", Ink.font(10 * k, .semibold)) + 10 * k, false)) }
         let finished = card.isFinished
@@ -988,7 +1034,7 @@ enum LineLayout {
         let op = 18 * k
         let groupWidth = finished ? 0 : 3 * slot + 2 * 2
         var line1 = max(lh11, op)
-        if state != nil || card.awaitingReview { line1 = max(line1, 16 * k) }
+        if state != nil { line1 = max(line1, 16 * k) }
         if !marks.isEmpty { line1 = max(line1, 14 * k) }
         if !finished { line1 = max(line1, slot) }
         let top1 = 6 * k
@@ -1003,7 +1049,20 @@ enum LineLayout {
                 x += slot + 2
             }
         }
-        let rightLimit = finished ? groupRight : groupRight - groupWidth - 7
+        // The my review mark: its right end as far from the first status
+        // circle as the circles are from each other (DESIGN.md,
+        // "Constants": 2 + 7.75 at text size 12; the 2 between the slots
+        // does not scale).
+        var myReview: MyReviewFrame?
+        if !finished, let mark = line.myReview, let first = status.first {
+            let size = MyReviewFrame.size(mark, avatar: line.myAvatar != nil, k: k)
+            let circleLeft = first.midX - MyReviewFrame.circle * k / 2
+            let maxX = circleLeft - (2 + 7.75 * k)
+            myReview = MyReviewFrame.layout(mark, avatar: line.myAvatar != nil, k: k, in: CGRect(
+                x: maxX - size.width, y: center(size.height, in: row1), width: size.width, height: size.height
+            ))
+        }
+        let rightLimit = finished ? groupRight : (myReview?.capsule.minX ?? groupRight - groupWidth) - 7
         var x = left
         // Compact: the card's unread mark first (Main.html `.l1 > .dot`).
         var unreadDot: CGRect?
@@ -1162,7 +1221,7 @@ enum LineLayout {
             size: CGSize(width: width, height: y), header: header, stateLabel: stateRect, prLabel: prLabel,
             marks: markRects, status: status, chain: chain, dismiss: dismiss, avatar: avatar, title: title, tag: tag,
             baseHead: baseHead, timesBand: rightRow, line3Fits: fits, labels: labelLine.frames, labelsMore: labelLine.more,
-            rows: rows, feet: feet, unreadDot: unreadDot
+            myReview: myReview, rows: rows, feet: feet, unreadDot: unreadDot
         )
     }
 
@@ -2250,6 +2309,7 @@ final class CardLineView: LineView {
         if let state = StateStyle.of(card.stateLabel) { heading.append(state.text) }
         heading.append(Warnings.prLabel(card.pr))
         heading += geometry.marks.map(\.0)
+        if let mark = geometry.myReview { heading.append(mark.mark.toolTip) }
         heading.append(card.title)
         if line.showsTag, let tag = card.placementTag { heading.append(tag) }
         heading.append("\(card.base) \u{2190} \(card.head)")
@@ -2297,6 +2357,7 @@ final class CardLineView: LineView {
     override func tip(at point: CGPoint) -> String? {
         guard let line, let geometry, let env else { return nil }
         if geometry.avatar.contains(point) { return line.card.author }
+        if let mark = geometry.myReview, mark.capsule.contains(point) { return mark.mark.toolTip }
         for frame in geometry.rows where frame.meta.contains(point) {
             guard let row = line.card.rows.first(where: { $0.id == frame.id }) else { continue }
             let p = RowPresentation(row, now: env.now, cardMuted: line.card.isMuted)
@@ -2437,15 +2498,15 @@ final class CardLineView: LineView {
         let f11 = Ink.font(11 * k)
         if let matches { Ink.drawMarks(Warnings.prLabel(card.pr), f11, matches.prLabel, in: geometry.prLabel) }
         Ink.draw(Warnings.prLabel(card.pr), f11, muted ? Palette.secondary.nsColor : Palette.secondary.nsColor, in: geometry.prLabel)
-        for (text, rect, filled) in geometry.marks {
-            if filled {
-                Shapes.rounded(rect, radius: 4, fill: Palette.reviewMark.nsColor)
-                Ink.drawLine(text, Ink.font(10 * k, .bold), Palette.orangeText.nsColor, in: rect.insetBy(dx: 6 * k, dy: 0))
-            } else {
-                Shapes.rounded(rect.insetBy(dx: 0.5, dy: 0.5), radius: 4, stroke: Palette.tertiary.nsColor)
-                Ink.drawLine(text, Ink.font(10 * k, .semibold), Palette.secondary.nsColor, in: rect.insetBy(dx: 5 * k, dy: 0))
-            }
+        // `Assigned` and `Muted`: outlined text marks.
+        for (text, rect, _) in geometry.marks {
+            Shapes.rounded(rect.insetBy(dx: 0.5, dy: 0.5), radius: 4, stroke: Palette.tertiary.nsColor)
+            Ink.drawLine(text, Ink.font(10 * k, .semibold), Palette.secondary.nsColor, in: rect.insetBy(dx: 5 * k, dy: 0))
         }
+
+        // The my review mark: its colors, and its avatar, whether the card
+        // is muted or selected (DESIGN.md, "My review mark").
+        if let frame = geometry.myReview { drawMyReview(frame) }
 
         // Line 2.
         drawAvatar(card, in: geometry.avatar, muted: muted)
@@ -2470,6 +2531,17 @@ final class CardLineView: LineView {
         if !geometry.labels.isEmpty {
             LabelInk.draw(card.labels, geometry.labels, more: geometry.labelsMore, moreCount: card.labelsMore, k: k, muted: muted, marks: matches?.labels ?? [:])
         }
+    }
+
+    private func drawMyReview(_ frame: MyReviewFrame) {
+        let ground = LabelInk.Ground.current()
+        let colors = frame.mark.colors(dark: ground.dark, card: ground.card)
+        Shapes.rounded(frame.capsule, radius: frame.capsule.height / 2, fill: LabelInk.nsColor(colors.ground))
+        if let rect = frame.avatar, let url = line?.myAvatar, let avatars = env?.context.avatars,
+           let image = DecodedAvatars.image(url, data: avatars.image(for: url)) {
+            drawRound(image, in: rect, opacity: 1)
+        }
+        Shapes.icon(frame.mark.sign, in: frame.sign, color: LabelInk.nsColor(colors.sign), grid: CGFloat(frame.mark.signGrid))
     }
 
     /// DESIGN.md, "How rows look": a row's avatar is faint (0.6) exactly

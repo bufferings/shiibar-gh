@@ -41,7 +41,8 @@ const SIDE_FILES: [&str; 2] = ["-wal", "-shm"];
 /// The tables of version 10 (0.8): the tables of versions 7 (0.5) and 8
 /// (0.6), which differ only in the values of Mine's sections, with
 /// `prs.timeline_updated_at` and `pr_rows.actor_avatar_url` (version 9) and
-/// `prs.labels` and `prs.labels_more` (version 10). A PR's placement, Dismiss state, Checks
+/// `prs.labels`, `prs.labels_more`, `prs.my_review` and
+/// `accounts.avatar_url` (version 10). A PR's placement, Dismiss state, Checks
 /// results, newest review request and own Unmute are columns of `prs`; Mute
 /// lists hang off the account; deleted row ids and Dismiss records have
 /// their own tables. It is the 0.4 schema (version 6) with `prs.done_seq`
@@ -61,7 +62,8 @@ CREATE TABLE accounts (
     graphql_limit TEXT,
     rest_limit TEXT,
     stopped_until INTEGER,
-    fetch TEXT NOT NULL
+    fetch TEXT NOT NULL,
+    avatar_url TEXT
 );
 CREATE TABLE mutes (
     account TEXT NOT NULL,
@@ -149,7 +151,8 @@ CREATE TABLE prs (
     unmuted INTEGER NOT NULL DEFAULT 0,
     timeline_updated_at INTEGER,
     labels TEXT,
-    labels_more INTEGER NOT NULL DEFAULT 0
+    labels_more INTEGER NOT NULL DEFAULT 0,
+    my_review TEXT
 );
 CREATE TABLE pr_rows (
     id TEXT PRIMARY KEY,
@@ -229,7 +232,9 @@ fn migrate_v8_to_v9(tx: &Transaction<'_>) -> rusqlite::Result<()> {
 /// PR's GitHub labels without a value (a PR shows none until its next status
 /// fetch saves them) and give every owner's event table the two kinds of
 /// version 10 at their defaults: Ready for review with List and Notify,
-/// Converted to draft with List only. Every other value stays, rows, unread
+/// Converted to draft and My review with List only. The account's newest
+/// review with a verdict on each PR and the account's own avatar start
+/// without a value: the next fetch saves them. Every other value stays, rows, unread
 /// marks, Reaction baselines and the records of the account's comments and
 /// threads included; `show_labels` is read at its default while the config
 /// table lacks it. The section `todo` of Review and Mine is renamed `inbox`
@@ -242,9 +247,15 @@ fn migrate_v9_to_v10(tx: &Transaction<'_>) -> rusqlite::Result<()> {
     tx.execute_batch(
         "ALTER TABLE prs ADD COLUMN labels TEXT;
          ALTER TABLE prs ADD COLUMN labels_more INTEGER NOT NULL DEFAULT 0;
+         ALTER TABLE prs ADD COLUMN my_review TEXT;
+         ALTER TABLE accounts ADD COLUMN avatar_url TEXT;
          UPDATE prs SET place_section = 'inbox' WHERE place_section = 'todo';",
     )?;
-    for kind in [EventKind::ReadyForReview, EventKind::ConvertedToDraft] {
+    for kind in [
+        EventKind::MyReview,
+        EventKind::ReadyForReview,
+        EventKind::ConvertedToDraft,
+    ] {
         let cell = kind.default_cell();
         tx.execute(
             "INSERT OR IGNORE INTO owner_events (owner, event, list, notify)
@@ -800,8 +811,8 @@ fn save_account(tx: &Transaction<'_>, a: &AccountRec) -> rusqlite::Result<()> {
     tx.execute(
         "INSERT OR REPLACE INTO accounts
          (id, login, color, seq, token, updated_at, dot, teams, graphql_limit, rest_limit,
-          stopped_until, fetch)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+          stopped_until, fetch, avatar_url)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             a.id,
             a.login,
@@ -815,6 +826,7 @@ fn save_account(tx: &Transaction<'_>, a: &AccountRec) -> rusqlite::Result<()> {
             a.rest.as_ref().map(to_json),
             a.stopped_until,
             to_json(&a.fetch),
+            a.avatar_url,
         ],
     )?;
     for (kind, list) in [
@@ -873,11 +885,11 @@ fn save_pr(tx: &Transaction<'_>, pr: &PrRec) -> rusqlite::Result<()> {
           prev_mergeable, settled, settled_head, watch_reset, place_tab, place_section,
           place_rank, closed_at, done_at, keep_after_close, dismissed_at, restored,
           seen_closed, quiet_from, quiet_until, merged_event_at, collected, done_seq, unmuted,
-          timeline_updated_at, labels, labels_more)
+          timeline_updated_at, labels, labels_more, my_review)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
                  ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32,
                  ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47,
-                 ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57, ?58, ?59)",
+                 ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57, ?58, ?59, ?60)",
         rusqlite::params_from_iter(pr_params(pr)),
     )?;
     Ok(())
@@ -950,6 +962,7 @@ fn pr_params(pr: &PrRec) -> Vec<rusqlite::types::Value> {
         opt_int(pr.timeline_updated_at),
         text(&to_json(&pr.labels)),
         int(i64::from(pr.labels_more)),
+        opt_text(pr.my_review.map(Verdict::as_str)),
     ]
 }
 
@@ -1013,7 +1026,7 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
 
     let mut statement = conn.prepare(
         "SELECT id, login, color, seq, token, updated_at, dot, teams, graphql_limit,
-                rest_limit, stopped_until, fetch
+                rest_limit, stopped_until, fetch, avatar_url
          FROM accounts",
     )?;
     let accounts = statement.query_map([], |row| {
@@ -1032,6 +1045,7 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
             rest: rest.as_deref().map(from_json).transpose()?,
             stopped_until: row.get(10)?,
             fetch: from_json(&row.get::<_, String>(11)?)?,
+            avatar_url: row.get(12)?,
             mutes: MuteRec::default(),
         })
     })?;
@@ -1097,7 +1111,10 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
         ))
     })?;
     for cell in cells {
-        let (owner, kind, cell) = cell?;
+        let (owner, kind, mut cell) = cell?;
+        // DESIGN.md, "Applying the table": a kind without a Notify column
+        // never notifies, whatever the row says.
+        cell.notify &= kind.has_notify();
         if let Some(owner) = data.owners.get_mut(&owner) {
             owner.events.0.insert(kind, cell);
         }
@@ -1113,7 +1130,7 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
                 watch_reset, place_tab, place_section, place_rank, closed_at, done_at,
                 keep_after_close, dismissed_at, restored, seen_closed, quiet_from,
                 quiet_until, merged_event_at, collected, done_seq, unmuted,
-                timeline_updated_at, labels, labels_more
+                timeline_updated_at, labels, labels_more, my_review
          FROM prs",
     )?;
     let prs = statement.query_map([], |row| {
@@ -1132,6 +1149,7 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
         };
         let settled: Option<String> = row.get(38)?;
         let labels: Option<String> = row.get(57)?;
+        let my_review: Option<String> = row.get(59)?;
         let place_tab: Option<String> = row.get(41)?;
         let place_section: Option<String> = row.get(42)?;
         let place_rank: Option<i64> = row.get(43)?;
@@ -1205,6 +1223,10 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
                 .transpose()?
                 .unwrap_or_default(),
             labels_more: u32::try_from(row.get::<_, i64>(58)?).unwrap_or(0),
+            my_review: my_review
+                .as_deref()
+                .map(|v| stored(59, v, Verdict::parse))
+                .transpose()?,
         })
     })?;
     for pr in prs {

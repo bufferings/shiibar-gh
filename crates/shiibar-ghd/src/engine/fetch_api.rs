@@ -369,6 +369,9 @@ impl Engine {
         if let Some(login) = outcome.login.filter(|l| !l.is_empty()) {
             record.login = login;
         }
+        if let Some(avatar) = outcome.avatar_url.filter(|u| !u.is_empty()) {
+            record.avatar_url = Some(avatar);
+        }
         if let Some(teams) = outcome.teams {
             record.teams = teams;
         }
@@ -551,6 +554,13 @@ impl Engine {
             && record.token.registered
         {
             record.token = TokenRec::default();
+        }
+    }
+
+    /// The account's own avatar as GitHub gave it.
+    pub fn avatar_seen(&mut self, account: &str, avatar_url: Option<String>) {
+        if let Some(record) = self.account_mut(account) {
+            record.avatar_url = avatar_url;
         }
     }
 

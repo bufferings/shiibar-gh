@@ -42,8 +42,12 @@ body. Cards carry GitHub labels (none on most, one or a few on many,
 enough to wrap on some, more than 20 with `+N` on one, colors close to
 white and to black, a yellow, upper-case colors and one invalid color);
 Ready for review and Converted to draft rows (some by the account itself,
-read); a dismissed card with a long branch and a long login. It needs a 0.8
-daemon (the working tree's: the labels and the two row kinds).
+read); a dismissed card with a long branch and a long login; the My
+review mark in its three states (waiting for your review, a team's request
+included; approved; changes requested), a card approved and asked again,
+My review rows of both verdicts, and the second account without an avatar.
+It needs a 0.8 daemon (the working tree's: the labels, the row kinds and the
+My review mark).
 """
 
 import json
@@ -228,6 +232,8 @@ def demo(daemon, colors, start):
             "mergeable": False, "failed_check": None, "changes_requested_by": None,
             "updated_at": updated, "created_at": updated - 86_400 * (1 + n % 9),
             "is_private": False, "requested_me": requested, "assignees": [ME] if n % 13 == 0 else [],
+            # A team's request, waiting for your review like your own.
+            "requested_team": author != ME and not requested and n % 10 == 5,
             "labels": demo_labels(n), "labels_more": 5 if n == 2 else 0,
             "links": {
                 "review": f"https://github.example/{OWNER}/{repo}/pull/{n}/files",
@@ -271,6 +277,19 @@ def demo(daemon, colors, start):
         elif n % 11 == 0:
             # Made a draft again.
             rows = [("converted_to_draft", None, ME if author == ME else actor)] + rows
+        # Your newest verdict (the My review mark) and the row of that review:
+        # approved or changes requested, and approved then asked again (the
+        # mark waits for your review again, the row stays).
+        verdict = None
+        if author != ME and not (merged or closed):
+            if n % 5 == 2:
+                verdict = "approved"
+            elif n % 5 == 4 and not requested:
+                verdict = "changes_requested"
+        if verdict:
+            rows.append((f"my_review_{verdict}", None, ME))
+            prs[-1]["my_review"] = verdict
+            prs[-1]["my_review_at"] = updated - (len(rows) - 1) * 30
         for j, (kind, text, who) in enumerate(rows):
             events.append({
                 "id": f"E_{n}_{j}", "pr_id": pr_id, "kind": kind, "occurred_at": updated - j * 30,
@@ -375,7 +394,9 @@ def main():
     # loads them runs at the start of that hour.
     start = int(time.time()) - 3600
     daemon = Daemon(binary, state, start)
-    daemon.ok({"cmd": "dev_account_add", "id": ACCOUNT_ID, "login": ME})
+    # `me` with its own avatar (the My review mark); `me-two` of the demo
+    # without one.
+    daemon.ok({"cmd": "dev_account_add", "id": ACCOUNT_ID, "login": ME, "avatar_url": colors[ME]})
     daemon.ok({"cmd": "dev_owner_add", "account": ME, "owner": OWNER, "kind": "org", "github_id": 100})
     daemon.ok({"cmd": "dev_owner_add", "account": ME, "owner": "public", "kind": "public"})
 

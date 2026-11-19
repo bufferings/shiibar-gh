@@ -13,6 +13,8 @@
 //! below are what those daemons write.
 
 mod common;
+#[cfg(feature = "dev-ingest")]
+mod fake_github;
 
 use rusqlite::Connection;
 use shiibar_ghd::model::*;
@@ -349,8 +351,8 @@ fn count(db: &Path, table: &str) -> i64 {
         .unwrap()
 }
 
-/// The counts of [`TABLES`] before a move to version 10, with the two event
-/// kinds it adds to the table of every owner.
+/// The counts of [`TABLES`] before a move to version 10, with the three
+/// event kinds it adds to the table of every owner.
 fn with_new_cells(db: &Path, before: &[i64]) -> Vec<i64> {
     let owners = count(db, "owners");
     TABLES
@@ -358,7 +360,7 @@ fn with_new_cells(db: &Path, before: &[i64]) -> Vec<i64> {
         .zip(before)
         .map(|(table, n)| {
             if *table == "owner_events" {
-                n + 2 * owners
+                n + 3 * owners
             } else {
                 *n
             }
@@ -645,7 +647,7 @@ fn a_0_4_database_moves_to_version_10_keeping_everything() {
     assert_eq!(
         after,
         with_new_cells(&db, &counts),
-        "every row stays; each owner's table gains the two kinds of version 10"
+        "every row stays; each owner's table gains the three kinds of version 10"
     );
 
     let account = &data.accounts["1001"];
@@ -934,7 +936,7 @@ fn a_0_5_database_moves_to_version_10_keeping_everything() {
     assert_eq!(
         after,
         with_new_cells(&db, &counts),
-        "every row stays; each owner's table gains the two kinds of version 10"
+        "every row stays; each owner's table gains the three kinds of version 10"
     );
 
     // Mine's single list is Mine's Inbox with the same ranks; the cards in
@@ -1351,7 +1353,7 @@ fn a_0_6_database_moves_to_version_10_keeping_everything() {
     assert_eq!(
         after,
         with_new_cells(&db, &counts),
-        "every row stays; each owner's table gains the two kinds of version 10"
+        "every row stays; each owner's table gains the three kinds of version 10"
     );
     assert!(columns(&db, "prs").contains(&"timeline_updated_at".to_string()));
     assert!(columns(&db, "pr_rows").contains(&"actor_avatar_url".to_string()));
@@ -1710,12 +1712,17 @@ fn a_0_7_database_moves_to_version_10_keeping_everything() {
     assert_eq!(
         after,
         with_new_cells(&db, &counts),
-        "every row stays; each owner's table gains the two kinds of version 10"
+        "every row stays; each owner's table gains the three kinds of version 10"
     );
     assert!(columns(&db, "prs").contains(&"labels".to_string()));
     assert!(columns(&db, "prs").contains(&"labels_more".to_string()));
+    assert!(columns(&db, "prs").contains(&"my_review".to_string()));
+    assert!(columns(&db, "accounts").contains(&"avatar_url".to_string()));
+    // The account's verdicts and its avatar wait for the next fetch.
+    assert!(data.prs.values().all(|p| p.my_review.is_none()));
+    assert!(data.accounts.values().all(|a| a.avatar_url.is_none()));
 
-    // The two kinds join every owner's table at their defaults; the other
+    // The three kinds join every owner's table at their defaults; the other
     // values stay.
     let org = saved_cells(&db, "o2");
     assert_eq!(org["ready_for_review"], (true, true));
@@ -1723,9 +1730,11 @@ fn a_0_7_database_moves_to_version_10_keeping_everything() {
     assert_eq!(org["comment"], (true, false));
     assert_eq!(org["checks_passed"], (false, false));
     assert_eq!(org["merged_closed"], (true, true));
-    assert_eq!(org.len(), 5, "the kinds 0.7 never saved stay unsaved");
+    assert_eq!(org["my_review"], (true, false));
+    assert_eq!(org.len(), 6, "the kinds 0.7 never saved stay unsaved");
     let public = saved_cells(&db, "o6");
-    assert_eq!(public.len(), 2);
+    assert_eq!(public.len(), 3);
+    assert_eq!(public["my_review"], (true, false));
     assert_eq!(public["ready_for_review"], (true, true));
     assert_eq!(public["converted_to_draft"], (true, false));
     let table = &data.owners["o2"].events;
@@ -1864,10 +1873,15 @@ fn a_moved_0_7_database_saves_and_opens_again() {
         },
     ];
     pr.labels_more = 3;
+    pr.my_review = Some(Verdict::ChangesRequested);
+    data.prs.get_mut("1001:PR_7").unwrap().my_review = Some(Verdict::Dismissed);
+    data.accounts.get_mut("1001").unwrap().avatar_url = Some("https://avatars.example/me".into());
     data.config.show_labels = false;
     let engine = shiibar_ghd::engine::Engine::restore(data.clone());
     let mut dirty = engine.dirty().clone();
     dirty.prs.insert("1001:PR_1".into());
+    dirty.prs.insert("1001:PR_7".into());
+    dirty.accounts.insert("1001".into());
     dirty.config = true;
     store.save(engine.data(), &dirty).unwrap();
     drop(store);
@@ -1876,6 +1890,15 @@ fn a_moved_0_7_database_saves_and_opens_again() {
     assert_eq!(again.prs["1001:PR_1"].labels.len(), 2);
     assert_eq!(again.prs["1001:PR_1"].labels[1].color, "7057FF");
     assert_eq!(again.prs["1001:PR_1"].labels_more, 3);
+    assert_eq!(
+        again.prs["1001:PR_1"].my_review,
+        Some(Verdict::ChangesRequested)
+    );
+    assert_eq!(again.prs["1001:PR_7"].my_review, Some(Verdict::Dismissed));
+    assert_eq!(
+        again.accounts["1001"].avatar_url.as_deref(),
+        Some("https://avatars.example/me")
+    );
     assert!(!again.config.show_labels);
 }
 
@@ -1995,5 +2018,109 @@ fn the_daemon_starts_on_a_0_7_state_directory() {
         daemon.ok(json!({"cmd":"config_get","key":"show_labels"}))["value"],
         true
     );
+    daemon.stop();
+}
+
+/// DESIGN.md, "Applying the table": My review has no Notify column. A
+/// stored `notify` of 1 for it reads as off and never reaches the wire.
+#[test]
+fn a_stored_notify_of_my_review_reads_as_off() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = old_database(dir.path(), 9, "");
+    let (store, _) = open(&db);
+    drop(store);
+    Connection::open(&db)
+        .unwrap()
+        .execute(
+            "UPDATE owner_events SET notify = 1 WHERE event = 'my_review'",
+            [],
+        )
+        .unwrap();
+    let (_, data) = open(&db);
+    let cell = data.owners["o2"].events.cell(EventKind::MyReview);
+    assert!(cell.list && !cell.notify);
+    let engine = shiibar_ghd::engine::Engine::restore(data);
+    let wire = engine.owner_events("o2")["my_review"];
+    assert!(wire.list && !wire.notify);
+}
+
+/// DESIGN.md, "Updating from 0.7": the account's reviews submitted before
+/// the update make My review rows only inside the range of the first fetch
+/// after it, which starts five minutes before the owner's last success
+/// (1799999000 in [`SEED_V9`]).
+#[cfg(feature = "dev-ingest")]
+#[test]
+fn the_first_fetch_after_the_move_makes_my_review_rows_inside_its_range() {
+    use common::*;
+    use fake_github::*;
+    use serde_json::json;
+    let token = "ghp_test_only";
+    let github = FakeGitHub::start();
+    let review = |id: &str, at: i64| {
+        json!({"__typename":"PullRequestReview","id":id,"url":format!("https://github.com/r/{id}"),
+               "createdAt":iso(at),"publishedAt":iso(at),"submittedAt":iso(at),
+               "state":"APPROVED","bodyText":"","bodyHTML":"",
+               "author":{"__typename":"User","login":"me"}})
+    };
+    github.with(|w| {
+        w.logins.insert(token.into(), "me".into());
+        w.owners.insert("org".into(), "Organization".into());
+        w.owner_ids.insert("org".into(), 100);
+        w.prs.push(pr_node(
+            "PR_7",
+            "org",
+            7,
+            "bob",
+            json!({"updatedAt": iso(1_799_999_600)}),
+        ));
+        w.timeline.insert(
+            "PR_7".into(),
+            vec![
+                review("PRR_BEFORE", 1_799_998_600),
+                review("PRR_OVERLAP", 1_799_998_800),
+                review("PRR_AFTER", 1_799_999_500),
+            ],
+        );
+    });
+    let dir = tempfile::tempdir().unwrap();
+    old_database(dir.path(), 9, "");
+    let item = dir.path().join("keychain.json");
+    std::fs::write(
+        &item,
+        format!(r#"{{"version":2,"accounts":[{{"id":"1001","login":"me","token":"{token}"}}]}}"#),
+    )
+    .unwrap();
+    let mut command = command(dir.path());
+    command
+        .env("SHIIBAR_GH_DEV_NOW", T0.to_string())
+        .env("SHIIBAR_GH_DEV_TZ", TZ)
+        .env("SHIIBAR_GH_DEV_KEYCHAIN", &item)
+        .env("SHIIBAR_GH_DEV_GITHUB_URL", &github.url);
+    let daemon = TestDaemon::spawn(dir.path(), command);
+    daemon.clock(T0 + 100);
+    let events = github
+        .requests()
+        .into_iter()
+        .find(|r| r.op.as_deref() == Some("Events"))
+        .expect("the events of the moved PR were fetched");
+    assert_eq!(events.vars()["since"], iso(1_799_998_700));
+    let cards =
+        daemon.ok(json!({"cmd":"list","account":"me","dismissed":"include"}))["cards"].clone();
+    let card = cards
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["pr"] == "org/app#7")
+        .unwrap()
+        .clone();
+    let mut mine: Vec<String> = card["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["kind"] == "my_review_approved")
+        .map(|r| r["id"].as_str().unwrap().to_string())
+        .collect();
+    mine.sort();
+    assert_eq!(mine, ["1001:PRR_AFTER", "1001:PRR_OVERLAP"]);
     daemon.stop();
 }

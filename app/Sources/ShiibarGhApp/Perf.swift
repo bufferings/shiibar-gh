@@ -2594,6 +2594,35 @@ final class PerfRunner: NSObject {
     /// The demo data searched for words whose matches are hidden (DESIGN.md,
     /// "Showing what matched"): `because` and `Follow`, at the top of All.
     private func demoShots(list: SurfaceListModel, window: NSWindow, directory: String) async {
+        // The my review mark's three states in Review (DESIGN.md, "Card",
+        // "My review mark"), light or dark (`SHIIBAR_GH_PERF_DARK=1`).
+        let dark = ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_DARK"] == "1"
+        if dark {
+            window.appearance = NSAppearance(named: .darkAqua)
+            SystemColors.bump()
+        }
+        list.openTab(.review)
+        if let done = list.sections.first(where: { $0.key == SectionKey.placed(.review, .done) }), !done.collapsed {
+            list.perform(.toggleSection(done.key))
+        }
+        await pause(1)
+        for (mark, name) in [(MyReviewMark.waiting, "waiting"), (.approved, "approved"), (.changesRequested, "changes-requested")] {
+            // In Review if there is one, otherwise in the tab that has one.
+            let shown = Listing.cards(list.data.cards, tab: .all)
+            guard let card = shown.first(where: { MyReviewMark.of($0) == mark && $0.tab == .review })
+                ?? shown.first(where: { MyReviewMark.of($0) == mark }) else {
+                log("demo: no card with the mark \(name)")
+                continue
+            }
+            if card.tab == .all { list.openTab(.all) }
+            list.reveal(pr: card.pr, waitForList: false)
+            await pause(1.2)
+            checkList("demo Review \(name)")
+            snapshot(window, directory + "/review-\(name)\(dark ? "-dark" : "").png")
+            list.openTab(.review)
+        }
+        // The rest checks the yellow of the light appearance.
+        if dark { return }
         list.openTab(.all)
         for text in ["because", "Follow"] {
             if let scroll = listScrollView(in: window) { scrollTo(scroll, y: 0) }

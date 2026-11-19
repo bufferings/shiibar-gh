@@ -346,7 +346,13 @@ struct EventTable: View {
     @ViewBuilder
     func mark(_ cell: EventCell, _ kind: EventKind, _ column: EventColumn) -> some View {
         let on = cell.value(column)
-        if editable {
+        if !SettingsModel.hasColumn(kind, column) {
+            // My review's Notify (SettingsOwner.html): a dash, not a control.
+            Text("\u{2013}")
+                .foregroundColor(editable ? Palette.tertiary.color : Palette.secondary.color)
+                .help(editable ? SettingsModel.noNotifyHelp : "")
+                .accessibilityLabel(SettingsModel.noNotifyLabel)
+        } else if editable {
             Toggle("", isOn: Binding(get: { on }, set: { set(kind, column, $0) }))
                 .toggleStyle(.checkbox)
                 .labelsHidden()

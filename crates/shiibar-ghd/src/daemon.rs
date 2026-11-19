@@ -457,7 +457,12 @@ impl Daemon {
                 ack()
             }
             #[cfg(feature = "dev-ingest")]
-            Request::DevAccountAdd { id, login, token } => {
+            Request::DevAccountAdd {
+                id,
+                login,
+                token,
+                avatar_url,
+            } => {
                 if let Some(token) = &token {
                     let mut stored = self.read_item()?;
                     stored.retain(|a| a.id != id);
@@ -475,6 +480,9 @@ impl Daemon {
                     self.engine.token_saved(&id);
                 } else {
                     self.engine.account_create(&id, &login)?;
+                }
+                if avatar_url.is_some() {
+                    self.engine.avatar_seen(&id, avatar_url);
                 }
                 self.account_line(&id)?
             }

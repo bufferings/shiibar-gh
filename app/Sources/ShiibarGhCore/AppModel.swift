@@ -517,7 +517,7 @@ public final class AppModel: ObservableObject {
 @MainActor
 public final class AccountViewModel: ObservableObject {
     public let accountId: String
-    unowned let app: AppModel
+    public unowned let app: AppModel
     /// The cards shown: the daemon's, with the local operations applied.
     /// A change shows first in the cards `Unread only` keeps, then in the
     /// selection (`SurfaceListModel.updateLinger`).

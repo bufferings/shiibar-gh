@@ -41,6 +41,12 @@ struct CardLine: Equatable {
     /// ends the heading of a card with labels.
     var showsLabels = false
 
+    /// The my review mark (`MyReviewMark.of`), and the URL of the
+    /// account's avatar while its image is loaded: without it the mark
+    /// shows the sign alone and keeps no room for the avatar.
+    var myReview: MyReviewMark?
+    var myAvatar: String?
+
     /// The labels the heading shows: none while `Show labels` is off.
     var shownLabels: [PRLabel] { showsLabels ? card.labels : [] }
 }

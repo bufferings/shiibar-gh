@@ -276,12 +276,12 @@ final class PresentationTests: XCTestCase {
             XCTAssertEqual(p.bodyLines, c.lines, c.row.id)
         }
         XCTAssertEqual(RowPresentation(cases.first { $0.row.id == "8" }!.row, now: T0).counts, "🎉2")
-        XCTAssertEqual(BoardIcons.row(.known(.reviewRequested)), BoardIcons.kindReviewRequest)
+        XCTAssertEqual(BoardIcons.row(.known(.reviewRequested)), BoardIcons.eye, "GitHub's eye for a review request")
         XCTAssertEqual(BoardIcons.row(.known(.teamMentioned)), BoardIcons.kindMention)
         XCTAssertEqual(BoardIcons.row(.known(.changesRequested)), BoardIcons.kindChangesRequested)
         XCTAssertEqual(BoardIcons.row(.known(.merged)), BoardIcons.kindMerged)
-        XCTAssertEqual(BoardIcons.row(.known(.readyForReview)), BoardIcons.kindReadyForReview, "the eye of Main.html")
-        XCTAssertEqual(BoardIcons.row(.known(.convertedToDraft)), BoardIcons.kindConvertedToDraft, "the pencil of Main.html")
+        XCTAssertEqual(BoardIcons.row(.known(.readyForReview)), BoardIcons.eye, "the same eye")
+        XCTAssertEqual(BoardIcons.row(.known(.convertedToDraft)), BoardIcons.kindConvertedToDraft, "the draft pull request of Main.html")
         XCTAssertEqual(BoardIcons.row(.unknown("later")), BoardIcons.kindComment)
         XCTAssertEqual(BoardIcons.row(.known(.approved)), BoardIcons.kindPassed)
         XCTAssertEqual(BoardIcons.row(.known(.checksPassed)), BoardIcons.kindPassed)
@@ -604,7 +604,7 @@ final class PresentationTests: XCTestCase {
         XCTAssertEqual(EmptyState.noOwnersDetail, "Add an owner in Settings")
         XCTAssertEqual(SettingsText.eventGroups.flatMap(\.1), EventKind.allCases, "every kind once, in table order")
         XCTAssertEqual(SettingsText.eventGroups.map(\.0), ["Reviews and mentions", "Comments", "My pull requests", "Any pull request"])
-        XCTAssertEqual(SettingsText.eventGroups.map(\.1.count), [4, 5, 6, 6], "DESIGN.md, the table's headings")
+        XCTAssertEqual(SettingsText.eventGroups.map(\.1.count), [5, 5, 6, 6], "DESIGN.md, the table's headings")
         XCTAssertEqual(
             SettingsText.eventGroups.last?.1, [.readyForReview, .convertedToDraft, .mergeQueueAdded, .mergeQueueRemoved, .mergedClosed, .reopened],
             "the two draft kinds lead Any pull request"

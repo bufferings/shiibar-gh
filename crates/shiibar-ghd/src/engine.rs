@@ -686,12 +686,32 @@ impl Engine {
             older_rows: self.pruned_prs.contains(&pr.key),
             labels: pr.labels.iter().map(proto::Label::from).collect(),
             labels_more: pr.labels_more,
+            my_review: self.my_review_mark(pr, owner).map(Lenient::Known),
             links: proto::Links {
                 review: pr.link_review.clone(),
                 checks: pr.link_checks.clone(),
                 base: pr.link_base.clone(),
             },
             rows: self.wire_rows(pr, owner),
+        }
+    }
+
+    /// DESIGN.md, "My review mark": the verdict the mark shows. None while
+    /// the PR awaits the account's review (that state wins), on a merged or
+    /// closed PR, on the account's own PR, on a dismissed card, and when the
+    /// newest verdict is a dismissed review or there is none.
+    fn my_review_mark(&self, pr: &PrRec, owner: &OwnerRec) -> Option<proto::MyReview> {
+        if pr.state != PrState::Open
+            || pr.dismissed_at.is_some()
+            || self.authored_by_me(pr)
+            || self.awaiting_review(pr, owner)
+        {
+            return None;
+        }
+        match pr.my_review? {
+            Verdict::Approved => Some(proto::MyReview::Approved),
+            Verdict::ChangesRequested => Some(proto::MyReview::ChangesRequested),
+            Verdict::Dismissed => None,
         }
     }
 
@@ -1439,6 +1459,12 @@ impl Engine {
             making.silent = true;
             making.read = true;
         }
+        // DESIGN.md, "My review rows": the account's own verdict is recorded
+        // read and never notified, whatever the table says.
+        if kind.is_my_review() {
+            making.silent = true;
+            making.read = true;
+        }
         let row = RowRec {
             id: row_id(account, &event),
             account: account.to_string(),
@@ -2094,6 +2120,15 @@ fn pr_from(account: &str, p: IngestPr, existing: Option<&PrRec>) -> PrRec {
         labels: match p.labels {
             Some(labels) => labels.into_iter().map(LabelRec::from).collect(),
             None => existing.map(|e| e.labels.clone()).unwrap_or_default(),
+        },
+        // An answer without the account's newest verdict keeps the saved
+        // one.
+        my_review: match p.my_review {
+            Some(proto::ReviewVerdict::Approved) => Some(Verdict::Approved),
+            Some(proto::ReviewVerdict::ChangesRequested) => Some(Verdict::ChangesRequested),
+            Some(proto::ReviewVerdict::Dismissed) => Some(Verdict::Dismissed),
+            Some(proto::ReviewVerdict::None) => None,
+            None => existing.and_then(|e| e.my_review),
         },
         link_review: p.links.review,
         link_checks: p.links.checks,

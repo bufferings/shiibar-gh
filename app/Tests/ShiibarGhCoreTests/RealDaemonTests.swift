@@ -410,13 +410,18 @@ final class RealDaemonTests: XCTestCase {
         XCTAssertTrue(model.showLabels, "on by default")
 
         try await dev(api, ["cmd": "dev_clock_set", "now": T0, "tz": "UTC"])
-        try await dev(api, ["cmd": "dev_account_add", "id": "3407303", "login": "me", "token": "t1"])
+        try await dev(api, [
+            "cmd": "dev_account_add", "id": "3407303", "login": "me", "token": "t1", "avatar_url": "https://example.test/me.png",
+        ])
         try await dev(api, ["cmd": "dev_owner_add", "account": "me", "owner": "example-org", "kind": "org", "github_id": 100])
         var labelled = pr("PR_1", number: 1)
         labelled["labels"] = [["name": "bug", "color": "d73a4a"], ["name": "Needs Triage", "color": "FBCA04"]]
         labelled["labels_more"] = 2
+        // My review: approved by the account, not waiting.
+        var reviewed = pr("PR_2", number: 2)
+        reviewed["my_review"] = "approved"
         try await dev(api, ["cmd": "dev_ingest", "account": "me", "ingest": [
-            "prs": [labelled, pr("PR_2", number: 2)],
+            "prs": [labelled, reviewed],
             "events": [
                 ["id": "RFR_1", "pr_id": "PR_1", "kind": "ready_for_review", "occurred_at": T0 + 10,
                  "url": "https://github.example/example-org/api/pull/1#event-11", "actor": "bob", "text": NSNull(), "comment_id": NSNull()],
@@ -434,6 +439,9 @@ final class RealDaemonTests: XCTestCase {
         XCTAssertEqual(card.labels, [PRLabel(name: "bug", color: "d73a4a"), PRLabel(name: "Needs Triage", color: "FBCA04")])
         XCTAssertEqual(card.labelsMore, 2)
         XCTAssertEqual(data.cards.first { $0.pr == "example-org/api#2" }?.labels, [], "a PR without labels")
+        XCTAssertEqual(data.cards.first { $0.pr == "example-org/api#2" }?.myReview, .known(.approved))
+        XCTAssertNil(card.myReview)
+        XCTAssertEqual(model.account("3407303")?.avatarUrl, "https://example.test/me.png")
         let rows = card.rows.filter { $0.kind == .known(.readyForReview) || $0.kind == .known(.convertedToDraft) }
         XCTAssertEqual(rows.map(\.kind), [.known(.readyForReview), .known(.convertedToDraft)], "newest first")
         XCTAssertEqual(rows.map(\.url), [

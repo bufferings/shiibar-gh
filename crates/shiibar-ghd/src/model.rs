@@ -115,6 +115,7 @@ both_ways!(BaseStatus {
 stored_enum!(EventKind {
     ReviewRequested = "review_requested",
     TeamReviewRequested = "team_review_requested",
+    MyReview = "my_review",
     Mentioned = "mentioned",
     TeamMentioned = "team_mentioned",
     Comment = "comment",
@@ -138,6 +139,7 @@ stored_enum!(EventKind {
 both_ways!(EventKind {
     ReviewRequested,
     TeamReviewRequested,
+    MyReview,
     Mentioned,
     TeamMentioned,
     Comment,
@@ -160,9 +162,10 @@ both_ways!(EventKind {
 });
 
 impl EventKind {
-    pub const ALL: [EventKind; 21] = [
+    pub const ALL: [EventKind; 22] = [
         EventKind::ReviewRequested,
         EventKind::TeamReviewRequested,
+        EventKind::MyReview,
         EventKind::Mentioned,
         EventKind::TeamMentioned,
         EventKind::Comment,
@@ -187,14 +190,23 @@ impl EventKind {
     /// The defaults of DESIGN.md, "Row kinds and states": List and Notify.
     pub fn default_cell(self) -> Cell {
         use EventKind::*;
-        let notify = !matches!(self, ConvertedToDraft | MergeQueueAdded | MergedClosed);
+        let notify =
+            self.has_notify() && !matches!(self, ConvertedToDraft | MergeQueueAdded | MergedClosed);
         Cell { list: true, notify }
+    }
+
+    /// DESIGN.md, "Applying the table": My review records the account's own
+    /// action, so it has no Notify column; its Notify stays off.
+    pub fn has_notify(self) -> bool {
+        self != EventKind::MyReview
     }
 }
 
 stored_enum!(RowKind {
     ReviewRequested = "review_requested",
     TeamReviewRequested = "team_review_requested",
+    MyReviewApproved = "my_review_approved",
+    MyReviewChangesRequested = "my_review_changes_requested",
     Mentioned = "mentioned",
     TeamMentioned = "team_mentioned",
     Comment = "comment",
@@ -219,6 +231,8 @@ stored_enum!(RowKind {
 both_ways!(RowKind {
     ReviewRequested,
     TeamReviewRequested,
+    MyReviewApproved,
+    MyReviewChangesRequested,
     Mentioned,
     TeamMentioned,
     Comment,
@@ -247,6 +261,8 @@ impl From<proto::IngestKind> for RowKind {
         match kind {
             I::ReviewRequested => Self::ReviewRequested,
             I::TeamReviewRequested => Self::TeamReviewRequested,
+            I::MyReviewApproved => Self::MyReviewApproved,
+            I::MyReviewChangesRequested => Self::MyReviewChangesRequested,
             I::Mentioned => Self::Mentioned,
             I::TeamMentioned => Self::TeamMentioned,
             I::Comment => Self::Comment,
@@ -272,6 +288,7 @@ impl RowKind {
         match self {
             ReviewRequested => EventKind::ReviewRequested,
             TeamReviewRequested => EventKind::TeamReviewRequested,
+            MyReviewApproved | MyReviewChangesRequested => EventKind::MyReview,
             Mentioned => EventKind::Mentioned,
             TeamMentioned => EventKind::TeamMentioned,
             Comment => EventKind::Comment,
@@ -292,6 +309,15 @@ impl RowKind {
             Merged | Closed => EventKind::MergedClosed,
             Reopened => EventKind::Reopened,
         }
+    }
+
+    /// DESIGN.md, "My review rows": the account's own reviews with a
+    /// verdict, made read and never notified.
+    pub fn is_my_review(self) -> bool {
+        matches!(
+            self,
+            Self::MyReviewApproved | Self::MyReviewChangesRequested
+        )
     }
 
     pub fn is_review_request(self) -> bool {
@@ -365,6 +391,8 @@ impl RowKind {
         match self {
             ReviewRequested => "Review requested",
             TeamReviewRequested => "Review requested to my team",
+            MyReviewApproved => "Approved",
+            MyReviewChangesRequested => "Changes requested",
             Mentioned => "Mentioned",
             TeamMentioned => "My team mentioned",
             Comment => "Comment on my PR",
@@ -451,6 +479,14 @@ stored_enum!(Section {
     Waiting = "waiting",
 });
 
+// The state of the account's newest review with a verdict on a PR
+// (DESIGN.md, "My review mark"); a PR without one has none.
+stored_enum!(Verdict {
+    Approved = "approved",
+    ChangesRequested = "changes_requested",
+    Dismissed = "dismissed",
+});
+
 stored_enum!(Appearance {
     System = "system",
     Light = "light",
@@ -480,8 +516,11 @@ impl Default for EventTable {
 }
 
 impl EventTable {
+    /// A kind without a Notify column (My review) answers Notify off.
     pub fn cell(&self, kind: EventKind) -> Cell {
-        self.0.get(&kind).copied().unwrap_or(kind.default_cell())
+        let mut cell = self.0.get(&kind).copied().unwrap_or(kind.default_cell());
+        cell.notify &= kind.has_notify();
+        cell
     }
 }
 
@@ -711,6 +750,9 @@ pub struct AccountRec {
     pub id: String,
     pub login: String,
     pub color: AccountColor,
+    /// The account's own avatar (`viewer.avatarUrl(size: 32)`) of the last
+    /// fetch.
+    pub avatar_url: Option<String>,
     /// Registration order.
     pub seq: u64,
     pub token: TokenRec,
@@ -806,6 +848,9 @@ pub struct PrRec {
     pub labels: Vec<LabelRec>,
     /// The labels beyond those fetched.
     pub labels_more: u32,
+    /// The account's newest review with a verdict, from the last status
+    /// fetch that read it; `None` without one, or before that fetch.
+    pub my_review: Option<Verdict>,
     pub link_review: String,
     pub link_checks: String,
     pub link_base: String,

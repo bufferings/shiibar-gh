@@ -208,6 +208,23 @@ pub fn labels_of(connection: &Value) -> Option<(Vec<proto::Label>, u32)> {
     Some((list, u32::try_from(more).unwrap_or(u32::MAX)))
 }
 
+/// DESIGN.md, "My review mark": the state of the account's newest review
+/// with a verdict, from `myReview` (`reviews(author:, states: [APPROVED,
+/// CHANGES_REQUESTED, DISMISSED], last: 1)`); `none` without such a review.
+/// `None` for a node without the connection or its `nodes` list, which keeps
+/// the saved value.
+pub fn my_review_of(connection: &Value) -> Option<proto::ReviewVerdict> {
+    let list = connection["nodes"].as_array()?;
+    Some(
+        match list.last().and_then(|review| review["state"].as_str()) {
+            Some("APPROVED") => proto::ReviewVerdict::Approved,
+            Some("CHANGES_REQUESTED") => proto::ReviewVerdict::ChangesRequested,
+            Some("DISMISSED") => proto::ReviewVerdict::Dismissed,
+            _ => proto::ReviewVerdict::None,
+        },
+    )
+}
+
 /// A PR node from the status query as an `IngestPr`.
 pub fn pr_values(node: &Value, extra: &StatusExtra, ctx: Ctx<'_>) -> Option<IngestPr> {
     let id = node["id"].as_str()?.to_string();
@@ -261,6 +278,7 @@ pub fn pr_values(node: &Value, extra: &StatusExtra, ctx: Ctx<'_>) -> Option<Inge
             .collect(),
         labels: labels.as_ref().map(|(list, _)| list.clone()),
         labels_more: labels.map(|(_, more)| more),
+        my_review: my_review_of(&node["myReview"]),
         links: proto::Links {
             review: url.clone(),
             checks: format!("{url}/checks"),
@@ -593,6 +611,29 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
             continue;
         }
         if ctx.is_me(post.author) {
+            // DESIGN.md, "My review rows": the account's own review with a
+            // verdict, as GitHub states it at this fetch (a review dismissed
+            // before it makes none), with or without a body.
+            let verdict = match post.state {
+                "APPROVED" if post.review => Some(IngestKind::MyReviewApproved),
+                "CHANGES_REQUESTED" if post.review => Some(IngestKind::MyReviewChangesRequested),
+                _ => None,
+            };
+            if let Some(kind) = verdict
+                && post.at >= input.since
+            {
+                out.events.push(IngestEvent {
+                    id: post.id.to_string(),
+                    pr_id: pr_id.clone(),
+                    kind,
+                    occurred_at: post.at,
+                    url: post.url.to_string(),
+                    actor: Some(post.author.to_string()),
+                    actor_avatar_url: post.avatar.clone(),
+                    text: None,
+                    comment_id: None,
+                });
+            }
             if !post.review || !post.body.trim().is_empty() {
                 out.own.push(OwnComment {
                     id: post.id.to_string(),

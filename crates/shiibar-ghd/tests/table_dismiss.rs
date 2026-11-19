@@ -75,7 +75,7 @@ fn dismissed_keep_days_applies_to_the_dismissed_cards() {
 fn the_automatic_dismiss_table() {
     // (name, setup after the merge, days passed, want dismissed)
     type Step = fn(&mut H);
-    let cases: [(&str, Step, i64, bool); 12] = [
+    let cases: [(&str, Step, i64, bool); 13] = [
         ("before n days", |_| {}, 2, false),
         ("after n days", |_| {}, 3, true),
         (
@@ -147,6 +147,19 @@ fn the_automatic_dismiss_table() {
             "a review request after the merge",
             |h| {
                 let e = h.ev("RR_1", "PR_1", IngestKind::ReviewRequested);
+                h.events(vec![e]);
+            },
+            3,
+            true,
+        ),
+        (
+            "the account's own verdict after the merge",
+            |h| {
+                let e = IngestEvent {
+                    actor: Some(ME.into()),
+                    text: None,
+                    ..h.ev("MR_1", "PR_1", IngestKind::MyReviewApproved)
+                };
                 h.events(vec![e]);
             },
             3,

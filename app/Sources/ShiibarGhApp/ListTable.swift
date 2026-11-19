@@ -501,6 +501,8 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
 
     private var lines: [ListEntry] = []
     private var heights: [CGFloat] = []
+    /// The account's avatar as the lines last had it (`ListContent.selfAvatar`).
+    private var selfAvatar: String?
     private var rowOf: [String: Int] = [:]
     /// Cells of the lines in view before a reload, to configure again.
     private var spare: [NSUserInterfaceItemIdentifier: [LineCell]] = [:]
@@ -559,9 +561,27 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
             .store(in: &cancellables)
 
         content.objectWillChange.sink { [weak self] _ in self?.setNeedsApply() }.store(in: &cancellables)
+        // The account's own avatar, for the my review mark: asked for when
+        // the account's avatar URL is known or changes.
+        let accountId = content.list.data.accountId
+        content.list.data.app.$accounts
+            .map { accounts in accounts.first { $0.id == accountId }?.avatarUrl }
+            .removeDuplicates()
+            .sink { [weak self] url in self?.context.avatars.request(url) }
+            .store(in: &cancellables)
         // An avatar arrived: the cards in view draw again.
         context.avatars.objectWillChange.sink { [weak self] _ in
-            DispatchQueue.main.async { self?.redrawVisible() }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.redrawVisible()
+                // The account's own avatar arrived: the my review marks
+                // make room for it.
+                let avatar = self.content.selfAvatar()
+                if avatar != self.selfAvatar {
+                    self.selfAvatar = avatar
+                    self.setNeedsApply()
+                }
+            }
         }.store(in: &cancellables)
         // The selection's tint follows the keys: the window turning key or
         // not, the search field taking or leaving them; the system colors.

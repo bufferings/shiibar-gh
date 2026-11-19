@@ -115,6 +115,7 @@ final class ListContent: ObservableObject {
         let expanded = list.expandedRows
         let compact = list.compact
         let showsLabels = list.showLabels
+        let myAvatar = selfAvatar()
         for section in list.sections {
             if section.showsHeader { out.append(.heading(HeadingLine(section))) }
             for card in section.cards {
@@ -123,7 +124,7 @@ final class ListContent: ObservableObject {
                     expanded: expanded.contains(card.id), canDrag: section.accepts && card.canDrag,
                     expandedBodies: list.expandedBodies.intersection(card.rows.map(\.id)),
                     compact: compact, unread: compact ? UnreadMark.of(card.rows) : .none, search: words,
-                    showsLabels: showsLabels
+                    showsLabels: showsLabels, myReview: MyReviewMark.of(card), myAvatar: myAvatar
                 )))
             }
             if section.accepts, section.matching.isEmpty, !section.collapsed { out.append(.empty(section.key)) }
@@ -133,6 +134,14 @@ final class ListContent: ObservableObject {
         }
         out.append(.end)
         return out
+    }
+
+    /// The account's own avatar URL while its image is loaded; nil
+    /// otherwise. The image is asked for when the account's avatar URL
+    /// changes (ListTable.swift).
+    func selfAvatar() -> String? {
+        guard let url = list.data.account?.avatarUrl, let avatars = context?.avatars else { return nil }
+        return DecodedAvatars.image(url, data: avatars.image(for: url)) != nil ? url : nil
     }
 
     // MARK: Item states

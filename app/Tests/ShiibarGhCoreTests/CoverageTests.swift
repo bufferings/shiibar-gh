@@ -189,6 +189,21 @@ final class SettingsModelTests: XCTestCase {
         XCTAssertEqual(settings.selection, .account("583231"))
     }
 
+    /// My review has no Notify column: the dash sends nothing; its List
+    /// is sent as any other.
+    func testMyReviewNotifyIsNoControl() async {
+        let settings = SettingsModel(app: app, launch: nil)
+        let account = Account(id: "7001", login: "example-reviewer", owners: [Owner(id: "o9", name: "example-team")])
+        let org = account.owners[0]
+        api.clearCalls()
+        settings.setEvent(org, of: account, .myReview, .notify, true)
+        await settle()
+        XCTAssertEqual(api.calls.filter { $0.hasPrefix("owner_events_set") }, [])
+        settings.setEvent(org, of: account, .myReview, .list, false)
+        await settle()
+        XCTAssertEqual(api.calls.filter { $0.hasPrefix("owner_events_set") }, ["owner_events_set example-reviewer example-team my_review list false"])
+    }
+
     func testOwnerControlsSendTheLoginAndPublic() async {
         let settings = SettingsModel(app: app, launch: nil)
         let account = sampleAccount()

@@ -1156,6 +1156,94 @@ fn ready_for_review_and_converted_to_draft_carry_who_and_the_event_url() {
     }
 }
 
+/// DESIGN.md, "My review rows": the account's own reviews with a verdict,
+/// on any PR, in the window, as GitHub states them at this fetch.
+#[test]
+fn the_accounts_reviews_with_a_verdict_are_my_review_rows() {
+    for mut pr in [Pr::mine(), Pr::others()] {
+        let me = json!({"__typename":"User","login":"Me","avatarUrl":"https://a/me"});
+        pr.timeline = vec![
+            review("R_OK", me.clone(), T0 + 10, "APPROVED", ""),
+            review(
+                "R_FIX",
+                me.clone(),
+                T0 + 20,
+                "CHANGES_REQUESTED",
+                "please fix",
+            ),
+            review("R_NOTE", me.clone(), T0 + 30, "COMMENTED", "a note"),
+            review("R_DRAFT", me.clone(), T0 + 40, "PENDING", "draft"),
+            review("R_GONE", me.clone(), T0 + 50, "DISMISSED", ""),
+            review("R_OLD", me.clone(), T0 - 10, "APPROVED", ""),
+        ];
+        let out = pr.run();
+        let got: Vec<_> = out
+            .events
+            .iter()
+            .map(|e| {
+                (
+                    e.id.as_str(),
+                    e.kind,
+                    e.occurred_at,
+                    e.url.as_str(),
+                    e.actor.as_deref(),
+                    e.actor_avatar_url.as_deref(),
+                    e.text.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (
+                    "R_OK",
+                    EventKind::MyReviewApproved,
+                    T0 + 10,
+                    "https://r/R_OK",
+                    Some("Me"),
+                    Some("https://a/me"),
+                    None
+                ),
+                (
+                    "R_FIX",
+                    EventKind::MyReviewChangesRequested,
+                    T0 + 20,
+                    "https://r/R_FIX",
+                    Some("Me"),
+                    Some("https://a/me"),
+                    None
+                ),
+            ],
+            "no row for a comment-only, pending, dismissed or older review"
+        );
+        // The reviews with a body stay the account's comments for reactions.
+        let own: Vec<&str> = out.own.iter().map(|o| o.id.as_str()).collect();
+        assert!(own.contains(&"R_FIX") && own.contains(&"R_NOTE"), "{own:?}");
+    }
+}
+
+#[test]
+fn the_newest_verdict_comes_from_my_review() {
+    use shiibar_gh_proto::ReviewVerdict as V;
+    let t = teams();
+    let cases = [
+        (json!({"nodes":[{"state":"APPROVED"}]}), Some(V::Approved)),
+        (
+            json!({"nodes":[{"state":"CHANGES_REQUESTED"}]}),
+            Some(V::ChangesRequested),
+        ),
+        (json!({"nodes":[{"state":"DISMISSED"}]}), Some(V::Dismissed)),
+        (json!({"nodes":[]}), Some(V::None)),
+        (json!({"nodes":null}), None),
+        (json!(null), None),
+    ];
+    for (connection, want) in cases {
+        let node = status_node(json!({ "myReview": connection.clone() }));
+        let pr = convert::pr_values(&node, &StatusExtra::default(), ctx(&t)).unwrap();
+        assert_eq!(pr.my_review, want, "{connection}");
+    }
+}
+
 #[test]
 fn merged_and_closed_carry_who_and_no_text() {
     let mut pr = Pr::others();

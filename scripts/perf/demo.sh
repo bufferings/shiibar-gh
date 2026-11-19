@@ -25,9 +25,10 @@ mkdir -p "$work"
 
 daemon=${SHIIBAR_GH_PERF_DAEMON:-}
 if [ -z "$daemon" ]; then
-    # The working tree's daemon (0.8: its schema with the labels and the
-    # rows' avatars, the draft rows, Mine's sections, mute rules, team
-    # mentions), built out of the repository's target/.
+    # The working tree's daemon (0.8: its schema with the labels, the My
+    # review mark, the account's and the rows' avatars, the draft and My
+    # review rows, Mine's sections, mute rules, team mentions), built out of
+    # the repository's target/.
     (cd "$repo" && CARGO_TARGET_DIR="$work/target-wt" cargo build --release -p shiibar-ghd --features dev-ingest)
     daemon="$work/target-wt/release/shiibar-ghd"
 fi

@@ -6,8 +6,9 @@ use shiibar_gh_client::{ClientError, request, request_json, socket_path_from_env
 use shiibar_gh_proto::{
     AccountResponse, AccountsResponse, AckResponse, ActivityResponse, At, Card, ConfigResponse,
     DismissedFilter, EventKind, EventsResponse, InfoResponse, ListResponse, MuteKind,
-    MutesResponse, OpenResponse, OwnerLookupResponse, PlaceTab, PrFilter, PrMute, RefreshResponse,
-    Request, Row, Section, StatusResponse, Tab, TestResult, TokenTestResponse, Warning,
+    MutesResponse, MyReview, OpenResponse, OwnerLookupResponse, PlaceTab, PrFilter, PrMute,
+    RefreshResponse, Request, Row, Section, StatusResponse, Tab, TestResult, TokenTestResponse,
+    Warning,
 };
 use std::collections::BTreeMap;
 use std::io::{BufRead, IsTerminal};
@@ -29,9 +30,11 @@ const COMMANDS: [(&str, &str, &str); 33] = [
          --dismissed prints the Dismissed list instead, newest first (--tab is\n      \
          ignored). Marks: [review:inbox] or [mine:doing] for the place,\n      \
          [review requested] for a PR awaiting your review, [muted], [unmuted]\n      \
-         for a PR whose own setting is Unmute, and the days left of a dismissed\n      \
-         card. Muted PRs are listed too. With show_labels on, a PR with GitHub\n      \
-         labels ends with labels=[bug, good first issue] (by name; +3 for those\n      \
+         for a PR whose own setting is Unmute, [my review: approved] or\n      \
+         [my review: changes requested] for your newest verdict on a PR that\n      \
+         does not await your review, and the days left of a dismissed card.\n      \
+         Muted PRs are listed too. With show_labels on, a PR with GitHub labels\n      \
+         ends with labels=[bug, good first issue] (by name; +3 for those\n      \
          beyond the first 20), except on the Dismissed list; --json always\n      \
          carries labels and labels_more. --search keeps the PRs where every\n      \
          word of <text> matches (a label's name only with show_labels on, and\n      \
@@ -200,7 +203,8 @@ const COMMANDS: [(&str, &str, &str); 33] = [
     (
         "owner events",
         "<owner> --account <a> [--json] | set <owner> <event> list|notify on|off --account <a> | copy <from-owner> <to-owner> --account <a>",
-        "Print, change or copy the event table",
+        "Print, change or copy the event table. my_review has no Notify\n      \
+         (printed notify=-): its rows are your own reviews, never notified",
     ),
     (
         "help",
@@ -872,6 +876,12 @@ fn card_line(card: &Card, logins: &BTreeMap<String, String>, show_labels: bool) 
     } else {
         ""
     };
+    // DESIGN.md, "CLI (AI integration)": the verdict of the My review mark.
+    let my_review = match &card.my_review {
+        Some(review) if review.is(MyReview::Approved) => " [my review: approved]",
+        Some(review) if review.is(MyReview::ChangesRequested) => " [my review: changes requested]",
+        _ => "",
+    };
     let left = card
         .dismiss_expires_at
         .map(|at| format!(" [{}]", days_left(at, now_epoch())))
@@ -883,7 +893,7 @@ fn card_line(card: &Card, logins: &BTreeMap<String, String>, show_labels: bool) 
         String::new()
     };
     format!(
-        "{} [{}]{}{awaiting}{muted}{left} review={} checks={} base={} {} ({}) account={account}{labels}",
+        "{} [{}]{}{awaiting}{muted}{my_review}{left} review={} checks={} base={} {} ({}) account={account}{labels}",
         card.pr,
         card.state_label.as_text(),
         place_mark(card),
@@ -1100,11 +1110,14 @@ fn execute(socket: &Path, command: Command) -> Result<(), ClientError> {
             for kind in EventKind::ALL {
                 let name = shiibar_gh_proto::Lenient::Known(kind).as_text();
                 if let Some(cell) = response.events.get(&name) {
-                    println!(
-                        "{name} list={} notify={}",
-                        mark(cell.list),
+                    // DESIGN.md, "Applying the table": My review has no
+                    // Notify column.
+                    let notify = if kind == EventKind::MyReview {
+                        "-"
+                    } else {
                         mark(cell.notify)
-                    );
+                    };
+                    println!("{name} list={} notify={notify}", mark(cell.list));
                 }
             }
         }
