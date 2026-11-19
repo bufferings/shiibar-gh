@@ -326,6 +326,13 @@ struct GeneralTab: View {
             SettingRow(title: "Text size", sub: SettingsText.textSizeDetail, error: model.errors[TextSize.configKey]) {
                 TextSizeField(model: model)
             }
+            SettingRow(title: ShowLabels.title, sub: ShowLabels.detail, error: model.errors[ShowLabels.configKey]) {
+                Toggle("", isOn: Binding(
+                    get: { ShowLabels.value(model.config[ShowLabels.configKey]) },
+                    set: { model.set(ShowLabels.configKey, .bool($0)) }
+                ))
+                .toggleStyle(.switch).labelsHidden().controlSize(.small)
+            }
         }
         Section2(title: "Polling") {
             SettingRow(title: "PR status interval", sub: "Shorter means you notice sooner, but uses more API quota", error: model.errors["status_interval_minutes"], first: true) {

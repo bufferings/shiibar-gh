@@ -302,13 +302,13 @@ final class AppModelTests: XCTestCase {
         view.openTab(.review)
         view.perform(.dismissAll(section: "review|done"))
         let asked = view.confirmingDismiss
-        // Meanwhile: E1 back in Todo (a reopen), E2 dismissed elsewhere,
+        // Meanwhile: E1 back in Inbox (a reopen), E2 dismissed elsewhere,
         // E3 gone, E4 moved to Mine.
         var next = doneCards()
-        next[next.firstIndex { $0.id == "E1" }!].placement = review(.todo, 9)
+        next[next.firstIndex { $0.id == "E1" }!].placement = review(.inbox, 9)
         next[next.firstIndex { $0.id == "E2" }!].dismissedAt = T0
         next.removeAll { $0.id == "E3" }
-        next[next.firstIndex { $0.id == "E4" }!].placement = mine(.todo, 9)
+        next[next.firstIndex { $0.id == "E4" }!].placement = mine(.inbox, 9)
         api.cards = next
         view.data.reload()
         await settle()
@@ -379,8 +379,8 @@ final class AppModelTests: XCTestCase {
         api.clearCalls()
         view.select(.header(card: "M2"))
         view.press(.moveTo(.doing))
-        view.press(.moveTo(.todo))
-        XCTAssertEqual(view.sections[3].cards.map(\.id), ["M2", "M1"], "shown at once: back at the top of Todo")
+        view.press(.moveTo(.inbox))
+        XCTAssertEqual(view.sections[3].cards.map(\.id), ["M2", "M1"], "shown at once: back at the top of Inbox")
         view.perform(.dismiss(card: "N1"))
         view.perform(.restore(card: "X1"))
         view.perform(.mute(.repo, "acme-corp/web"))
@@ -393,7 +393,7 @@ final class AppModelTests: XCTestCase {
         await settle()
         XCTAssertEqual(sent(), [
             "place bufferings-work acme-corp/web#77 mine doing",
-            "place bufferings-work acme-corp/web#77 mine todo",
+            "place bufferings-work acme-corp/web#77 mine inbox",
             "dismiss bufferings-work acme-corp/web#80",
             "restore bufferings-work example-org/web#205",
             "mute bufferings-work repo acme-corp/web",
@@ -444,7 +444,7 @@ final class AppModelTests: XCTestCase {
         api.refuse["dismiss"] = DaemonError.unreachable(SocketError.closed)
         view.select(.header(card: "T1"))
         view.press(.delete)
-        XCTAssertFalse(view.sections[3].matching.contains { $0.id == "T1" }, "gone from Todo at once")
+        XCTAssertFalse(view.sections[3].matching.contains { $0.id == "T1" }, "gone from Inbox at once")
         XCTAssertEqual(view.dismissedCount, 3)
         XCTAssertEqual(view.data.cards.first { $0.id == "T1" }?.dismissExpiresAt, T0 + 7 * 86_400)
         XCTAssertNil(view.selection)
@@ -488,7 +488,7 @@ final class AppModelTests: XCTestCase {
         view.select(.header(card: "T4"))
         view.press(.reorder(up: true))
         await settle()
-        XCTAssertEqual(calls("place"), ["place bufferings-work example-org/api#415 review todo before example-org/web#230"],
+        XCTAssertEqual(calls("place"), ["place bufferings-work example-org/api#415 review inbox before example-org/web#230"],
                        "`before` names the PR")
     }
 
@@ -499,8 +499,8 @@ final class AppModelTests: XCTestCase {
         window.openTab(.review)
         api.operationDelay = 100_000_000
         popover.beginDrag("T4")
-        XCTAssertEqual(popover.dragOver(.card("T1", lowerHalf: false)), DropTarget(section: "review|todo", position: .top), "the first card")
-        XCTAssertEqual(popover.dragOver(.card("T2", lowerHalf: false)), DropTarget(section: "review|todo", position: .before("T2")))
+        XCTAssertEqual(popover.dragOver(.card("T1", lowerHalf: false)), DropTarget(section: "review|inbox", position: .top), "the first card")
+        XCTAssertEqual(popover.dragOver(.card("T2", lowerHalf: false)), DropTarget(section: "review|inbox", position: .before("T2")))
         // Done takes a drop anywhere, by its own order: no position.
         XCTAssertEqual(popover.dragOver(.header("review|done")), DropTarget(section: "review|done", position: .byDefault))
         XCTAssertEqual(popover.dragOver(.card("D1", lowerHalf: true)), DropTarget(section: "review|done", position: .byDefault))
@@ -556,7 +556,7 @@ final class AppModelTests: XCTestCase {
         let view = await loaded()
         view.openTab(.review)
         api.refuse["place"] = DaemonError(code: .invalid, message: "Invalid")
-        view.perform(.place(PlaceMove(card: "N1", target: .mine(.todo), position: .byDefault, verb: .add)))
+        view.perform(.place(PlaceMove(card: "N1", target: .mine(.inbox), position: .byDefault, verb: .add)))
         await settle()
         XCTAssertEqual(view.data.failure, "Couldn't add: Invalid")
         view.perform(.place(PlaceMove(card: "M2", target: .none, position: .byDefault, verb: .remove)))
@@ -758,7 +758,7 @@ final class AppModelTests: XCTestCase {
         let popover = await loaded()
         popover.data.setFilter(ListFilter(muted: .show), tab: .review)
         popover.openTab(.review)
-        popover.perform(.toggleMore("review|todo"))
+        popover.perform(.toggleMore("review|inbox"))
         XCTAssertEqual(popover.sections[3].foldLine, "Show less")
         popover.perform(.toggleSection("review|waiting"))
         let window = popover.data.list(.window)
@@ -769,12 +769,12 @@ final class AppModelTests: XCTestCase {
         model.surfaceClosed(.popover, account: "3407303")
         XCTAssertEqual(popover.sections[3].foldLine, "Show less", "kept across openings")
         let store = UIStateStore(defaults: defaults)
-        XCTAssertEqual(store.expanded(account: "3407303"), ["review|todo"])
+        XCTAssertEqual(store.expanded(account: "3407303"), ["review|inbox"])
         XCTAssertEqual(store.collapsed(account: "3407303"), ["review|waiting"])
-        popover.select(.more("review|todo"))
+        popover.select(.more("review|inbox"))
         popover.press(.open)
         XCTAssertEqual(popover.sections[3].foldLine, "+ 2 more PRs")
-        XCTAssertEqual(popover.selection, .more("review|todo"))
+        XCTAssertEqual(popover.selection, .more("review|inbox"))
         XCTAssertEqual(store.expanded(account: "3407303"), [])
     }
 
@@ -892,7 +892,7 @@ final class AppModelTests: XCTestCase {
         view.setSearch("keep")
         view.openTab(.review)
         view.setSearch("nothing")
-        view.perform(.toggleSection("review|todo"))
+        view.perform(.toggleSection("review|inbox"))
         let note = DaemonNotification(id: "n", type: .single, account: "3407303", pr: "example-org/api#402", url: "https://github.com/x", title: "t")
         model.handle(.notify(note))
         XCTAssertEqual(notifier.shown, [note])
@@ -1006,6 +1006,36 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(lists().count, 1)
     }
 
+    /// `show_labels` (DESIGN.md, "Card", "GitHub labels"): read at
+    /// connection; a `config_changed` turns the label line and the search
+    /// of label names off at once, so a card matched only by a label hides
+    /// and leaves the selection while the search text stays.
+    func testShowLabelsFollowsConfigChangedAtOnce() async {
+        api.config["show_labels"] = .bool(false)
+        await model.loadConfig()
+        XCTAssertFalse(model.showLabels)
+        model.handle(.configChanged(key: "show_labels", value: .bool(true)))
+        XCTAssertTrue(model.showLabels)
+        var cards = sampleCards()
+        let index = cards.firstIndex { $0.id == "T2" }!
+        cards[index].labels = [PRLabel(name: "needs-triage-zq", color: "ededed")]
+        let view = await loaded(cards)
+        view.openTab(.review)
+        view.setSearch("triage-zq")
+        XCTAssertEqual(view.sections.flatMap(\.cards).map(\.id), ["T2"])
+        XCTAssertEqual(view.sections.count, 4, "every section, the others with their frame")
+        XCTAssertTrue(view.showLabels)
+        view.select(.header(card: "T2"))
+        model.handle(.configChanged(key: "show_labels", value: .bool(false)))
+        XCTAssertFalse(view.showLabels)
+        XCTAssertEqual(view.sections, [], "no card matches without the label names")
+        XCTAssertEqual(view.emptyText, "Nothing matches")
+        XCTAssertNil(view.selection, "the card no longer shown leaves the selection")
+        XCTAssertEqual(view.search, "triage-zq", "the search text stays")
+        model.handle(.configChanged(key: "show_labels", value: .bool(true)))
+        XCTAssertEqual(view.sections.flatMap(\.cards).map(\.id), ["T2"], "on again: it matches again")
+    }
+
     func testTextSizeKeysSendConfigSetAndStopAtTheEnds() async {
         api.config["text_size"] = .int(17)
         await model.loadConfig()
@@ -1037,7 +1067,7 @@ final class AppModelTests: XCTestCase {
         view.press(.copy)
         view.select(.row(id: "A", card: "T1"))
         view.press(.copy)
-        view.select(.section("review|todo"))
+        view.select(.section("review|inbox"))
         view.press(.copy)
         XCTAssertEqual(copier.copied, ["https://github.com/p/T1", "https://github.com/c/A"], "nothing for a heading")
     }

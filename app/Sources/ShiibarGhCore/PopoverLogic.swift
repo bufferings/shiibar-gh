@@ -34,7 +34,7 @@ public enum SelectionItem: Equatable, Hashable {
     }
 
     /// The card a header or a row belongs to: the target of ⌫, ⌥↑↓ and
-    /// D / T / W (DESIGN.md, "Keyboard").
+    /// I / D / W (DESIGN.md, "Keyboard").
     public var card: String? {
         switch self {
         case .header(let card), .row(_, let card): return card
@@ -60,7 +60,7 @@ public enum Key: Equatable {
     case delete
     /// ⌥↑ and ⌥↓.
     case reorder(up: Bool)
-    /// D, T and W.
+    /// I, D and W.
     case moveTo(PlacementSection)
     /// ⌘1, ⌘2 and ⌘3.
     case tab(ListTab)
@@ -289,7 +289,7 @@ public enum PopoverLogic {
             else { return nil }
             return .place(move)
         case .moveTo(let target):
-            // Review and Mine only: in All, D / T / W do nothing.
+            // Review and Mine only: in All, I / D / W do nothing.
             guard view.tab == .review || view.tab == .mine, let id = selection.card, let (card, _) = view.card(id),
                   let move = CardDrop.moveTo(target, card) else { return nil }
             return .place(move)
@@ -299,12 +299,12 @@ public enum PopoverLogic {
     }
 
     /// The hint line while several cards are selected (DESIGN.md,
-    /// "Keyboard"): `⌥↑↓ Reorder` only when it moves them, `D T W Move to`
+    /// "Keyboard"): `⌥↑↓ Reorder` only when it moves them, `I D W Move to`
     /// in Review and Mine only.
     public static func multipleHints(tab: ListTab, canReorder: Bool) -> [KeyHint] {
         var hints = [moveHint]
         if canReorder { hints.append(KeyHint("\u{2325}\u{2191}\u{2193}", "Reorder")) }
-        if tab != .all { hints.append(KeyHint("D T W", "Move to")) }
+        if tab != .all { hints.append(KeyHint("I D W", "Move to")) }
         hints += [KeyHint("\u{232B}", "Dismiss"), KeyHint("esc", "Clear"), markAllHint, searchHint]
         return hints
     }
@@ -345,7 +345,7 @@ public enum PopoverLogic {
             hints.append(openHint)
             if let (card, _) = view.card(id), view.tab != .all, let placement = card.placement {
                 if !placement.isDone { hints.append(KeyHint("\u{2325}\u{2191}\u{2193}", "Reorder")) }
-                hints.append(KeyHint("D T W", "Move to"))
+                hints.append(KeyHint("I D W", "Move to"))
             }
             hints.append(KeyHint("\u{232B}", "Dismiss"))
         }
@@ -408,9 +408,9 @@ public enum PopoverLogic {
         guard let placement = card.placement else {
             var entries: [MenuEntry] = []
             if !card.authoredByMe {
-                entries.append(MenuEntry("Add to Review", .place(PlaceMove(card: card.id, target: .review(.todo), position: .byDefault, verb: .add))))
+                entries.append(MenuEntry("Add to Review", .place(PlaceMove(card: card.id, target: .review(.inbox), position: .byDefault, verb: .add))))
             }
-            entries.append(MenuEntry("Add to Mine", .place(PlaceMove(card: card.id, target: .mine(.todo), position: .byDefault, verb: .add))))
+            entries.append(MenuEntry("Add to Mine", .place(PlaceMove(card: card.id, target: .mine(.inbox), position: .byDefault, verb: .add))))
             return entries
         }
         guard let tab = placement.tab.value else { return [] }

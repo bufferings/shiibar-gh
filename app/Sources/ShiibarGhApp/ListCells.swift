@@ -377,6 +377,158 @@ enum Ink {
     }
 }
 
+// MARK: - Labels
+
+/// Draws the label line of a card (DESIGN.md, "Card", "GitHub labels"):
+/// each label a capsule in its colors (`LabelColors`, worked out for the
+/// appearance drawn in and, in dark, over the ground of a card that is not
+/// selected, so a selected heading keeps them), the search's matches on its
+/// name, then `+N`. A muted card's labels are drawn at 0.6 as one layer.
+@MainActor
+enum LabelInk {
+    /// The appearance a card's labels are drawn in: dark or light and, in
+    /// dark, the ground of a card that is not selected. Worked out once per
+    /// draw of a card, not per label.
+    struct Ground: Hashable {
+        var dark: Bool
+        var card: LabelRGB
+
+        /// The appearance drawn in now.
+        @MainActor static func current() -> Ground {
+            let dark = NSAppearance.currentDrawing().isDark
+            return Ground(dark: dark, card: dark ? cardGround() : .white)
+        }
+    }
+
+    private struct LookKey: Hashable {
+        var color: String
+        var ground: Ground
+    }
+
+    /// A label's colors resolved for drawing.
+    struct Inks {
+        var look: LabelLook
+        var ground: CGColor
+        var text: NSColor
+        var outline: CGColor?
+    }
+
+    private static var inks: [LookKey: Inks] = [:]
+    /// Capsule paths by size, at the origin.
+    private struct SizeKey: Hashable {
+        var width: CGFloat
+        var height: CGFloat
+    }
+
+    private static var capsules: [SizeKey: (fill: CGPath, outline: CGPath)] = [:]
+
+    /// The ground of a card that is not selected, in the appearance drawn
+    /// in, as sRGB components from 0 to 255.
+    static func cardGround() -> LabelRGB {
+        let color = Palette.surface.nsColor.usingColorSpace(.sRGB) ?? .white
+        return LabelRGB(Double(color.redComponent) * 255, Double(color.greenComponent) * 255, Double(color.blueComponent) * 255)
+    }
+
+    /// The colors of a label in the appearance drawn in now.
+    static func look(_ color: String) -> LabelLook {
+        inks(color, Ground.current()).look
+    }
+
+    static func inks(_ color: String, _ ground: Ground) -> Inks {
+        let key = LookKey(color: color, ground: ground)
+        if let inks = inks[key] { return inks }
+        if inks.count > 2_000 { inks = [:] }
+        let look = ground.dark ? LabelColors.dark(color, card: ground.card) : LabelColors.light(color)
+        let resolved = Inks(
+            look: look, ground: cgColor(look.ground), text: nsColor(look.text),
+            outline: look.outline.map { cgColor($0, alpha: look.outlineAlpha) }
+        )
+        inks[key] = resolved
+        return resolved
+    }
+
+    static func nsColor(_ rgb: LabelRGB, alpha: Double = 1) -> NSColor {
+        NSColor(srgbRed: rgb.r / 255, green: rgb.g / 255, blue: rgb.b / 255, alpha: alpha)
+    }
+
+    static func cgColor(_ rgb: LabelRGB, alpha: Double = 1) -> CGColor {
+        CGColor(srgbRed: rgb.r / 255, green: rgb.g / 255, blue: rgb.b / 255, alpha: alpha)
+    }
+
+    private static func capsule(_ size: CGSize) -> (fill: CGPath, outline: CGPath) {
+        let key = SizeKey(width: size.width, height: size.height)
+        if let paths = capsules[key] { return paths }
+        if capsules.count > 500 { capsules = [:] }
+        let radius = size.height / 2
+        let rect = CGRect(origin: .zero, size: size)
+        let inner = rect.insetBy(dx: 0.5, dy: 0.5)
+        let radii = min(radius, rect.width / 2)
+        let paths = (
+            fill: CGPath(roundedRect: rect, cornerWidth: radii, cornerHeight: radii, transform: nil),
+            outline: CGPath(
+                roundedRect: inner, cornerWidth: max(0, min(radius - 0.5, inner.width / 2)),
+                cornerHeight: max(0, min(radius - 0.5, inner.height / 2)), transform: nil
+            )
+        )
+        capsules[key] = paths
+        return paths
+    }
+
+    /// The opacity of the capsules of a card's labels: 0.6 on a muted card
+    /// (as its avatars). `+N` is text of the card, not a label: it keeps
+    /// the card's own text color at full opacity (Main.html).
+    static func capsuleOpacity(muted: Bool) -> CGFloat {
+        muted ? CGFloat(LabelColors.mutedOpacity) : 1
+    }
+
+    static func draw(
+        _ labels: [PRLabel], _ frames: [LabelFrame], more: CGRect?, moreCount: Int, k: CGFloat, muted: Bool,
+        marks: [Int: Highlight.TextMarks]
+    ) {
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        let ground = Ground.current()
+        let faint = capsuleOpacity(muted: muted) < 1
+        if faint {
+            context.saveGState()
+            // The layer is as large as the clip: only the labels.
+            let area = frames.reduce(CGRect.null) { $0.union($1.frame) }
+            if !area.isNull { context.clip(to: area.insetBy(dx: -1, dy: -1)) }
+            context.setAlpha(capsuleOpacity(muted: muted))
+            context.beginTransparencyLayer(auxiliaryInfo: nil)
+        }
+        let font = LineLayout.labelFont(k: k)
+        let lineHeight = Ink.lineHeight(font)
+        for frame in frames where frame.index < labels.count {
+            let label = labels[frame.index]
+            let inks = inks(label.color, ground)
+            let paths = capsule(frame.frame.size)
+            context.saveGState()
+            context.translateBy(x: frame.frame.minX, y: frame.frame.minY)
+            context.addPath(paths.fill)
+            context.setFillColor(inks.ground)
+            context.fillPath()
+            if let outline = inks.outline {
+                context.addPath(paths.outline)
+                context.setStrokeColor(outline)
+                context.setLineWidth(1)
+                context.strokePath()
+            }
+            context.restoreGState()
+            let text = CGRect(x: frame.text.minX, y: frame.frame.midY - lineHeight / 2, width: frame.text.width, height: lineHeight)
+            if let found = marks[frame.index] { Ink.drawMarks(label.name, font, found, in: text) }
+            Ink.draw(label.name, font, inks.text, in: text)
+        }
+        if faint {
+            context.endTransparencyLayer()
+            context.restoreGState()
+        }
+        // `+N` after the layer: at full opacity on a muted card too.
+        if let more, moreCount > 0 {
+            Ink.drawLine(LineLayout.labelsMoreText(moreCount), font, Palette.secondary.nsColor, in: more)
+        }
+    }
+}
+
 // MARK: - Shapes
 
 @MainActor
@@ -751,6 +903,12 @@ struct CardGeometry {
     /// days` before them): on line 3, or on a line of their own.
     var timesBand: CGRect
     var line3Fits: Bool
+    /// The label line, the last of the heading (DESIGN.md, "Card", "GitHub
+    /// labels"): every label shown, wrapped; empty for a card without
+    /// labels or while `Show labels` is off.
+    var labels: [LabelFrame] = []
+    /// `+N` after the last label, for a PR with more than 20 labels.
+    var labelsMore: CGRect?
     var rows: [RowFrame]
 
     /// Where the times and `Dismissed in N days` are now. Worked out when
@@ -771,6 +929,15 @@ struct CardGeometry {
     var unreadDot: CGRect?
 }
 
+/// A label of a card's label line: the label (`index` in `card.labels`),
+/// its capsule, and the rectangle its name is drawn in (cut with "…" when
+/// the label alone is wider than the line).
+struct LabelFrame: Equatable {
+    var index: Int
+    var frame: CGRect
+    var text: CGRect
+}
+
 struct DismissedGeometry {
     var size: CGSize
     var stateLabel: CGRect?
@@ -780,6 +947,11 @@ struct DismissedGeometry {
     var title: CGRect
     var daysLeft: CGRect
     var restore: CGRect
+    /// Line 3 at the left: `base ← head`, cut first, then `by <login>`
+    /// (nil when the author is unknown), its login cut once the branches
+    /// show only "…" (DESIGN.md, "Dismissed list").
+    var branches: CGRect
+    var by: CGRect?
 }
 
 /// The geometry of each kind of line. A cell is the line's full width; the
@@ -893,7 +1065,15 @@ enum LineLayout {
             lx += tagSize.width + 6
         }
         let baseHead = CGRect(x: lx, y: center(lh11, in: leftRow), width: max(0, min(baseHeadWidth, leftRow.maxX - lx)), height: lh11)
-        let headerHeight = top3 + line3 + 6 * k
+        // The label line under line 3 (or the times' line 4).
+        let shownLabels = line.shownLabels
+        var labelLine = LabelLine(frames: [], more: nil, height: 0)
+        var headerHeight = top3 + line3 + 6 * k
+        if !shownLabels.isEmpty {
+            let top = top3 + line3 + labelGap * k
+            labelLine = labels(shownLabels, more: card.labelsMore, left: left, top: top, room: room3, k: k)
+            headerHeight = top + labelLine.height + 6 * k
+        }
         let header = CGRect(x: 0, y: 0, width: width, height: headerHeight)
 
         // Rows.
@@ -981,8 +1161,66 @@ enum LineLayout {
         return CardGeometry(
             size: CGSize(width: width, height: y), header: header, stateLabel: stateRect, prLabel: prLabel,
             marks: markRects, status: status, chain: chain, dismiss: dismiss, avatar: avatar, title: title, tag: tag,
-            baseHead: baseHead, timesBand: rightRow, line3Fits: fits, rows: rows, feet: feet, unreadDot: unreadDot
+            baseHead: baseHead, timesBand: rightRow, line3Fits: fits, labels: labelLine.frames, labelsMore: labelLine.more,
+            rows: rows, feet: feet, unreadDot: unreadDot
         )
+    }
+
+    // MARK: Labels
+
+    /// DESIGN.md, "Constants", the size of GitHub labels, at text size 12:
+    /// 10-point semibold text, 16 points high, 7 points each side, 4 points
+    /// between labels and between wrapped lines, 5 points under line 3.
+    static let labelFontSize: CGFloat = 10
+    static let labelHeight: CGFloat = 16
+    static let labelPadding: CGFloat = 7
+    static let labelSpacing: CGFloat = 4
+    static let labelGap: CGFloat = 5
+
+    static func labelFont(k: CGFloat) -> NSFont { Ink.font(labelFontSize * k, .semibold) }
+
+    /// `+N`: the labels not fetched.
+    static func labelsMoreText(_ more: Int) -> String { "+\(more)" }
+
+    struct LabelLine: Equatable {
+        var frames: [LabelFrame]
+        var more: CGRect?
+        var height: CGFloat
+    }
+
+    /// The labels from the left of a line `room` wide at `top`, in their
+    /// order, a label that does not fit the rest of a line starting the
+    /// next one; a label wider than the whole line takes the line and its
+    /// name is cut. `+N` (when `more` > 0) follows the last label and wraps
+    /// the same way. The height is that of all the lines.
+    static func labels(_ labels: [PRLabel], more: Int, left: CGFloat, top: CGFloat, room: CGFloat, k: CGFloat) -> LabelLine {
+        let font = labelFont(k: k)
+        let height = labelHeight * k
+        let padding = labelPadding * k
+        let spacing = labelSpacing * k
+        var x = left
+        var y = top
+        func place(_ width: CGFloat) -> CGRect {
+            if x > left, x + width > left + room {
+                x = left
+                y += height + spacing
+            }
+            let rect = CGRect(x: x, y: y, width: width, height: height)
+            x += width + spacing
+            return rect
+        }
+        var frames: [LabelFrame] = []
+        for (index, label) in labels.enumerated() {
+            let natural = (Ink.width(label.name, font) + 2 * padding).rounded(.up)
+            let frame = place(min(natural, max(0, room)))
+            frames.append(LabelFrame(index: index, frame: frame, text: frame.insetBy(dx: padding, dy: 0)))
+        }
+        var moreRect: CGRect?
+        if more > 0 {
+            let width = min(Ink.width(labelsMoreText(more), font).rounded(.up), max(0, room))
+            moreRect = place(width)
+        }
+        return LabelLine(frames: frames, more: moreRect, height: y + height - top)
     }
 
     /// The size of a row's avatar at text size 12 (DESIGN.md, "Constants").
@@ -1077,11 +1315,43 @@ enum LineLayout {
         let restore = CGRect(x: right - restoreSize.width, y: center(restoreSize.height, in: row3), width: restoreSize.width, height: restoreSize.height)
         let daysWidth = Ink.width(DismissedText.daysLeft(card.dismissExpiresAt, now: now), f11)
         let daysLeft = CGRect(x: restore.minX - 8 - daysWidth, y: center(lh11, in: row3), width: daysWidth, height: lh11)
+        // The days left and Restore are kept whole; `by <login>` next, and
+        // the branches take what is left. Once the branches are down to
+        // "…", the login is cut.
+        let room = max(0, daysLeft.minX - 8 - left)
+        let branchesText = "\(card.base) \u{2190} \(card.head)"
+        let branchesWidth = Ink.width(branchesText, f11)
+        let byText = Highlight.dismissedBy(card.author)
+        let gap = dismissedGap * k
+        var branches: CGRect
+        var by: CGRect?
+        if let byText {
+            let byWidth = Ink.width(byText, f11)
+            let ellipsis = Ink.width("\u{2026}", f11).rounded(.up)
+            let branchesRoom = room - gap - byWidth
+            if branchesRoom >= min(branchesWidth, ellipsis) {
+                branches = CGRect(x: left, y: center(lh11, in: row3), width: min(branchesWidth, branchesRoom), height: lh11)
+                by = CGRect(x: branches.maxX + gap, y: center(lh11, in: row3), width: byWidth, height: lh11)
+            } else {
+                // Every branch cut: a lone "…" stays, never wider than the
+                // room, and the login gets what is left after it.
+                let shown = min(branchesWidth, ellipsis, room)
+                branches = CGRect(x: left, y: center(lh11, in: row3), width: shown, height: lh11)
+                let byX = min(branches.maxX + gap, left + room)
+                by = CGRect(x: byX, y: center(lh11, in: row3), width: max(0, left + room - byX), height: lh11)
+            }
+        } else {
+            branches = CGRect(x: left, y: center(lh11, in: row3), width: min(branchesWidth, room), height: lh11)
+        }
         return DismissedGeometry(
             size: CGSize(width: width, height: row3.maxY + 6 * k), stateLabel: stateRect, prLabel: prLabel, chain: chain,
-            avatar: avatar, title: title, daysLeft: daysLeft, restore: restore
+            avatar: avatar, title: title, daysLeft: daysLeft, restore: restore, branches: branches, by: by
         )
     }
+
+    /// Between `base ← head` and `by <login>` on line 3 of a Dismissed card
+    /// (Main.html `.dlft`, 4 points at text size 12).
+    static let dismissedGap: CGFloat = 4
 
     // MARK: Other lines
 
@@ -1249,16 +1519,13 @@ class LineView: PressView {
 
     /// Everything the layer's image was drawn from (`DrawKey`). AppKit asks
     /// a line in a scroll view to display again for each part that scrolls
-    /// into view: when nothing the drawing reads has changed, the image,
-    /// drawn whole, is kept. Drawing it again each time was what made a
-    /// scroll frame slow (the measurement mode's slow frames had four or
-    /// five card images, 12 to 14 ms, drawn again for cards drawn frames
-    /// before). The key is compared when AppKit asks, so no change can be
-    /// missed. A flag set from `needsDisplay` (the first version of this)
-    /// missed the changes made while the table reuses a line, outside the
-    /// window: a heading configured from Todo to Waiting there recorded no
-    /// `needsDisplay`, and its Todo image was kept (the measurement mode's
-    /// trace; cards of another repository appeared under a heading).
+    /// into view; drawing a card's image again each time would cost a
+    /// scroll frame its budget, so the image, drawn whole, is kept while
+    /// nothing the drawing reads has changed. The key is compared each time
+    /// AppKit asks, rather than kept as a flag set with `needsDisplay`,
+    /// because the table reconfigures lines it reuses outside the window,
+    /// where `needsDisplay` is not recorded: only the key tells that a line
+    /// now shows another heading or card.
     private(set) var drawnKey: DrawKey?
 
     /// What the drawing of this line reads, besides the item state, the
@@ -1292,6 +1559,26 @@ class LineView: PressView {
             }
         )
     }
+
+    /// Which parts of the draw key differ from those of the image shown
+    /// (the measurement mode's check).
+    func drawKeyDifference() -> String {
+        guard let drawn = drawnKey else { return "never drawn" }
+        let now = currentDrawKey()
+        var parts: [String] = []
+        if now.content != drawn.content { parts.append("content" + (contentDifference().map { " (\($0))" } ?? "")) }
+        if now.state != drawn.state { parts.append("state") }
+        if now.size != drawn.size { parts.append("size \(drawn.size) -> \(now.size)") }
+        if now.scale != drawn.scale { parts.append("scale \(drawn.scale) -> \(now.scale)") }
+        if now.appearance != drawn.appearance { parts.append("appearance") }
+        if now.look != drawn.look { parts.append("look") }
+        if now.idleControls != drawn.idleControls { parts.append("idle controls") }
+        return parts.isEmpty ? "none" : parts.joined(separator: ", ")
+    }
+
+    /// Which inputs of the content differ from those drawn; nil when the
+    /// line does not tell.
+    func contentDifference() -> String? { nil }
 
     /// The line's image drawn now (also the measurement mode's check, which
     /// compares it with the layer's).
@@ -1733,9 +2020,13 @@ final class CardLineView: LineView {
         let f11 = Ink.font(11 * k)
         let titleFont = Ink.font(12 * k, line.card.isMuted ? .regular : .semibold)
         return Highlight.card(
-            line.card, words: line.search, now: now, expanded: line.expanded, expandedBodies: line.expandedBodies, compact: line.compact
+            line.card, words: line.search, now: now, expanded: line.expanded, expandedBodies: line.expandedBodies, compact: line.compact,
+            labels: !line.shownLabels.isEmpty
         ) { cut, text in
             switch cut {
+            case .label(let index):
+                guard let frame = geometry.labels.first(where: { $0.index == index }) else { return 0 }
+                return Ink.shownEnd(text, LineLayout.labelFont(k: k), width: frame.text.width)
             case .prLabel: return Ink.shownEnd(text, f11, width: geometry.prLabel.width)
             case .title: return Ink.shownEnd(text, titleFont, width: geometry.title.width)
             case .baseHead: return Ink.shownEnd(text, f11, width: geometry.baseHead.width)
@@ -1758,13 +2049,55 @@ final class CardLineView: LineView {
         var rowAvatars: [Bool]
     }
 
+    /// The inputs of the image shown (the measurement mode's check).
+    private var drawnInputs: Inputs?
+
+    override func updateLayer() {
+        super.updateLayer()
+        if PerfMode.enabled { drawnInputs = currentInputs() }
+    }
+
+    override func contentDifference() -> String? {
+        guard let old = drawnInputs else { return "no inputs kept" }
+        let new = currentInputs()
+        var parts: [String] = []
+        if old.line != new.line {
+            if old.line?.card != new.line?.card {
+                var card: [String] = []
+                if let a = old.line?.card, let b = new.line?.card {
+                    if a.rows != b.rows { card.append("rows") }
+                    if a.updatedAt != b.updatedAt { card.append("updated_at") }
+                    if a.placement != b.placement { card.append("placement") }
+                    if a.labels != b.labels { card.append("labels") }
+                    if a.muted != b.muted { card.append("muted") }
+                    if a.autoDismissAt != b.autoDismissAt { card.append("auto_dismiss_at") }
+                    if a.id != b.id { card.append("another card") }
+                }
+                parts.append("card [" + card.joined(separator: " ") + "]")
+            } else {
+                parts.append("line (not the card)")
+            }
+        }
+        if old.size != new.size { parts.append("size") }
+        if old.line3Fits != new.line3Fits { parts.append("line 3") }
+        if old.k != new.k { parts.append("k") }
+        if old.now != new.now { parts.append("now \(old.now) -> \(new.now)") }
+        if old.avatar != new.avatar { parts.append("avatar") }
+        if old.rowAvatars != new.rowAvatars { parts.append("row avatars") }
+        return parts.joined(separator: ", ")
+    }
+
     override func drawInputs() -> AnyEquatable? {
+        AnyEquatable(currentInputs())
+    }
+
+    private func currentInputs() -> Inputs {
         let url = line?.card.authorAvatarUrl
-        return AnyEquatable(Inputs(
+        return Inputs(
             line: line, size: geometry?.size, line3Fits: geometry?.line3Fits, k: env?.k ?? 1, now: env?.now ?? 0,
             avatar: env?.context.avatars.image(for: url) != nil,
             rowAvatars: shownRows().map { rowImage($0) != nil }
-        ))
+        )
     }
 
     /// The rows the geometry lays out, in order.
@@ -1922,6 +2255,8 @@ final class CardLineView: LineView {
         heading.append("\(card.base) \u{2190} \(card.head)")
         if let text = DismissedText.dismissedIn(card.autoDismissAt, now: now) { heading.append(text) }
         heading.append(CardText.times(card, now: now))
+        heading += line.shownLabels.map(\.name)
+        if !line.shownLabels.isEmpty, card.labelsMore > 0 { heading.append(LineLayout.labelsMoreText(card.labelsMore)) }
         var parts: [(NSAccessibility.Role, String, CGRect)] = [(.group, heading.joined(separator: ", "), geometry.header)]
         for frame in geometry.rows {
             guard let row = card.rows.first(where: { $0.id == frame.id }) else { continue }
@@ -2130,6 +2465,11 @@ final class CardLineView: LineView {
         let timesRect = parts.times.insetBy(dx: -1, dy: 0)
         if let matches { Ink.drawMatches(times, f11, matches.author, in: timesRect) }
         Ink.draw(times, f11, muted ? Palette.secondary.nsColor : Palette.secondary.nsColor, in: timesRect)
+
+        // The label line.
+        if !geometry.labels.isEmpty {
+            LabelInk.draw(card.labels, geometry.labels, more: geometry.labelsMore, moreCount: card.labelsMore, k: k, muted: muted, marks: matches?.labels ?? [:])
+        }
     }
 
     /// DESIGN.md, "How rows look": a row's avatar is faint (0.6) exactly
@@ -2162,8 +2502,9 @@ final class CardLineView: LineView {
 }
 
 /// A card of the Dismissed list (Main.html): the state label, owner/repo
-/// #number, the chain icon; the avatar and the title; the days left and
-/// Restore. No rows, no status icons, no ×.
+/// #number, the chain icon; the avatar and the title; `base ← head by
+/// <login>`, the days left and Restore. No rows, no status icons, no ×, no
+/// labels, no times.
 final class DismissedLineView: LineView {
     private(set) var card: Card?
     private var search: [String] = []
@@ -2272,6 +2613,25 @@ final class DismissedLineView: LineView {
             Ink.drawMarks(card.title, font, marks, in: geometry.title)
         }
         Ink.draw(card.title, Ink.font(12 * k, .semibold), Palette.text.nsColor, in: geometry.title)
+        // Line 3 at the left: the branches and the author, in the faint text
+        // of a tab card's line 3.
+        let branches = "\(card.base) \u{2190} \(card.head)"
+        if !search.isEmpty {
+            let marks = Highlight.TextMarks(Highlight.baseHead(search, base: card.base, head: card.head)) {
+                Ink.shownEnd(branches, f11, width: geometry.branches.width)
+            }
+            Ink.drawMarks(branches, f11, marks, in: geometry.branches)
+        }
+        Ink.draw(branches, f11, Palette.secondary.nsColor, in: geometry.branches)
+        if let rect = geometry.by, let by = Highlight.dismissedBy(card.author) {
+            if !search.isEmpty {
+                let marks = Highlight.TextMarks(Highlight.dismissedAuthor(search, author: card.author)) {
+                    Ink.shownEnd(by, f11, width: rect.width)
+                }
+                Ink.drawMarks(by, f11, marks, in: rect)
+            }
+            Ink.draw(by, f11, Palette.secondary.nsColor, in: rect)
+        }
         Ink.draw(DismissedText.daysLeft(card.dismissExpiresAt, now: env.now), f11, Palette.secondary.nsColor, in: geometry.daysLeft)
         if let bar = Shapes.stateColor(card.stateLabel) {
             bar.setFill()

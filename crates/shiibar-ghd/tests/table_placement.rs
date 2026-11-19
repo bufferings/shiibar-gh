@@ -34,14 +34,14 @@ fn closed(id: &str, author_me: bool) -> IngestPr {
 // ------------------------------------------------------------ Card states
 
 #[test]
-fn a_new_open_pr_of_the_account_goes_to_the_end_of_mines_todo() {
+fn a_new_open_pr_of_the_account_goes_to_the_end_of_mines_inbox() {
     let mut h = H::new();
     h.prs(vec![pr("PR_1"), other("PR_2")]);
-    assert_eq!(h.placement("PR_1"), place("mine", "todo", 0));
+    assert_eq!(h.placement("PR_1"), place("mine", "inbox", 0));
     assert_eq!(h.placement("PR_2"), None, "someone else's PR: no place");
     h.prs(vec![pr("PR_3")]);
-    assert_eq!(h.placement("PR_3"), place("mine", "todo", 1));
-    // After the cards the user put in Todo, and never in another section.
+    assert_eq!(h.placement("PR_3"), place("mine", "inbox", 1));
+    // After the cards the user put in Inbox, and never in another section.
     h.prs(vec![pr("PR_4"), other("PR_5")]);
     h.place(
         &key("PR_1"),
@@ -54,14 +54,14 @@ fn a_new_open_pr_of_the_account_goes_to_the_end_of_mines_todo() {
     h.place(
         &key("PR_5"),
         PlaceTab::Mine,
-        Some(Section::Todo),
+        Some(Section::Inbox),
         None,
         None,
     )
     .unwrap();
     h.prs(vec![pr("PR_6")]);
     assert_eq!(
-        h.section(Tab::Mine, Section::Todo),
+        h.section(Tab::Mine, Section::Inbox),
         ["PR_3", "PR_4", "PR_5", "PR_6"]
     );
     assert_eq!(h.section(Tab::Mine, Section::Doing), ["PR_1"]);
@@ -81,33 +81,33 @@ fn several_new_prs_go_to_mine_oldest_created_first() {
         made("PR_3", T0 - 2 * DAY),
     ]);
     assert_eq!(
-        h.section(Tab::Mine, Section::Todo),
+        h.section(Tab::Mine, Section::Inbox),
         ["PR_2", "PR_3", "PR_1"]
     );
 }
 
 #[test]
-fn a_review_request_row_puts_an_unplaced_pr_at_the_end_of_todo() {
+fn a_review_request_row_puts_an_unplaced_pr_at_the_end_of_inbox() {
     let mut h = H::new();
     requested(&mut h, "PR_1", T0);
     requested(&mut h, "PR_2", T0);
-    assert_eq!(h.section(Tab::Review, Section::Todo), ["PR_1", "PR_2"]);
-    assert_eq!(h.placement("PR_2"), place("review", "todo", 1));
+    assert_eq!(h.section(Tab::Review, Section::Inbox), ["PR_1", "PR_2"]);
+    assert_eq!(h.placement("PR_2"), place("review", "inbox", 1));
 }
 
 #[test]
-fn todo_takes_several_requests_oldest_request_first() {
+fn inbox_takes_several_requests_oldest_request_first() {
     let mut h = H::new();
     let a = h.ev_at("RR_1", "PR_1", IngestKind::ReviewRequested, T0 + 5);
     let b = h.ev_at("RR_2", "PR_2", IngestKind::ReviewRequested, T0 + 2);
     h.set_time(T0 + 10);
     h.push(vec![other("PR_1"), other("PR_2")], vec![a, b], vec![]);
-    assert_eq!(h.section(Tab::Review, Section::Todo), ["PR_2", "PR_1"]);
+    assert_eq!(h.section(Tab::Review, Section::Inbox), ["PR_2", "PR_1"]);
 }
 
 #[test]
-fn review_request_rows_and_todo() {
-    // (name, kind, List off, want Todo)
+fn review_request_rows_and_inbox() {
+    // (name, kind, List off, want Inbox)
     let cases = [
         ("to me", IngestKind::ReviewRequested, None, true),
         ("to my team", IngestKind::TeamReviewRequested, None, true),
@@ -131,8 +131,8 @@ fn review_request_rows_and_todo() {
         }
         let e = h.ev("RR_1", "PR_1", kind);
         h.push(vec![other("PR_1")], vec![e], vec![]);
-        let todo = h.placement("PR_1") == place("review", "todo", 0);
-        assert_eq!(todo, want, "{name}");
+        let inbox = h.placement("PR_1") == place("review", "inbox", 0);
+        assert_eq!(inbox, want, "{name}");
     }
 }
 
@@ -151,7 +151,7 @@ fn a_placed_pr_does_not_move_on_a_review_request() {
     h.place(
         &key("PR_2"),
         PlaceTab::Mine,
-        Some(Section::Todo),
+        Some(Section::Inbox),
         None,
         None,
     )
@@ -160,7 +160,7 @@ fn a_placed_pr_does_not_move_on_a_review_request() {
     let b = h.ev("RR_2", "PR_2", IngestKind::ReviewRequested);
     h.events(vec![a, b]);
     assert_eq!(h.placement("PR_1"), place("review", "waiting", 0));
-    assert_eq!(h.placement("PR_2"), place("mine", "todo", 0));
+    assert_eq!(h.placement("PR_2"), place("mine", "inbox", 0));
 }
 
 #[test]
@@ -172,30 +172,30 @@ fn an_automatic_addition_goes_to_the_end_muted_or_not() {
     h.mute(MuteKind::Pr, &key("PR_9"));
     requested(&mut h, "PR_9", T0);
     requested(&mut h, "PR_1", T0);
-    assert_eq!(h.section(Tab::Review, Section::Todo), ["PR_9", "PR_1"]);
-    assert_eq!(h.placement("PR_9"), place("review", "todo", 0));
+    assert_eq!(h.section(Tab::Review, Section::Inbox), ["PR_9", "PR_1"]);
+    assert_eq!(h.placement("PR_9"), place("review", "inbox", 0));
     h.prs(vec![other("PR_2")]);
     h.mute(MuteKind::Pr, &key("PR_2"));
     requested(&mut h, "PR_2", T0);
     requested(&mut h, "PR_3", T0);
     assert_eq!(
-        h.section(Tab::Review, Section::Todo),
+        h.section(Tab::Review, Section::Inbox),
         ["PR_9", "PR_1", "PR_2", "PR_3"]
     );
     h.unmute(MuteKind::Pr, &key("PR_9"));
     assert_eq!(
-        h.section(Tab::Review, Section::Todo),
+        h.section(Tab::Review, Section::Inbox),
         ["PR_9", "PR_1", "PR_2", "PR_3"],
         "Unmute moves nothing"
     );
-    // The account's own PR goes to the end of Mine's Todo though its
+    // The account's own PR goes to the end of Mine's Inbox though its
     // repository is muted.
     h.mute(MuteKind::Repo, "org/app");
     h.prs(vec![pr("PR_5"), pr("PR_6")]);
     h.mute(MuteKind::Pr, &key("PR_5"));
     h.prs(vec![pr("PR_7")]);
     assert_eq!(
-        h.section(Tab::Mine, Section::Todo),
+        h.section(Tab::Mine, Section::Inbox),
         ["PR_5", "PR_6", "PR_7"]
     );
 }
@@ -208,7 +208,7 @@ fn a_review_stays_in_review_after_the_request_ends() {
         my_review_at: Some(h.at()),
         ..other("PR_1")
     }]);
-    assert_eq!(h.placement("PR_1"), place("review", "todo", 0));
+    assert_eq!(h.placement("PR_1"), place("review", "inbox", 0));
 }
 
 // ---------------------------------------------------------- Done and back
@@ -264,7 +264,7 @@ fn done_follows_the_status_not_the_reopened_row() {
     h.events(vec![e]);
     assert_eq!(h.placement("PR_1"), place("mine", "done", 0));
     h.prs(vec![pr("PR_1")]);
-    assert_eq!(h.placement("PR_1"), place("mine", "todo", 0));
+    assert_eq!(h.placement("PR_1"), place("mine", "inbox", 0));
 }
 
 #[test]
@@ -292,8 +292,8 @@ fn add_to_a_closed_pr_places_it_in_that_tabs_done() {
     )
     .unwrap();
     assert_eq!(h.placement("PR_2"), place("mine", "done", 0));
-    // Its place before Done is the end of Todo.
-    assert_eq!(h.engine.open_section(&full("PR_2")), Some(Section::Todo));
+    // Its place before Done is the end of Inbox.
+    assert_eq!(h.engine.open_section(&full("PR_2")), Some(Section::Inbox));
 }
 
 #[test]
@@ -327,51 +327,51 @@ fn place_positions_and_their_defaults() {
         h.place(&key(id), PlaceTab::Review, Some(section), before, at)
             .unwrap()
     };
-    to(&mut h, "PR_1", Section::Todo, None, None);
-    to(&mut h, "PR_2", Section::Todo, None, None);
+    to(&mut h, "PR_1", Section::Inbox, None, None);
+    to(&mut h, "PR_2", Section::Inbox, None, None);
     assert_eq!(
-        h.section(Tab::Review, Section::Todo),
+        h.section(Tab::Review, Section::Inbox),
         ["PR_1", "PR_2"],
         "end"
     );
-    to(&mut h, "PR_3", Section::Todo, None, Some(At::Top));
+    to(&mut h, "PR_3", Section::Inbox, None, Some(At::Top));
     assert_eq!(
-        h.section(Tab::Review, Section::Todo),
+        h.section(Tab::Review, Section::Inbox),
         ["PR_3", "PR_1", "PR_2"]
     );
-    let card = to(&mut h, "PR_4", Section::Todo, Some(&key("PR_1")), None);
+    let card = to(&mut h, "PR_4", Section::Inbox, Some(&key("PR_1")), None);
     assert_eq!(
         card.placement.unwrap().position,
         1,
         "the answer is the card"
     );
     assert_eq!(
-        h.section(Tab::Review, Section::Todo),
+        h.section(Tab::Review, Section::Inbox),
         ["PR_3", "PR_4", "PR_1", "PR_2"]
     );
-    // From Doing or Waiting to Todo without a position: the top.
+    // From Doing or Waiting to Inbox without a position: the top.
     to(&mut h, "PR_2", Section::Doing, None, None);
-    to(&mut h, "PR_2", Section::Todo, None, None);
+    to(&mut h, "PR_2", Section::Inbox, None, None);
     assert_eq!(
-        h.section(Tab::Review, Section::Todo),
+        h.section(Tab::Review, Section::Inbox),
         ["PR_2", "PR_3", "PR_4", "PR_1"]
     );
     to(&mut h, "PR_3", Section::Waiting, None, None);
-    to(&mut h, "PR_3", Section::Todo, None, None);
-    assert_eq!(h.section(Tab::Review, Section::Todo)[0], "PR_3");
-    // Inside Todo without a position: the end.
-    to(&mut h, "PR_3", Section::Todo, None, None);
+    to(&mut h, "PR_3", Section::Inbox, None, None);
+    assert_eq!(h.section(Tab::Review, Section::Inbox)[0], "PR_3");
+    // Inside Inbox without a position: the end.
+    to(&mut h, "PR_3", Section::Inbox, None, None);
     assert_eq!(
-        h.section(Tab::Review, Section::Todo),
+        h.section(Tab::Review, Section::Inbox),
         ["PR_2", "PR_4", "PR_1", "PR_3"]
     );
-    to(&mut h, "PR_3", Section::Todo, None, Some(At::Bottom));
+    to(&mut h, "PR_3", Section::Inbox, None, Some(At::Bottom));
     assert_eq!(
-        h.section(Tab::Review, Section::Todo).last().unwrap(),
+        h.section(Tab::Review, Section::Inbox).last().unwrap(),
         "PR_3"
     );
     // Review lists its sections in the screen's order: Done, Waiting,
-    // Doing, Todo.
+    // Doing, Inbox.
     to(&mut h, "PR_1", Section::Waiting, None, None);
     to(&mut h, "PR_4", Section::Doing, None, None);
     assert_eq!(h.tab(Tab::Review), ["PR_1", "PR_4", "PR_2", "PR_3"]);
@@ -402,7 +402,7 @@ fn place_is_invalid_in_these_cases() {
     h.place(
         &key("PR_4"),
         PlaceTab::Review,
-        Some(Section::Todo),
+        Some(Section::Inbox),
         None,
         None,
     )
@@ -442,7 +442,7 @@ fn place_is_invalid_in_these_cases() {
             h.place(
                 &key("PR_3"),
                 r,
-                Some(Section::Todo),
+                Some(Section::Inbox),
                 Some(&key("PR_1")),
                 None,
             ),
@@ -469,7 +469,7 @@ fn place_is_invalid_in_these_cases() {
         ),
         (
             "own PR to review",
-            h.place(&key("PR_1"), r, Some(Section::Todo), None, None),
+            h.place(&key("PR_1"), r, Some(Section::Inbox), None, None),
         ),
         (
             "own PR to none",
@@ -477,14 +477,14 @@ fn place_is_invalid_in_these_cases() {
         ),
         (
             "a dismissed card",
-            h.place(&key("PR_2"), r, Some(Section::Todo), None, None),
+            h.place(&key("PR_2"), r, Some(Section::Inbox), None, None),
         ),
         (
             "before a PR of the same section in the other tab",
             h.place(
                 &key("PR_3"),
                 PlaceTab::Mine,
-                Some(Section::Todo),
+                Some(Section::Inbox),
                 Some(&key("PR_4")),
                 None,
             ),
@@ -496,7 +496,7 @@ fn place_is_invalid_in_these_cases() {
     assert!(not_found(h.place(
         "org/app#99",
         r,
-        Some(Section::Todo),
+        Some(Section::Inbox),
         None,
         None
     )));
@@ -563,11 +563,11 @@ fn place_has_nothing_to_do_with_mute() {
         h.section(Tab::Review, Section::Doing),
         ["PR_4", "PR_3", "PR_2", "PR_1"]
     );
-    // The default to Todo from Doing is its top, muted cards included.
+    // The default to Inbox from Doing is its top, muted cards included.
     h.place(
         &key("PR_2"),
         PlaceTab::Review,
-        Some(Section::Todo),
+        Some(Section::Inbox),
         None,
         None,
     )
@@ -575,13 +575,13 @@ fn place_has_nothing_to_do_with_mute() {
     h.place(
         &key("PR_1"),
         PlaceTab::Review,
-        Some(Section::Todo),
+        Some(Section::Inbox),
         None,
         None,
     )
     .unwrap();
-    assert_eq!(h.section(Tab::Review, Section::Todo), ["PR_1", "PR_2"]);
-    assert_eq!(h.placement("PR_1"), place("review", "todo", 0));
+    assert_eq!(h.section(Tab::Review, Section::Inbox), ["PR_1", "PR_2"]);
+    assert_eq!(h.placement("PR_1"), place("review", "inbox", 0));
 }
 
 #[test]
@@ -686,7 +686,7 @@ fn add_to_closed_prs_keeps_the_order_of_their_detection() {
     h.prs(vec![closed("PR_2", false)]);
     h.prs(vec![closed("PR_1", false), closed("PR_3", false)]);
     for id in ["PR_3", "PR_2", "PR_1"] {
-        h.place(&key(id), PlaceTab::Review, Some(Section::Todo), None, None)
+        h.place(&key(id), PlaceTab::Review, Some(Section::Inbox), None, None)
             .unwrap();
     }
     assert_eq!(
@@ -749,10 +749,10 @@ fn list_of_review_and_mine_in_section_order() {
     assert_eq!(
         h.tab(Tab::Mine),
         ["PR_1", "PR_2", "PR_4", "PR_5"],
-        "done, then todo"
+        "done, then inbox"
     );
     assert_eq!(h.placement("PR_1"), place("mine", "done", 0));
-    // Mine lists Done, Waiting, Doing and Todo in that order, as Review.
+    // Mine lists Done, Waiting, Doing and Inbox in that order, as Review.
     h.place(
         &key("PR_5"),
         PlaceTab::Mine,
@@ -771,7 +771,7 @@ fn list_of_review_and_mine_in_section_order() {
     .unwrap();
     assert_eq!(h.tab(Tab::Mine), ["PR_1", "PR_2", "PR_5", "PR_4"]);
     assert_eq!(h.placement("PR_5"), place("mine", "doing", 0));
-    assert_eq!(h.placement("PR_4"), place("mine", "todo", 0));
+    assert_eq!(h.placement("PR_4"), place("mine", "inbox", 0));
     assert_eq!(h.placement("PR_2"), place("mine", "waiting", 0));
     let cards = h.list(ListArgs {
         tab: Tab::Mine,
@@ -884,12 +884,12 @@ fn an_open_card_in_done_moves_out_and_is_removed_like_any_other() {
         None,
     )
     .unwrap();
-    // Out of Done to Todo without a position: the end (not from Doing).
+    // Out of Done to Inbox without a position: the end (not from Doing).
     h.prs(vec![other("PR_4")]);
     h.place(
         &key("PR_4"),
         PlaceTab::Review,
-        Some(Section::Todo),
+        Some(Section::Inbox),
         None,
         None,
     )
@@ -897,12 +897,12 @@ fn an_open_card_in_done_moves_out_and_is_removed_like_any_other() {
     h.place(
         &key("PR_2"),
         PlaceTab::Review,
-        Some(Section::Todo),
+        Some(Section::Inbox),
         None,
         None,
     )
     .unwrap();
-    assert_eq!(h.section(Tab::Review, Section::Todo), ["PR_4", "PR_2"]);
+    assert_eq!(h.section(Tab::Review, Section::Inbox), ["PR_4", "PR_2"]);
     assert!(h.section(Tab::Review, Section::Done).is_empty());
     // Out of Done to a position.
     h.place(
@@ -954,12 +954,12 @@ fn an_open_card_in_done_moves_out_and_is_removed_like_any_other() {
     h.place(
         &key("PR_1"),
         PlaceTab::Mine,
-        Some(Section::Todo),
+        Some(Section::Inbox),
         None,
         Some(At::Top),
     )
     .unwrap();
-    assert_eq!(h.placement("PR_1"), place("mine", "todo", 0));
+    assert_eq!(h.placement("PR_1"), place("mine", "inbox", 0));
 }
 
 #[test]
@@ -1236,7 +1236,7 @@ fn mine_takes_the_sections_and_positions_of_review() {
     let mut h = H::new();
     h.prs(vec![pr("PR_1"), pr("PR_2"), pr("PR_3"), pr("PR_4")]);
     assert_eq!(
-        h.section(Tab::Mine, Section::Todo),
+        h.section(Tab::Mine, Section::Inbox),
         ["PR_1", "PR_2", "PR_3", "PR_4"]
     );
     let to = |h: &mut H, id: &str, section: Section, before: Option<&str>, at: Option<At>| {
@@ -1266,28 +1266,28 @@ fn mine_takes_the_sections_and_positions_of_review() {
         h.section(Tab::Mine, Section::Doing),
         ["PR_3", "PR_1", "PR_2", "PR_4"]
     );
-    // From Doing or Waiting of Mine to Todo without a position: the top.
-    to(&mut h, "PR_1", Section::Todo, None, None);
+    // From Doing or Waiting of Mine to Inbox without a position: the top.
+    to(&mut h, "PR_1", Section::Inbox, None, None);
     to(&mut h, "PR_2", Section::Waiting, None, None);
-    to(&mut h, "PR_2", Section::Todo, None, None);
-    assert_eq!(h.section(Tab::Mine, Section::Todo), ["PR_2", "PR_1"]);
-    // Inside Todo without a position: the end.
-    to(&mut h, "PR_2", Section::Todo, None, None);
-    assert_eq!(h.section(Tab::Mine, Section::Todo), ["PR_1", "PR_2"]);
-    // From Done to Todo without a position: the end.
+    to(&mut h, "PR_2", Section::Inbox, None, None);
+    assert_eq!(h.section(Tab::Mine, Section::Inbox), ["PR_2", "PR_1"]);
+    // Inside Inbox without a position: the end.
+    to(&mut h, "PR_2", Section::Inbox, None, None);
+    assert_eq!(h.section(Tab::Mine, Section::Inbox), ["PR_1", "PR_2"]);
+    // From Done to Inbox without a position: the end.
     to(&mut h, "PR_3", Section::Done, None, None);
-    to(&mut h, "PR_3", Section::Todo, None, None);
+    to(&mut h, "PR_3", Section::Inbox, None, None);
     assert_eq!(
-        h.section(Tab::Mine, Section::Todo),
+        h.section(Tab::Mine, Section::Inbox),
         ["PR_1", "PR_2", "PR_3"]
     );
-    assert_eq!(h.placement("PR_3"), place("mine", "todo", 2));
+    assert_eq!(h.placement("PR_3"), place("mine", "inbox", 2));
     assert_eq!(h.placement("PR_4"), place("mine", "doing", 0));
 }
 
 #[test]
-fn todo_takes_a_card_from_elsewhere_at_its_end() {
-    // DESIGN.md, "Wire format": the top of Todo is only for a card from
+fn inbox_takes_a_card_from_elsewhere_at_its_end() {
+    // DESIGN.md, "Wire format": the top of Inbox is only for a card from
     // Doing or Waiting of the same tab; one from the other tab, from Done or
     // unplaced goes to the end, in Review and Mine alike.
     let mut h = H::new();
@@ -1298,17 +1298,17 @@ fn todo_takes_a_card_from_elsewhere_at_its_end() {
         other("PR_4"),
         other("PR_5"),
     ]);
-    // Unplaced to Mine's Todo (`Add to Mine`): after the account's own PR.
+    // Unplaced to Mine's Inbox (`Add to Mine`): after the account's own PR.
     h.place(
         &key("PR_2"),
         PlaceTab::Mine,
-        Some(Section::Todo),
+        Some(Section::Inbox),
         None,
         None,
     )
     .unwrap();
-    assert_eq!(h.section(Tab::Mine, Section::Todo), ["PR_1", "PR_2"]);
-    // Review's Doing to Mine's Todo: the end.
+    assert_eq!(h.section(Tab::Mine, Section::Inbox), ["PR_1", "PR_2"]);
+    // Review's Doing to Mine's Inbox: the end.
     h.place(
         &key("PR_3"),
         PlaceTab::Review,
@@ -1320,20 +1320,20 @@ fn todo_takes_a_card_from_elsewhere_at_its_end() {
     h.place(
         &key("PR_3"),
         PlaceTab::Mine,
-        Some(Section::Todo),
+        Some(Section::Inbox),
         None,
         None,
     )
     .unwrap();
     assert_eq!(
-        h.section(Tab::Mine, Section::Todo),
+        h.section(Tab::Mine, Section::Inbox),
         ["PR_1", "PR_2", "PR_3"]
     );
-    // Mine's Waiting to Review's Todo: the end.
+    // Mine's Waiting to Review's Inbox: the end.
     h.place(
         &key("PR_4"),
         PlaceTab::Review,
-        Some(Section::Todo),
+        Some(Section::Inbox),
         None,
         None,
     )
@@ -1349,13 +1349,13 @@ fn todo_takes_a_card_from_elsewhere_at_its_end() {
     h.place(
         &key("PR_5"),
         PlaceTab::Review,
-        Some(Section::Todo),
+        Some(Section::Inbox),
         None,
         None,
     )
     .unwrap();
-    assert_eq!(h.section(Tab::Review, Section::Todo), ["PR_4", "PR_5"]);
-    // Review's Doing to Review's Todo: the top.
+    assert_eq!(h.section(Tab::Review, Section::Inbox), ["PR_4", "PR_5"]);
+    // Review's Doing to Review's Inbox: the top.
     h.place(
         &key("PR_2"),
         PlaceTab::Review,
@@ -1367,13 +1367,13 @@ fn todo_takes_a_card_from_elsewhere_at_its_end() {
     h.place(
         &key("PR_2"),
         PlaceTab::Review,
-        Some(Section::Todo),
+        Some(Section::Inbox),
         None,
         None,
     )
     .unwrap();
     assert_eq!(
-        h.section(Tab::Review, Section::Todo),
+        h.section(Tab::Review, Section::Inbox),
         ["PR_2", "PR_4", "PR_5"]
     );
 }
@@ -1416,7 +1416,7 @@ fn mine_done_and_a_reopen_bring_a_card_back_to_its_section() {
     h.prs(vec![closed("PR_4", true)]);
     h.prs(vec![pr("PR_4")]);
     assert_eq!(h.placement("PR_4"), place("mine", "doing", 0));
-    // From another tab to Mine's Done: it keeps the end of Todo.
+    // From another tab to Mine's Done: it keeps the end of Inbox.
     h.prs(vec![other("PR_5")]);
     h.place(
         &key("PR_5"),
@@ -1436,7 +1436,7 @@ fn mine_done_and_a_reopen_bring_a_card_back_to_its_section() {
     .unwrap();
     h.prs(vec![closed("PR_5", false)]);
     h.prs(vec![other("PR_5")]);
-    assert_eq!(h.placement("PR_5"), place("mine", "todo", 0));
+    assert_eq!(h.placement("PR_5"), place("mine", "inbox", 0));
     // Out of Done by hand, to any section.
     h.prs(vec![closed("PR_1", true)]);
     h.place(
@@ -1453,19 +1453,19 @@ fn mine_done_and_a_reopen_bring_a_card_back_to_its_section() {
 #[test]
 fn a_closed_pr_of_the_account_found_new_goes_to_mines_done() {
     // DESIGN.md, "Mine": found with its return trigger row; its place
-    // before Done is the end of Todo, where a reopen takes it.
+    // before Done is the end of Inbox, where a reopen takes it.
     let mut h = H::new();
     h.prs(vec![pr("PR_1")]);
     let mention = h.ev("M_2", "PR_2", IngestKind::Mentioned);
     h.push(vec![closed("PR_2", true)], vec![mention], vec![]);
     assert_eq!(h.placement("PR_2"), place("mine", "done", 0));
     h.prs(vec![pr("PR_2")]);
-    assert_eq!(h.section(Tab::Mine, Section::Todo), ["PR_1", "PR_2"]);
+    assert_eq!(h.section(Tab::Mine, Section::Inbox), ["PR_1", "PR_2"]);
 }
 
 #[test]
 fn list_of_review_has_its_four_sections_in_the_screens_order() {
-    // DESIGN.md, "Review" and "CLI": Done, Waiting, Doing, Todo, every
+    // DESIGN.md, "Review" and "CLI": Done, Waiting, Doing, Inbox, every
     // section with a card.
     let mut h = H::new();
     h.prs(vec![
@@ -1475,7 +1475,7 @@ fn list_of_review_has_its_four_sections_in_the_screens_order() {
         other("PR_4"),
     ]);
     for (id, section) in [
-        ("PR_1", Section::Todo),
+        ("PR_1", Section::Inbox),
         ("PR_2", Section::Doing),
         ("PR_3", Section::Waiting),
         ("PR_4", Section::Done),

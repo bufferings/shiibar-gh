@@ -14,20 +14,23 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// 0.7. Version 8 (0.6) moves to 9 at startup keeping everything; version 7
-/// (0.5) moves to 8 and then to 9; version 6 (0.4) moves through 7 and 8 to
-/// 9, keeping everything; versions 5 (0.3) and 4 (0.2) move to 9 keeping only
-/// the accounts. Versions 1 to 3 are the 0.1 schema, which is not migrated:
-/// such a database is treated like an unreadable one (DESIGN.md, "Saved
-/// state").
-pub const SCHEMA_VERSION: i64 = 9;
-/// The 0.6 schema, moved to 9 at startup with all its data.
+/// 0.8. Version 9 (0.7) moves to 10 at startup keeping everything; version
+/// 8 (0.6) moves to 9 and then to 10; version 7 (0.5) moves through 8 and 9;
+/// version 6 (0.4) moves through 7, 8 and 9 to 10, keeping everything;
+/// versions 5 (0.3) and 4 (0.2) move to 10 keeping only the accounts.
+/// Versions 1 to 3 are the 0.1 schema, which is not migrated: such a
+/// database is treated like an unreadable one (DESIGN.md, "Saved state").
+pub const SCHEMA_VERSION: i64 = 10;
+/// The 0.7 schema, moved to 10 at startup with all its data.
+const V07_VERSION: i64 = 9;
+/// The 0.6 schema, moved to 9 and then to 10 at startup with all its data.
 const V06_VERSION: i64 = 8;
-/// The 0.5 schema, moved to 8 and then to 9 at startup with all its data.
+/// The 0.5 schema, moved through 8 and 9 to 10 at startup with all its data.
 const V05_VERSION: i64 = 7;
-/// The 0.4 schema, moved through 7 and 8 to 9 at startup with all its data.
+/// The 0.4 schema, moved through 7, 8 and 9 to 10 at startup with all its
+/// data.
 const V04_VERSION: i64 = 6;
-/// The 0.3 and 0.2 schemas, moved to 9 at startup with only the accounts.
+/// The 0.3 and 0.2 schemas, moved to 10 at startup with only the accounts.
 const MOVED_VERSIONS: [i64; 2] = [4, 5];
 /// The newest version of the 0.1 schema.
 const LAST_V01_VERSION: i64 = 3;
@@ -35,9 +38,10 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 const FILE_MODE: u32 = 0o600;
 const SIDE_FILES: [&str; 2] = ["-wal", "-shm"];
 
-/// The tables of version 9 (0.7): the tables of versions 7 (0.5) and 8
+/// The tables of version 10 (0.8): the tables of versions 7 (0.5) and 8
 /// (0.6), which differ only in the values of Mine's sections, with
-/// `prs.timeline_updated_at` and `pr_rows.actor_avatar_url`. A PR's placement, Dismiss state, Checks
+/// `prs.timeline_updated_at` and `pr_rows.actor_avatar_url` (version 9) and
+/// `prs.labels` and `prs.labels_more` (version 10). A PR's placement, Dismiss state, Checks
 /// results, newest review request and own Unmute are columns of `prs`; Mute
 /// lists hang off the account; deleted row ids and Dismiss records have
 /// their own tables. It is the 0.4 schema (version 6) with `prs.done_seq`
@@ -143,7 +147,9 @@ CREATE TABLE prs (
     collected INTEGER NOT NULL,
     done_seq INTEGER NOT NULL DEFAULT 0,
     unmuted INTEGER NOT NULL DEFAULT 0,
-    timeline_updated_at INTEGER
+    timeline_updated_at INTEGER,
+    labels TEXT,
+    labels_more INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE pr_rows (
     id TEXT PRIMARY KEY,
@@ -190,11 +196,13 @@ fn migrate_v6_to_v7(tx: &Transaction<'_>) -> rusqlite::Result<()> {
 }
 
 /// DESIGN.md, "Updating from 0.5": inside the caller's transaction, move
-/// Mine's single list (section `main` of version 7) to Mine's Todo. The one column holds the section of an open card and
-/// the section a card in Done had before Done, for every card, dismissed
-/// and muted ones included. Ranks keep their values, so the cards keep
-/// their order in Todo; Done's times and sequence and Review stay as they
-/// are. Any error leaves the transaction for the caller to roll back.
+/// Mine's single list (section `main` of version 7) to Mine's `todo`, the
+/// value of version 8 and 9, which the move to version 10 renames `inbox`.
+/// The one column holds the section of an open card and the section a card
+/// in Done had before Done, for every card, dismissed and muted ones
+/// included. Ranks keep their values, so the cards keep their order; Done's
+/// times and sequence and Review stay as they are. Any error leaves the
+/// transaction for the caller to roll back.
 fn migrate_v7_to_v8(tx: &Transaction<'_>) -> rusqlite::Result<()> {
     tx.execute(
         "UPDATE prs SET place_section = 'todo'
@@ -217,9 +225,39 @@ fn migrate_v8_to_v9(tx: &Transaction<'_>) -> rusqlite::Result<()> {
     )
 }
 
+/// DESIGN.md, "Updating from 0.7": inside the caller's transaction, add the
+/// PR's GitHub labels without a value (a PR shows none until its next status
+/// fetch saves them) and give every owner's event table the two kinds of
+/// version 10 at their defaults: Ready for review with List and Notify,
+/// Converted to draft with List only. Every other value stays, rows, unread
+/// marks, Reaction baselines and the records of the account's comments and
+/// threads included; `show_labels` is read at its default while the config
+/// table lacks it. The section `todo` of Review and Mine is renamed `inbox`
+/// in `prs.place_section`, the only place that stores a section: the
+/// section of a placed card and the section a card in Done had before Done,
+/// dismissed and muted cards included. Ranks stay, so the cards keep their
+/// order. It runs after the older moves, which write `todo`. Any error
+/// leaves the transaction for the caller to roll back.
+fn migrate_v9_to_v10(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    tx.execute_batch(
+        "ALTER TABLE prs ADD COLUMN labels TEXT;
+         ALTER TABLE prs ADD COLUMN labels_more INTEGER NOT NULL DEFAULT 0;
+         UPDATE prs SET place_section = 'inbox' WHERE place_section = 'todo';",
+    )?;
+    for kind in [EventKind::ReadyForReview, EventKind::ConvertedToDraft] {
+        let cell = kind.default_cell();
+        tx.execute(
+            "INSERT OR IGNORE INTO owner_events (owner, event, list, notify)
+             SELECT id, ?1, ?2, ?3 FROM owners",
+            params![kind.as_str(), cell.list, cell.notify],
+        )?;
+    }
+    Ok(())
+}
+
 /// DESIGN.md, "Updating from 0.3 and 0.2": inside the caller's transaction,
 /// keep each account's id, login, color and order, drop every table, create
-/// the version 9 tables, put the accounts back and set `user_version`. The
+/// the version 10 tables, put the accounts back and set `user_version`. The
 /// `accounts` table of versions 4 and 5 has the same four columns. Any error
 /// leaves the transaction for the caller to roll back.
 fn migrate_accounts_only(tx: &Transaction<'_>) -> rusqlite::Result<()> {
@@ -470,11 +508,13 @@ impl Store {
         let migrating = accounts_only
             || version == V04_VERSION
             || version == V05_VERSION
-            || version == V06_VERSION;
+            || version == V06_VERSION
+            || version == V07_VERSION;
         if migrating {
-            // DESIGN.md, "Updating from 0.6", "Updating from 0.5", "Updating
-            // from 0.4" and "Updating from 0.3 and 0.2": every step from the
-            // stored version up to 9 runs in the one transaction, the
+            // DESIGN.md, "Updating from 0.7", "Updating from 0.6", "Updating
+            // from 0.5", "Updating from 0.4" and "Updating from 0.3 and
+            // 0.2": every step from the stored version up to 10 runs in the
+            // one transaction, the
             // version is written after the last one, and a failed move rolls
             // back and leaves the database as it was, in the unreadable
             // state.
@@ -488,7 +528,10 @@ impl Store {
                 if version <= V05_VERSION {
                     step = step.and_then(|()| migrate_v7_to_v8(&tx));
                 }
-                step.and_then(|()| migrate_v8_to_v9(&tx))
+                if version <= V06_VERSION {
+                    step = step.and_then(|()| migrate_v8_to_v9(&tx));
+                }
+                step.and_then(|()| migrate_v9_to_v10(&tx))
                     .and_then(|()| tx.pragma_update(None, "user_version", SCHEMA_VERSION))
             };
             if let Err(e) = moved {
@@ -830,11 +873,11 @@ fn save_pr(tx: &Transaction<'_>, pr: &PrRec) -> rusqlite::Result<()> {
           prev_mergeable, settled, settled_head, watch_reset, place_tab, place_section,
           place_rank, closed_at, done_at, keep_after_close, dismissed_at, restored,
           seen_closed, quiet_from, quiet_until, merged_event_at, collected, done_seq, unmuted,
-          timeline_updated_at)
+          timeline_updated_at, labels, labels_more)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
                  ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32,
                  ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47,
-                 ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57)",
+                 ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57, ?58, ?59)",
         rusqlite::params_from_iter(pr_params(pr)),
     )?;
     Ok(())
@@ -905,6 +948,8 @@ fn pr_params(pr: &PrRec) -> Vec<rusqlite::types::Value> {
         int(pr.done_seq),
         flag(pr.unmuted),
         opt_int(pr.timeline_updated_at),
+        text(&to_json(&pr.labels)),
+        int(i64::from(pr.labels_more)),
     ]
 }
 
@@ -1068,7 +1113,7 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
                 watch_reset, place_tab, place_section, place_rank, closed_at, done_at,
                 keep_after_close, dismissed_at, restored, seen_closed, quiet_from,
                 quiet_until, merged_event_at, collected, done_seq, unmuted,
-                timeline_updated_at
+                timeline_updated_at, labels, labels_more
          FROM prs",
     )?;
     let prs = statement.query_map([], |row| {
@@ -1086,6 +1131,7 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
             _ => None,
         };
         let settled: Option<String> = row.get(38)?;
+        let labels: Option<String> = row.get(57)?;
         let place_tab: Option<String> = row.get(41)?;
         let place_section: Option<String> = row.get(42)?;
         let place_rank: Option<i64> = row.get(43)?;
@@ -1153,6 +1199,12 @@ fn load(conn: &Connection) -> anyhow::Result<Option<Data>> {
             done_seq: row.get(54)?,
             unmuted: row.get(55)?,
             timeline_updated_at: row.get(56)?,
+            labels: labels
+                .as_deref()
+                .map(from_json)
+                .transpose()?
+                .unwrap_or_default(),
+            labels_more: u32::try_from(row.get::<_, i64>(58)?).unwrap_or(0),
         })
     })?;
     for pr in prs {

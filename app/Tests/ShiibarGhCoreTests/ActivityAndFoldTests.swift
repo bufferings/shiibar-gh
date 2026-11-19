@@ -92,27 +92,27 @@ final class RecentActivityTests: XCTestCase {
 }
 
 final class SectionOrderTests: XCTestCase {
-    /// The screen shows Done, Waiting, Doing, Todo; the menus keep Doing,
-    /// Todo, Waiting, Done.
+    /// The screen shows Done, Waiting, Doing, Inbox; the menus follow the flow, Inbox,
+    /// Doing, Waiting, Done.
     func testTheShownOrderAndTheMenuOrder() {
-        XCTAssertEqual(PlacementSection.displayOrder, [.done, .waiting, .doing, .todo])
-        XCTAssertEqual(PlacementSection.menuOrder, [.doing, .todo, .waiting, .done])
+        XCTAssertEqual(PlacementSection.displayOrder, [.done, .waiting, .doing, .inbox])
+        XCTAssertEqual(PlacementSection.menuOrder, [.inbox, .doing, .waiting, .done])
         XCTAssertEqual(MultiRules.operations(.review).map(\.title),
-                       ["Move to Doing", "Move to Todo", "Move to Waiting", "Move to Done", "Remove from Review"])
+                       ["Move to Inbox", "Move to Doing", "Move to Waiting", "Move to Done", "Remove from Review"])
         XCTAssertEqual(MultiRules.operations(.mine).map(\.title),
-                       ["Move to Doing", "Move to Todo", "Move to Waiting", "Move to Done", "Remove from Mine"])
-        XCTAssertEqual(layout(.review).map(\.key), ["review|done", "review|waiting", "review|doing", "review|todo"])
-        XCTAssertEqual(SectionKey.placed(.mine, .todo), "mine|todo", "the keys of the folds stay")
+                       ["Move to Inbox", "Move to Doing", "Move to Waiting", "Move to Done", "Remove from Mine"])
+        XCTAssertEqual(layout(.review).map(\.key), ["review|done", "review|waiting", "review|doing", "review|inbox"])
+        XCTAssertEqual(SectionKey.placed(.mine, .inbox), "mine|inbox", "the keys of the folds stay")
     }
 
     /// ↑↓ walk the sections in the order shown: from Done's last card to
-    /// Waiting, from Doing to Todo.
+    /// Waiting, from Doing to Inbox.
     func testTheArrowsFollowTheShownOrder() {
         let items = PopoverLogic.items(view(.review))
         let d1 = items.firstIndex(of: .header(card: "D1"))!
         XCTAssertEqual(PopoverLogic.move(items[d1], up: false, in: items), .section("review|waiting"))
         let r1 = items.firstIndex(of: .row(id: "r1", card: "R1"))!
-        XCTAssertEqual(PopoverLogic.move(items[r1], up: false, in: items), .section("review|todo"))
+        XCTAssertEqual(PopoverLogic.move(items[r1], up: false, in: items), .section("review|inbox"))
     }
 }
 
@@ -122,9 +122,9 @@ final class FoldMarkTests: XCTestCase {
     func testACollapsedSectionShowsTheDot() {
         let open = layout(.review)
         XCTAssertTrue(open.allSatisfy { $0.foldMark == .none }, "no mark on an open heading")
-        let collapsed = layout(.review, collapsed: ["review|todo", "review|done", "review|doing"])
+        let collapsed = layout(.review, collapsed: ["review|inbox", "review|done", "review|doing"])
         let marks = Dictionary(uniqueKeysWithValues: collapsed.map { ($0.key, $0.foldMark) })
-        XCTAssertEqual(marks["review|todo"], .blue, "T1's unread rows")
+        XCTAssertEqual(marks["review|inbox"], .blue, "T1's unread rows")
         XCTAssertEqual(marks["review|done"], UnreadMark.none, "D1 has no unread row")
         XCTAssertEqual(marks["review|doing"], UnreadMark.none, "R1's row is read")
         XCTAssertEqual(marks["review|waiting"], UnreadMark.none, "open")
@@ -134,16 +134,16 @@ final class FoldMarkTests: XCTestCase {
     /// count; the search does not change the mark.
     func testTheRingTheFilterAndTheSearch() {
         let cards = [
-            card("G1", placement: review(.todo, 0), muted: [.author], rows: [row("g", pr: "example-org/api#G1", unread: true, muted: true)]),
-            card("G2", placement: review(.todo, 1), rows: [row("h", pr: "example-org/api#G2")]),
+            card("G1", placement: review(.inbox, 0), muted: [.author], rows: [row("g", pr: "example-org/api#G1", unread: true, muted: true)]),
+            card("G2", placement: review(.inbox, 1), rows: [row("h", pr: "example-org/api#G2")]),
         ]
-        let shown = layout(.review, cards: cards, collapsed: ["review|todo"], filter: mutedShown)
-        XCTAssertEqual(shown.first { $0.key == "review|todo" }?.foldMark, .ring)
-        let hidden = layout(.review, cards: cards, collapsed: ["review|todo"], filter: mutedHidden)
-        XCTAssertEqual(hidden.first { $0.key == "review|todo" }?.foldMark, UnreadMark.none, "the muted card is hidden")
-        let blue = cards + [card("G3", placement: review(.todo, 2), rows: [row("i", pr: "example-org/api#G3", unread: true)])]
-        let searched = layout(.review, cards: blue, collapsed: ["review|todo"], search: "Title G2", filter: mutedShown)
-        XCTAssertEqual(searched.first { $0.key == "review|todo" }?.foldMark, .blue, "G3 does not match the search but counts")
+        let shown = layout(.review, cards: cards, collapsed: ["review|inbox"], filter: mutedShown)
+        XCTAssertEqual(shown.first { $0.key == "review|inbox" }?.foldMark, .ring)
+        let hidden = layout(.review, cards: cards, collapsed: ["review|inbox"], filter: mutedHidden)
+        XCTAssertEqual(hidden.first { $0.key == "review|inbox" }?.foldMark, UnreadMark.none, "the muted card is hidden")
+        let blue = cards + [card("G3", placement: review(.inbox, 2), rows: [row("i", pr: "example-org/api#G3", unread: true)])]
+        let searched = layout(.review, cards: blue, collapsed: ["review|inbox"], search: "Title G2", filter: mutedShown)
+        XCTAssertEqual(searched.first { $0.key == "review|inbox" }?.foldMark, .blue, "G3 does not match the search but counts")
     }
 
     /// All: a collapsed group of the first level takes the cards of all its

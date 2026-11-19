@@ -88,7 +88,7 @@ public final class SettingsModel: ObservableObject {
 
     public static let keys = [
         "launch_at_login", "appearance", "text_size", "status_interval_minutes", "reactions_interval_minutes",
-        DismissedText.autoDismissKey, DismissedText.keepDaysKey, DismissedText.confirmKey,
+        DismissedText.autoDismissKey, DismissedText.keepDaysKey, DismissedText.confirmKey, ShowLabels.configKey,
     ]
 
     public init(app: AppModel, launch: LaunchAtLogin?) {

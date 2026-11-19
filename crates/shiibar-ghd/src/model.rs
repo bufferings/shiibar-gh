@@ -128,6 +128,8 @@ stored_enum!(EventKind {
     ChecksPassed = "checks_passed",
     Conflicts = "conflicts",
     Mergeable = "mergeable",
+    ReadyForReview = "ready_for_review",
+    ConvertedToDraft = "converted_to_draft",
     MergeQueueAdded = "merge_queue_added",
     MergeQueueRemoved = "merge_queue_removed",
     MergedClosed = "merged_closed",
@@ -149,6 +151,8 @@ both_ways!(EventKind {
     ChecksPassed,
     Conflicts,
     Mergeable,
+    ReadyForReview,
+    ConvertedToDraft,
     MergeQueueAdded,
     MergeQueueRemoved,
     MergedClosed,
@@ -156,7 +160,7 @@ both_ways!(EventKind {
 });
 
 impl EventKind {
-    pub const ALL: [EventKind; 19] = [
+    pub const ALL: [EventKind; 21] = [
         EventKind::ReviewRequested,
         EventKind::TeamReviewRequested,
         EventKind::Mentioned,
@@ -172,6 +176,8 @@ impl EventKind {
         EventKind::ChecksPassed,
         EventKind::Conflicts,
         EventKind::Mergeable,
+        EventKind::ReadyForReview,
+        EventKind::ConvertedToDraft,
         EventKind::MergeQueueAdded,
         EventKind::MergeQueueRemoved,
         EventKind::MergedClosed,
@@ -181,7 +187,7 @@ impl EventKind {
     /// The defaults of DESIGN.md, "Row kinds and states": List and Notify.
     pub fn default_cell(self) -> Cell {
         use EventKind::*;
-        let notify = !matches!(self, MergeQueueAdded | MergedClosed);
+        let notify = !matches!(self, ConvertedToDraft | MergeQueueAdded | MergedClosed);
         Cell { list: true, notify }
     }
 }
@@ -202,6 +208,8 @@ stored_enum!(RowKind {
     ChecksPassed = "checks_passed",
     Conflicts = "conflicts",
     Mergeable = "mergeable",
+    ReadyForReview = "ready_for_review",
+    ConvertedToDraft = "converted_to_draft",
     MergeQueueAdded = "merge_queue_added",
     MergeQueueRemoved = "merge_queue_removed",
     Merged = "merged",
@@ -224,6 +232,8 @@ both_ways!(RowKind {
     ChecksPassed,
     Conflicts,
     Mergeable,
+    ReadyForReview,
+    ConvertedToDraft,
     MergeQueueAdded,
     MergeQueueRemoved,
     Merged,
@@ -244,6 +254,8 @@ impl From<proto::IngestKind> for RowKind {
             I::Reply => Self::Reply,
             I::ReplyMentioned => Self::ReplyMentioned,
             I::Approved => Self::Approved,
+            I::ReadyForReview => Self::ReadyForReview,
+            I::ConvertedToDraft => Self::ConvertedToDraft,
             I::MergeQueueAdded => Self::MergeQueueAdded,
             I::MergeQueueRemoved => Self::MergeQueueRemoved,
             I::Merged => Self::Merged,
@@ -273,6 +285,8 @@ impl RowKind {
             ChecksPassed => EventKind::ChecksPassed,
             Conflicts => EventKind::Conflicts,
             Mergeable => EventKind::Mergeable,
+            ReadyForReview => EventKind::ReadyForReview,
+            ConvertedToDraft => EventKind::ConvertedToDraft,
             MergeQueueAdded => EventKind::MergeQueueAdded,
             MergeQueueRemoved => EventKind::MergeQueueRemoved,
             Merged | Closed => EventKind::MergedClosed,
@@ -319,7 +333,9 @@ impl RowKind {
     pub fn is_own_action_kind(self) -> bool {
         matches!(
             self,
-            Self::Merged
+            Self::ReadyForReview
+                | Self::ConvertedToDraft
+                | Self::Merged
                 | Self::Closed
                 | Self::Reopened
                 | Self::MergeQueueAdded
@@ -362,6 +378,8 @@ impl RowKind {
             ChecksPassed => "Checks passed",
             Conflicts => "Conflicts",
             Mergeable => "Mergeable",
+            ReadyForReview => "Ready for review",
+            ConvertedToDraft => "Converted to draft",
             MergeQueueAdded => "Added to merge queue",
             MergeQueueRemoved => "Removed from merge queue",
             Merged => "Merged",
@@ -425,10 +443,11 @@ stored_enum!(PlacedTab {
 both_ways!(PlacedTab { Review, Mine });
 
 // The section a placed card is in. A card in Done (`PrRec::done_at`) keeps
-// this as the section it was in before it entered Done.
+// this as the section it was in before it entered Done. Version 10 renamed
+// `todo` to `inbox` (DESIGN.md, "Updating from 0.7").
 stored_enum!(Section {
     Doing = "doing",
-    Todo = "todo",
+    Inbox = "inbox",
     Waiting = "waiting",
 });
 
@@ -559,6 +578,31 @@ pub struct TeamRec {
     pub org: Option<String>,
 }
 
+/// A GitHub label of a PR as the status fetch gave it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct LabelRec {
+    pub name: String,
+    pub color: String,
+}
+
+impl From<proto::Label> for LabelRec {
+    fn from(label: proto::Label) -> Self {
+        Self {
+            name: label.name,
+            color: label.color,
+        }
+    }
+}
+
+impl From<&LabelRec> for proto::Label {
+    fn from(label: &LabelRec) -> Self {
+        Self {
+            name: label.name.clone(),
+            color: label.color.clone(),
+        }
+    }
+}
+
 /// A review thread whose comments become Reply rows.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ThreadRec {
@@ -577,6 +621,12 @@ pub struct OwnComment {
     pub pr_id: String,
     pub url: String,
     pub text: String,
+    /// The time the comment was published (DESIGN.md, "Comment times"):
+    /// `publishedAt` of a review comment of a thread, `publishedAt` (else
+    /// `createdAt`) of a conversation comment, `submittedAt` (else
+    /// `createdAt`) of a review body and `createdAt` of the PR body. It is
+    /// named `created_at` because that is its key in the JSON saved in
+    /// `accounts.fetch`, which has no default for it.
     pub created_at: i64,
     /// The core already holds a baseline, or this comment starts from zero.
     pub baseline_done: bool,
@@ -750,6 +800,12 @@ pub struct PrRec {
     pub requested_me: bool,
     pub requested_team: bool,
     pub assignees: Vec<String>,
+    /// The GitHub labels of the last status fetch that read them, in the
+    /// order GitHub gave them (by name); empty until then. DESIGN.md,
+    /// "Card", "GitHub labels".
+    pub labels: Vec<LabelRec>,
+    /// The labels beyond those fetched.
+    pub labels_more: u32,
     pub link_review: String,
     pub link_checks: String,
     pub link_base: String,
@@ -884,6 +940,8 @@ pub struct Config {
     /// Whether the × on a card asks before it dismisses (the app's
     /// confirmation; the daemon only keeps the setting).
     pub confirm_dismiss: bool,
+    /// Cards show the PRs' GitHub labels, and searches match their names.
+    pub show_labels: bool,
 }
 
 impl Default for Config {
@@ -897,6 +955,7 @@ impl Default for Config {
             appearance: Appearance::System,
             text_size: TEXT_SIZE_DEFAULT,
             confirm_dismiss: true,
+            show_labels: true,
         }
     }
 }

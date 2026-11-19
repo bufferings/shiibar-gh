@@ -331,7 +331,15 @@ fn owner_settings_send_account_changed() {
         events["review_requested"],
         json!({"list":true,"notify":true})
     );
-    assert_eq!(events.as_object().unwrap().len(), 19);
+    assert_eq!(
+        events["ready_for_review"],
+        json!({"list":true,"notify":true})
+    );
+    assert_eq!(
+        events["converted_to_draft"],
+        json!({"list":true,"notify":false})
+    );
+    assert_eq!(events.as_object().unwrap().len(), 21);
     let copied = daemon.ok(json!({"cmd":"owner_events_copy","account":"me",
         "from_owner":"org","to_owner":"public"}))["events"]
         .clone();

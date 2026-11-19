@@ -289,6 +289,8 @@ public enum RowText {
         case .checksPassed: return "Checks passed"
         case .conflicts: return "Conflicts"
         case .mergeable: return "Mergeable"
+        case .readyForReview: return "Ready for review"
+        case .convertedToDraft: return "Converted to draft"
         case .mergeQueueAdded: return "Added to merge queue"
         case .mergeQueueRemoved: return "Removed from merge queue"
         case .merged: return "Merged"
@@ -719,7 +721,7 @@ public enum SettingsText {
         ("Reviews and mentions", [.reviewRequested, .teamReviewRequested, .mentioned, .teamMentioned]),
         ("Comments", [.comment, .commentOther, .reply, .replyMentioned, .reaction]),
         ("My pull requests", [.approved, .changesRequested, .checksFailed, .checksPassed, .conflicts, .mergeable]),
-        ("Any pull request", [.mergeQueueAdded, .mergeQueueRemoved, .mergedClosed, .reopened]),
+        ("Any pull request", [.readyForReview, .convertedToDraft, .mergeQueueAdded, .mergeQueueRemoved, .mergedClosed, .reopened]),
     ]
 
     public static func eventTitle(_ kind: EventKind) -> String {
@@ -739,6 +741,8 @@ public enum SettingsText {
         case .checksPassed: return "Checks passed"
         case .conflicts: return "Conflicts"
         case .mergeable: return "Mergeable"
+        case .readyForReview: return "Ready for review"
+        case .convertedToDraft: return "Converted to draft"
         case .mergeQueueAdded: return "Added to merge queue"
         case .mergeQueueRemoved: return "Removed from merge queue"
         case .mergedClosed: return "Merged / Closed"

@@ -147,6 +147,9 @@ public final class SurfaceListModel: ObservableObject {
 
     var app: AppModel { data.app }
 
+    /// `show_labels`: the cards' label line and the search of label names.
+    public var showLabels: Bool { app.showLabels }
+
     /// `auto_dismiss_after_days`, for the tooltip of `Dismissed in N days`.
     public var autoDismissDays: Int64 { app.autoDismissDays }
 
@@ -393,7 +396,8 @@ public final class SurfaceListModel: ObservableObject {
                 tab: tab, cards: data.cards, account: account, options: data.options, orders: data.groupOrders,
                 repositories: data.repositories,
                 folding: Listing.Folding(
-                    collapsed: data.collapsed, expanded: data.expanded, search: search, visibility: visibility
+                    collapsed: data.collapsed, expanded: data.expanded, search: search, visibility: visibility,
+                    labels: app.showLabels
                 )
             )
         } else {
@@ -435,7 +439,9 @@ public final class SurfaceListModel: ObservableObject {
     public var emptyText: String? {
         showingDismissed
             ? Listing.dismissedEmptyText(loaded: data.loaded, cards: data.cards, search: search)
-            : Listing.emptyText(loaded: data.loaded, tab: tab, cards: data.cards, search: search, visibility: visibility)
+            : Listing.emptyText(
+                loaded: data.loaded, tab: tab, cards: data.cards, search: search, visibility: visibility, labels: app.showLabels
+            )
     }
 
     public var items: [SelectionItem] {
@@ -450,7 +456,8 @@ public final class SurfaceListModel: ObservableObject {
 
     /// The rows ⇧R and Mark all as read send.
     public var rowsToRead: [String] {
-        showingDismissed ? [] : Listing.rowsToRead(tab: tab, cards: data.cards, search: search, visibility: visibility)
+        showingDismissed
+            ? [] : Listing.rowsToRead(tab: tab, cards: data.cards, search: search, visibility: visibility, labels: app.showLabels)
     }
 
     /// The cards laid out now, in order (the ⇧-click range, ⌘A).
@@ -733,7 +740,7 @@ public final class SurfaceListModel: ObservableObject {
         case .delete where !showingDismissed && multiple:
             multi(.dismiss)
         case .moveTo(let section) where !showingDismissed && multiple:
-            // Review and Mine only: in All, D / T / W do nothing.
+            // Review and Mine only: in All, I / D / W do nothing.
             guard tab != .all, section != .done else { return }
             multi(.move(PlaceTarget(tab == .review ? .review : .mine, section)))
         case .reorder(let up) where !showingDismissed && multiple:
@@ -884,7 +891,7 @@ public final class SurfaceListModel: ObservableObject {
         if cards != selectedCards { selectedCards = cards }
     }
 
-    /// An operation on every selected card of the tab (⌫, D / T / W or an
+    /// An operation on every selected card of the tab (⌫, I / D / W or an
     /// item of the multi-card menu). The cards stay selected; those it
     /// cannot take stay as they are.
     public func multi(_ operation: MultiOperation) {

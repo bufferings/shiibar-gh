@@ -177,6 +177,17 @@ public enum BoardIcons {
         lineWidth: 1.4, roundCaps: true, roundJoins: true
     )
 
+    /// Ready for review (Main.html, "Rows Ready for review and Converted to
+    /// draft"): an eye.
+    public static let kindReadyForReview = BoardIcon(
+        [.path("M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8s-2.4 4.5-6.5 4.5S1.5 8 1.5 8z"), .circle(cx: 8, cy: 8, r: 2, dash: nil)],
+        lineWidth: 1.4, roundCaps: true, roundJoins: true
+    )
+    /// Converted to draft (the same scene): a pencil.
+    public static let kindConvertedToDraft = BoardIcon(
+        [.path("M10.5 2.5l3 3-7.5 7.5H3v-3z"), .path("M9 4l3 3")], lineWidth: 1.4, roundCaps: true, roundJoins: true
+    )
+
     /// Keep on top (Main.html `.pin`): filled while on, outlined while off.
     public static let pin = BoardIcon(
         [.path("M9.5 1.5l5 5-1.4 1.4-.7-.7-3 3 .4 2.6-1.2 1.2L5.7 11 2.5 14.2 1.3 13l3.2-3.2L1.6 6.9l1.2-1.2 2.6.4 3-3-.7-.7z")],
@@ -222,6 +233,8 @@ extension BoardIcons {
         case .checksFailed, .conflicts, .mergeQueueRemoved: return rowCross
         case .mergeable: return rowCheck
         case .mergeQueueAdded: return mergeQueue
+        case .readyForReview: return kindReadyForReview
+        case .convertedToDraft: return kindConvertedToDraft
         }
     }
 }

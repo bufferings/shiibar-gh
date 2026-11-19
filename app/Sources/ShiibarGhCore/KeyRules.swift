@@ -92,7 +92,7 @@ public enum KeyRules {
             }
         }
         if inSearch {
-            // Only Esc and ↓ leave; ⇧R, D, T, W and ⌫ are text.
+            // Only Esc and ↓ leave; ⇧R, I, D, W and ⌫ are text.
             guard mods.isEmpty else { return .pass }
             switch press.keyCode {
             case KeyPress.escape: return .leaveSearch(clearing: hasSearchText)
@@ -125,8 +125,9 @@ public enum KeyRules {
             return hasSelection ? .key(.clearSelection) : .pass
         default:
             switch chars.lowercased() {
+            // I, D and W (DESIGN.md, "Keyboard"); T is no key.
+            case "i": return .key(.moveTo(.inbox))
             case "d": return .key(.moveTo(.doing))
-            case "t": return .key(.moveTo(.todo))
             case "w": return .key(.moveTo(.waiting))
             default: return .pass
             }

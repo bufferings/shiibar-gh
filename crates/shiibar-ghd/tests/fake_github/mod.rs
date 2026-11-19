@@ -392,6 +392,9 @@ fn search(world: &World, token: &str, query: &str) -> Value {
     json!({"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":nodes})
 }
 
+/// The review threads of a PR. A comment written without `publishedAt` is
+/// published when it was created, like a comment of a review submitted at
+/// once; [`review_comment`] gives the two times apart, or a pending one.
 fn threads(world: &World, id: &str) -> Value {
     let list: Vec<Value> = world
         .threads
@@ -400,7 +403,22 @@ fn threads(world: &World, id: &str) -> Value {
         .unwrap_or_default()
         .into_iter()
         .map(|t| {
-            json!({"id":t["id"],"comments":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":t["comments"]}})
+            let comments: Vec<Value> = t["comments"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|c| {
+                    let mut c = c.clone();
+                    if let Some(map) = c.as_object_mut()
+                        && !map.contains_key("publishedAt")
+                    {
+                        let created = map.get("createdAt").cloned().unwrap_or(Value::Null);
+                        map.insert("publishedAt".into(), created);
+                    }
+                    c
+                })
+                .collect();
+            json!({"id":t["id"],"comments":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":comments}})
         })
         .collect();
     json!({"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":list})
@@ -666,9 +684,28 @@ pub fn pr_node(id: &str, owner: &str, number: u64, author: &str, patch: Value) -
     node
 }
 
+/// A conversation comment: published when it is created.
 pub fn issue_comment(id: &str, author: &str, at: i64, html: &str) -> Value {
     json!({"__typename":"IssueComment","id":id,"url":format!("https://github.com/c/{id}"),
-           "createdAt":iso(at),"bodyText":format!("text {id}"),"bodyHTML":html,
+           "createdAt":iso(at),"publishedAt":iso(at),"bodyText":format!("text {id}"),
+           "bodyHTML":html,"author":{"__typename":"User","login":author}})
+}
+
+/// A review comment of a review thread, drafted at `drafted` in a pending
+/// review and published when the review was submitted at `published`;
+/// `None` for a comment of a review still pending (`publishedAt` null,
+/// `state` `PENDING`).
+pub fn review_comment(
+    id: &str,
+    author: &str,
+    drafted: i64,
+    published: Option<i64>,
+    html: &str,
+) -> Value {
+    json!({"id":id,"url":format!("https://github.com/c/{id}"),"createdAt":iso(drafted),
+           "publishedAt":published.map(iso),
+           "state":if published.is_some() { "SUBMITTED" } else { "PENDING" },
+           "bodyText":format!("text {id}"),"bodyHTML":html,
            "author":{"__typename":"User","login":author}})
 }
 

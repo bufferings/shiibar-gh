@@ -134,19 +134,30 @@ public final class UIStateStore {
     }
 
     /// The section key of 0.5's one list of Mine, which 0.6 replaced with
-    /// Doing, Todo and Waiting (DESIGN.md, "Updating from 0.5").
+    /// Doing, Inbox and Waiting (DESIGN.md, "Updating from 0.5").
     static let oldMineList = "mine|main"
+
+    /// The section keys of Review's and Mine's Inbox as 0.7 saved them,
+    /// under the section's name then, Todo (DESIGN.md, "Updating from 0.7"),
+    /// with the keys they are now.
+    static let renamedSections = [
+        "review|todo": SectionKey.placed(.review, .inbox), "mine|todo": SectionKey.placed(.mine, .inbox),
+    ]
 
     /// The collapsed or expanded sections saved under `key`. 0.5's key of
     /// Mine's one list is dropped from the saved value the first time it is
-    /// read; Mine's Done keeps its key and stays as it was.
+    /// read; Mine's Done keeps its key and stays as it was. 0.7's keys of
+    /// Todo are saved again as Inbox's, so a collapsed or expanded Inbox
+    /// stays so.
     private func sectionKeys(_ key: String) -> Set<String> {
-        var saved = defaults.stringArray(forKey: key) ?? []
-        if saved.contains(Self.oldMineList) {
-            saved.removeAll { $0 == Self.oldMineList }
-            defaults.set(saved, forKey: key)
+        let stored = defaults.stringArray(forKey: key) ?? []
+        var saved = stored.filter { $0 != Self.oldMineList }
+        saved = saved.map { Self.renamedSections[$0] ?? $0 }
+        let unique = Array(Set(saved)).sorted()
+        if saved != stored {
+            defaults.set(unique, forKey: key)
         }
-        return Set(saved)
+        return Set(unique)
     }
 
     public func setExpanded(_ keys: Set<String>, account: String) {

@@ -243,6 +243,13 @@ final class PresentationTests: XCTestCase {
                  label: "Removed from merge queue", actor: "github-merge-queue", body: "Checks failed · added by alice", lines: 1),
             Case(row: Row(id: "10b", kind: .mergeQueueAdded, actor: "mk", occurredAt: at),
                  label: "Added to merge queue", actor: "mk", body: nil, lines: 1),
+            Case(row: Row(id: "10c", kind: .readyForReview, actor: "sam", occurredAt: at),
+                 label: "Ready for review", actor: "sam", body: nil, lines: 1),
+            Case(row: Row(id: "10d", kind: .convertedToDraft, actor: "sam", occurredAt: at, unread: false),
+                 label: "Converted to draft", actor: "sam", body: nil, lines: 1),
+            // GitHub may give no actor for these events: the row shows no one.
+            Case(row: Row(id: "10e", kind: .readyForReview, occurredAt: at),
+                 label: "Ready for review", actor: nil, body: nil, lines: 1),
             Case(row: Row(id: "11", kind: .approved, actor: "erin", occurredAt: at),
                  label: "Approved", actor: "erin", body: nil, lines: 1),
             Case(row: Row(id: "12", kind: .replyMentioned, text: "ok", actor: "frank", occurredAt: at),
@@ -273,6 +280,8 @@ final class PresentationTests: XCTestCase {
         XCTAssertEqual(BoardIcons.row(.known(.teamMentioned)), BoardIcons.kindMention)
         XCTAssertEqual(BoardIcons.row(.known(.changesRequested)), BoardIcons.kindChangesRequested)
         XCTAssertEqual(BoardIcons.row(.known(.merged)), BoardIcons.kindMerged)
+        XCTAssertEqual(BoardIcons.row(.known(.readyForReview)), BoardIcons.kindReadyForReview, "the eye of Main.html")
+        XCTAssertEqual(BoardIcons.row(.known(.convertedToDraft)), BoardIcons.kindConvertedToDraft, "the pencil of Main.html")
         XCTAssertEqual(BoardIcons.row(.unknown("later")), BoardIcons.kindComment)
         XCTAssertEqual(BoardIcons.row(.known(.approved)), BoardIcons.kindPassed)
         XCTAssertEqual(BoardIcons.row(.known(.checksPassed)), BoardIcons.kindPassed)
@@ -526,7 +535,9 @@ final class PresentationTests: XCTestCase {
             (press(KeyPress.enter), false, false, .key(.open), "keypad Enter"),
             (press(1, "s"), false, false, .pass, "S does nothing now"),
             (d, false, false, .key(.moveTo(.doing)), "D"),
-            (press(17, "t"), false, false, .key(.moveTo(.todo)), "T"),
+            (press(34, "i"), false, false, .key(.moveTo(.inbox)), "I moves to Inbox"),
+            (press(17, "t"), false, false, .pass, "T does nothing, as any other letter"),
+            (press(34, "I", [.shift]), false, false, .pass, "⇧I"),
             (press(13, "W", [.shift]), false, false, .pass, "⇧W"),
             (press(13, "w"), false, false, .key(.moveTo(.waiting)), "W"),
             (delete, false, false, .key(.delete), "⌫"),
@@ -552,6 +563,7 @@ final class PresentationTests: XCTestCase {
             (down, true, true, .leaveSearch(clearing: false), "↓ goes back, text kept"),
             (shiftR, true, false, .pass, "⇧R is typed"),
             (d, true, true, .pass, "D is typed"),
+            (press(34, "i"), true, false, .pass, "I is typed in the search field"),
             (delete, true, true, .pass, "⌫ edits the text"),
             (press(8, "c", [.command]), true, true, .pass, "⌘C copies the field's text"),
             (press(19, "2", [.command]), true, false, .key(.tab(.review)), "⌘2 in the field"),
@@ -592,7 +604,13 @@ final class PresentationTests: XCTestCase {
         XCTAssertEqual(EmptyState.noOwnersDetail, "Add an owner in Settings")
         XCTAssertEqual(SettingsText.eventGroups.flatMap(\.1), EventKind.allCases, "every kind once, in table order")
         XCTAssertEqual(SettingsText.eventGroups.map(\.0), ["Reviews and mentions", "Comments", "My pull requests", "Any pull request"])
-        XCTAssertEqual(SettingsText.eventGroups.map(\.1.count), [4, 5, 6, 4], "DESIGN.md, the table's headings")
+        XCTAssertEqual(SettingsText.eventGroups.map(\.1.count), [4, 5, 6, 6], "DESIGN.md, the table's headings")
+        XCTAssertEqual(
+            SettingsText.eventGroups.last?.1, [.readyForReview, .convertedToDraft, .mergeQueueAdded, .mergeQueueRemoved, .mergedClosed, .reopened],
+            "the two draft kinds lead Any pull request"
+        )
+        XCTAssertEqual(SettingsText.eventTitle(.readyForReview), "Ready for review")
+        XCTAssertEqual(SettingsText.eventTitle(.convertedToDraft), "Converted to draft")
         XCTAssertEqual(SettingsText.eventTitle(.mergedClosed), "Merged / Closed")
         XCTAssertEqual(SettingsText.eventTitle(.commentOther), "Comment on other PRs")
         XCTAssertEqual(SettingsText.eventTitle(.checksPassed), "Checks passed")

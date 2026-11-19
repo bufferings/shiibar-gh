@@ -12,7 +12,7 @@ use std::collections::{BTreeSet, HashMap};
 fn wire_section(section: Section) -> proto::Section {
     match section {
         Section::Doing => proto::Section::Doing,
-        Section::Todo => proto::Section::Todo,
+        Section::Inbox => proto::Section::Inbox,
         Section::Waiting => proto::Section::Waiting,
     }
 }
@@ -213,18 +213,18 @@ impl Engine {
             None => return Err(invalid("review and mine need a section")),
             // A merged or closed unplaced PR goes to that tab's Done whatever
             // the section says.
-            Some(_) if !open && from.is_none() => (Section::Todo, true),
+            Some(_) if !open && from.is_none() => (Section::Inbox, true),
             Some(proto::Section::Doing) => (Section::Doing, false),
-            Some(proto::Section::Todo) => (Section::Todo, false),
+            Some(proto::Section::Inbox) => (Section::Inbox, false),
             Some(proto::Section::Waiting) => (Section::Waiting, false),
-            Some(proto::Section::Done) => (Section::Todo, true),
+            Some(proto::Section::Done) => (Section::Inbox, true),
         };
         if to_done {
             // DESIGN.md, "Review": Done keeps its own order, newest entry
             // first. A merged or closed unplaced PR goes straight to Done
             // and keeps the time of its detection; another card enters Done
             // now. A card keeps the section and rank it had before Done, or
-            // takes the end of Todo when it comes from elsewhere.
+            // takes the end of Inbox when it comes from elsewhere.
             if !open && from.is_none() {
                 self.place_at_end(&pr_key, tab, section);
                 if let Some(pr) = self.pr_mut(&pr_key)
@@ -276,14 +276,14 @@ impl Engine {
             }
             (None, Some(proto::At::Top)) => 0,
             (None, Some(proto::At::Bottom)) => members.len(),
-            // Todo takes a card from Doing or Waiting of the same tab at its
+            // Inbox takes a card from Doing or Waiting of the same tab at its
             // top, and any other card at its end, in Review and Mine alike.
             (None, None) => {
                 let from_side = !from_done
                     && from.is_some_and(|p| {
                         p.tab == tab && matches!(p.section, Section::Doing | Section::Waiting)
                     });
-                if section == Section::Todo && from_side {
+                if section == Section::Inbox && from_side {
                     0
                 } else {
                     members.len()

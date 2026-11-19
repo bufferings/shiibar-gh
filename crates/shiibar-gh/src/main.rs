@@ -25,13 +25,17 @@ const COMMANDS: [(&str, &str, &str); 33] = [
         "[--account <a>] [--tab all|review|mine] [--owner <o>] [--authored|--assigned|--review-requested] [--search <text>] [--dismissed] [--json]",
         "Print the PR cards of a tab (default all). all: by owner, then Recent\n      \
          activity (the newest row shown, else when the card was added, newest\n      \
-         first); review and mine: Done, Waiting, Doing, Todo in order.\n      \
+         first); review and mine: Done, Waiting, Doing, Inbox in order.\n      \
          --dismissed prints the Dismissed list instead, newest first (--tab is\n      \
-         ignored). Marks: [review:todo] or [mine:doing] for the place,\n      \
+         ignored). Marks: [review:inbox] or [mine:doing] for the place,\n      \
          [review requested] for a PR awaiting your review, [muted], [unmuted]\n      \
          for a PR whose own setting is Unmute, and the days left of a dismissed\n      \
-         card. Muted PRs are listed too. --search keeps the PRs where\n      \
-         every word of <text> matches",
+         card. Muted PRs are listed too. With show_labels on, a PR with GitHub\n      \
+         labels ends with labels=[bug, good first issue] (by name; +3 for those\n      \
+         beyond the first 20), except on the Dismissed list; --json always\n      \
+         carries labels and labels_more. --search keeps the PRs where every\n      \
+         word of <text> matches (a label's name only with show_labels on, and\n      \
+         never on the Dismissed list)",
     ),
     (
         "status",
@@ -51,10 +55,10 @@ const COMMANDS: [(&str, &str, &str); 33] = [
     ),
     (
         "place",
-        "<pr> review|mine doing|todo|waiting [--top|--bottom|--before <pr>] --account <a> | <pr> review|mine done --account <a> | <pr> none --account <a>",
+        "<pr> review|mine inbox|doing|waiting [--top|--bottom|--before <pr>] --account <a> | <pr> review|mine done --account <a> | <pr> none --account <a>",
         "Put a PR in a section of Review or Mine, in the Done of either, or in\n      \
          neither. Both tabs take the same sections, and the section is needed.\n      \
-         Without a position it goes to the end, or to the top of todo from doing\n      \
+         Without a position it goes to the end, or to the top of inbox from doing\n      \
          or waiting of the same tab. Done takes no position: newest first by the\n      \
          time a card entered it. A merged or closed PR not in Review or Mine\n      \
          goes straight to Done",
@@ -104,7 +108,8 @@ const COMMANDS: [(&str, &str, &str); 33] = [
         "<key> [--json]",
         "Print a setting. Keys: launch_at_login, appearance, text_size,\n      \
          status_interval_minutes, reactions_interval_minutes,\n      \
-         auto_dismiss_after_days, dismissed_keep_days, confirm_dismiss",
+         auto_dismiss_after_days, dismissed_keep_days, confirm_dismiss,\n      \
+         show_labels",
     ),
     (
         "config set",
@@ -752,14 +757,14 @@ fn place_command(rest: &[String]) -> Result<Command, UsageError> {
         [pr, tab] if tab == "none" => (pr.clone(), PlaceTab::None, None),
         _ => {
             return Err(UsageError(
-                "expected <pr> review|mine doing|todo|waiting|done or <pr> none".into(),
+                "expected <pr> review|mine inbox|doing|waiting|done or <pr> none".into(),
             ));
         }
     };
     let section = match section {
         Some(text) => Some(wire::<Section>(text, "section").map_err(|_| {
             UsageError(format!(
-                "review and mine take doing, todo, waiting or done, not {text}"
+                "review and mine take inbox, doing, waiting or done, not {text}"
             ))
         })?),
         None => None,
@@ -803,7 +808,7 @@ fn row_line(row: &Row) -> String {
     format!("{unread} {} {}{muted} {text}", row.id, row.kind.as_text())
 }
 
-/// `[review:todo]` or `[mine:doing]`: the tab and the section.
+/// `[review:inbox]` or `[mine:doing]`: the tab and the section.
 fn place_mark(card: &Card) -> String {
     match &card.placement {
         None => String::new(),
@@ -833,7 +838,28 @@ fn now_epoch() -> i64 {
         .map_or(0, |d| d.as_secs() as i64)
 }
 
-fn card_line(card: &Card, logins: &BTreeMap<String, String>) -> String {
+/// Whether the text of `list` shows the labels: the `show_labels` setting.
+/// The cards are already listed, so an answer that cannot be read takes the
+/// setting's default (on) instead of failing the command.
+fn show_labels_of(answer: Result<ConfigResponse, ClientError>) -> bool {
+    answer.map_or(true, |r| r.value.as_bool().unwrap_or(true))
+}
+
+/// DESIGN.md, "CLI (AI integration)": ` labels=[bug, good first issue]`,
+/// `+N` last for the labels beyond those fetched; nothing for a PR without
+/// labels and for a dismissed card, which shows none.
+fn labels_mark(card: &Card) -> String {
+    if card.labels.is_empty() || card.dismissed_at.is_some() {
+        return String::new();
+    }
+    let mut names: Vec<String> = card.labels.iter().map(|l| l.name.clone()).collect();
+    if card.labels_more > 0 {
+        names.push(format!("+{}", card.labels_more));
+    }
+    format!(" labels=[{}]", names.join(", "))
+}
+
+fn card_line(card: &Card, logins: &BTreeMap<String, String>, show_labels: bool) -> String {
     let awaiting = if card.awaiting_review {
         " [review requested]"
     } else {
@@ -851,8 +877,13 @@ fn card_line(card: &Card, logins: &BTreeMap<String, String>) -> String {
         .map(|at| format!(" [{}]", days_left(at, now_epoch())))
         .unwrap_or_default();
     let account = logins.get(&card.account).unwrap_or(&card.account);
+    let labels = if show_labels {
+        labels_mark(card)
+    } else {
+        String::new()
+    };
     format!(
-        "{} [{}]{}{awaiting}{muted}{left} review={} checks={} base={} {} ({}) account={account}",
+        "{} [{}]{}{awaiting}{muted}{left} review={} checks={} base={} {} ({}) account={account}{labels}",
         card.pr,
         card.state_label.as_text(),
         place_mark(card),
@@ -864,8 +895,8 @@ fn card_line(card: &Card, logins: &BTreeMap<String, String>) -> String {
     )
 }
 
-fn print_card(card: &Card, logins: &BTreeMap<String, String>) {
-    println!("{}", card_line(card, logins));
+fn print_card(card: &Card, logins: &BTreeMap<String, String>, show_labels: bool) {
+    println!("{}", card_line(card, logins, show_labels));
     for row in &card.rows {
         println!("  {}", row_line(row));
     }
@@ -981,8 +1012,14 @@ fn execute(socket: &Path, command: Command) -> Result<(), ClientError> {
         Output::Cards => {
             let response: ListResponse = request(socket, &command.request)?;
             let logins = logins(socket);
+            let show_labels = show_labels_of(request::<ConfigResponse>(
+                socket,
+                &Request::ConfigGet {
+                    key: "show_labels".into(),
+                },
+            ));
             for card in &response.cards {
-                print_card(card, &logins);
+                print_card(card, &logins, show_labels);
             }
         }
         Output::Rows => {
@@ -1305,7 +1342,7 @@ mod tests {
             &args(&[
                 "o/r#1",
                 "review",
-                "todo",
+                "inbox",
                 "--before",
                 "o/r#2",
                 "--account",
@@ -1316,7 +1353,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             place.request,
-            Request::Place { tab: PlaceTab::Review, section: Some(Section::Todo), before: Some(ref b), at: None, .. } if b == "o/r#2"
+            Request::Place { tab: PlaceTab::Review, section: Some(Section::Inbox), before: Some(ref b), at: None, .. } if b == "o/r#2"
         ));
         let top = command(
             "place",
@@ -1335,7 +1372,7 @@ mod tests {
         ));
         for (word, section) in [
             ("doing", Section::Doing),
-            ("todo", Section::Todo),
+            ("inbox", Section::Inbox),
             ("waiting", Section::Waiting),
             ("done", Section::Done),
         ] {
@@ -1375,6 +1412,10 @@ mod tests {
                 "me",
             ],
             &["o/r#1", "mine", "main", "--account", "me"],
+            // The section of 0.7 and earlier is no value any more.
+            &["o/r#1", "mine", "todo", "--account", "me"],
+            &["o/r#1", "review", "todo", "--account", "me"],
+            &["o/r#1", "mine", "Todo", "--account", "me"],
             &["o/r#1", "review", "main", "--account", "me"],
             &["o/r#1", "review", "--account", "me"],
             &["o/r#1", "mine", "--account", "me"],
@@ -1382,7 +1423,7 @@ mod tests {
             &[
                 "o/r#1",
                 "mine",
-                "todo",
+                "inbox",
                 "--top",
                 "--bottom",
                 "--account",
@@ -1392,7 +1433,7 @@ mod tests {
             &[
                 "o/r#1",
                 "mine",
-                "todo",
+                "inbox",
                 "--top",
                 "--before",
                 "o/r#2",
@@ -1402,6 +1443,24 @@ mod tests {
         ] {
             assert!(command("place", &args(bad)).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn list_shows_the_labels_unless_the_setting_says_off() {
+        let answer = |value: serde_json::Value| Ok(ConfigResponse { ok: true, value });
+        assert!(show_labels_of(answer(serde_json::json!(true))));
+        assert!(!show_labels_of(answer(serde_json::json!(false))));
+        assert!(
+            show_labels_of(answer(serde_json::json!("off"))),
+            "a value that is no boolean takes the default"
+        );
+        assert!(
+            show_labels_of(Err(ClientError::Remote {
+                code: shiibar_gh_proto::Lenient::Known(shiibar_gh_proto::ErrorCode::Invalid),
+                message: "unknown setting: show_labels".into(),
+            })),
+            "a refused request takes the default"
+        );
     }
 
     #[test]

@@ -100,6 +100,8 @@ public enum RowKind: String, Equatable {
     case checksPassed = "checks_passed"
     case conflicts
     case mergeable
+    case readyForReview = "ready_for_review"
+    case convertedToDraft = "converted_to_draft"
     case mergeQueueAdded = "merge_queue_added"
     case mergeQueueRemoved = "merge_queue_removed"
     case merged
@@ -125,6 +127,8 @@ public enum EventKind: String, Equatable, CaseIterable {
     case checksPassed = "checks_passed"
     case conflicts
     case mergeable
+    case readyForReview = "ready_for_review"
+    case convertedToDraft = "converted_to_draft"
     case mergeQueueAdded = "merge_queue_added"
     case mergeQueueRemoved = "merge_queue_removed"
     case mergedClosed = "merged_closed"
@@ -144,7 +148,7 @@ public enum PlacementTab: String, Equatable, Codable, CaseIterable { case review
 
 /// `placement.section`: the four sections of Review and of Mine.
 public enum PlacementSection: String, Equatable, Codable, CaseIterable {
-    case doing, todo, waiting, done
+    case doing, inbox, waiting, done
 }
 
 /// What a card is muted for (`card.muted`).
@@ -469,6 +473,19 @@ public struct Placement: Equatable, Decodable {
     public var isDone: Bool { section.value == .done }
 }
 
+/// A GitHub label of a PR (`card.labels`): `Label.name`, and `Label.color`
+/// as GitHub gives it (six hexadecimal digits without `#`, either case; any
+/// other text is drawn as gray, `LabelColors`).
+public struct PRLabel: Equatable, Hashable, Decodable {
+    public var name: String
+    public var color: String
+
+    public init(name: String, color: String) {
+        self.name = name
+        self.color = color
+    }
+}
+
 public struct Card: Equatable, Decodable, Identifiable {
     public var id: String
     public var pr: String
@@ -515,6 +532,12 @@ public struct Card: Equatable, Decodable, Identifiable {
     /// Rows of this PR were deleted past the 20 kept (DESIGN.md, "Rows in a
     /// card").
     public var olderRows: Bool
+    /// The PR's GitHub labels fetched, at most 20, in the order the daemon
+    /// sends them (by name); sent whatever `show_labels` says (DESIGN.md,
+    /// "Wire format"). Empty when the daemon sends none.
+    public var labels: [PRLabel]
+    /// The labels not fetched beyond the 20: `+N` after the last label.
+    public var labelsMore: Int
 
     enum CodingKeys: String, CodingKey {
         case id, pr, account, owner, title, url, author, review, checks, base, head
@@ -534,6 +557,8 @@ public struct Card: Equatable, Decodable, Identifiable {
         case autoDismissAt = "auto_dismiss_at"
         case olderRows = "older_rows"
         case prMute = "pr_mute"
+        case labels
+        case labelsMore = "labels_more"
     }
 
     public init(
@@ -545,7 +570,8 @@ public struct Card: Equatable, Decodable, Identifiable {
         head: String = "topic", addedAt: Int64? = nil,
         createdAt: Int64? = nil, updatedAt: Int64 = 0, links: Links = Links(review: "r", checks: "c", base: "b"), rows: [Row] = [],
         placement: Placement? = nil, muted: [MuteReason] = [], prMute: PrMute = .none, dismissedAt: Int64? = nil,
-        dismissExpiresAt: Int64? = nil, autoDismissAt: Int64? = nil, olderRows: Bool = false
+        dismissExpiresAt: Int64? = nil, autoDismissAt: Int64? = nil, olderRows: Bool = false,
+        labels: [PRLabel] = [], labelsMore: Int = 0
     ) {
         self.id = id
         self.pr = pr
@@ -577,6 +603,8 @@ public struct Card: Equatable, Decodable, Identifiable {
         self.dismissExpiresAt = dismissExpiresAt
         self.autoDismissAt = autoDismissAt
         self.olderRows = olderRows
+        self.labels = labels
+        self.labelsMore = labelsMore
     }
 
     public init(from decoder: Decoder) throws {
@@ -611,6 +639,8 @@ public struct Card: Equatable, Decodable, Identifiable {
         dismissExpiresAt = try c.decodeIfPresent(Int64.self, forKey: .dismissExpiresAt)
         autoDismissAt = try c.decodeIfPresent(Int64.self, forKey: .autoDismissAt)
         olderRows = try c.decodeIfPresent(Bool.self, forKey: .olderRows) ?? false
+        labels = try c.decodeIfPresent([PRLabel].self, forKey: .labels) ?? []
+        labelsMore = try c.decodeIfPresent(Int.self, forKey: .labelsMore) ?? 0
     }
 
     /// Merged and Closed come after the open PRs (Draft included).

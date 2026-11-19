@@ -245,6 +245,53 @@ fn a_status_node_becomes_an_ingest_pr() {
     assert_eq!(pr.links.base, pr.url);
 }
 
+/// DESIGN.md, "Card", "GitHub labels": the labels in the order GitHub gave
+/// them (by name), their colors as given, and how many more there are.
+#[test]
+fn labels_come_from_the_labels_connection() {
+    let t = teams();
+    let names = |pr: &shiibar_gh_proto::IngestPr| -> Vec<(String, String)> {
+        pr.labels
+            .clone()
+            .unwrap()
+            .into_iter()
+            .map(|l| (l.name, l.color))
+            .collect()
+    };
+    let node = status_node(json!({"labels":{"totalCount":2,"nodes":[
+        {"name":"bug","color":"d73a4a"},{"name":"good first issue","color":"7057FF"}]}}));
+    let pr = convert::pr_values(&node, &StatusExtra::default(), ctx(&t)).unwrap();
+    assert_eq!(
+        names(&pr),
+        [
+            ("bug".to_string(), "d73a4a".to_string()),
+            ("good first issue".to_string(), "7057FF".to_string())
+        ]
+    );
+    assert_eq!(pr.labels_more, Some(0));
+    // More than the 20 fetched.
+    let twenty: Vec<Value> = (0..20)
+        .map(|i| json!({"name":format!("area-{i:02}"),"color":"ededed"}))
+        .collect();
+    let node = status_node(json!({"labels":{"totalCount":23,"nodes":twenty}}));
+    let pr = convert::pr_values(&node, &StatusExtra::default(), ctx(&t)).unwrap();
+    assert_eq!(pr.labels.as_ref().unwrap().len(), 20);
+    assert_eq!(pr.labels_more, Some(3));
+    // None at all.
+    let node = status_node(json!({"labels":{"totalCount":0,"nodes":[]}}));
+    let pr = convert::pr_values(&node, &StatusExtra::default(), ctx(&t)).unwrap();
+    assert_eq!(pr.labels, Some(vec![]));
+    // A connection without its list keeps the saved labels.
+    for nodes in [json!(null), json!({}), json!("bug")] {
+        let node = status_node(json!({"labels":{"totalCount":2,"nodes":nodes}}));
+        let pr = convert::pr_values(&node, &StatusExtra::default(), ctx(&t)).unwrap();
+        assert_eq!((pr.labels, pr.labels_more), (None, None), "{node}");
+    }
+    // An answer without the connection keeps the saved labels.
+    let pr = convert::pr_values(&status_node(json!({})), &StatusExtra::default(), ctx(&t)).unwrap();
+    assert_eq!((pr.labels, pr.labels_more), (None, None));
+}
+
 #[test]
 fn a_deleted_author_is_an_empty_login() {
     let t = teams();
@@ -487,23 +534,37 @@ impl Pr {
     }
 }
 
+/// A conversation comment, published when it is created.
 fn comment(id: &str, author: Value, at: i64, html: &str) -> Value {
     json!({"__typename":"IssueComment","id":id,"url":format!("https://c/{id}"),
-           "createdAt":iso(at),"bodyText":format!("text {id}"),"bodyHTML":html,"author":author})
+           "createdAt":iso(at),"publishedAt":iso(at),"bodyText":format!("text {id}"),
+           "bodyHTML":html,"author":author})
 }
 
+/// A review drafted 30 seconds before it was submitted at `at`: its
+/// `createdAt` and `publishedAt` are the time it was drafted.
 fn review(id: &str, author: Value, at: i64, state: &str, body: &str) -> Value {
     json!({"__typename":"PullRequestReview","id":id,"url":format!("https://r/{id}"),
-           "createdAt":iso(at - 30),"submittedAt":iso(at),"state":state,
-           "bodyText":body,"bodyHTML":body,"author":author})
+           "createdAt":iso(at - 30),"publishedAt":iso(at - 30),"submittedAt":iso(at),
+           "state":state,"bodyText":body,"bodyHTML":body,"author":author})
 }
 
 fn thread(id: &str, comments: Vec<Value>) -> Value {
     json!({"id":id,"comments":{"nodes":comments}})
 }
 
+/// A review comment of a review submitted at once: drafted and published
+/// at `at`.
 fn inline(id: &str, author: Value, at: i64, html: &str) -> Value {
+    drafted(id, author, at, Some(at), html)
+}
+
+/// A review comment drafted at `at` and published at `published`, or still
+/// pending (`publishedAt` null, `state` `PENDING`).
+fn drafted(id: &str, author: Value, at: i64, published: Option<i64>, html: &str) -> Value {
     json!({"id":id,"url":format!("https://i/{id}"),"createdAt":iso(at),
+           "publishedAt":published.map(iso),
+           "state":if published.is_some() { "SUBMITTED" } else { "PENDING" },
            "bodyText":format!("text {id}"),"bodyHTML":html,"author":author})
 }
 
@@ -790,6 +851,216 @@ fn threads_are_recorded_when_i_comment_or_am_mentioned() {
     assert_eq!(out.own[0].id, "B");
 }
 
+// ---------------------------------------------------------- comment times
+
+#[test]
+fn a_review_comment_takes_the_time_it_was_published() {
+    let mut pr = Pr::mine();
+    // Drafted before the window, submitted inside it.
+    pr.threads = vec![thread(
+        "T_1",
+        vec![drafted("I_1", user("alice"), T0 - 500, Some(T0 + 40), "")],
+    )];
+    let events = pr.run().events;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, EventKind::Comment);
+    assert_eq!(events[0].occurred_at, T0 + 40);
+    // Drafted inside the window, submitted before it.
+    pr.threads = vec![thread(
+        "T_1",
+        vec![drafted("I_1", user("alice"), T0 + 10, Some(T0 - 1), "")],
+    )];
+    assert!(pr.run().events.is_empty());
+}
+
+#[test]
+fn a_review_body_takes_its_submitted_time_not_its_published_time() {
+    let mut pr = Pr::mine();
+    // `publishedAt` of a review is the time it was drafted, before the
+    // window; `submittedAt` is inside it.
+    let mut body = review("R_1", user("alice"), T0 + 40, "COMMENTED", "nit");
+    body["createdAt"] = json!(iso(T0 - 500));
+    body["publishedAt"] = json!(iso(T0 - 500));
+    pr.timeline = vec![body.clone()];
+    let events = pr.run().events;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].occurred_at, T0 + 40);
+    // Without `submittedAt`, `createdAt`.
+    body["submittedAt"] = json!(null);
+    body["createdAt"] = json!(iso(T0 + 5));
+    pr.timeline = vec![body];
+    assert_eq!(pr.run().events[0].occurred_at, T0 + 5);
+}
+
+#[test]
+fn a_conversation_comment_without_published_at_takes_created_at() {
+    let mut pr = Pr::mine();
+    let mut plain = comment("C_1", user("alice"), T0 + 20, "");
+    plain.as_object_mut().unwrap().remove("publishedAt");
+    let mut null = comment("C_2", user("alice"), T0 + 30, "");
+    null["publishedAt"] = json!(null);
+    let mut later = comment("C_3", user("alice"), T0 + 40, "");
+    later["publishedAt"] = json!(iso(T0 + 45));
+    pr.timeline = vec![plain, null, later];
+    let times: Vec<(String, i64)> = pr
+        .run()
+        .events
+        .into_iter()
+        .map(|e| (e.id, e.occurred_at))
+        .collect();
+    assert_eq!(
+        times,
+        [
+            ("C_1".to_string(), T0 + 20),
+            ("C_2".to_string(), T0 + 30),
+            ("C_3".to_string(), T0 + 45)
+        ]
+    );
+}
+
+#[test]
+fn my_review_comments_count_from_their_published_time() {
+    let mut pr = Pr::others();
+    pr.since = T0 - 1000;
+    pr.threads = vec![thread(
+        "T_1",
+        vec![drafted("I_ME", user(ME), T0 - 100, Some(T0 + 50), "")],
+    )];
+    let out = pr.run();
+    assert_eq!(out.own.len(), 1);
+    assert_eq!(out.own[0].created_at, T0 + 50);
+    assert!(out.own[0].baseline_done, "published after the last fetch");
+    assert_eq!(out.threads[0].mine_at, Some(T0 + 50));
+}
+
+#[test]
+fn a_pending_review_comment_is_not_collected_by_the_events() {
+    let mut pr = Pr::others();
+    pr.threads = vec![thread(
+        "T_1",
+        vec![
+            inline("I_A", user("alice"), T0 + 5, ""),
+            drafted("I_ME", user(ME), T0 + 10, None, ""),
+            inline("I_B", user("alice"), T0 + 20, ""),
+            drafted("I_AT", user("bob"), T0 + 25, None, &mention_link(ME)),
+        ],
+    )];
+    let out = pr.run();
+    assert!(out.own.is_empty(), "no Reaction baseline");
+    assert!(out.threads.is_empty(), "no thread record");
+    assert!(out.events.is_empty(), "I_B is no reply");
+}
+
+#[test]
+fn a_pending_review_comment_is_not_collected_from_a_found_pr() {
+    let pr = json!({
+        "id":"PR_1","url":"https://github.com/o/r/pull/1","createdAt":iso(T0 - 1000),
+        "author":user("alice"),"bodyHTML":"","bodyText":"",
+        "comments":{"nodes":[]},"reviews":{"nodes":[]},
+        "reviewThreads":{"nodes":[
+            thread("T_1", vec![inline("I_1", user("alice"), T0 - 500, ""), drafted("I_ME", user(ME), T0 - 400, None, "")]),
+            thread("T_2", vec![drafted("I_AT", user("bob"), T0 - 300, None, &mention_link(ME))]),
+            thread("T_3", vec![drafted("I_MINE", user(ME), T0 - 300, Some(T0 - 200), "")])
+        ]},
+        "reviewRequests":{"nodes":[]},"requestEvents":{"nodes":[]}
+    });
+    let t = teams();
+    let found = convert::collect(&pr, T0 - 250, ctx(&t));
+    let own: Vec<(&str, i64, bool)> = found
+        .own
+        .iter()
+        .map(|o| (o.id.as_str(), o.created_at, o.baseline_done))
+        .collect();
+    assert_eq!(
+        own,
+        [("I_MINE", T0 - 200, true)],
+        "only the published comment, at its published time"
+    );
+    let threads: Vec<(&str, Option<i64>)> = found
+        .threads
+        .iter()
+        .map(|t| (t.id.as_str(), t.mine_at))
+        .collect();
+    assert_eq!(threads, [("T_3", Some(T0 - 200))]);
+}
+
+/// DESIGN.md, "Comment times": the comments of one review share their
+/// time; in a thread, a comment further down is after one further up.
+#[test]
+fn a_tie_of_times_in_a_thread_is_decided_by_the_place_in_the_thread() {
+    use EventKind::*;
+    let at = T0 + 40;
+    // alice's mention and her follow-up in one review.
+    let mut pr = Pr::others();
+    pr.threads = vec![thread(
+        "T_1",
+        vec![
+            drafted("I_AT", user("alice"), T0 + 10, Some(at), &mention_link(ME)),
+            drafted("I_MORE", user("alice"), T0 + 20, Some(at), ""),
+        ],
+    )];
+    assert_eq!(
+        pr.kinds(),
+        [
+            ("I_AT".to_string(), Mentioned),
+            ("I_MORE".to_string(), ReplyMentioned)
+        ]
+    );
+    // A follow-up above the mention is not after it.
+    pr.threads = vec![thread(
+        "T_1",
+        vec![
+            drafted("I_MORE", user("alice"), T0 + 10, Some(at), ""),
+            drafted("I_AT", user("alice"), T0 + 20, Some(at), &mention_link(ME)),
+        ],
+    )];
+    assert_eq!(pr.kinds(), [("I_AT".to_string(), Mentioned)]);
+    // The account's comment and a reply at the same time.
+    pr.threads = vec![thread(
+        "T_1",
+        vec![
+            drafted("I_ME", user(ME), T0 + 10, Some(at), ""),
+            drafted("I_B", user("alice"), T0 + 20, Some(at), ""),
+        ],
+    )];
+    assert_eq!(pr.kinds(), [("I_B".to_string(), Reply)]);
+    pr.threads = vec![thread(
+        "T_1",
+        vec![
+            drafted("I_B", user("alice"), T0 + 10, Some(at), ""),
+            drafted("I_ME", user(ME), T0 + 20, Some(at), ""),
+        ],
+    )];
+    assert!(pr.kinds().is_empty(), "a reply above the account's comment");
+    // A thread recorded earlier at the same time, the account's comment
+    // above the reply.
+    let mut pr = Pr::others();
+    pr.record("T_1", Some(at), None);
+    pr.threads = vec![thread(
+        "T_1",
+        vec![
+            drafted("I_ME", user(ME), T0 + 10, Some(at), ""),
+            drafted("I_B", user("alice"), T0 + 20, Some(at), ""),
+        ],
+    )];
+    assert_eq!(pr.kinds(), [("I_B".to_string(), Reply)]);
+    // The account's comment at the same time in another thread decides
+    // nothing for this one.
+    let mut pr = Pr::others();
+    pr.record("T_2", Some(at), None);
+    pr.threads = vec![
+        thread(
+            "T_1",
+            vec![drafted("I_ME", user(ME), T0 + 10, Some(at), "")],
+        ),
+        thread(
+            "T_2",
+            vec![drafted("I_B", user("alice"), T0 + 20, Some(at), "")],
+        ),
+    ];
+    assert!(pr.kinds().is_empty(), "nothing above I_B in its thread");
+}
+
 #[test]
 fn review_requests_for_me_and_my_teams() {
     let event = |id: &str, reviewer: Value| {
@@ -828,6 +1099,61 @@ fn review_requests_for_me_and_my_teams() {
     );
     assert!(out.iter().all(|e| e.url == "https://github.com/o/r/pull/1"));
     assert!(out.iter().all(|e| e.actor.as_deref() == Some("alice")));
+}
+
+/// DESIGN.md, "Ready for review and Converted to draft rows": rows from
+/// READY_FOR_REVIEW_EVENT and CONVERT_TO_DRAFT_EVENT of any PR in the
+/// window, without a body, opening the event's `url`.
+#[test]
+fn ready_for_review_and_converted_to_draft_carry_who_and_the_event_url() {
+    for mut pr in [Pr::mine(), Pr::others()] {
+        pr.timeline = vec![
+            json!({"__typename":"ConvertToDraftEvent","id":"CD_OLD","createdAt":iso(T0 - 1),
+                   "url":"https://github.com/o/r/pull/1#event-1","actor":{"login":"bob"}}),
+            json!({"__typename":"ReadyForReviewEvent","id":"RR_1","createdAt":iso(T0 + 1),
+                   "url":"https://github.com/o/r/pull/1#event-2",
+                   "actor":{"__typename":"User","login":"bob","avatarUrl":"https://a/bob"}}),
+            json!({"__typename":"ConvertToDraftEvent","id":"CD_1","createdAt":iso(T0 + 2),
+                   "url":null,"actor":null}),
+        ];
+        let out = pr.run().events;
+        let got: Vec<_> = out
+            .iter()
+            .map(|e| {
+                (
+                    e.id.as_str(),
+                    e.kind,
+                    e.occurred_at,
+                    e.url.as_str(),
+                    e.actor.as_deref(),
+                    e.text.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (
+                    "RR_1",
+                    EventKind::ReadyForReview,
+                    T0 + 1,
+                    "https://github.com/o/r/pull/1#event-2",
+                    Some("bob"),
+                    None
+                ),
+                (
+                    "CD_1",
+                    EventKind::ConvertedToDraft,
+                    T0 + 2,
+                    "https://github.com/o/r/pull/1",
+                    None,
+                    None
+                ),
+            ],
+            "the event before the window makes none; no URL opens the PR"
+        );
+        assert_eq!(out[0].actor_avatar_url.as_deref(), Some("https://a/bob"));
+    }
 }
 
 #[test]

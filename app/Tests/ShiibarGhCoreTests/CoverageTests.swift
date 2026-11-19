@@ -18,7 +18,7 @@ final class StoreTests: XCTestCase {
         store.setWindowFrame("{{10, 20}, {460, 620}}", account: "1001")
         store.setOptions(ListOptions(groupBy: .status, thenBy: .owner, sort: .recentlyAdded), account: "1001")
         store.setKeepOnTop(false, account: "1001")
-        store.setCollapsed(["review|todo"], account: "1001")
+        store.setCollapsed(["review|inbox"], account: "1001")
         store.setExpanded(["mine|done"], account: "1001")
         store.setGroupOrders([.status: ["closed", "open"]], account: "1001")
         store.setRepositories(["o/b", "o/a"], account: "1001")
@@ -29,7 +29,7 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(again.options(account: "1001"), ListOptions(groupBy: .status, thenBy: .owner, sort: .recentlyAdded))
         XCTAssertFalse(again.keepOnTop(account: "1001"))
         XCTAssertTrue(again.keepOnTop(account: "583231"))
-        XCTAssertEqual(again.collapsed(account: "1001"), ["review|todo"])
+        XCTAssertEqual(again.collapsed(account: "1001"), ["review|inbox"])
         XCTAssertEqual(again.expanded(account: "1001"), ["mine|done"])
         XCTAssertEqual(again.groupOrders(account: "1001"), [.status: ["closed", "open"]])
         XCTAssertEqual(again.repositories(account: "1001"), ["o/b", "o/a"])
@@ -50,8 +50,8 @@ final class StoreTests: XCTestCase {
         defaults.set(["mine|main"], forKey: "v4.expanded.1001")
         defaults.set(["mine|main", "mine|done"], forKey: "v4.expanded.583231")
         let store = UIStateStore(defaults: defaults)
-        XCTAssertEqual(store.collapsed(account: "1001"), ["mine|done", "review|todo"])
-        XCTAssertEqual(defaults.stringArray(forKey: "v4.collapsed.1001"), ["mine|done", "review|todo"], "saved without it")
+        XCTAssertEqual(store.collapsed(account: "1001"), ["mine|done", "review|inbox"], "Todo's key read as Inbox's")
+        XCTAssertEqual(defaults.stringArray(forKey: "v4.collapsed.1001"), ["mine|done", "review|inbox"], "saved without it")
         XCTAssertEqual(store.expanded(account: "1001"), [])
         XCTAssertEqual(defaults.stringArray(forKey: "v4.expanded.1001"), [])
         XCTAssertEqual(defaults.stringArray(forKey: "v4.expanded.583231"), ["mine|main", "mine|done"], "another account until it is read")
@@ -59,6 +59,29 @@ final class StoreTests: XCTestCase {
         // Mine's new sections start from the defaults.
         let sections = layout(.mine, collapsed: store.collapsed(account: "1001"), expanded: store.expanded(account: "1001"))
         XCTAssertEqual(sections.map(\.collapsed), [true, false, false, false], "Done, at the top, stays collapsed")
+    }
+
+    /// DESIGN.md, "Updating from 0.7": the section Todo is Inbox now. The
+    /// collapsed sections and the expanded "+ N more PRs" saved under
+    /// Todo's keys carry over to Inbox's, saved again under the new keys;
+    /// every other key stays.
+    func testTodosSavedStateCarriesOverToInbox() {
+        let (defaults, suite) = testDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(["review|todo", "mine|done"], forKey: "v4.collapsed.1001")
+        defaults.set(["mine|todo", "review|todo", "repository|none|example-org/api|"], forKey: "v4.expanded.1001")
+        defaults.set(["review|todo", "review|inbox"], forKey: "v4.expanded.583231")
+        let store = UIStateStore(defaults: defaults)
+        XCTAssertEqual(store.collapsed(account: "1001"), ["review|inbox", "mine|done"])
+        XCTAssertEqual(defaults.stringArray(forKey: "v4.collapsed.1001"), ["mine|done", "review|inbox"])
+        XCTAssertEqual(store.expanded(account: "1001"), ["mine|inbox", "review|inbox", "repository|none|example-org/api|"])
+        XCTAssertEqual(store.expanded(account: "583231"), ["review|inbox"], "both keys: one Inbox")
+        XCTAssertEqual(defaults.stringArray(forKey: "v4.expanded.583231"), ["review|inbox"])
+        let sections = layout(.review, collapsed: store.collapsed(account: "1001"), expanded: store.expanded(account: "1001"))
+        XCTAssertEqual(sections.last?.key, "review|inbox")
+        XCTAssertEqual(sections.last?.collapsed, true, "Inbox stays collapsed as Todo was")
+        let open = layout(.review, expanded: store.expanded(account: "1001"))
+        XCTAssertEqual(open.last?.showLess, true, "Inbox stays expanded as Todo was")
     }
 
     /// DESIGN.md, "Account color": no dot (nor its room) for None.
@@ -290,7 +313,7 @@ final class SettingsModelTests: XCTestCase {
         settings.show(.addAccount)
         XCTAssertEqual(settings.tab, .accounts)
         XCTAssertEqual(settings.requestedSheet, .addAccount)
-        XCTAssertEqual(SettingsModel.keys.suffix(3), ["auto_dismiss_after_days", "dismissed_keep_days", "confirm_dismiss"])
+        XCTAssertEqual(SettingsModel.keys.suffix(4), ["auto_dismiss_after_days", "dismissed_keep_days", "confirm_dismiss", "show_labels"])
     }
 
     func testAddAccountAndRemoveNeedTheKeychain() {

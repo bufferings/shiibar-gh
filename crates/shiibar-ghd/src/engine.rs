@@ -156,7 +156,7 @@ fn view_of(pr: &PrRec) -> Option<(PlacedTab, proto::Section)> {
     } else {
         match place.section {
             Section::Doing => proto::Section::Doing,
-            Section::Todo => proto::Section::Todo,
+            Section::Inbox => proto::Section::Inbox,
             Section::Waiting => proto::Section::Waiting,
         }
     };
@@ -164,13 +164,13 @@ fn view_of(pr: &PrRec) -> Option<(PlacedTab, proto::Section)> {
 }
 
 /// The order of sections in `list` of a tab, the order the screen shows
-/// them (DESIGN.md, "Review" and "Mine"): Done, Waiting, Doing, Todo.
+/// them (DESIGN.md, "Review" and "Mine"): Done, Waiting, Doing, Inbox.
 fn section_index(section: proto::Section) -> u8 {
     match section {
         proto::Section::Done => 0,
         proto::Section::Waiting => 1,
         proto::Section::Doing => 2,
-        proto::Section::Todo => 3,
+        proto::Section::Inbox => 3,
     }
 }
 
@@ -684,6 +684,8 @@ impl Engine {
             dismiss_expires_at: pr.dismissed_at.map(|at| at.saturating_add(keep)),
             auto_dismiss_at: self.auto_dismiss_at(pr),
             older_rows: self.pruned_prs.contains(&pr.key),
+            labels: pr.labels.iter().map(proto::Label::from).collect(),
+            labels_more: pr.labels_more,
             links: proto::Links {
                 review: pr.link_review.clone(),
                 checks: pr.link_checks.clone(),
@@ -746,7 +748,7 @@ impl Engine {
 
     /// `list`. DESIGN.md, "CLI (AI integration)": `all` in owner order, each
     /// owner in `Recent activity` order; `review` and `mine` in the screen's
-    /// section order (Done, Waiting, Doing, Todo) and position; the
+    /// section order (Done, Waiting, Doing, Inbox) and position; the
     /// Dismissed list newest Dismiss first.
     pub fn list(&self, args: &ListArgs, _now: &Now) -> Result<Vec<proto::Card>> {
         let accounts = self.accounts_named(args.account.as_deref())?;
@@ -819,7 +821,7 @@ impl Engine {
             .into_iter()
             .chain(dismissed)
             .map(|(pr, owner)| self.wire_card(pr, owner, &positions))
-            .filter(|card| card_matches(card, &words))
+            .filter(|card| card_matches(card, &words, self.data.config.show_labels))
             .collect())
     }
 
@@ -850,7 +852,7 @@ impl Engine {
             if owners.as_ref().is_some_and(|set| !set.contains(&owner.id)) {
                 continue;
             }
-            let fields = pr_fields(pr);
+            let fields = pr_fields(pr, self.data.config.show_labels);
             rows.extend(
                 self.wire_rows(pr, owner)
                     .into_iter()
@@ -1195,8 +1197,8 @@ impl Engine {
     }
 
     /// A PR the core did not know: its card, placed by DESIGN.md, "Card
-    /// states" (the account's own PR at the end of Mine's Todo; a closed one
-    /// in Mine's Done, keeping the end of Todo as its place before Done).
+    /// states" (the account's own PR at the end of Mine's Inbox; a closed one
+    /// in Mine's Done, keeping the end of Inbox as its place before Done).
     fn new_pr(&mut self, account: &str, p: IngestPr, now: &Now) {
         let key = join_key(account, &p.id);
         let closed = p.state != proto::PrState::Open;
@@ -1220,7 +1222,7 @@ impl Engine {
         self.dirty.prs.insert(key.clone());
         self.data.prs.insert(key.clone(), record);
         if authored {
-            self.place_at_end(&key, PlacedTab::Mine, Section::Todo);
+            self.place_at_end(&key, PlacedTab::Mine, Section::Inbox);
         }
     }
 
@@ -1467,11 +1469,11 @@ impl Engine {
             return;
         }
         // DESIGN.md, "Review": a review request row puts an unplaced PR at
-        // the end of Todo; a dismissed PR does not move by this rule.
+        // the end of Inbox; a dismissed PR does not move by this rule.
         if listed && kind.is_review_request() && !dismissed_before.contains(&key) {
             let unplaced = self.data.prs.get(&key).is_some_and(|p| p.place.is_none());
             if unplaced {
-                self.place_at_end(&key, PlacedTab::Review, Section::Todo);
+                self.place_at_end(&key, PlacedTab::Review, Section::Inbox);
             }
         }
     }
@@ -1590,11 +1592,20 @@ impl Engine {
         // Recorded while List is off: read, no notification.
         row.unread = cell.list && !making.read;
         let muted = self.row_muted(&row, pr);
+        // DESIGN.md, "Ready for review and Converted to draft rows": Skip
+        // draft pull requests judges these two by the row's kind, not by the
+        // PR's `isDraft`, which GitHub may still answer true right after the
+        // draft ended.
+        let skipped_as_draft = match row.kind {
+            RowKind::ReadyForReview => false,
+            RowKind::ConvertedToDraft => owner.skip_drafts,
+            _ => owner.skip_drafts && pr.is_draft,
+        };
         let notifies = !making.silent
             && cell.list
             && cell.notify
             && owner.notify
-            && !(owner.skip_drafts && pr.is_draft)
+            && !skipped_as_draft
             && !pr.unreadable
             && !muted
             && pr.dismissed_at.is_none();
@@ -2075,6 +2086,15 @@ fn pr_from(account: &str, p: IngestPr, existing: Option<&PrRec>) -> PrRec {
         requested_me: p.requested_me,
         requested_team: p.requested_team,
         assignees: p.assignees,
+        // An answer without the labels keeps the saved ones.
+        labels_more: match &p.labels {
+            Some(_) => p.labels_more.unwrap_or(0),
+            None => existing.map_or(0, |e| e.labels_more),
+        },
+        labels: match p.labels {
+            Some(labels) => labels.into_iter().map(LabelRec::from).collect(),
+            None => existing.map(|e| e.labels.clone()).unwrap_or_default(),
+        },
         link_review: p.links.review,
         link_checks: p.links.checks,
         link_base: p.links.base,
@@ -2136,10 +2156,10 @@ pub fn search_words(search: Option<&str>) -> Vec<String> {
 }
 
 /// The PR's own fields a search word may match: the title,
-/// `owner/repo#number`, the author's login and the base and head branches,
-/// lowercased.
-fn pr_fields(pr: &PrRec) -> Vec<String> {
-    [
+/// `owner/repo#number`, the author's login, the base and head branches and,
+/// with `labels`, the names of the GitHub labels, lowercased.
+fn pr_fields(pr: &PrRec, labels: bool) -> Vec<String> {
+    let mut fields: Vec<String> = [
         pr.title.as_str(),
         &pr.display_key(),
         &pr.author,
@@ -2148,7 +2168,11 @@ fn pr_fields(pr: &PrRec) -> Vec<String> {
     ]
     .iter()
     .map(|f| f.to_lowercase())
-    .collect()
+    .collect();
+    if labels {
+        fields.extend(pr.labels.iter().map(|l| l.name.to_lowercase()));
+    }
+    fields
 }
 
 /// The text and actor of a row, lowercased.
@@ -2167,8 +2191,10 @@ fn all_words_in(fields: &[String], words: &[String]) -> bool {
 }
 
 /// DESIGN.md, "What the filters mean": a card matches when every word is in
-/// the PR's fields or in the text or actor of one of its rows.
-pub fn card_matches(card: &proto::Card, words: &[String]) -> bool {
+/// the PR's fields or in the text or actor of one of its rows. The names of
+/// its GitHub labels count with `show_labels` on, except on a dismissed card,
+/// which shows no labels.
+pub fn card_matches(card: &proto::Card, words: &[String], show_labels: bool) -> bool {
     if words.is_empty() {
         return true;
     }
@@ -2182,6 +2208,9 @@ pub fn card_matches(card: &proto::Card, words: &[String]) -> bool {
     .iter()
     .map(|f| f.to_lowercase())
     .collect();
+    if show_labels && card.dismissed_at.is_none() {
+        fields.extend(card.labels.iter().map(|l| l.name.to_lowercase()));
+    }
     for row in &card.rows {
         fields.extend(row_fields(row));
     }
@@ -2219,7 +2248,7 @@ fn reaction_summary(counts: &BTreeMap<String, u32>) -> String {
     known.chain(unknown).collect::<Vec<_>>().join(" ")
 }
 
-pub const CONFIG_KEYS: [&str; 8] = [
+pub const CONFIG_KEYS: [&str; 9] = [
     "launch_at_login",
     "appearance",
     "text_size",
@@ -2228,6 +2257,7 @@ pub const CONFIG_KEYS: [&str; 8] = [
     "auto_dismiss_after_days",
     "dismissed_keep_days",
     "confirm_dismiss",
+    "show_labels",
 ];
 
 pub fn read_config(config: &Config, key: &str) -> Option<Value> {
@@ -2240,6 +2270,7 @@ pub fn read_config(config: &Config, key: &str) -> Option<Value> {
         "auto_dismiss_after_days" => json!(config.auto_dismiss_after_days),
         "dismissed_keep_days" => json!(config.dismissed_keep_days),
         "confirm_dismiss" => json!(config.confirm_dismiss),
+        "show_labels" => json!(config.show_labels),
         _ => return None,
     })
 }
@@ -2272,6 +2303,7 @@ pub fn write_config(
         "auto_dismiss_after_days" => config.auto_dismiss_after_days = integer(key, value, 0)?,
         "dismissed_keep_days" => config.dismissed_keep_days = integer(key, value, 1)?,
         "confirm_dismiss" => config.confirm_dismiss = boolean(key, value)?,
+        "show_labels" => config.show_labels = boolean(key, value)?,
         _ => return Err(format!("unknown setting: {key}")),
     }
     Ok(())

@@ -760,6 +760,7 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
             shapedWidth = width
         }
         let nextHeights = next.map { shape($0).height }
+        if PerfMode.enabled { noteHeightChanges(next: next, heights: nextHeights) }
         let nextIDs = next.map(\.id)
         let oldIDs = lines.map(\.id)
         let old = lines
@@ -800,7 +801,14 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
                 }
                 animating = nil
             } else {
-                change()
+                // Any other height change shows at once: told by
+                // `noteHeightOfRows` outside a group, the table animated the
+                // row views to their new heights (bounds and position
+                // animations) and left the cells at the old ones.
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0
+                    change()
+                }
             }
             if rowViewsMisplaced("heights") { reload() }
             placeDropLine()
@@ -871,7 +879,13 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
             if redraw || next[i] != old[j] || heightChanged { redrawRow(i) }
             if heightChanged { changedHeights.insert(i) }
         }
-        if !changedHeights.isEmpty { table.noteHeightOfRows(withIndexesChanged: changedHeights) }
+        if !changedHeights.isEmpty {
+            // At once, as in the same-lines case above.
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0
+                table.noteHeightOfRows(withIndexesChanged: changedHeights)
+            }
+        }
         // Inside the update the table places the rows after an inserted one
         // by an estimate of its height, and moves the row views in view
         // there (they were found a fraction of a point off: 6732.06 for
@@ -890,6 +904,65 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
             guard let self, self.rowViewsMisplaced("rows, later") else { return }
             self.reload()
         }
+    }
+
+    // MARK: Measurement mode
+
+    /// The measurement mode's record of each line's last height change: the
+    /// height before and after, the change (counted by `applies`) and the
+    /// path the change took, for a consistency check that fails.
+    private(set) var applies = 0
+    private var heightChanges: [String: (from: CGFloat, to: CGFloat, apply: Int, sameLines: Bool)] = [:]
+
+    private func noteHeightChanges(next: [ListEntry], heights nextHeights: [CGFloat]) {
+        applies += 1
+        var old: [String: CGFloat] = [:]
+        for (i, line) in lines.enumerated() where i < heights.count { old[line.id] = heights[i] }
+        let sameLines = next.map(\.id) == lines.map(\.id)
+        for (i, line) in next.enumerated() {
+            if let before = old[line.id], before != nextHeights[i] {
+                heightChanges[line.id] = (before, nextHeights[i], applies, sameLines)
+            }
+        }
+    }
+
+    /// Whether a display is pending for the line in view with this id, by
+    /// view and layer (the line view, which owns the image; its cell; its
+    /// row view), for the measurement mode's second look. nil when the line
+    /// is not in view.
+    func displayFlags(_ id: String) -> (pending: Bool, text: String)? {
+        guard let row = lines.firstIndex(where: { $0.id == id }), row < table.numberOfRows,
+              let view = table.rowView(atRow: row, makeIfNecessary: false),
+              let cell = table.view(atColumn: 0, row: row, makeIfNecessary: false) as? LineCell else { return nil }
+        let flags: [(String, Bool)] = [
+            ("line view", cell.content.needsDisplay), ("its layer", cell.content.layer?.needsDisplay() ?? false),
+            ("cell", cell.needsDisplay), ("cell layer", cell.layer?.needsDisplay() ?? false),
+            ("row view", view.needsDisplay), ("row view layer", view.layer?.needsDisplay() ?? false),
+        ]
+        let text = flags.map { "\($0.0) \($0.1 ? "yes" : "no")" }.joined(separator: ", ")
+        return (flags.contains { $0.1 }, text)
+    }
+
+    /// What the measurement mode logs about a line a check found wrong.
+    func diagnostics(_ id: String) -> String {
+        var parts: [String] = ["applies so far \(applies)"]
+        if let change = heightChanges[id] {
+            parts.append(String(
+                format: "last height change %.1f -> %.1f at apply %d (%@)", change.from, change.to, change.apply,
+                change.sameLines ? "same lines" : "lines inserted or removed"
+            ))
+        } else {
+            parts.append("no height change recorded")
+        }
+        if let row = lines.firstIndex(where: { $0.id == id }) {
+            parts.append(String(format: "model height %.2f", heights[row]))
+            if case .card(let line) = lines[row] {
+                let geometry = LineLayout.card(line, width: shapedWidth > 0 ? shapedWidth : width, k: k, now: now)
+                let labelLines = Set(geometry.labels.map(\.frame.minY)).count
+                parts.append("labels \(line.shownLabels.count) on \(labelLines) lines, line 3 \(geometry.line3Fits ? "fits" : "wraps"), rows \(geometry.rows.count), compact \(line.compact)")
+            }
+        }
+        return parts.joined(separator: "; ")
     }
 
     /// The lines in view configured again, the others when they come into
@@ -927,6 +1000,24 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
                 if PerfMode.enabled {
                     FileHandle.standardError.write(Data(String(
                         format: "perf: %@: row view %d at y %.2f, its row at %.2f: reloaded\n", when, row, view.frame.minY, table.rect(ofRow: row).minY
+                    ).utf8))
+                }
+                return true
+            }
+            // A cell left at another height than its row view (told by
+            // `noteHeightOfRows`, the table resized the row view and not
+            // always its cell): the cell's line would be cut or leave a gap.
+            if let cell = view.view(atColumn: 0) as? LineCell, abs(cell.frame.height - view.frame.height) > 0.5 {
+                if PerfMode.enabled {
+                    let model = row < heights.count ? heights[row] : -1
+                    FileHandle.standardError.write(Data(String(
+                        format: "perf: %@: row %d (%@) cell height %.2f, its content %.2f, in a row view %.2f high (model %.2f); "
+                            + "animations: cell %@, content %@, row view %@; animation context duration %.2f: reloaded\n",
+                        when, row, cell.lineID ?? "-", cell.frame.height, cell.content.frame.height, view.frame.height, model,
+                        (cell.layer?.animationKeys() ?? []).joined(separator: " "),
+                        (cell.content.layer?.animationKeys() ?? []).joined(separator: " "),
+                        (view.layer?.animationKeys() ?? []).joined(separator: " "),
+                        NSAnimationContext.current.duration
                     ).utf8))
                 }
                 return true
@@ -1215,10 +1306,17 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
             let row = table.row(for: view)
             guard row >= 0, row < model.count, let cell = view.view(atColumn: 0) as? LineCell,
                   let line = cell.content as? LineView else { continue }
+            // What the screen shows is compared with what the line would
+            // draw now. A change applied in this pass of the run loop (the
+            // clock's tick reconfigures every line in view) is drawn at the
+            // next display: the measurement mode looks again after that
+            // display before it counts a difference (`Perf.checkList`).
             if let shown = line.layer?.contents, CFGetTypeID(shown as CFTypeRef) == CGImage.typeID,
                let fresh = line.renderImage(), let difference = ImageCompare.difference(shown as! CGImage, fresh), difference > 0.005 {
-                problems.append(String(format: "row %d (%@) shows another image than it draws now (%.1f%% of its pixels differ)",
-                                       row, model[row].id, difference * 100))
+                problems.append(String(
+                    format: "row %d (%@) shows another image than it draws now (%.1f%% of its pixels differ; draw key: %@)",
+                    row, model[row].id, difference * 100, line.drawKeyDifference()
+                ))
             }
             // A card of the Dismissed list sits under its repository.
             if let card = (line as? DismissedLineView)?.card {

@@ -114,6 +114,7 @@ final class ListContent: ObservableObject {
         let showsTag = list.tab == .all
         let expanded = list.expandedRows
         let compact = list.compact
+        let showsLabels = list.showLabels
         for section in list.sections {
             if section.showsHeader { out.append(.heading(HeadingLine(section))) }
             for card in section.cards {
@@ -121,7 +122,8 @@ final class ListContent: ObservableObject {
                     card: card, section: section.key, showsTag: showsTag, indented: section.level == 2,
                     expanded: expanded.contains(card.id), canDrag: section.accepts && card.canDrag,
                     expandedBodies: list.expandedBodies.intersection(card.rows.map(\.id)),
-                    compact: compact, unread: compact ? UnreadMark.of(card.rows) : .none, search: words
+                    compact: compact, unread: compact ? UnreadMark.of(card.rows) : .none, search: words,
+                    showsLabels: showsLabels
                 )))
             }
             if section.accepts, section.matching.isEmpty, !section.collapsed { out.append(.empty(section.key)) }

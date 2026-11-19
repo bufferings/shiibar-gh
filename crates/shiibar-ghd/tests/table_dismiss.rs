@@ -265,7 +265,7 @@ fn the_end_of_the_dismissed_list_leaves_a_record_for_an_open_pr_only() {
     h.place(
         &key("PR_1"),
         PlaceTab::Review,
-        Some(Section::Todo),
+        Some(Section::Inbox),
         None,
         None,
     )
@@ -579,9 +579,9 @@ fn a_record_shows_again_only_through_a_return_trigger() {
     let request = h.ev("E_2", "PR_1", IngestKind::ReviewRequested);
     let comment = h.ev("E_3", "PR_1", IngestKind::Comment);
     h.push(vec![later], vec![request, comment], vec![]);
-    // Like a newly found PR: a request puts it in Todo.
+    // Like a newly found PR: a request puts it in Inbox.
     assert!(h.visible("PR_1"));
-    assert_eq!(h.placement("PR_1").map(|p| p.1), Some("todo".into()));
+    assert_eq!(h.placement("PR_1").map(|p| p.1), Some("inbox".into()));
     assert!(h.engine.record(&full("PR_1")).is_none());
     assert!(h.has_row("E_2"));
     assert!(!h.has_row("E_3"), "only the trigger row");
@@ -946,8 +946,8 @@ fn a_team_only_pr_with_a_team_request_follows_the_list() {
     found_by_team(&mut h, vec![request]);
     assert_eq!(
         h.placement("PR_1").map(|p| (p.0, p.1)),
-        Some(("review".to_string(), "todo".to_string())),
-        "List on: a request row puts it in Todo"
+        Some(("review".to_string(), "inbox".to_string())),
+        "List on: a request row puts it in Inbox"
     );
 }
 

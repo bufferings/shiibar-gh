@@ -37,6 +37,12 @@ struct CardLine: Equatable {
     /// background (DESIGN.md, "Showing what matched"). Part of what the
     /// card's image is drawn from, not of its geometry.
     var search: [String] = []
+    /// `Show labels` (DESIGN.md, "Card", "GitHub labels"): the label line
+    /// ends the heading of a card with labels.
+    var showsLabels = false
+
+    /// The labels the heading shows: none while `Show labels` is off.
+    var shownLabels: [PRLabel] { showsLabels ? card.labels : [] }
 }
 
 /// The values of a section heading, or of a repository of the Dismissed

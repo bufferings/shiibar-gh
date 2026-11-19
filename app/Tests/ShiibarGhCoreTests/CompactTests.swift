@@ -67,8 +67,8 @@ final class CompactTests: XCTestCase {
             }
         }
         XCTAssertTrue(items.contains(.header(card: "T1")))
-        XCTAssertTrue(items.contains(.section("review|todo")))
-        XCTAssertTrue(items.contains(.more("review|todo")), "+ N more PRs stays")
+        XCTAssertTrue(items.contains(.section("review|inbox")))
+        XCTAssertTrue(items.contains(.more("review|inbox")), "+ N more PRs stays")
         list.toggleCompact()
         XCTAssertTrue(list.items.contains(.row(id: "A", card: "T1")), "off again: the rows are back")
     }
@@ -81,7 +81,7 @@ final class CompactTests: XCTestCase {
         XCTAssertEqual(list.selection, .header(card: "T2"))
         list.press(.up)
         list.press(.up)
-        XCTAssertEqual(list.selection, .section("review|todo"))
+        XCTAssertEqual(list.selection, .section("review|inbox"))
         await settle()
         XCTAssertEqual(calls("read"), [], "the hidden rows stay unread")
     }

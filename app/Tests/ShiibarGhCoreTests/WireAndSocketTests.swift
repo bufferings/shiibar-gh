@@ -152,7 +152,7 @@ final class WireTests: XCTestCase {
         XCTAssertEqual(EventKind.allCases.map(\.rawValue), [
             "review_requested", "team_review_requested", "mentioned", "team_mentioned", "comment", "comment_other", "reply",
             "reply_mentioned", "reaction", "approved", "changes_requested", "checks_failed", "checks_passed", "conflicts", "mergeable",
-            "merge_queue_added", "merge_queue_removed", "merged_closed", "reopened",
+            "ready_for_review", "converted_to_draft", "merge_queue_added", "merge_queue_removed", "merged_closed", "reopened",
         ], "DESIGN.md, Wire format")
         XCTAssertEqual(WarningKind(rawValue: "status_fetch_failed"), .statusFetchFailed)
     }
@@ -211,7 +211,7 @@ final class SocketClientTests: XCTestCase {
         XCTAssertNil(object["tab"])
         XCTAssertNil(object["filter"], "the app filters by itself")
         XCTAssertNil(object["search"])
-        XCTAssertNil(object["todo"])
+        XCTAssertNil(object["inbox"])
         XCTAssertNil(object["owner"])
         let read = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(fake.requests[1].utf8)) as? [String: Any])
         XCTAssertEqual(read["cmd"] as? String, "read")
@@ -237,8 +237,8 @@ final class SocketClientTests: XCTestCase {
             line.contains("mute") ? ok(["mutes": ["repos": ["o/r"], "users": [], "prs": []]]) : ok(["card": [:]])
         }
         let api = SocketDaemonAPI(socketPath: fake.path)
-        try await api.place(account: "me", pr: "o/r#1", target: .review(.todo), position: .before("o/r#2"))
-        try await api.place(account: "me", pr: "o/r#1", target: .mine(.todo), position: .bottom)
+        try await api.place(account: "me", pr: "o/r#1", target: .review(.inbox), position: .before("o/r#2"))
+        try await api.place(account: "me", pr: "o/r#1", target: .mine(.inbox), position: .bottom)
         try await api.place(account: "me", pr: "o/r#1", target: .mine(.doing), position: .byDefault)
         try await api.place(account: "me", pr: "o/r#1", target: .mine(.waiting), position: .before("o/r#2"))
         try await api.place(account: "me", pr: "o/r#1", target: .none, position: .byDefault)
@@ -253,8 +253,8 @@ final class SocketClientTests: XCTestCase {
         _ = try await api.mutes(account: "me")
         let sent = try fake.requests.map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]).mapValues { "\($0)" } }
         XCTAssertEqual(sent, [
-            ["cmd": "place", "account": "me", "pr": "o/r#1", "tab": "review", "section": "todo", "before": "o/r#2"],
-            ["cmd": "place", "account": "me", "pr": "o/r#1", "tab": "mine", "section": "todo", "at": "bottom"],
+            ["cmd": "place", "account": "me", "pr": "o/r#1", "tab": "review", "section": "inbox", "before": "o/r#2"],
+            ["cmd": "place", "account": "me", "pr": "o/r#1", "tab": "mine", "section": "inbox", "at": "bottom"],
             ["cmd": "place", "account": "me", "pr": "o/r#1", "tab": "mine", "section": "doing"],
             ["cmd": "place", "account": "me", "pr": "o/r#1", "tab": "mine", "section": "waiting", "before": "o/r#2"],
             ["cmd": "place", "account": "me", "pr": "o/r#1", "tab": "none"],

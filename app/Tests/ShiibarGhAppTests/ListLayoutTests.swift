@@ -139,7 +139,7 @@ final class ListLayoutTests: XCTestCase {
 final class HeadingValueTests: XCTestCase {
     func section(_ key: String, done: Bool, cards: [Card], collapsed: Bool = false) -> SectionLayout {
         SectionLayout(
-            key: key, title: done ? "Done" : "Todo", level: 1, isLeaf: true, detail: "\(cards.count) PRs", collapsed: collapsed,
+            key: key, title: done ? "Done" : "Inbox", level: 1, isLeaf: true, detail: "\(cards.count) PRs", collapsed: collapsed,
             cards: collapsed ? [] : cards, more: 0, showLess: false, moreMark: .none, matching: cards, accepts: true, isDone: done
         )
     }
@@ -150,7 +150,7 @@ final class HeadingValueTests: XCTestCase {
         XCTAssertTrue(HeadingLine(section("mine|done", done: true, cards: cards)).dismissAll)
         XCTAssertFalse(HeadingLine(section("review|done", done: true, cards: [])).dismissAll, "no card to dismiss")
         XCTAssertFalse(HeadingLine(section("review|done", done: true, cards: cards, collapsed: true)).dismissAll, "collapsed")
-        XCTAssertFalse(HeadingLine(section("review|todo", done: false, cards: cards)).dismissAll, "not Done")
+        XCTAssertFalse(HeadingLine(section("review|inbox", done: false, cards: cards)).dismissAll, "not Done")
         // A change of it is a change of the heading (its image is drawn
         // again).
         XCTAssertNotEqual(HeadingLine(section("review|done", done: true, cards: cards)),
@@ -406,11 +406,11 @@ final class DismissedBandPressTests: XCTestCase {
         // goes again here: this list has no section to keep it on).
         let heading = HeadingLineView(frame: NSRect(x: 0, y: 0, width: 460, height: 31))
         let section = SectionLayout(
-            key: "review|todo", title: "Todo", level: 1, isLeaf: true, detail: "0 PRs", collapsed: false, cards: [], more: 0,
+            key: "review|inbox", title: "Inbox", level: 1, isLeaf: true, detail: "0 PRs", collapsed: false, cards: [], more: 0,
             showLess: false, moreMark: .none, matching: [], accepts: true, isDone: false
         )
         heading.configure(HeadingLine(section), env: env, state: ItemState())
         heading.mouseDown(with: event(.leftMouseDown))
-        XCTAssertEqual(list.data.collapsed, ["review|todo"])
+        XCTAssertEqual(list.data.collapsed, ["review|inbox"])
     }
 }

@@ -1,6 +1,6 @@
 // Moving a card (DESIGN.md, "Review", "Mine", "What a press does" and
 // "Keyboard"): what a dragged card is over, where it lands, the line that
-// shows it, the moves of ⌥↑↓ and D / T / W, and the same moves applied to
+// shows it, the moves of ⌥↑↓ and I / D / W, and the same moves applied to
 // the cards on screen before the daemon answers. A landing is the `before`
 // or `at` of the wire's `place` (DESIGN.md, "Wire format"), so the daemon
 // gets the place the screen shows.
@@ -160,7 +160,7 @@ public enum CardDrop {
         return PlaceMove(card: card.id, target: target, position: position(index + 1, lowerHalf: true, in: ids), verb: .move)
     }
 
-    /// D, T or W in Review or Mine: to that section of the card's tab at
+    /// I, D or W in Review or Mine: to that section of the card's tab at
     /// its default place, from Done too; nothing for the section the card
     /// is in, nor without a placement (All).
     public static func moveTo(_ section: PlacementSection, _ card: Card) -> PlaceMove? {
@@ -281,11 +281,11 @@ public enum LocalChange: Equatable {
                 case .top: index = 0
                 case .bottom: index = order.count
                 case .byDefault:
-                    // Todo: at the top from Doing or Waiting of the same tab,
+                    // Inbox: at the top from Doing or Waiting of the same tab,
                     // else at the bottom (DESIGN.md, "Review", "Mine").
                     let fromDoingOrWaiting = from?.tab.value == tab
                         && (from?.section.value == .doing || from?.section.value == .waiting)
-                    index = section == .todo && fromDoingOrWaiting ? 0 : order.count
+                    index = section == .inbox && fromDoingOrWaiting ? 0 : order.count
                 }
             }
             order.insert(card.id, at: index)
