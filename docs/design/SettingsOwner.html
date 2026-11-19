@@ -202,7 +202,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
 <div class="ab">
 <section class="scene">
     <div class="cap">Settings › Accounts: owner example-org selected</div>
-    <div class="desc" style="width: 760px">One page without tabs. Boxes from the top: <b>Owner</b> (Enabled), <b>Notifications</b> (Notify for example-org, Skip draft pull requests), <b>Events</b> (the List / Notify table and Copy table from another owner) and <b>Remove</b>. When the page is taller than the window, the right side scrolls. <b>Any pull request</b> starts with <b>Ready for review</b> (List and Notify on by default) and <b>Converted to draft</b> (List on, Notify off by default), which apply to every PR you are involved in, like Merged / Closed.</div>
+    <div class="desc" style="width: 760px">One page without tabs. Boxes from the top: <b>Owner</b> (Enabled), <b>Notifications</b> (Notify for example-org, Skip draft pull requests), <b>Events</b> (the List / Notify table and Copy table from another owner) and <b>Remove</b>. When the page is taller than the window, the right side scrolls. <b>Any pull request</b> starts with <b>Ready for review</b> (List and Notify on by default) and <b>Converted to draft</b> (List on, Notify off by default), which apply to every PR you are involved in, like Merged / Closed. <b>My review</b> (after Review requested to my team) lists your own approvals and change requests as read rows; it never notifies, so its Notify cell is a dash that cannot be checked.</div>
     <div class="win" style="width: 760px">
       <div class="titlebar">
         <div class="tl"><div class="dots" aria-hidden="true"><span style="background: #EC6A5E"></span><span style="background: #F4BF4F"></span><span style="background: #61C554"></span></div><div class="wt">Accounts</div><div style="width: 50px"></div></div>
@@ -231,6 +231,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
 <tr class="g"><td colspan="3">Reviews and mentions</td></tr>
 <tr><td>Review requested</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
 <tr><td>Review requested to my team</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
+<tr><td>My review</td><td><input type="checkbox" checked></td><td><span style="color: var(--tertiary)" title="Your own reviews never notify">&ndash;</span></td></tr>
 <tr><td>Mentioned</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
 <tr><td>My team mentioned</td><td><input type="checkbox" checked></td><td><input type="checkbox" checked></td></tr>
 <tr class="g"><td colspan="3">Comments</td></tr>
@@ -271,6 +272,7 @@ body{margin:0;padding:24px;background:#e9e9ee}
 <tr class="g"><td colspan="3">Reviews and mentions</td></tr>
 <tr><td>Review requested</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
 <tr><td>Review requested to my team</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
+<tr><td>My review</td><td><span class="on">&#10003;</span></td><td><span class="off">&ndash;</span></td></tr>
 <tr><td>Mentioned</td><td><span class="on">&#10003;</span></td><td><span class="off">&ndash;</span></td></tr>
 <tr><td>My team mentioned</td><td><span class="on">&#10003;</span></td><td><span class="on">&#10003;</span></td></tr>
 <tr class="g"><td colspan="3">Comments</td></tr>
