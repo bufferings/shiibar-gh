@@ -143,7 +143,7 @@ final class MyReviewDrawingTests: XCTestCase {
             case .approved: card.myReview = .known(.approved)
             case .changesRequested: card.myReview = .known(.changesRequested)
             }
-            let line = CardLine(card: card, section: "s", showsTag: false, indented: false, expanded: false, canDrag: true, myReview: MyReviewMark.of(card))
+            let line = CardLine(card: card, section: "s", showsTag: false, expanded: false, canDrag: true, myReview: MyReviewMark.of(card))
             let g = LineLayout.card(line, width: 460, k: 1, now: 0)
             let frame = try XCTUnwrap(g.myReview)
             let view = CardLineView(frame: CGRect(origin: .zero, size: g.size))
@@ -194,7 +194,7 @@ final class MyReviewDrawingTests: XCTestCase {
 
     func testTheHeadingsTextForAssistiveApps() {
         let line = CardLine(
-            card: waitingCard, section: "review|inbox", showsTag: false, indented: false, expanded: false, canDrag: true,
+            card: waitingCard, section: "review|inbox", showsTag: false, expanded: false, canDrag: true,
             myReview: MyReviewMark.of(waitingCard)
         )
         let g = LineLayout.card(line, width: 460, k: 1, now: 0)

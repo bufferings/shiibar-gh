@@ -256,13 +256,19 @@ final class SurfaceRoot: NSView {
         guard let onMinimumHeight, let k = content.environment?.1, !content.list.showingDismissed,
               let listTop = content.listAnchor?.frameInRoot?.minY, let hints = content.hintsAnchor?.frameInRoot else { return }
         // The options' area as laid out now (none while closed): taken off
-        // the list's top, and their full area added back.
+        // the list's top, and their full area at this width added back
+        // (narrow, the box has more rows).
         let shown = content.optionsAnchor.flatMap { $0.rootView === self ? $0.frameInRoot?.height : nil } ?? 0
         let bands = content.bandsAnchor.flatMap { $0.rootView === self ? $0.frameInRoot?.height : nil } ?? 0
+        let area = FilterOptionsLayout.areaHeight(filter: content.list.filter, width: bounds.width, k: k)
+        let rowRoom = FilterOptionsLayout.closedRoom(open: shown > 0, bandFirst: content.list.startsWithBand)
         let minimum = FilterOptionsLayout.surfaceMinimum(
-            listTop: listTop, shownOptions: shown, bands: bands, below: hints.height, lines: content.list.filterOptions.count, k: k
+            listTop: listTop, shownOptions: shown, rowRoom: rowRoom, bands: bands, below: hints.height, area: area, k: k
         )
-        if let reportedMinimum, abs(reportedMinimum - minimum) < 0.5 { return }
+        // The same least height again only while the surface is lower
+        // than it (its frame was set below it in code): `onMinimumHeight`
+        // raises it.
+        if let reportedMinimum, abs(reportedMinimum - minimum) < 0.5, bounds.height >= minimum - 0.5 { return }
         reportedMinimum = minimum
         onMinimumHeight(minimum)
     }
@@ -274,10 +280,10 @@ final class SurfaceRoot: NSView {
          content.hintsAnchor?.frameInRoot)
     }
 
-    /// The cards in view, in this root, and whether each is indented (the
-    /// measurement mode's frame check: the margins left and right).
-    var cardFrames: [(CGRect, indented: Bool)] {
-        controller.cardViews.map { (self.convert($0.bounds, from: $0), $0.line?.indented ?? false) }
+    /// The cards in view, in this root (the measurement mode's frame
+    /// check: the margins left and right).
+    var cardFrames: [CGRect] {
+        controller.cardViews.map { self.convert($0.bounds, from: $0) }
     }
 
     override func layout() {
@@ -1206,7 +1212,7 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
             cell.contentFrame = frame
             (cell.content as? HeadingLineView)?.configure(heading, env: env, state: content.state(id))
         case (.card(let line), .card(let geometry)):
-            let frame = CGRect(x: line.indented ? 24 : 12, y: 0, width: geometry.size.width, height: geometry.size.height)
+            let frame = CGRect(x: 12, y: 0, width: geometry.size.width, height: geometry.size.height)
             if id == animating, previous == id, cell.content.frame.height > 0 {
                 cell.animateContentFrame(to: frame, duration: Self.heightAnimation, timing: Self.heightTiming)
             } else {
@@ -1436,7 +1442,7 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
 
     private func placeDropLine() {
         guard let (card, edge) = content.dropLine, let row = rowOf["card:" + card], row < table.numberOfRows,
-              case .card(let line) = lines[row] else {
+              case .card = lines[row] else {
             dropLine.isHidden = true
             return
         }
@@ -1445,7 +1451,7 @@ final class ListTableController: NSObject, NSTableViewDataSource, NSTableViewDel
         // it. The line is centered on the 8-point gap above or below the
         // card and starts 3 points left of it.
         let rect = table.rect(ofRow: row)
-        let left = (line.indented ? 24 : 12) - 3.0
+        let left: CGFloat = 12 - 3
         // Over the first line of the list (a card with no heading above
         // it) the gap above is not in the list: the line goes just inside
         // its top edge, where it can be seen.

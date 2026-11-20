@@ -1013,7 +1013,7 @@ enum LineLayout {
 
     static func card(_ line: CardLine, width cellWidth: CGFloat, k: CGFloat, now: Int64) -> CardGeometry {
         let card = line.card
-        let width = max(80, cellWidth - (line.indented ? 24 : 12) - 12)
+        let width = max(80, cellWidth - 24)
         let left: CGFloat = 12
         let right = width - 10
         let f11 = Ink.font(11 * k)
@@ -1322,7 +1322,7 @@ enum LineLayout {
     static func line3Fits(_ line: CardLine, width cellWidth: CGFloat, k: CGFloat, now: Int64) -> Bool {
         let card = line.card
         let f11 = Ink.font(11 * k)
-        let width = max(80, cellWidth - (line.indented ? 24 : 12) - 12)
+        let width = max(80, cellWidth - 24)
         let room = width - 10 - 12
         let tag = (line.showsTag ? card.placementTag : nil).map { ListButton.tagSize($0, k: k).width + 6 } ?? 0
         let left = tag + Ink.width("\(card.base) \u{2190} \(card.head)", f11)
@@ -1415,17 +1415,39 @@ enum LineLayout {
     // MARK: Other lines
 
     /// A band heading (level 1) or a small one (level 2): the press frame
-    /// in the cell and the cell's height.
+    /// in the cell and the cell's height. The band spans the list's whole
+    /// width, `bandSpace` above it (`HeadingLine.gap`) and below it.
     static func heading(_ heading: HeadingLine, width: CGFloat, k: CGFloat) -> (frame: CGRect, height: CGFloat) {
         if heading.level == 1 {
-            let inner = max(Ink.lineHeight(Ink.font(12 * k, .semibold)), Ink.lineHeight(Ink.font(11 * k)), 14 * k)
-            let band = CGRect(x: 12, y: heading.gap, width: max(0, width - 24), height: 4 * k + inner + 4 * k)
-            return (band, band.maxY + 6)
+            let band = CGRect(x: 0, y: heading.gap, width: max(0, width), height: bandHeight(k: k))
+            return (band, band.maxY + bandSpace)
         }
+        // The text line, `smallAbove` above it and `smallBelow` under it.
         let inner = max(Ink.lineHeight(Ink.font(11 * k, .semibold)), Ink.lineHeight(Ink.font(11 * k)), 14 * k)
-        let band = CGRect(x: 12, y: 2, width: max(0, width - 24), height: 2 * k + inner + 2 * k)
-        return (band, band.maxY + 4)
+        let frame = CGRect(x: 12, y: smallAbove, width: max(0, width - 24), height: inner)
+        return (frame, frame.maxY + smallBelow)
     }
+
+    /// Above and below a second-level heading, at every text size.
+    static let smallAbove: CGFloat = 4
+    static let smallBelow: CGFloat = 5
+    /// The least width of a second-level heading's thin line: a long name
+    /// is cut before the line gets shorter.
+    static let ruleMinimum: CGFloat = 8
+
+    /// The band's height at text size 12 (DESIGN.md, "Constants").
+    static let bandHeight: CGFloat = 28
+    /// Above and below a band.
+    nonisolated static let bandSpace: CGFloat = 8
+    /// The band's height at the text scale `k`, its text line centered in
+    /// it.
+    static func bandHeight(k: CGFloat) -> CGFloat {
+        bandHeight * k
+    }
+
+    /// The parts of a band sit as they did in a band inset by the cards'
+    /// margin: this far in from the band's left and right ends.
+    static let bandInset: CGFloat = 12
 
     static func fold(width: CGFloat, k: CGFloat) -> (frame: CGRect, height: CGFloat) {
         let inner = max(7 * k, Ink.lineHeight(Ink.font(12 * k)))
@@ -1837,11 +1859,13 @@ class LineView: PressView {
     }
 }
 
-/// A section heading: a band (Main.html `.band`) or a small indented
-/// heading (`.grp2`). Pressing it folds the section. The Done of Review and
-/// Mine has `Dismiss all` between the count and the chevron. A repository
-/// of the Dismissed list is a band without the chevron, which a press does
-/// nothing to.
+/// A section heading: a band across the whole list with a line on its top
+/// and bottom edges (Main.html `.band`), or a small heading of a
+/// second-level group: its name, a thin line filling the room, the count
+/// and the chevron, at the cards' place (`.grp2`). Pressing it folds the
+/// section. The Done of Review and Mine has `Dismiss all` between the count
+/// and the chevron. A repository of the Dismissed list is a band without
+/// the chevron, which a press does nothing to.
 final class HeadingLineView: LineView {
     var heading: HeadingLine?
 
@@ -1877,7 +1901,7 @@ final class HeadingLineView: LineView {
         heading?.collapsed == true ? BoardIcons.sectionClosed : BoardIcons.sectionOpen
     }
 
-    private struct Parts {
+    struct Parts {
         var chevron: CGRect?
         /// The unread mark of a collapsed heading, before its name.
         var mark: CGRect?
@@ -1885,17 +1909,22 @@ final class HeadingLineView: LineView {
         var showLess: CGRect?
         var detail: CGRect
         var dismissAll: CGRect?
+        /// The thin line of a second-level heading, between the name and
+        /// what is right of it.
+        var rule: CGRect?
     }
 
-    private func parts() -> Parts? {
+    func parts() -> Parts? {
         guard let heading else { return nil }
         let level1 = heading.level == 1
         let titleFont = Ink.font((level1 ? 12 : 11) * k, .semibold)
         let detailFont = Ink.font(11 * k)
-        let left: CGFloat = level1 ? 10 : 22
-        let right = bounds.width - 8
-        let spacing: CGFloat = level1 ? 8 : 6
-        let line = CGRect(x: 0, y: (level1 ? 4 : 2) * k, width: bounds.width, height: bounds.height - (level1 ? 8 : 4) * k)
+        // The band spans the list; its parts keep the cards' margin.
+        let inset = level1 ? LineLayout.bandInset : 0
+        let left: CGFloat = inset + 10
+        let right = bounds.width - inset - 8
+        let spacing: CGFloat = 8
+        let line = bounds
         let chevronSize = 14 * k
         let detailWidth = Ink.width(heading.detail, detailFont)
         let lessSize = heading.showLess ? ListButton.textSize("Show less", size: 11 * k) : nil
@@ -1932,23 +1961,33 @@ final class HeadingLineView: LineView {
             let title = CGRect(x: titleX, y: LineLayout.center(Ink.lineHeight(titleFont), in: line), width: max(0, titleRight - titleX), height: Ink.lineHeight(titleFont))
             return Parts(chevron: chevron, mark: mark, title: title, showLess: less, detail: detail, dismissAll: dismissAll)
         }
-        let chevron = CGRect(x: left, y: LineLayout.center(chevronSize, in: line), width: chevronSize, height: chevronSize)
-        let detail = CGRect(x: right - detailWidth, y: LineLayout.center(Ink.lineHeight(detailFont), in: line), width: detailWidth, height: Ink.lineHeight(detailFont))
+        // From the right: the chevron, the count, `Show less`; from the
+        // left the unread mark and the name; the line fills the room
+        // between.
+        let chevron = CGRect(x: right - chevronSize, y: LineLayout.center(chevronSize, in: line), width: chevronSize, height: chevronSize)
+        let detail = CGRect(
+            x: chevron.minX - spacing - detailWidth, y: LineLayout.center(Ink.lineHeight(detailFont), in: line), width: detailWidth,
+            height: Ink.lineHeight(detailFont)
+        )
         var titleRight = detail.minX - spacing
         var less: CGRect?
         if let lessSize {
             less = CGRect(x: titleRight - lessSize.width, y: LineLayout.center(lessSize.height, in: line), width: lessSize.width, height: lessSize.height)
             titleRight = less!.minX - spacing
         }
-        // Main.html `.grp2 > .dot`: after the chevron, before the name.
-        var titleX = chevron.maxX + spacing
+        var titleX = left
         var mark: CGRect?
         if heading.mark != .none {
             mark = CGRect(x: titleX, y: LineLayout.center(7 * k, in: line), width: 7 * k, height: 7 * k)
             titleX = mark!.maxX + spacing - 2
         }
-        let title = CGRect(x: titleX, y: LineLayout.center(Ink.lineHeight(titleFont), in: line), width: max(0, titleRight - titleX), height: Ink.lineHeight(titleFont))
-        return Parts(chevron: chevron, mark: mark, title: title, showLess: less, detail: detail)
+        // The name is cut before the line goes under its least width.
+        let titleRoom = titleRight - spacing - LineLayout.ruleMinimum - titleX
+        let titleWidth = min(Ink.width(heading.title, titleFont) + 1, max(0, titleRoom))
+        let title = CGRect(x: titleX, y: LineLayout.center(Ink.lineHeight(titleFont), in: line), width: titleWidth, height: Ink.lineHeight(titleFont))
+        let ruleX = (title.maxX + spacing).rounded()
+        let rule = CGRect(x: ruleX, y: line.midY.rounded(.down), width: max(LineLayout.ruleMinimum, (titleRight - ruleX).rounded()), height: 1)
+        return Parts(chevron: chevron, mark: mark, title: title, showLess: less, detail: detail, rule: rule)
     }
 
     private func layoutControls() {
@@ -1982,12 +2021,22 @@ final class HeadingLineView: LineView {
         // A drop target takes the accent tint whatever has the keys.
         let highlight = state.over ? Palette.selection.nsColor : selectionFill
         if heading.level == 1 {
-            Shapes.rounded(bounds, radius: 6, fill: highlighted ? highlight : Palette.band.nsColor)
-            if state.over { Shapes.rounded(bounds.insetBy(dx: 1, dy: 1), radius: 6, stroke: Palette.accent.nsColor, lineWidth: 2) }
+            // The whole band, square, a 1-point line on its top and bottom
+            // edges in every state.
+            (highlighted ? highlight : Palette.band.nsColor).setFill()
+            bounds.fill()
+            Palette.border.nsColor.setFill()
+            CGRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: 1).fill()
+            CGRect(x: bounds.minX, y: bounds.maxY - 1, width: bounds.width, height: 1).fill()
+            if state.over { Shapes.rounded(bounds.insetBy(dx: 1, dy: 1), radius: 0, stroke: Palette.accent.nsColor, lineWidth: 2) }
             Ink.draw(heading.title, Ink.font(12 * k, .semibold), heading.collapsed ? Palette.secondary.nsColor : Palette.text.nsColor, in: parts.title)
             Ink.draw(heading.detail, Ink.font(11 * k), Palette.secondary.nsColor, in: parts.detail)
         } else {
             if highlighted { Shapes.rounded(bounds, radius: 6, fill: highlight) }
+            if let rule = parts.rule {
+                Palette.border.nsColor.setFill()
+                rule.fill()
+            }
             Ink.draw(heading.title, Ink.font(11 * k, .semibold), Palette.text.nsColor, in: parts.title)
             Ink.draw(heading.detail, Ink.font(11 * k), Palette.secondary.nsColor, in: parts.detail)
         }

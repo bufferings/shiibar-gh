@@ -501,8 +501,8 @@ public enum SectionKey {
 public struct SectionLayout: Equatable, Identifiable {
     public var key: String
     public var title: String
-    /// 0: no heading (Group by None); 1: a band; 2: an indented small
-    /// heading.
+    /// 0: no heading (Group by None); 1: a band; 2: a small heading with a
+    /// line, its cards at the same place as the band's.
     public var level: Int
     /// Holds cards (the innermost group).
     public var isLeaf: Bool

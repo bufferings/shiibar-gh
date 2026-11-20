@@ -23,8 +23,6 @@ struct CardLine: Equatable {
     var section: String
     /// The placement tag: All only.
     var showsTag: Bool
-    /// Under a second-level group of All (Main.html `.card.in`).
-    var indented: Bool
     var expanded: Bool
     var canDrag: Bool
     /// The card's rows whose body is expanded with `more`.
@@ -71,9 +69,11 @@ struct HeadingLine: Equatable {
     /// selection. A repository of the Dismissed list does none of these
     /// (DESIGN.md, "Dismissed list").
     var folds = true
-    /// The room above the band: less under the Dismissed list's note
-    /// (Main.html `.dhead + .dnote + .band`).
-    var gap: CGFloat = 8
+    /// The room above the band (`LineLayout.bandSpace`): less under the
+    /// Dismissed list's note (Main.html `.dhead + .dnote + .band`), none
+    /// for the list's first line, which sits right under the Filter row
+    /// with its top line showing.
+    var gap: CGFloat = LineLayout.bandSpace
 
     init(_ section: SectionLayout) {
         key = section.key

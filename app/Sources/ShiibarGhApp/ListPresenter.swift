@@ -117,10 +117,15 @@ final class ListContent: ObservableObject {
         let showsLabels = list.showLabels
         let myAvatar = selfAvatar()
         for section in list.sections {
-            if section.showsHeader { out.append(.heading(HeadingLine(section))) }
+            if section.showsHeader {
+                var heading = HeadingLine(section)
+                // The first line: right under the Filter row (`startsWithBand`).
+                if out.isEmpty { heading.gap = 0 }
+                out.append(.heading(heading))
+            }
             for card in section.cards {
                 out.append(.card(CardLine(
-                    card: card, section: section.key, showsTag: showsTag, indented: section.level == 2,
+                    card: card, section: section.key, showsTag: showsTag,
                     expanded: expanded.contains(card.id), canDrag: section.accepts && card.canDrag,
                     expandedBodies: list.expandedBodies.intersection(card.rows.map(\.id)),
                     compact: compact, unread: compact ? UnreadMark.of(card.rows) : .none, search: words,
@@ -245,5 +250,16 @@ final class ListContent: ObservableObject {
         guard list.selection == item, list.dragging == nil else { return }
         if drag?.isVisible(item) == true { return }
         table?.reveal(item)
+    }
+}
+
+extension SurfaceListModel {
+    /// The list's first line is a band heading (`ListPresenter.entries`):
+    /// a tab's list with no text in place of it whose first section has a
+    /// first-level heading. Its top line then sits right under the closed
+    /// Filter row, with no room between (DESIGN.md, "Filter"); a card, the
+    /// text of an empty list or the Dismissed list keeps the room.
+    var startsWithBand: Bool {
+        !showingDismissed && emptyText == nil && sections.first?.level == 1
     }
 }

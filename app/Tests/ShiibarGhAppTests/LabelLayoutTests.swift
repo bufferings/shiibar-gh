@@ -17,7 +17,7 @@ final class LabelLayoutTests: XCTestCase {
 
     func line(_ card: Card, shows: Bool = true, compact: Bool = false) -> CardLine {
         CardLine(
-            card: card, section: "s", showsTag: false, indented: false, expanded: false, canDrag: true, compact: compact,
+            card: card, section: "s", showsTag: false, expanded: false, canDrag: true, compact: compact,
             showsLabels: shows
         )
     }

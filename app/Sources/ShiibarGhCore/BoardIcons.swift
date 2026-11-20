@@ -116,6 +116,15 @@ public enum BoardIcons {
     /// down while open.
     public static let filterClosed = BoardIcon([.path("M6 4l4 4-4 4")], lineWidth: 2, roundCaps: true, roundJoins: true)
     public static let filterOpen = BoardIcon([.path("M4 6l4 4 4-4")], lineWidth: 2, roundCaps: true, roundJoins: true)
+    /// The `Filter` tab (DESIGN.md, "Filter"): three lines, each shorter
+    /// than the one above, centered. Drawn so its shape matches the board.
+    public static let filter = BoardIcon([.path("M2.5 4.5h11M4.5 8h7M6.5 11.5h3")], lineWidth: 1.7, roundCaps: true)
+    /// `Grouping…` (DESIGN.md, "Filter"): three lines, the lower two
+    /// indented. Drawn so its shape matches the board.
+    public static let grouping = BoardIcon([.path("M2.5 4h11M5.5 8h8M5.5 12h8")], lineWidth: 1.7, roundCaps: true)
+    /// The ✓ of a Filter Status button that is on (Main.html `.fchip svg`),
+    /// on a 10 by 10 grid.
+    public static let optionCheck = BoardIcon([.path("M1.8 5.4l2.2 2.2 4.2-4.6")], lineWidth: 1.8, roundCaps: true, roundJoins: true)
     /// A section header: expanded (down) and collapsed (right).
     public static let sectionOpen = BoardIcon([.path("M4 6l4 4 4-4")], lineWidth: 1.8, roundCaps: true, roundJoins: true)
     public static let sectionClosed = BoardIcon([.path("M6 4l4 4-4 4")], lineWidth: 1.8, roundCaps: true, roundJoins: true)

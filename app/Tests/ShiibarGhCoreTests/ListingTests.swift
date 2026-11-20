@@ -1054,11 +1054,11 @@ final class InboxTests: XCTestCase {
     /// left out; Add to Review and Add to Mine put the card in Inbox.
     func testTheMenusFollowTheFlow() {
         let all = view(.all)
-        let doing = titles(PopoverLogic.menu(for: .header(card: "R1"), view: all, login: "bufferings-work"))
+        let doing = titles(PopoverLogic.menu(for: .header(card: "R1"), view: all, login: "example-user"))
         XCTAssertEqual(doing.filter { $0.hasPrefix("Move to") }, ["Move to Inbox", "Move to Waiting", "Move to Done"])
-        let inbox = titles(PopoverLogic.menu(for: .header(card: "T1"), view: all, login: "bufferings-work"))
+        let inbox = titles(PopoverLogic.menu(for: .header(card: "T1"), view: all, login: "example-user"))
         XCTAssertEqual(inbox.filter { $0.hasPrefix("Move to") }, ["Move to Doing", "Move to Waiting", "Move to Done"])
-        let add = PopoverLogic.menu(for: .header(card: "N1"), view: all, login: "bufferings-work").compactMap { $0 }
+        let add = PopoverLogic.menu(for: .header(card: "N1"), view: all, login: "example-user").compactMap { $0 }
         XCTAssertEqual(
             add.first { $0.title == "Add to Review" }?.action,
             .place(PlaceMove(card: "N1", target: .review(.inbox), position: .byDefault, verb: .add))

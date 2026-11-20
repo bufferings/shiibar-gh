@@ -116,7 +116,7 @@ final class ListContentLabelsTests: XCTestCase {
         let (_, list) = model(reviewCards())
         let context = CardContext.of(list, avatars: AvatarStore(loader: FileImageLoader(), schemes: ["file"]))
         let card = reviewCards()[0]
-        let line = CardLine(card: card, section: "review|inbox", showsTag: false, indented: false, expanded: false, canDrag: true, showsLabels: true)
+        let line = CardLine(card: card, section: "review|inbox", showsTag: false, expanded: false, canDrag: true, showsLabels: true)
         let geometry = LineLayout.card(line, width: 460, k: 1, now: 0)
         let frame = try XCTUnwrap(geometry.labels.first?.frame)
         for dark in [false, true] {
@@ -150,7 +150,7 @@ final class ListContentLabelsTests: XCTestCase {
                 id: "M", pr: "example-org/api#3", account: "1001", title: "Muted", authoredByMe: false,
                 muted: muted ? [.author] : [], labels: [PRLabel(name: "bug", color: "d73a4a")], labelsMore: 8
             )
-            let line = CardLine(card: card, section: "s", showsTag: false, indented: false, expanded: false, canDrag: true, showsLabels: true)
+            let line = CardLine(card: card, section: "s", showsTag: false, expanded: false, canDrag: true, showsLabels: true)
             let geometry = LineLayout.card(line, width: 460, k: 1, now: 0)
             let view = CardLineView(frame: CGRect(origin: .zero, size: geometry.size))
             view.appearance = NSAppearance(named: .aqua)

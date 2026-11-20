@@ -61,8 +61,9 @@ extension Palette {
         dark: { darkGround }
     )
     /// The share of gray in the light ground: enough that the ground is
-    /// visibly off the white cards.
-    public static let lightGroundGray: CGFloat = 0.10
+    /// visibly off the white cards, light enough that the gray heading
+    /// bands stand out from it.
+    public static let lightGroundGray: CGFloat = 0.05
     private static var darkGround: NSColor {
         NSColor.windowBackgroundColor.blended(withFraction: 0.3, of: .black) ?? .windowBackgroundColor
     }
@@ -99,8 +100,23 @@ extension Palette {
 
     // MARK: Fills
 
-    /// A section's or a group's band heading: a light gray veil.
-    public static let band = Tone(NSColor(name: nil) { _ in NSColor.systemGray.withAlphaComponent(0.12) })
+    /// A section's or a group's band heading: a light gray veil, lighter on
+    /// light (the list's ground there is lighter too).
+    public static let band = Tone(NSColor(name: nil) { appearance in
+        NSColor.systemGray.withAlphaComponent(appearance.isDark ? bandAlpha.dark : bandAlpha.light)
+    })
+    /// The band's opacity of system gray on light and on dark.
+    public static let bandAlpha: (light: CGFloat, dark: CGFloat) = (0.09, 0.12)
+    /// The ground of a Filter option button or switch segment that is off,
+    /// and of one that is on (selected), over the options' box: black on
+    /// light, white on dark, at these opacities. On and off differ by at
+    /// least 0.10 in either appearance, so the state reads without color.
+    public static let optionOff = Tone(NSColor(name: nil) { appearance in
+        appearance.isDark ? NSColor.white.withAlphaComponent(0.06) : NSColor.black.withAlphaComponent(0.04)
+    })
+    public static let optionOn = Tone(NSColor(name: nil) { appearance in
+        appearance.isDark ? NSColor.white.withAlphaComponent(0.22) : NSColor.black.withAlphaComponent(0.14)
+    })
     /// A hovered icon button and a key chip of the key hints.
     public static let fill = Tone(NSColor(name: nil) { _ in NSColor.systemGray.withAlphaComponent(0.16) })
 

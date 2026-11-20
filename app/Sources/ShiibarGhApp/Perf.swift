@@ -621,10 +621,9 @@ final class PerfRunner: NSObject {
                 if let anchor, abs(listFrame.minX - anchor.minX) > 1 || abs(listFrame.maxX - anchor.maxX) > 1 {
                     problems.append("left or right edge off its place")
                 }
-                // The cards' margins left and right are the same (an
-                // indented card's left margin is 12 points more).
-                for (card, indented) in root.cardFrames {
-                    let left = card.minX - listFrame.minX - (indented ? 12 : 0)
+                // The cards' margins left and right are the same.
+                for card in root.cardFrames {
+                    let left = card.minX - listFrame.minX
                     let right = listFrame.maxX - card.maxX
                     if abs(left - right) > 1 || card.maxX > listFrame.maxX {
                         problems.append(String(format: "card margins %.1f left, %.1f right", left, right))
@@ -1516,7 +1515,7 @@ final class PerfRunner: NSObject {
                 for windowWidth in [frame.width, 400, 520, 360, 600, 640] {
                     let w = windowWidth - margin
                     func fits(_ c: Card) -> Bool {
-                        LineLayout.line3Fits(CardLine(card: c, section: done, showsTag: false, indented: false, expanded: false, canDrag: true),
+                        LineLayout.line3Fits(CardLine(card: c, section: done, showsTag: false, expanded: false, canDrag: true),
                                              width: w, k: k, now: now)
                     }
                     if !fits(card) && fits(plain) {
@@ -1890,10 +1889,10 @@ final class PerfRunner: NSObject {
         await pause(0.8)
         let unbanded = window.frame.height
         log("consistency short window: a failure band: height \(lowest) -> \(banded) -> \(unbanded), list \(listBefore) -> \(listBanded)")
-        let area = FilterOptionsLayout.areaHeight(lines: list.filterOptions.count, k: k)
+        let area = FilterOptionsLayout.areaHeight(filter: list.filter, width: window.contentView?.bounds.width ?? 0, k: k)
         if open, listHeight >= 100 * k - 0.5 || hasWarning, abs(closedHeight - lowest) < 0.5, abs(reopened - lowest) < 0.5,
            abs(banded - lowest) < 0.5, abs(unbanded - lowest) < 0.5, listBanded < listBefore,
-           abs(closedList - listHeight - area) < 1.5 {
+           abs(closedList - listHeight - FilterOptionsLayout.openShift(area: area, bandFirst: list.startsWithBand)) < 1.5 {
             log(String(format: "consistency short window: lowest %.0f pt; the list keeps %.0f pt with the options open (%.0f closed); the options' area %.1f pt; open and close keep the height",
                        lowest, listHeight, closedList, area))
         } else {

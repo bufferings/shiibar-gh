@@ -117,6 +117,38 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(light.redComponent, control.redComponent, accuracy: 0.001)
     }
 
+    /// DESIGN.md, "Colors": on light the list's ground is the control
+    /// background with 5% system gray and the band system gray at 0.09; on
+    /// dark the ground is the window background with 30% black and the band
+    /// system gray at 0.12. The Filter options' grounds differ by 0.10 or
+    /// more between off and on in either appearance.
+    func testTheGroundAndTheBandValues() {
+        XCTAssertEqual(Palette.lightGroundGray, 0.05)
+        let light = Palette.background.resolved(dark: false)
+        let mixed = Tone(light: { NSColor.controlBackgroundColor.blended(withFraction: 0.05, of: .systemGray)! }, dark: { .black })
+            .resolved(dark: false)
+        XCTAssertEqual(light.redComponent, mixed.redComponent, accuracy: 0.001)
+        XCTAssertEqual(light.blueComponent, mixed.blueComponent, accuracy: 0.001)
+        let dark = Palette.background.resolved(dark: true)
+        let darkWant = Tone(light: { .white }, dark: { NSColor.windowBackgroundColor.blended(withFraction: 0.3, of: .black)! })
+            .resolved(dark: true)
+        XCTAssertEqual(dark.redComponent, darkWant.redComponent, accuracy: 0.001, "dark ground unchanged")
+        XCTAssertEqual(Palette.band.resolved(dark: false).alphaComponent, 0.09, accuracy: 0.001)
+        XCTAssertEqual(Palette.band.resolved(dark: true).alphaComponent, 0.12, accuracy: 0.001)
+        let gray = Tone(.systemGray)
+        for dark in [false, true] {
+            let band = Palette.band.resolved(dark: dark)
+            XCTAssertEqual(band.redComponent, gray.resolved(dark: dark).redComponent, accuracy: 0.001, "dark=\(dark)")
+            let off = Palette.optionOff.resolved(dark: dark).alphaComponent
+            let on = Palette.optionOn.resolved(dark: dark).alphaComponent
+            XCTAssertGreaterThanOrEqual(on - off, 0.10 - 0.0001, "dark=\(dark)")
+        }
+        XCTAssertEqual(Palette.optionOff.resolved(dark: false).alphaComponent, 0.04, accuracy: 0.001)
+        XCTAssertEqual(Palette.optionOn.resolved(dark: false).alphaComponent, 0.14, accuracy: 0.001)
+        XCTAssertEqual(Palette.optionOff.resolved(dark: true).alphaComponent, 0.06, accuracy: 0.001)
+        XCTAssertEqual(Palette.optionOn.resolved(dark: true).alphaComponent, 0.22, accuracy: 0.001)
+    }
+
     /// Text grays are the label colors; the selection is the accent color
     /// at 0.16, and gray while the list does not have the keys.
     func testTextAndSelectionFollowTheSystemColors() {
@@ -763,10 +795,13 @@ final class SurfaceHeightTests: XCTestCase {
     func testTheMinimumByTextSize() {
         // Above the list with the options open: header, tabs, search and
         // Filter rows and the options' area; below: the key hints.
+        // The popover's parts as laid out (ShiibarGhAppTests,
+        // HeaderAndWindowTests): above the list 161 + the options' area 70
+        // at text size 12.
         XCTAssertEqual(SurfaceHeight.minimum(above: 150, below: 26, k: 1), 300, "never under 300")
-        XCTAssertEqual(SurfaceHeight.minimum(above: 150 + 139, below: 26, k: 1), 415)
-        XCTAssertEqual(SurfaceHeight.minimum(above: 225 + 208.5, below: 39, k: 1.5), 623, "at 18: everything grows")
-        XCTAssertEqual(SurfaceHeight.minimum(above: 112.5, below: 19.5, k: 0.75), 300)
+        XCTAssertEqual(SurfaceHeight.minimum(above: 161 + 70, below: 28, k: 1), 359)
+        XCTAssertEqual(SurfaceHeight.minimum(above: 196 + 105, below: 34, k: 1.5), 485, "at 18: everything grows")
+        XCTAssertEqual(SurfaceHeight.minimum(above: 142.5 + 52.5, below: 24, k: 0.75), 300, "at 9: under 300")
     }
 
     func testARememberedHeightIsRaisedToTheMinimum() {

@@ -12,7 +12,7 @@ import XCTest
 final class MyReviewLayoutTests: XCTestCase {
     func line(_ card: Card, avatar: String? = "https://example.test/me.png", compact: Bool = false) -> CardLine {
         CardLine(
-            card: card, section: "s", showsTag: false, indented: false, expanded: false, canDrag: true, compact: compact,
+            card: card, section: "s", showsTag: false, expanded: false, canDrag: true, compact: compact,
             myReview: MyReviewMark.of(card), myAvatar: avatar
         )
     }
