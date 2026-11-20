@@ -188,6 +188,43 @@ pub fn my_review_at(reviews: &Value, ctx: Ctx<'_>) -> Option<i64> {
         .max()
 }
 
+/// DESIGN.md, "Card", "GitHub labels": the labels of
+/// `labels(first: 20, orderBy: {field: NAME, direction: ASC})` in the order
+/// GitHub gave them, and how many more the PR has. `None` for a node
+/// without the connection or without its `nodes` list, which keeps the
+/// saved labels.
+pub fn labels_of(connection: &Value) -> Option<(Vec<proto::Label>, u32)> {
+    // A connection without its `nodes` list says nothing about the labels.
+    let list: Vec<proto::Label> = connection["nodes"]
+        .as_array()?
+        .iter()
+        .map(|label| proto::Label {
+            name: text(&label["name"]).to_string(),
+            color: text(&label["color"]).to_string(),
+        })
+        .collect();
+    let total = connection["totalCount"].as_u64().unwrap_or(0);
+    let more = total.saturating_sub(list.len() as u64);
+    Some((list, u32::try_from(more).unwrap_or(u32::MAX)))
+}
+
+/// DESIGN.md, "My review mark": the state of the account's newest review
+/// with a verdict, from `myReview` (`reviews(author:, states: [APPROVED,
+/// CHANGES_REQUESTED, DISMISSED], last: 1)`); `none` without such a review.
+/// `None` for a node without the connection or its `nodes` list, which keeps
+/// the saved value.
+pub fn my_review_of(connection: &Value) -> Option<proto::ReviewVerdict> {
+    let list = connection["nodes"].as_array()?;
+    Some(
+        match list.last().and_then(|review| review["state"].as_str()) {
+            Some("APPROVED") => proto::ReviewVerdict::Approved,
+            Some("CHANGES_REQUESTED") => proto::ReviewVerdict::ChangesRequested,
+            Some("DISMISSED") => proto::ReviewVerdict::Dismissed,
+            _ => proto::ReviewVerdict::None,
+        },
+    )
+}
+
 /// A PR node from the status query as an `IngestPr`.
 pub fn pr_values(node: &Value, extra: &StatusExtra, ctx: Ctx<'_>) -> Option<IngestPr> {
     let id = node["id"].as_str()?.to_string();
@@ -200,6 +237,7 @@ pub fn pr_values(node: &Value, extra: &StatusExtra, ctx: Ctx<'_>) -> Option<Inge
         extra.previous,
     );
     let asked = requested(&node["reviewRequests"], ctx);
+    let labels = labels_of(&node["labels"]);
     let state = match text(&node["state"]) {
         "MERGED" => proto::PrState::Merged,
         "CLOSED" => proto::PrState::Closed,
@@ -238,6 +276,9 @@ pub fn pr_values(node: &Value, extra: &StatusExtra, ctx: Ctx<'_>) -> Option<Inge
             .map(|a| login(a).to_string())
             .filter(|a| !a.is_empty())
             .collect(),
+        labels: labels.as_ref().map(|(list, _)| list.clone()),
+        labels_more: labels.map(|(_, more)| more),
+        my_review: my_review_of(&node["myReview"]),
         links: proto::Links {
             review: url.clone(),
             checks: format!("{url}/checks"),
@@ -365,11 +406,29 @@ pub fn mentioned_teams(html: &str) -> Vec<i64> {
 
 // ---------------------------------------------------------------- events
 
+/// Where a post comes from. DESIGN.md, "Comment times": each takes its time
+/// from a different field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Source {
+    /// A conversation comment (`IssueComment`): `publishedAt`, else
+    /// `createdAt`.
+    Conversation,
+    /// A review body (`PullRequestReview`): `submittedAt`, else `createdAt`.
+    /// A review's `publishedAt` is the time it was drafted.
+    Review,
+    /// A review comment of a review thread: `publishedAt`, the time its
+    /// review was submitted. `createdAt` is the time it was drafted.
+    Thread,
+    /// The PR body: `createdAt`.
+    PrBody,
+}
+
 /// A comment, review body or review comment, flattened.
 #[derive(Debug, Clone)]
 struct Post<'a> {
     id: &'a str,
     url: &'a str,
+    /// The time the post was published (DESIGN.md, "Comment times").
     at: i64,
     author: &'a str,
     /// The author's avatar URL.
@@ -378,6 +437,9 @@ struct Post<'a> {
     body: &'a str,
     /// The review thread of a review comment.
     thread: Option<&'a str>,
+    /// The place of a review comment in its thread, from 0. The comments of
+    /// one review share their time, so a tie is decided by this place.
+    pos: usize,
     /// A review body: one without text makes no row.
     review: bool,
     /// The review's `state`, for a review.
@@ -385,16 +447,22 @@ struct Post<'a> {
 }
 
 impl<'a> Post<'a> {
-    fn from(node: &'a Value, thread: Option<&'a str>, review: bool) -> Self {
-        let at = if review {
-            node["submittedAt"]
+    /// `None` for a review comment not published yet (`publishedAt` null: a
+    /// comment of the account's own pending review), which is not collected
+    /// until its review is submitted.
+    fn from(node: &'a Value, source: Source) -> Option<Self> {
+        let published = node["publishedAt"].as_str().and_then(parse_time);
+        let at = match source {
+            Source::Conversation => published.unwrap_or_else(|| time(&node["createdAt"])),
+            Source::Review => node["submittedAt"]
                 .as_str()
                 .and_then(parse_time)
-                .unwrap_or_else(|| time(&node["createdAt"]))
-        } else {
-            time(&node["createdAt"])
+                .unwrap_or_else(|| time(&node["createdAt"])),
+            Source::Thread => published?,
+            Source::PrBody => time(&node["createdAt"]),
         };
-        Post {
+        let review = source == Source::Review;
+        Some(Post {
             id: text(&node["id"]),
             url: text(&node["url"]),
             at,
@@ -402,10 +470,26 @@ impl<'a> Post<'a> {
             avatar: avatar(&node["author"]),
             html: text(&node["bodyHTML"]),
             body: text(&node["bodyText"]),
-            thread,
+            thread: None,
+            pos: 0,
             review,
             state: if review { text(&node["state"]) } else { "" },
-        }
+        })
+    }
+
+    /// The published review comments of a review thread, in thread order.
+    fn of_thread(thread: &'a Value) -> Vec<Self> {
+        let thread_id = text(&thread["id"]);
+        nodes(&thread["comments"])
+            .iter()
+            .filter_map(|comment| Post::from(comment, Source::Thread))
+            .enumerate()
+            .map(|(pos, post)| Post {
+                thread: Some(thread_id),
+                pos,
+                ..post
+            })
+            .collect()
     }
 }
 
@@ -423,7 +507,7 @@ pub struct EventInput<'a> {
     /// refused, which makes a removal row from the timeline item alone.
     pub merge_queue: Option<&'a [Value]>,
     pub since: i64,
-    /// Comments of the viewer created after this start from zero.
+    /// Comments of the viewer published after this start from zero.
     pub zero_after: i64,
     /// Threads recorded earlier.
     pub recorded: &'a BTreeMap<String, ThreadRec>,
@@ -490,19 +574,15 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
     // Posts in timeline order, review comments after the timeline.
     let mut posts: Vec<Post<'_>> = Vec::new();
     for item in input.timeline {
-        match item["__typename"].as_str() {
-            Some("IssueComment") => posts.push(Post::from(item, None, false)),
-            Some("PullRequestReview") if item["state"] != "PENDING" => {
-                posts.push(Post::from(item, None, true));
-            }
-            _ => {}
-        }
+        let source = match item["__typename"].as_str() {
+            Some("IssueComment") => Source::Conversation,
+            Some("PullRequestReview") if item["state"] != "PENDING" => Source::Review,
+            _ => continue,
+        };
+        posts.extend(Post::from(item, source));
     }
     for thread in input.threads {
-        let thread_id = text(&thread["id"]);
-        for comment in nodes(&thread["comments"]) {
-            posts.push(Post::from(comment, Some(thread_id), false));
-        }
+        posts.extend(Post::of_thread(thread));
     }
 
     // Threads: those the account commented in, and those it was mentioned in.
@@ -526,11 +606,34 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
     }
 
     let mut seen: BTreeSet<String> = BTreeSet::new();
-    for post in &posts {
+    for (index, post) in posts.iter().enumerate() {
         if post.id.is_empty() || !seen.insert(post.id.to_string()) {
             continue;
         }
         if ctx.is_me(post.author) {
+            // DESIGN.md, "My review rows": the account's own review with a
+            // verdict, as GitHub states it at this fetch (a review dismissed
+            // before it makes none), with or without a body.
+            let verdict = match post.state {
+                "APPROVED" if post.review => Some(IngestKind::MyReviewApproved),
+                "CHANGES_REQUESTED" if post.review => Some(IngestKind::MyReviewChangesRequested),
+                _ => None,
+            };
+            if let Some(kind) = verdict
+                && post.at >= input.since
+            {
+                out.events.push(IngestEvent {
+                    id: post.id.to_string(),
+                    pr_id: pr_id.clone(),
+                    kind,
+                    occurred_at: post.at,
+                    url: post.url.to_string(),
+                    actor: Some(post.author.to_string()),
+                    actor_avatar_url: post.avatar.clone(),
+                    text: None,
+                    comment_id: None,
+                });
+            }
             if !post.review || !post.body.trim().is_empty() {
                 out.own.push(OwnComment {
                     id: post.id.to_string(),
@@ -566,16 +669,33 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
             continue;
         }
         let thread = post.thread.and_then(|t| recorded.get(t));
-        let after = |at: Option<i64>| at.is_some_and(|from| post.at > from);
+        // DESIGN.md, "Comment times": later than the account's comment or
+        // the mention, or at the same time (one review) and further down
+        // the thread than such a comment.
+        let by_me = |p: &Post<'_>| ctx.is_me(p.author);
+        let mentioning = |p: &Post<'_>| !ctx.is_me(p.author) && mention_kind(p.html, ctx).is_some();
+        // The comments above this one in its thread: `Post::of_thread`
+        // adds a thread's comments together, in order, with `pos` from 0.
+        let above = if post.thread.is_some() {
+            &posts[index - post.pos..index]
+        } else {
+            &posts[..0]
+        };
+        let after = |from: Option<i64>, starts: &dyn Fn(&Post<'_>) -> bool| {
+            from.is_some_and(|from| {
+                post.at > from
+                    || (post.at == from && above.iter().any(|p| p.at == from && starts(p)))
+            })
+        };
         let kind = mention_kind(post.html, ctx)
             .or_else(|| {
                 thread
-                    .filter(|t| after(t.mine_at))
+                    .filter(|t| after(t.mine_at, &by_me))
                     .map(|_| IngestKind::Reply)
             })
             .or_else(|| {
                 thread
-                    .filter(|t| after(t.mention_at))
+                    .filter(|t| after(t.mention_at, &mentioning))
                     .map(|_| IngestKind::ReplyMentioned)
             })
             .or_else(|| mine.then_some(IngestKind::Comment))
@@ -668,6 +788,20 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
                 actor,
                 None,
             )),
+            // DESIGN.md, "Ready for review and Converted to draft rows":
+            // without a body, opening the event's place on the PR page.
+            Some(kind @ ("ReadyForReviewEvent" | "ConvertToDraftEvent")) => {
+                let kind = if kind == "ReadyForReviewEvent" {
+                    IngestKind::ReadyForReview
+                } else {
+                    IngestKind::ConvertedToDraft
+                };
+                let url = item["url"]
+                    .as_str()
+                    .filter(|u| !u.is_empty())
+                    .map_or_else(|| pr_url.clone(), str::to_string);
+                out.events.push(event(kind, url, actor, None));
+            }
             // `ReopenedEvent` has no URL: the row opens the PR page.
             Some("ReopenedEvent") => {
                 out.events
@@ -861,26 +995,33 @@ pub fn collect(pr: &Value, zero_after: i64, ctx: Ctx<'_>) -> Collection {
             baseline_done: post.at > zero_after,
         });
     };
-    if ctx.is_me(login(&pr["author"])) {
-        own(&Post::from(pr, None, false), &mut out);
+    if ctx.is_me(login(&pr["author"]))
+        && let Some(post) = Post::from(pr, Source::PrBody)
+    {
+        own(&post, &mut out);
     }
     for comment in nodes(&pr["comments"]) {
-        let post = Post::from(comment, None, false);
-        if ctx.is_me(post.author) {
+        if let Some(post) = Post::from(comment, Source::Conversation)
+            && ctx.is_me(post.author)
+        {
             own(&post, &mut out);
         }
     }
     for review in nodes(&pr["reviews"]) {
-        let post = Post::from(review, None, true);
-        if ctx.is_me(post.author) && !post.body.trim().is_empty() && review["state"] != "PENDING" {
+        if let Some(post) = Post::from(review, Source::Review)
+            && ctx.is_me(post.author)
+            && !post.body.trim().is_empty()
+            && review["state"] != "PENDING"
+        {
             own(&post, &mut out);
         }
     }
+    // DESIGN.md, "Comment times": a review comment not published yet makes
+    // neither a record of the account's comments nor of the thread.
     for thread in nodes(&pr["reviewThreads"]) {
         let thread_id = text(&thread["id"]);
         let mut recorded = BTreeMap::new();
-        for comment in nodes(&thread["comments"]) {
-            let post = Post::from(comment, Some(thread_id), false);
+        for post in Post::of_thread(thread) {
             let me = ctx.is_me(post.author);
             if me {
                 own(&post, &mut out);

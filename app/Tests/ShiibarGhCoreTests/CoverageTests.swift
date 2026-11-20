@@ -18,7 +18,7 @@ final class StoreTests: XCTestCase {
         store.setWindowFrame("{{10, 20}, {460, 620}}", account: "1001")
         store.setOptions(ListOptions(groupBy: .status, thenBy: .owner, sort: .recentlyAdded), account: "1001")
         store.setKeepOnTop(false, account: "1001")
-        store.setCollapsed(["review|todo"], account: "1001")
+        store.setCollapsed(["review|inbox"], account: "1001")
         store.setExpanded(["mine|done"], account: "1001")
         store.setGroupOrders([.status: ["closed", "open"]], account: "1001")
         store.setRepositories(["o/b", "o/a"], account: "1001")
@@ -29,7 +29,7 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(again.options(account: "1001"), ListOptions(groupBy: .status, thenBy: .owner, sort: .recentlyAdded))
         XCTAssertFalse(again.keepOnTop(account: "1001"))
         XCTAssertTrue(again.keepOnTop(account: "583231"))
-        XCTAssertEqual(again.collapsed(account: "1001"), ["review|todo"])
+        XCTAssertEqual(again.collapsed(account: "1001"), ["review|inbox"])
         XCTAssertEqual(again.expanded(account: "1001"), ["mine|done"])
         XCTAssertEqual(again.groupOrders(account: "1001"), [.status: ["closed", "open"]])
         XCTAssertEqual(again.repositories(account: "1001"), ["o/b", "o/a"])
@@ -50,8 +50,8 @@ final class StoreTests: XCTestCase {
         defaults.set(["mine|main"], forKey: "v4.expanded.1001")
         defaults.set(["mine|main", "mine|done"], forKey: "v4.expanded.583231")
         let store = UIStateStore(defaults: defaults)
-        XCTAssertEqual(store.collapsed(account: "1001"), ["mine|done", "review|todo"])
-        XCTAssertEqual(defaults.stringArray(forKey: "v4.collapsed.1001"), ["mine|done", "review|todo"], "saved without it")
+        XCTAssertEqual(store.collapsed(account: "1001"), ["mine|done", "review|inbox"], "Todo's key read as Inbox's")
+        XCTAssertEqual(defaults.stringArray(forKey: "v4.collapsed.1001"), ["mine|done", "review|inbox"], "saved without it")
         XCTAssertEqual(store.expanded(account: "1001"), [])
         XCTAssertEqual(defaults.stringArray(forKey: "v4.expanded.1001"), [])
         XCTAssertEqual(defaults.stringArray(forKey: "v4.expanded.583231"), ["mine|main", "mine|done"], "another account until it is read")
@@ -59,6 +59,29 @@ final class StoreTests: XCTestCase {
         // Mine's new sections start from the defaults.
         let sections = layout(.mine, collapsed: store.collapsed(account: "1001"), expanded: store.expanded(account: "1001"))
         XCTAssertEqual(sections.map(\.collapsed), [true, false, false, false], "Done, at the top, stays collapsed")
+    }
+
+    /// DESIGN.md, "Updating from 0.7": the section Todo is Inbox now. The
+    /// collapsed sections and the expanded "+ N more PRs" saved under
+    /// Todo's keys carry over to Inbox's, saved again under the new keys;
+    /// every other key stays.
+    func testTodosSavedStateCarriesOverToInbox() {
+        let (defaults, suite) = testDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(["review|todo", "mine|done"], forKey: "v4.collapsed.1001")
+        defaults.set(["mine|todo", "review|todo", "repository|none|example-org/api|"], forKey: "v4.expanded.1001")
+        defaults.set(["review|todo", "review|inbox"], forKey: "v4.expanded.583231")
+        let store = UIStateStore(defaults: defaults)
+        XCTAssertEqual(store.collapsed(account: "1001"), ["review|inbox", "mine|done"])
+        XCTAssertEqual(defaults.stringArray(forKey: "v4.collapsed.1001"), ["mine|done", "review|inbox"])
+        XCTAssertEqual(store.expanded(account: "1001"), ["mine|inbox", "review|inbox", "repository|none|example-org/api|"])
+        XCTAssertEqual(store.expanded(account: "583231"), ["review|inbox"], "both keys: one Inbox")
+        XCTAssertEqual(defaults.stringArray(forKey: "v4.expanded.583231"), ["review|inbox"])
+        let sections = layout(.review, collapsed: store.collapsed(account: "1001"), expanded: store.expanded(account: "1001"))
+        XCTAssertEqual(sections.last?.key, "review|inbox")
+        XCTAssertEqual(sections.last?.collapsed, true, "Inbox stays collapsed as Todo was")
+        let open = layout(.review, expanded: store.expanded(account: "1001"))
+        XCTAssertEqual(open.last?.showLess, true, "Inbox stays expanded as Todo was")
     }
 
     /// DESIGN.md, "Account color": no dot (nor its room) for None.
@@ -92,6 +115,38 @@ final class StoreTests: XCTestCase {
         let light = Palette.surface.resolved(dark: false)
         let control = Tone(.controlBackgroundColor).resolved(dark: false)
         XCTAssertEqual(light.redComponent, control.redComponent, accuracy: 0.001)
+    }
+
+    /// DESIGN.md, "Colors": on light the list's ground is the control
+    /// background with 5% system gray and the band system gray at 0.09; on
+    /// dark the ground is the window background with 30% black and the band
+    /// system gray at 0.12. The Filter options' grounds differ by 0.10 or
+    /// more between off and on in either appearance.
+    func testTheGroundAndTheBandValues() {
+        XCTAssertEqual(Palette.lightGroundGray, 0.05)
+        let light = Palette.background.resolved(dark: false)
+        let mixed = Tone(light: { NSColor.controlBackgroundColor.blended(withFraction: 0.05, of: .systemGray)! }, dark: { .black })
+            .resolved(dark: false)
+        XCTAssertEqual(light.redComponent, mixed.redComponent, accuracy: 0.001)
+        XCTAssertEqual(light.blueComponent, mixed.blueComponent, accuracy: 0.001)
+        let dark = Palette.background.resolved(dark: true)
+        let darkWant = Tone(light: { .white }, dark: { NSColor.windowBackgroundColor.blended(withFraction: 0.3, of: .black)! })
+            .resolved(dark: true)
+        XCTAssertEqual(dark.redComponent, darkWant.redComponent, accuracy: 0.001, "dark ground unchanged")
+        XCTAssertEqual(Palette.band.resolved(dark: false).alphaComponent, 0.09, accuracy: 0.001)
+        XCTAssertEqual(Palette.band.resolved(dark: true).alphaComponent, 0.12, accuracy: 0.001)
+        let gray = Tone(.systemGray)
+        for dark in [false, true] {
+            let band = Palette.band.resolved(dark: dark)
+            XCTAssertEqual(band.redComponent, gray.resolved(dark: dark).redComponent, accuracy: 0.001, "dark=\(dark)")
+            let off = Palette.optionOff.resolved(dark: dark).alphaComponent
+            let on = Palette.optionOn.resolved(dark: dark).alphaComponent
+            XCTAssertGreaterThanOrEqual(on - off, 0.10 - 0.0001, "dark=\(dark)")
+        }
+        XCTAssertEqual(Palette.optionOff.resolved(dark: false).alphaComponent, 0.04, accuracy: 0.001)
+        XCTAssertEqual(Palette.optionOn.resolved(dark: false).alphaComponent, 0.14, accuracy: 0.001)
+        XCTAssertEqual(Palette.optionOff.resolved(dark: true).alphaComponent, 0.06, accuracy: 0.001)
+        XCTAssertEqual(Palette.optionOn.resolved(dark: true).alphaComponent, 0.22, accuracy: 0.001)
     }
 
     /// Text grays are the label colors; the selection is the accent color
@@ -164,6 +219,21 @@ final class SettingsModelTests: XCTestCase {
         settings.select(.owner(account: "583231", owner: "gone"))
         settings.ensureSelection()
         XCTAssertEqual(settings.selection, .account("583231"))
+    }
+
+    /// My review has no Notify column: the dash sends nothing; its List
+    /// is sent as any other.
+    func testMyReviewNotifyIsNoControl() async {
+        let settings = SettingsModel(app: app, launch: nil)
+        let account = Account(id: "7001", login: "example-reviewer", owners: [Owner(id: "o9", name: "example-team")])
+        let org = account.owners[0]
+        api.clearCalls()
+        settings.setEvent(org, of: account, .myReview, .notify, true)
+        await settle()
+        XCTAssertEqual(api.calls.filter { $0.hasPrefix("owner_events_set") }, [])
+        settings.setEvent(org, of: account, .myReview, .list, false)
+        await settle()
+        XCTAssertEqual(api.calls.filter { $0.hasPrefix("owner_events_set") }, ["owner_events_set example-reviewer example-team my_review list false"])
     }
 
     func testOwnerControlsSendTheLoginAndPublic() async {
@@ -290,7 +360,7 @@ final class SettingsModelTests: XCTestCase {
         settings.show(.addAccount)
         XCTAssertEqual(settings.tab, .accounts)
         XCTAssertEqual(settings.requestedSheet, .addAccount)
-        XCTAssertEqual(SettingsModel.keys.suffix(3), ["auto_dismiss_after_days", "dismissed_keep_days", "confirm_dismiss"])
+        XCTAssertEqual(SettingsModel.keys.suffix(4), ["auto_dismiss_after_days", "dismissed_keep_days", "confirm_dismiss", "show_labels"])
     }
 
     func testAddAccountAndRemoveNeedTheKeychain() {
@@ -725,10 +795,13 @@ final class SurfaceHeightTests: XCTestCase {
     func testTheMinimumByTextSize() {
         // Above the list with the options open: header, tabs, search and
         // Filter rows and the options' area; below: the key hints.
+        // The popover's parts as laid out (ShiibarGhAppTests,
+        // HeaderAndWindowTests): above the list 161 + the options' area 70
+        // at text size 12.
         XCTAssertEqual(SurfaceHeight.minimum(above: 150, below: 26, k: 1), 300, "never under 300")
-        XCTAssertEqual(SurfaceHeight.minimum(above: 150 + 139, below: 26, k: 1), 415)
-        XCTAssertEqual(SurfaceHeight.minimum(above: 225 + 208.5, below: 39, k: 1.5), 623, "at 18: everything grows")
-        XCTAssertEqual(SurfaceHeight.minimum(above: 112.5, below: 19.5, k: 0.75), 300)
+        XCTAssertEqual(SurfaceHeight.minimum(above: 161 + 70, below: 28, k: 1), 359)
+        XCTAssertEqual(SurfaceHeight.minimum(above: 196 + 105, below: 34, k: 1.5), 485, "at 18: everything grows")
+        XCTAssertEqual(SurfaceHeight.minimum(above: 142.5 + 52.5, below: 24, k: 0.75), 300, "at 9: under 300")
     }
 
     func testARememberedHeightIsRaisedToTheMinimum() {

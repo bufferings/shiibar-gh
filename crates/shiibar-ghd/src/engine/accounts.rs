@@ -84,6 +84,7 @@ impl Engine {
                 rest: None,
                 stopped_until: None,
                 fetch: FetchRec::default(),
+                avatar_url: None,
                 mutes: MuteRec::default(),
             },
         );
@@ -160,6 +161,7 @@ impl Engine {
             id: account.id.clone(),
             login: account.login.clone(),
             color: Lenient::Known(account.color.into()),
+            avatar_url: account.avatar_url.clone(),
             token: proto::TokenInfo {
                 registered: account.token.registered,
                 expires_at: account.token.expires_at,
@@ -396,8 +398,9 @@ impl Engine {
             .map(|o| {
                 o.events
                     .0
-                    .iter()
-                    .map(|(k, c)| {
+                    .keys()
+                    .map(|k| {
+                        let c = o.events.cell(*k);
                         (
                             k.as_str().to_string(),
                             proto::EventCell {
@@ -432,6 +435,13 @@ impl Engine {
                 if !on {
                     cell.notify = false;
                 }
+            }
+            // DESIGN.md, "Applying the table": My review has no Notify.
+            proto::EventColumn::Notify if on && !kind.has_notify() => {
+                return Err(CmdError::Invalid(format!(
+                    "{} has no Notify: its rows are never notified",
+                    kind.as_str()
+                )));
             }
             proto::EventColumn::Notify if on && !cell.list => {
                 return Err(CmdError::Invalid(format!(

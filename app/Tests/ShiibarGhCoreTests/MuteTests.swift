@@ -12,10 +12,10 @@ final class MutedFilterTests: XCTestCase {
     /// (DESIGN.md, "Mute", "Filter", "Section size").
     func testMutedCardsHideWithMutedHide() {
         let review = layout(.review, filter: mutedHidden)
-        let todo = review[3]
-        XCTAssertEqual(todo.matching.map(\.id), ["T1", "T2", "T3", "T4", "T5"])
-        XCTAssertEqual(todo.detail, "5 PRs", "the muted cards are not counted")
-        XCTAssertNil(todo.foldLine, "5 cards do not fold")
+        let inbox = review[3]
+        XCTAssertEqual(inbox.matching.map(\.id), ["T1", "T2", "T3", "T4", "T5"])
+        XCTAssertEqual(inbox.detail, "5 PRs", "the muted cards are not counted")
+        XCTAssertNil(inbox.foldLine, "5 cards do not fold")
         let on = layout(.review, filter: mutedShown)[3]
         XCTAssertEqual(on.detail, "7 PRs")
         XCTAssertEqual(on.foldLine, "+ 2 more PRs")
@@ -26,10 +26,10 @@ final class MutedFilterTests: XCTestCase {
         let mutedOnly = sampleCards().filter { ["T6", "T7"].contains($0.id) }
         XCTAssertEqual(layout(.review, cards: mutedOnly, filter: mutedHidden).map(\.key), [])
         XCTAssertEqual(
-            Listing.emptyText(loaded: true, tab: .review, cards: mutedOnly, search: "", visibility: shows(mutedHidden)),
+            Listing.emptyText(loaded: true, tab: .review, cards: mutedOnly, search: "", visibility: shows(mutedHidden), labels: true),
             "No pull requests to review"
         )
-        XCTAssertNil(Listing.emptyText(loaded: true, tab: .review, cards: mutedOnly, search: "", visibility: shows(mutedShown)))
+        XCTAssertNil(Listing.emptyText(loaded: true, tab: .review, cards: mutedOnly, search: "", visibility: shows(mutedShown), labels: true))
         // All: a group of muted cards only is not there.
         let all = layout(.all, cards: mutedOnly + [sampleCards()[1]], filter: mutedHidden)
         XCTAssertEqual(all.map(\.title), ["example-org/api"])
@@ -39,28 +39,31 @@ final class MutedFilterTests: XCTestCase {
 }
 
 final class HiddenPlaceTests: XCTestCase {
-    /// Todo: T1, H (muted, hidden), T2, T3, K (hidden by the search).
-    func todo() -> [Card] {
+    /// Inbox: T1, H (muted, hidden), T2, T3, K (hidden by the search).
+    func inbox() -> [Card] {
         [
-            card("T1", placement: review(.todo, 0)),
-            card("H", author: "example-bot", placement: review(.todo, 1), muted: [.author]),
-            card("T2", placement: review(.todo, 2)),
-            card("T3", placement: review(.todo, 3)),
-            card("K", pr: "other/k#1", placement: review(.todo, 4)),
-            card("T4", placement: review(.todo, 5)),
+            card("T1", placement: review(.inbox, 0)),
+            card("H", author: "example-bot", placement: review(.inbox, 1), muted: [.author]),
+            card("T2", placement: review(.inbox, 2)),
+            card("T3", placement: review(.inbox, 3)),
+            card("K", pr: "other/k#1", placement: review(.inbox, 4)),
+            card("T4", placement: review(.inbox, 5)),
         ]
     }
 
     func sections(search: String = "") -> [SectionLayout] {
-        layout(.review, cards: todo(), search: search, filter: mutedHidden)
+        layout(.review, cards: inbox(), search: search, filter: mutedHidden)
     }
 
     /// DESIGN.md, "Hidden cards and places": one rule for drops and ⌥↑↓
     /// among the reference cards V1, V2, …
     func testDropsLandAmongTheReferenceCards() {
         let s = sections(search: "example-org")
-        XCTAssertEqual(s.map(\.key), ["review|todo"])
-        XCTAssertEqual(s[0].matching.map(\.id), ["T1", "T2", "T3", "T4"])
+        // While searching, the empty sections stay for a drop (DESIGN.md,
+        // "Review").
+        XCTAssertEqual(s.map(\.key), ["review|done", "review|waiting", "review|doing", "review|inbox"])
+        XCTAssertEqual(s.map(\.matching.count), [0, 0, 0, 4])
+        XCTAssertEqual(s[3].matching.map(\.id), ["T1", "T2", "T3", "T4"])
         func at(_ id: String, lower: Bool) -> PlacePosition? {
             CardDrop.target(.card(id, lowerHalf: lower), sections: s)?.position
         }
@@ -69,16 +72,16 @@ final class HiddenPlaceTests: XCTestCase {
         XCTAssertEqual(at("T1", lower: true), .before("T2"))
         XCTAssertEqual(at("T3", lower: true), .before("T4"), "K stays above")
         XCTAssertEqual(at("T4", lower: true), .bottom)
-        XCTAssertEqual(CardDrop.target(.header("review|todo"), sections: s)?.position, .top)
+        XCTAssertEqual(CardDrop.target(.header("review|inbox"), sections: s)?.position, .top)
         // The places as the daemon will order them.
-        let moved = LocalChange.place(PlaceMove(card: "T4", target: .review(.todo), position: .before("T2"), verb: .move)).apply(todo())
-        XCTAssertEqual(Listing.ranked(moved.filter { $0.sectionKey == "review|todo" }).map(\.id), ["T1", "H", "T4", "T2", "T3", "K"])
+        let moved = LocalChange.place(PlaceMove(card: "T4", target: .review(.inbox), position: .before("T2"), verb: .move)).apply(inbox())
+        XCTAssertEqual(Listing.ranked(moved.filter { $0.sectionKey == "review|inbox" }).map(\.id), ["T1", "H", "T4", "T2", "T3", "K"])
     }
 
     func testOptionArrowsPassOneReferenceCard() {
-        let refs = sections(search: "example-org")[0].matching
+        let refs = sections(search: "example-org")[3].matching
         func move(_ id: String, up: Bool) -> PlacePosition? {
-            CardDrop.reorder(todo().first { $0.id == id }!, up: up, refs: refs)?.position
+            CardDrop.reorder(inbox().first { $0.id == id }!, up: up, refs: refs)?.position
         }
         XCTAssertEqual(move("T2", up: true), .top, "past V1: the top")
         XCTAssertEqual(move("T3", up: true), .before("T2"))
@@ -91,28 +94,28 @@ final class HiddenPlaceTests: XCTestCase {
 
     /// Folded and collapsed cards are reference cards, not hidden ones.
     func testFoldedCardsAreReferenceCards() {
-        let cards = (0..<7).map { card("F\($0)", placement: review(.todo, $0)) }
+        let cards = (0..<7).map { card("F\($0)", placement: review(.inbox, $0)) }
         let s = layout(.review, cards: cards, filter: mutedHidden)
         XCTAssertEqual(s[3].cards.count, 5)
         XCTAssertEqual(CardDrop.target(.card("F4", lowerHalf: true), sections: s)?.position, .before("F5"),
                        "the last shown card's lower half: before the first folded one")
-        XCTAssertEqual(CardDrop.target(.more("review|todo"), sections: s)?.position, .before("F5"),
+        XCTAssertEqual(CardDrop.target(.more("review|inbox"), sections: s)?.position, .before("F5"),
                        "+ N more PRs: right after the last card shown")
-        let collapsed = layout(.review, cards: cards, collapsed: ["review|todo"], filter: mutedHidden)
-        XCTAssertEqual(CardDrop.target(.header("review|todo"), sections: collapsed)?.position, .top)
+        let collapsed = layout(.review, cards: cards, collapsed: ["review|inbox"], filter: mutedHidden)
+        XCTAssertEqual(CardDrop.target(.header("review|inbox"), sections: collapsed)?.position, .top)
     }
 
     /// Several cards dropped on one of them: the nearest reference card
     /// that stays decides; nothing is sent when nothing changes.
     func testSeveralCardsDroppedOnOneOfThem() {
-        let all = todo()
+        let all = inbox()
         let s = sections()
         let checked = { (ids: [String]) in all.filter { ids.contains($0.id) } }
-        XCTAssertEqual(MultiRules.drop(checked(["T2", "T3"]), at: DropTarget(section: "review|todo", position: .before("T3")), sections: s, all: all), [])
-        let top = MultiRules.drop(checked(["T1", "T2", "T4"]), at: DropTarget(section: "review|todo", position: .before("T2")), sections: s, all: all)
+        XCTAssertEqual(MultiRules.drop(checked(["T2", "T3"]), at: DropTarget(section: "review|inbox", position: .before("T3")), sections: s, all: all), [])
+        let top = MultiRules.drop(checked(["T1", "T2", "T4"]), at: DropTarget(section: "review|inbox", position: .before("T2")), sections: s, all: all)
         XCTAssertEqual(top.map(\.position), [.top, .top, .top], "no reference card before it stays: the top")
         XCTAssertEqual(top.map(\.card), ["T4", "T2", "T1"])
-        let next = MultiRules.drop(checked(["T2", "T4"]), at: DropTarget(section: "review|todo", position: .before("T2")), sections: s, all: all)
+        let next = MultiRules.drop(checked(["T2", "T4"]), at: DropTarget(section: "review|inbox", position: .before("T2")), sections: s, all: all)
         XCTAssertEqual(next.map(\.position), [.before("T3"), .before("T3")])
     }
 }

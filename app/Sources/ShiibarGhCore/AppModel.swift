@@ -61,6 +61,9 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var checks = TokenChecks()
     /// `text_size`: the body text of the popovers and windows.
     @Published public private(set) var textSize = TextSize.base
+    /// `show_labels`: the cards show their GitHub labels and the search of
+    /// the tabs looks at label names (DESIGN.md, "Card", "GitHub labels").
+    @Published public private(set) var showLabels = ShowLabels.defaultValue
     /// `dismissed_keep_days`: the m of the Dismissed list's note and of a
     /// Dismiss shown before the daemon answers.
     /// `confirm_dismiss`: the × on a card asks first (DESIGN.md,
@@ -218,6 +221,12 @@ public final class AppModel: ObservableObject {
             textSize = TextSize.clamp(value?.intValue ?? value?.stringValue.flatMap { Int64($0) })
         case DismissedText.confirmKey:
             if let on = value?.boolValue { confirmDismiss = on }
+        case ShowLabels.configKey:
+            let on = ShowLabels.value(value)
+            guard on != showLabels else { return }
+            showLabels = on
+            // What the search matches changes at once, with the labels shown.
+            viewModels.values.forEach { $0.labelsChanged() }
         case DismissedText.keepDaysKey:
             if let days = value?.intValue, days >= 1 { keepDays = days }
         case DismissedText.autoDismissKey:
@@ -229,7 +238,10 @@ public final class AppModel: ObservableObject {
 
     /// The settings the popovers use, at connection.
     public func loadConfig() async {
-        for key in [TextSize.configKey, DismissedText.keepDaysKey, DismissedText.autoDismissKey, DismissedText.confirmKey] {
+        for key in [
+            TextSize.configKey, DismissedText.keepDaysKey, DismissedText.autoDismissKey, DismissedText.confirmKey,
+            ShowLabels.configKey,
+        ] {
             if let value = try? await api.configGet(key) { configChanged(key, value) }
         }
     }
@@ -505,7 +517,7 @@ public final class AppModel: ObservableObject {
 @MainActor
 public final class AccountViewModel: ObservableObject {
     public let accountId: String
-    unowned let app: AppModel
+    public unowned let app: AppModel
     /// The cards shown: the daemon's, with the local operations applied.
     /// A change shows first in the cards `Unread only` keeps, then in the
     /// selection (`SurfaceListModel.updateLinger`).
@@ -701,6 +713,15 @@ public final class AccountViewModel: ObservableObject {
         guard search(scope) != text else { return }
         searches[scope] = text.isEmpty ? nil : text
         app.store.setSearches(searches, account: accountId)
+        surfacesKeepSelection()
+    }
+
+    /// `Show labels` changed: the cards draw with or without their labels,
+    /// and the search of the tabs matches label names or not, so a card
+    /// that no longer matches leaves the selection.
+    func labelsChanged() {
+        revision += 1
+        objectWillChange.send()
         surfacesKeepSelection()
     }
 

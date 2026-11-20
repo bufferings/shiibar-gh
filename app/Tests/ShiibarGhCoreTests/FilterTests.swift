@@ -173,17 +173,17 @@ final class FilterListTests: XCTestCase {
     /// Headings, "+ N more PRs" and groups count what the Filter shows.
     func testHeadingsFoldsAndGroupsFollowTheFilter() {
         let open = ListFilter(muted: .show, statuses: [.open])
-        let todo = layout(.review, filter: open)[3]
-        XCTAssertEqual(todo.detail, "7 PRs")
+        let inbox = layout(.review, filter: open)[3]
+        XCTAssertEqual(inbox.detail, "7 PRs")
         let merged = layout(.review, filter: ListFilter(muted: .show, statuses: [.merged, .closed]))
         XCTAssertEqual(merged.map(\.detail), ["1 PR", "0 PRs", "0 PRs", "0 PRs"], "the empty sections stay for a drop")
-        XCTAssertEqual(merged.map(\.key), ["review|done", "review|waiting", "review|doing", "review|todo"])
+        XCTAssertEqual(merged.map(\.key), ["review|done", "review|waiting", "review|doing", "review|inbox"])
         XCTAssertNil(merged[3].foldLine)
         // Mine: Review's four sections, the empty ones kept.
         let mine = layout(.mine, filter: ListFilter(statuses: [.closed]))
-        XCTAssertEqual(mine.map(\.key), ["mine|done", "mine|waiting", "mine|doing", "mine|todo"])
+        XCTAssertEqual(mine.map(\.key), ["mine|done", "mine|waiting", "mine|doing", "mine|inbox"])
         XCTAssertEqual(mine.map(\.matching.count), [1, 0, 0, 0])
-        // Unread only: Todo holds T1 alone; the other sections empty.
+        // Unread only: Inbox holds T1 alone; the other sections empty.
         let unread = layout(.review, filter: ListFilter(unreadOnly: true))
         XCTAssertEqual(unread.map(\.detail), ["0 PRs", "0 PRs", "0 PRs", "1 PR"])
         // A Filter that leaves no card: no section at all.
@@ -193,7 +193,7 @@ final class FilterListTests: XCTestCase {
         XCTAssertEqual(all.map(\.title), ["example-org/api", "example-org/web"])
         XCTAssertEqual(all.map(\.detail), ["1 PR", "1 PR"])
         // Six cards fold; with the Filter hiding two of them, they do not.
-        let six = (0..<6).map { card("F\($0)", placement: review(.todo, $0), rows: $0 < 4 ? [row("f\($0)", pr: "example-org/api#F\($0)", unread: true)] : []) }
+        let six = (0..<6).map { card("F\($0)", placement: review(.inbox, $0), rows: $0 < 4 ? [row("f\($0)", pr: "example-org/api#F\($0)", unread: true)] : []) }
         XCTAssertEqual(layout(.review, cards: six, filter: mutedHidden)[3].foldLine, "+ 1 more PR")
         XCTAssertNil(layout(.review, cards: six, filter: ListFilter(unreadOnly: true))[3].foldLine)
     }
@@ -202,22 +202,22 @@ final class FilterListTests: XCTestCase {
     /// Filter; else `Nothing matches`.
     func testTheEmptyTexts() {
         let none: [Card] = []
-        XCTAssertEqual(Listing.emptyText(loaded: true, tab: .all, cards: none, search: "", visibility: shows(mutedHidden)), EmptyState.all)
-        XCTAssertEqual(Listing.emptyText(loaded: true, tab: .all, cards: none, search: "x", visibility: shows(mutedHidden)), EmptyState.nothingMatches,
+        XCTAssertEqual(Listing.emptyText(loaded: true, tab: .all, cards: none, search: "", visibility: shows(mutedHidden), labels: true), EmptyState.all)
+        XCTAssertEqual(Listing.emptyText(loaded: true, tab: .all, cards: none, search: "x", visibility: shows(mutedHidden), labels: true), EmptyState.nothingMatches,
                        "no card at all, but search text: Nothing matches")
-        XCTAssertEqual(Listing.emptyText(loaded: true, tab: .mine, cards: none, search: "", visibility: shows(ListFilter(unreadOnly: true))),
+        XCTAssertEqual(Listing.emptyText(loaded: true, tab: .mine, cards: none, search: "", visibility: shows(ListFilter(unreadOnly: true)), labels: true),
                        EmptyState.nothingMatches)
-        XCTAssertEqual(Listing.emptyText(loaded: true, tab: .review, cards: none, search: " ", visibility: shows(mutedHidden)), EmptyState.review,
+        XCTAssertEqual(Listing.emptyText(loaded: true, tab: .review, cards: none, search: " ", visibility: shows(mutedHidden), labels: true), EmptyState.review,
                        "white space is no search")
         let cards = sampleCards()
         XCTAssertEqual(
-            Listing.emptyText(loaded: true, tab: .review, cards: cards, search: "", visibility: shows(ListFilter(statuses: [.closed]))),
+            Listing.emptyText(loaded: true, tab: .review, cards: cards, search: "", visibility: shows(ListFilter(statuses: [.closed])), labels: true),
             EmptyState.nothingMatches
         )
-        XCTAssertNil(Listing.emptyText(loaded: true, tab: .review, cards: cards, search: "", visibility: shows(ListFilter(unreadOnly: true))))
+        XCTAssertNil(Listing.emptyText(loaded: true, tab: .review, cards: cards, search: "", visibility: shows(ListFilter(unreadOnly: true)), labels: true))
         // Muted Show alone, every card muted… none here: Mine with Only.
         XCTAssertEqual(
-            Listing.emptyText(loaded: true, tab: .mine, cards: cards, search: "", visibility: shows(ListFilter(muted: .only))),
+            Listing.emptyText(loaded: true, tab: .mine, cards: cards, search: "", visibility: shows(ListFilter(muted: .only)), labels: true),
             EmptyState.nothingMatches
         )
     }
@@ -225,22 +225,22 @@ final class FilterListTests: XCTestCase {
     /// ⇧R leaves out the rows of the cards the Filter hides.
     func testMarkAllReadLeavesOutWhatTheFilterHides() {
         let cards = sampleCards()
-        XCTAssertEqual(Listing.rowsToRead(tab: .review, cards: cards, search: "", visibility: shows(ListFilter(muted: .only))), ["t6", "t7"])
-        XCTAssertEqual(Listing.rowsToRead(tab: .review, cards: cards, search: "", visibility: shows(ListFilter(muted: .show, unreadOnly: true))),
+        XCTAssertEqual(Listing.rowsToRead(tab: .review, cards: cards, search: "", visibility: shows(ListFilter(muted: .only)), labels: true), ["t6", "t7"])
+        XCTAssertEqual(Listing.rowsToRead(tab: .review, cards: cards, search: "", visibility: shows(ListFilter(muted: .show, unreadOnly: true)), labels: true),
                        ["A", "D", "t7"], "T6 has a gray row only")
-        XCTAssertEqual(Listing.rowsToRead(tab: .review, cards: cards, search: "", visibility: shows(ListFilter(muted: .show, statuses: [.merged]))), [])
+        XCTAssertEqual(Listing.rowsToRead(tab: .review, cards: cards, search: "", visibility: shows(ListFilter(muted: .show, statuses: [.merged])), labels: true), [])
     }
 
     /// Cards the Filter hides are hidden cards: drops and ⌥↑↓ land among
     /// the cards shown (DESIGN.md, "Hidden cards and places").
     func testHiddenCardsAndPlaces() {
-        // Todo: A (open), B (merged, hidden by Status), C, D (draft, hidden), E.
+        // Inbox: A (open), B (merged, hidden by Status), C, D (draft, hidden), E.
         let cards = [
-            card("A", placement: review(.todo, 0)),
-            card("B", state: .merged, placement: review(.todo, 1)),
-            card("C", placement: review(.todo, 2)),
-            card("D", state: .draft, placement: review(.todo, 3)),
-            card("E", placement: review(.todo, 4)),
+            card("A", placement: review(.inbox, 0)),
+            card("B", state: .merged, placement: review(.inbox, 1)),
+            card("C", placement: review(.inbox, 2)),
+            card("D", state: .draft, placement: review(.inbox, 3)),
+            card("E", placement: review(.inbox, 4)),
         ]
         let s = layout(.review, cards: cards, filter: ListFilter(statuses: [.open]))
         XCTAssertEqual(s[3].matching.map(\.id), ["A", "C", "E"])
@@ -253,8 +253,8 @@ final class FilterListTests: XCTestCase {
         // Move to …: `at` by default, in the whole section.
         let plan = MultiRules.plan(.move(.review(.waiting)), cards: [cards[2]])
         XCTAssertEqual(plan.moves.map(\.position), [.bottom])
-        let moved = LocalChange.place(PlaceMove(card: "E", target: .review(.todo), position: .before("C"), verb: .move)).apply(cards)
-        XCTAssertEqual(Listing.ranked(moved.filter { $0.sectionKey == "review|todo" }).map(\.id), ["A", "B", "E", "C", "D"])
+        let moved = LocalChange.place(PlaceMove(card: "E", target: .review(.inbox), position: .before("C"), verb: .move)).apply(cards)
+        XCTAssertEqual(Listing.ranked(moved.filter { $0.sectionKey == "review|inbox" }).map(\.id), ["A", "B", "E", "C", "D"])
     }
 
     /// Kept cards (`Unread only`) are shown cards: counted, places.
@@ -282,9 +282,9 @@ final class UnreadLingerTests: XCTestCase {
 
     func cards(read: Set<String> = []) -> [Card] {
         ["U1", "U2", "U3"].enumerated().map { i, id in
-            card(id, pr: "example-org/api#\(id)", placement: review(.todo, i),
+            card(id, pr: "example-org/api#\(id)", placement: review(.inbox, i),
                  rows: [row(id.lowercased(), pr: "example-org/api#\(id)", unread: !read.contains(id))])
-        } + [card("R", pr: "example-org/api#R", placement: review(.todo, 3))]
+        } + [card("R", pr: "example-org/api#R", placement: review(.inbox, 3))]
     }
 
     func testTheWait() {
@@ -389,15 +389,15 @@ final class FilterModelTests: XCTestCase {
         defaults.removePersistentDomain(forName: suite)
     }
 
-    /// Todo: U1–U3 with a colored unread row each, R read, G with a gray
+    /// Inbox: U1–U3 with a colored unread row each, R read, G with a gray
     /// unread row only; Doing: K (blue); W1 waiting, read.
     func unreadCards() -> [Card] {
         ["U1", "U2", "U3"].enumerated().map { i, id in
-            card(id, pr: "example-org/api#\(i + 1)", author: "al", placement: review(.todo, i),
+            card(id, pr: "example-org/api#\(i + 1)", author: "al", placement: review(.inbox, i),
                  rows: [row(id.lowercased(), pr: "example-org/api#\(i + 1)", actor: "zz", unread: true)])
         } + [
-            card("R", pr: "example-org/api#9", placement: review(.todo, 3)),
-            card("G", pr: "example-org/api#8", placement: review(.todo, 4),
+            card("R", pr: "example-org/api#9", placement: review(.inbox, 3)),
+            card("G", pr: "example-org/api#8", placement: review(.inbox, 4),
                  rows: [row("g", pr: "example-org/api#8", actor: "bot", unread: true, muted: true)]),
             card("K", pr: "example-org/web#5", placement: review(.doing, 0), rows: [row("k", pr: "example-org/web#5", unread: true)]),
             card("W1", pr: "acme-corp/infra#61", owner: "o3", placement: review(.waiting, 0)),
@@ -674,7 +674,7 @@ final class FilterModelTests: XCTestCase {
     func testThePlacementTagClearsTheSearchUnfoldsAndChangesWhatHides() async {
         let list = await loaded(.review, cards: sampleCards())
         list.setSearch("nothing")
-        list.perform(.toggleSection("review|todo"))
+        list.perform(.toggleSection("review|inbox"))
         list.toggleStatus(.open)
         list.openTab(.all)
         list.perform(.showInTab(card: "T5"))
@@ -682,7 +682,7 @@ final class FilterModelTests: XCTestCase {
         XCTAssertEqual(list.search, "")
         XCTAssertEqual(list.filter, ListFilter(), "Open on again; nothing else changed")
         XCTAssertEqual(list.selection, .header(card: "T5"))
-        XCTAssertTrue(list.sections[3].cards.contains { $0.id == "T5" }, "Todo opened")
+        XCTAssertTrue(list.sections[3].cards.contains { $0.id == "T5" }, "Inbox opened")
         assertSelectionConsistent(list)
     }
 
@@ -1091,13 +1091,13 @@ final class FilterModelTests: XCTestCase {
     /// A card folded into "+ N more PRs" is kept too.
     func testAFoldedCardIsKept() async {
         let cards = (0..<7).map { i in
-            card("F\(i)", pr: "example-org/api#\(10 + i)", placement: review(.todo, i),
+            card("F\(i)", pr: "example-org/api#\(10 + i)", placement: review(.inbox, i),
                  rows: [row("f\(i)", pr: "example-org/api#\(10 + i)", unread: true)])
         }
         let list = await loaded(.review, cards: cards)
         list.setUnreadOnly(true)
-        let todo = list.sections.first { $0.key == "review|todo" }
-        XCTAssertEqual(todo?.more, 2)
+        let inbox = list.sections.first { $0.key == "review|inbox" }
+        XCTAssertEqual(inbox?.more, 2)
         api.cards = cards.map { card in
             guard card.id == "F6" else { return card }
             var read = card
@@ -1107,9 +1107,9 @@ final class FilterModelTests: XCTestCase {
         list.data.reload()
         await settle()
         XCTAssertEqual(list.lingering, ["F6"])
-        XCTAssertEqual(list.sections.first { $0.key == "review|todo" }?.detail, "7 PRs")
+        XCTAssertEqual(list.sections.first { $0.key == "review|inbox" }?.detail, "7 PRs")
         clock.advance(5)
-        XCTAssertEqual(list.sections.first { $0.key == "review|todo" }?.detail, "6 PRs")
+        XCTAssertEqual(list.sections.first { $0.key == "review|inbox" }?.detail, "6 PRs")
     }
 
     /// The tab's unread count does not follow the search text.

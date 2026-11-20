@@ -54,13 +54,16 @@ const ACTOR: &str = "{ __typename login avatarUrl(size: 32) }";
 const AUTHOR: &str = ACTOR;
 const REVIEWER: &str =
     "requestedReviewer { __typename ... on User { login } ... on Team { databaseId slug } }";
-const COMMENT: &str =
-    "id url createdAt bodyText bodyHTML author { __typename login avatarUrl(size: 32) }";
+/// A conversation comment or a review comment. DESIGN.md, "Comment times":
+/// `publishedAt` is the time it was published (`DateTime`, null for a
+/// comment of a pending review; public schema, 2026-11-18); `createdAt` is
+/// the time a review comment was drafted.
+const COMMENT: &str = "id url createdAt publishedAt bodyText bodyHTML author { __typename login avatarUrl(size: 32) }";
 /// DESIGN.md, "API usage": each hit carries its `updatedAt` and state.
 const SEARCH_NODES: &str = "pageInfo { hasNextPage endCursor } nodes { ... on PullRequest { id updatedAt state repository { owner { login } } } }";
 const ITEM_TYPES: &str = "[ISSUE_COMMENT, PULL_REQUEST_REVIEW, REVIEW_REQUESTED_EVENT, \
-    MERGED_EVENT, CLOSED_EVENT, REOPENED_EVENT, ADDED_TO_MERGE_QUEUE_EVENT, \
-    REMOVED_FROM_MERGE_QUEUE_EVENT]";
+    READY_FOR_REVIEW_EVENT, CONVERT_TO_DRAFT_EVENT, MERGED_EVENT, CLOSED_EVENT, \
+    REOPENED_EVENT, ADDED_TO_MERGE_QUEUE_EVENT, REMOVED_FROM_MERGE_QUEUE_EVENT]";
 /// DESIGN.md, "API usage": the checks of the commit a merge queue made, with
 /// `isRequired` for the PR (`$number`). Checked against the public schema and
 /// bevyengine/bevy#26450 (2026-11-13).
@@ -80,6 +83,8 @@ fn timeline_nodes() -> String {
          ... on IssueComment {{ {COMMENT} }} \
          ... on PullRequestReview {{ id url createdAt submittedAt state bodyText bodyHTML author {ACTOR} }} \
          ... on ReviewRequestedEvent {{ id createdAt actor {ACTOR} {REVIEWER} }} \
+         ... on ReadyForReviewEvent {{ id createdAt url actor {ACTOR} }} \
+         ... on ConvertToDraftEvent {{ id createdAt url actor {ACTOR} }} \
          ... on MergedEvent {{ id createdAt url actor {ACTOR} }} \
          ... on ClosedEvent {{ id createdAt url actor {ACTOR} }} \
          ... on ReopenedEvent {{ id createdAt actor {ACTOR} }} \
@@ -89,6 +94,12 @@ fn timeline_nodes() -> String {
 }
 
 /// `assignees` is a `UserConnection` of `PullRequest` (public schema).
+/// DESIGN.md, "API usage": the labels, the first 20 by name. With them, 50
+/// PRs of cli/cli cost 3 points instead of 2, with or without `orderBy`
+/// (`rateLimit.cost` of read-only requests, 2026-11-18). `myReview` is the
+/// account's newest review with a verdict (`$login`, the account), for the
+/// My review mark: a review without one (COMMENTED) leaves the verdict as
+/// it was, and a dismissed one ends it.
 fn pr_status_fields() -> String {
     format!(
         "id number url title state isDraft createdAt updatedAt isCrossRepository \
@@ -98,7 +109,9 @@ fn pr_status_fields() -> String {
          statusCheckRollup {{ state }} mergeable mergeStateStatus \
          reviewRequests(first: 100) {{ nodes {{ {REVIEWER} }} }} \
          reviews(last: 100) {{ nodes {{ state submittedAt createdAt author {{ login }} }} }} \
-         assignees(first: 100) {{ nodes {{ login }} }}"
+         assignees(first: 100) {{ nodes {{ login }} }} \
+         labels(first: 20, orderBy: {{field: NAME, direction: ASC}}) {{ totalCount nodes {{ name color }} }} \
+         myReview: reviews(author: $login, states: [APPROVED, CHANGES_REQUESTED, DISMISSED], last: 1) {{ nodes {{ state }} }}"
     )
 }
 
@@ -510,13 +523,19 @@ impl Run<'_> {
             self.out.pending_signals = Some(plan.pending_signals.clone());
             return;
         }
-        // DESIGN.md, "Tokens": the login follows GitHub's.
+        // DESIGN.md, "Tokens": the login follows GitHub's. DESIGN.md, "API
+        // usage": the account's own avatar for the My review mark.
         match self
-            .gql("query Viewer { viewer { databaseId login } }", json!({}))
+            .gql(
+                "query Viewer { viewer { databaseId login avatarUrl(size: 32) } }",
+                json!({}),
+            )
             .await
         {
             Ok(answer) => {
-                self.out.login = answer.data["viewer"]["login"].as_str().map(str::to_string);
+                let viewer = &answer.data["viewer"];
+                self.out.login = viewer["login"].as_str().map(str::to_string);
+                self.out.avatar_url = viewer["avatarUrl"].as_str().map(str::to_string);
             }
             Err(e) if stops_the_run(&e) => return,
             Err(e) => {
@@ -1333,12 +1352,14 @@ impl Run<'_> {
             return Ok(Some((nodes, broken)));
         }
         let text = format!(
-            "query Status($ids: [ID!]!) {{ nodes(ids: $ids) {{ ... on PullRequest {{ {} }} }} }}",
+            "query Status($ids: [ID!]!, $login: String!) {{ nodes(ids: $ids) {{ ... on PullRequest {{ {} }} }} }}",
             pr_status_fields()
         );
+        // The login `viewer` answered this run, which the account follows.
+        let login = self.out.login.clone().unwrap_or_else(|| plan.login.clone());
         let answer = self
             .split(ids, NODES_PER_QUERY, |part| {
-                (text.clone(), json!({"ids": part}))
+                (text.clone(), json!({"ids": part, "login": login}))
             })
             .await?;
         if !self.owner_request_answered(op, STATUS, &answer) {

@@ -1,16 +1,20 @@
-//! The move of a 0.6 database (schema version 8) to version 9, of a 0.5
-//! database (version 7) through 8 to 9 and of a 0.4 database (version 6)
-//! through 7 and 8 to 9, keeping everything, and of a 0.3 database (version
-//! 5) and a 0.2 database (version 4) to version 9, keeping only the
-//! accounts. docs/tasks/M7.md, docs/tasks/M9.md and docs/tasks/M10.md,
-//! "Database and migration" and "How to test"; DESIGN.md, "Updating from
-//! 0.6", "Updating from 0.5", "Updating from 0.4" and "Updating from 0.3 and
-//! 0.2". The schemas come from tags v0.6.0 (`data/schema_v06.sql`), v0.5.0
+//! The move of a 0.7 database (schema version 9) to version 10, of a 0.6
+//! database (version 8) through 9 to 10, of a 0.5 database (version 7)
+//! through 8 and 9 to 10 and of a 0.4 database (version 6) through 7, 8 and
+//! 9 to 10, keeping everything, and of a 0.3 database (version 5) and a 0.2
+//! database (version 4) to version 10, keeping only the accounts.
+//! docs/tasks/M7.md, docs/tasks/M9.md, docs/tasks/M10.md and
+//! docs/tasks/M11.md, "Database and migration" and "How to test";
+//! DESIGN.md, "Updating from 0.7", "Updating from 0.6", "Updating from 0.5",
+//! "Updating from 0.4" and "Updating from 0.3 and 0.2". The schemas come
+//! from tags v0.7.0 (`data/schema_v07.sql`), v0.6.0 (`data/schema_v06.sql`), v0.5.0
 //! (`data/schema_v05.sql`), v0.4.0 (`data/schema_v04.sql`), v0.3.0
 //! (`data/schema_v03.sql`) and v0.2.0 (`data/schema_v02.sql`); the rows
 //! below are what those daemons write.
 
 mod common;
+#[cfg(feature = "dev-ingest")]
+mod fake_github;
 
 use rusqlite::Connection;
 use shiibar_ghd::model::*;
@@ -297,6 +301,7 @@ fn old_database(dir: &Path, version: i64, extra: &str) -> PathBuf {
     let db = dir.join("state.db");
     let conn = Connection::open(&db).unwrap();
     let (schema, seed) = match version {
+        9 => (include_str!("data/schema_v07.sql"), SEED_V9),
         8 => (include_str!("data/schema_v06.sql"), SEED_V8),
         7 => (include_str!("data/schema_v05.sql"), SEED_V7),
         6 => (include_str!("data/schema_v04.sql"), SEED_V6),
@@ -311,6 +316,9 @@ fn old_database(dir: &Path, version: i64, extra: &str) -> PathBuf {
     }
     if version == 8 {
         conn.execute_batch(&cards_v8()).unwrap();
+    }
+    if version == 9 {
+        conn.execute_batch(&cards_v9()).unwrap();
     }
     conn.execute_batch(extra).unwrap();
     drop(conn);
@@ -343,6 +351,23 @@ fn count(db: &Path, table: &str) -> i64 {
         .unwrap()
 }
 
+/// The counts of [`TABLES`] before a move to version 10, with the three
+/// event kinds it adds to the table of every owner.
+fn with_new_cells(db: &Path, before: &[i64]) -> Vec<i64> {
+    let owners = count(db, "owners");
+    TABLES
+        .iter()
+        .zip(before)
+        .map(|(table, n)| {
+            if *table == "owner_events" {
+                n + 3 * owners
+            } else {
+                *n
+            }
+        })
+        .collect()
+}
+
 fn open(db: &Path) -> (Store, Data) {
     match Store::open(db).unwrap() {
         OpenOutcome::Ready(store, Some(data)) => (store, *data),
@@ -353,7 +378,7 @@ fn open(db: &Path) -> (Store, Data) {
 /// What every move leaves: the accounts and nothing else.
 fn only_the_accounts_are_left(db: &Path, data: &Data) {
     assert_eq!(version(db), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 9);
+    assert_eq!(SCHEMA_VERSION, 10);
     let mut names = tables(db);
     names.sort();
     assert_eq!(
@@ -408,7 +433,7 @@ fn only_the_accounts_are_left(db: &Path, data: &Data) {
 }
 
 #[test]
-fn a_0_3_database_moves_to_version_9_keeping_only_the_accounts() {
+fn a_0_3_database_moves_to_version_10_keeping_only_the_accounts() {
     let dir = tempfile::tempdir().unwrap();
     let db = old_database(dir.path(), 5, "");
     let (store, data) = open(&db);
@@ -432,7 +457,7 @@ fn a_0_3_database_moves_to_version_9_keeping_only_the_accounts() {
 }
 
 #[test]
-fn a_0_2_database_moves_to_version_9_keeping_only_the_accounts() {
+fn a_0_2_database_moves_to_version_10_keeping_only_the_accounts() {
     let dir = tempfile::tempdir().unwrap();
     let db = old_database(dir.path(), 4, "");
     let (store, data) = open(&db);
@@ -446,7 +471,7 @@ fn a_0_2_database_moves_to_version_9_keeping_only_the_accounts() {
 }
 
 #[test]
-fn a_moved_database_saves_and_opens_again_as_version_9() {
+fn a_moved_database_saves_and_opens_again_as_version_10() {
     let dir = tempfile::tempdir().unwrap();
     let db = old_database(dir.path(), 5, "");
     let (mut store, data) = open(&db);
@@ -581,7 +606,7 @@ fn the_daemon_starts_on_a_0_3_state_directory() {
 // ------------------------------------------------------------- from 0.4
 
 #[test]
-fn a_0_4_database_moves_to_version_9_keeping_everything() {
+fn a_0_4_database_moves_to_version_10_keeping_everything() {
     let dir = tempfile::tempdir().unwrap();
     let db = old_database(dir.path(), 6, "");
     let counts: Vec<i64> = [
@@ -602,7 +627,7 @@ fn a_0_4_database_moves_to_version_9_keeping_everything() {
     .collect();
     let (store, data) = open(&db);
     drop(store);
-    assert_eq!(version(&db), 9);
+    assert_eq!(version(&db), 10);
     let after: Vec<i64> = [
         "accounts",
         "owners",
@@ -619,7 +644,11 @@ fn a_0_4_database_moves_to_version_9_keeping_everything() {
     .iter()
     .map(|t| count(&db, t))
     .collect();
-    assert_eq!(after, counts, "every row stays");
+    assert_eq!(
+        after,
+        with_new_cells(&db, &counts),
+        "every row stays; each owner's table gains the three kinds of version 10"
+    );
 
     let account = &data.accounts["1001"];
     assert_eq!(
@@ -677,12 +706,13 @@ fn a_0_4_database_moves_to_version_9_keeping_everything() {
     let pr6 = &data.prs["1001:PR_6"];
     assert_eq!(pr6.dismissed_at, Some(1_799_999_900));
     assert!(pr6.restored);
-    // Through version 7 to 8: Mine's single list is Mine's Todo.
+    // Through versions 7, 8 and 9 to 10: Mine's single list is Mine's
+    // Inbox.
     assert_eq!(
         pr6.place,
         Some(PlaceRec {
             tab: PlacedTab::Mine,
-            section: Section::Todo,
+            section: Section::Inbox,
             rank: 0,
         })
     );
@@ -729,13 +759,13 @@ fn a_0_4_database_shows_its_ranks_and_done_order_after_the_move() {
             )
         })
         .collect();
-    // The screen's section order: Done before Todo.
+    // The screen's section order: Done before Inbox.
     let want = [
         ("org/app#4", "done", 0, false),
         ("org/app#5", "done", 1, false),
-        ("org/app#1", "todo", 0, false),
-        ("org/app#2", "todo", 1, true),
-        ("org/app#3", "todo", 2, false),
+        ("org/app#1", "inbox", 0, false),
+        ("org/app#2", "inbox", 1, true),
+        ("org/app#3", "inbox", 2, false),
     ];
     let want: Vec<(String, String, u32, bool)> = want
         .iter()
@@ -855,7 +885,7 @@ fn the_daemon_starts_on_a_0_4_state_directory() {
         .iter()
         .map(|c| c["pr"].as_str().unwrap())
         .collect();
-    // Done (#4, #5) before Todo (#1, #2, #3).
+    // Done (#4, #5) before Inbox (#1, #2, #3).
     assert_eq!(
         prs,
         [
@@ -895,18 +925,22 @@ const TABLES: [&str; 11] = [
 ];
 
 #[test]
-fn a_0_5_database_moves_to_version_9_keeping_everything() {
+fn a_0_5_database_moves_to_version_10_keeping_everything() {
     let dir = tempfile::tempdir().unwrap();
     let db = old_database(dir.path(), 7, "");
     let counts: Vec<i64> = TABLES.iter().map(|t| count(&db, t)).collect();
     let (store, data) = open(&db);
     drop(store);
-    assert_eq!(version(&db), 9);
+    assert_eq!(version(&db), 10);
     let after: Vec<i64> = TABLES.iter().map(|t| count(&db, t)).collect();
-    assert_eq!(after, counts, "every row stays");
+    assert_eq!(
+        after,
+        with_new_cells(&db, &counts),
+        "every row stays; each owner's table gains the three kinds of version 10"
+    );
 
-    // Mine's single list is Mine's Todo with the same ranks; the cards in
-    // Done keep their entry and take Todo as their section before Done;
+    // Mine's single list is Mine's Inbox with the same ranks; the cards in
+    // Done keep their entry and take Inbox as their section before Done;
     // Review stays.
     let place = |n: u32| {
         let pr = &data.prs[&format!("1001:PR_{n}")];
@@ -914,14 +948,28 @@ fn a_0_5_database_moves_to_version_9_keeping_everything() {
         (p.tab, p.section, p.rank, pr.done_at, pr.done_seq)
     };
     let want = [
-        (1, PlacedTab::Mine, Section::Todo, 0, None, 0),
-        (2, PlacedTab::Mine, Section::Todo, 2, None, 0),
-        (3, PlacedTab::Mine, Section::Todo, 5, None, 0),
-        (4, PlacedTab::Mine, Section::Todo, 7, None, 0),
-        (5, PlacedTab::Mine, Section::Todo, 1, Some(1_799_999_000), 3),
-        (6, PlacedTab::Mine, Section::Todo, 4, Some(1_799_999_000), 4),
+        (1, PlacedTab::Mine, Section::Inbox, 0, None, 0),
+        (2, PlacedTab::Mine, Section::Inbox, 2, None, 0),
+        (3, PlacedTab::Mine, Section::Inbox, 5, None, 0),
+        (4, PlacedTab::Mine, Section::Inbox, 7, None, 0),
+        (
+            5,
+            PlacedTab::Mine,
+            Section::Inbox,
+            1,
+            Some(1_799_999_000),
+            3,
+        ),
+        (
+            6,
+            PlacedTab::Mine,
+            Section::Inbox,
+            4,
+            Some(1_799_999_000),
+            4,
+        ),
         (7, PlacedTab::Review, Section::Doing, 0, None, 0),
-        (8, PlacedTab::Review, Section::Todo, 0, None, 0),
+        (8, PlacedTab::Review, Section::Inbox, 0, None, 0),
         (9, PlacedTab::Review, Section::Waiting, 0, None, 0),
         (
             10,
@@ -952,7 +1000,7 @@ fn a_0_5_database_moves_to_version_9_keeping_everything() {
 #[test]
 fn a_0_5_database_lists_mine_in_the_same_order_after_the_move() {
     // docs/tasks/M9.md, "Risky points": the relative order of Mine's single
-    // list is the order of Todo, seen in the wire `placement.position`.
+    // list is the order of Inbox, seen in the wire `placement.position`.
     let dir = tempfile::tempdir().unwrap();
     let db = old_database(dir.path(), 7, "");
     let (_, data) = open(&db);
@@ -992,11 +1040,11 @@ fn a_0_5_database_lists_mine_in_the_same_order_after_the_move() {
         want(&[
             ("org/app#6", "done", 0, false, false),
             ("org/app#5", "done", 1, false, false),
-            ("org/app#1", "todo", 0, false, false),
-            ("org/app#2", "todo", 1, true, false),
-            ("org/app#4", "todo", 2, false, false),
+            ("org/app#1", "inbox", 0, false, false),
+            ("org/app#2", "inbox", 1, true, false),
+            ("org/app#4", "inbox", 2, false, false),
             // Dismissed: where it would come back, between #2 and #4.
-            ("org/app#3", "todo", 2, false, true),
+            ("org/app#3", "inbox", 2, false, true),
         ])
     );
     assert_eq!(
@@ -1005,7 +1053,7 @@ fn a_0_5_database_lists_mine_in_the_same_order_after_the_move() {
             ("org/app#10", "done", 0, false, false),
             ("org/app#9", "waiting", 0, false, false),
             ("org/app#7", "doing", 0, false, false),
-            ("org/app#8", "todo", 0, false, false),
+            ("org/app#8", "inbox", 0, false, false),
         ])
     );
 }
@@ -1070,8 +1118,8 @@ fn a_failed_move_from_0_5_rolls_back_and_leaves_version_7_unreadable() {
 }
 
 /// The daemon on a 0.5 state directory, with a test Keychain file and no
-/// GitHub: Mine's single list is Mine's Todo in the same order, and a
-/// reopen takes a card in Mine's Done back to its rank in Todo.
+/// GitHub: Mine's single list is Mine's Inbox in the same order, and a
+/// reopen takes a card in Mine's Done back to its rank in Inbox.
 #[cfg(feature = "dev-ingest")]
 #[test]
 fn the_daemon_starts_on_a_0_5_state_directory() {
@@ -1116,12 +1164,12 @@ fn the_daemon_starts_on_a_0_5_state_directory() {
         [
             at("org/app#6", "done", 0),
             at("org/app#5", "done", 1),
-            at("org/app#1", "todo", 0),
-            at("org/app#2", "todo", 1),
-            at("org/app#4", "todo", 2),
+            at("org/app#1", "inbox", 0),
+            at("org/app#2", "inbox", 1),
+            at("org/app#4", "inbox", 2),
         ]
     );
-    // A reopen of the cards in Done: back to their ranks in Todo.
+    // A reopen of the cards in Done: back to their ranks in Inbox.
     daemon.ingest(
         vec![
             with(pr("PR_5", "me"), json!({"updated_at": T0 + 10})),
@@ -1133,16 +1181,16 @@ fn the_daemon_starts_on_a_0_5_state_directory() {
     assert_eq!(
         mine(),
         [
-            at("org/app#1", "todo", 0),
-            at("org/app#5", "todo", 1),
-            at("org/app#2", "todo", 2),
-            at("org/app#6", "todo", 3),
-            at("org/app#4", "todo", 4),
+            at("org/app#1", "inbox", 0),
+            at("org/app#5", "inbox", 1),
+            at("org/app#2", "inbox", 2),
+            at("org/app#6", "inbox", 3),
+            at("org/app#4", "inbox", 4),
         ]
     );
-    // The dismissed card comes back to its rank in Todo too.
+    // The dismissed card comes back to its rank in Inbox too.
     daemon.ok(json!({"cmd":"restore","account":"me","pr":"org/app#3"}));
-    assert_eq!(mine()[4], at("org/app#3", "todo", 4));
+    assert_eq!(mine()[4], at("org/app#3", "inbox", 4));
     daemon.stop();
 }
 
@@ -1274,7 +1322,7 @@ fn columns(db: &Path, table: &str) -> Vec<String> {
 }
 
 #[test]
-fn a_0_6_database_moves_to_version_9_keeping_everything() {
+fn a_0_6_database_moves_to_version_10_keeping_everything() {
     let dir = tempfile::tempdir().unwrap();
     let db = old_database(dir.path(), 8, "");
     let counts: Vec<i64> = TABLES.iter().map(|t| count(&db, t)).collect();
@@ -1300,9 +1348,13 @@ fn a_0_6_database_moves_to_version_9_keeping_everything() {
     };
     let (store, data) = open(&db);
     drop(store);
-    assert_eq!(version(&db), 9);
+    assert_eq!(version(&db), 10);
     let after: Vec<i64> = TABLES.iter().map(|t| count(&db, t)).collect();
-    assert_eq!(after, counts, "every row stays");
+    assert_eq!(
+        after,
+        with_new_cells(&db, &counts),
+        "every row stays; each owner's table gains the three kinds of version 10"
+    );
     assert!(columns(&db, "prs").contains(&"timeline_updated_at".to_string()));
     assert!(columns(&db, "pr_rows").contains(&"actor_avatar_url".to_string()));
 
@@ -1341,10 +1393,17 @@ fn a_0_6_database_moves_to_version_9_keeping_everything() {
     };
     let want = [
         (1, PlacedTab::Mine, Section::Doing, 0, None, 0),
-        (2, PlacedTab::Mine, Section::Todo, 0, None, 0),
-        (3, PlacedTab::Mine, Section::Todo, 1, None, 0),
+        (2, PlacedTab::Mine, Section::Inbox, 0, None, 0),
+        (3, PlacedTab::Mine, Section::Inbox, 1, None, 0),
         (4, PlacedTab::Mine, Section::Waiting, 0, None, 0),
-        (5, PlacedTab::Mine, Section::Todo, 2, Some(1_799_999_000), 3),
+        (
+            5,
+            PlacedTab::Mine,
+            Section::Inbox,
+            2,
+            Some(1_799_999_000),
+            3,
+        ),
         (
             6,
             PlacedTab::Review,
@@ -1354,7 +1413,7 @@ fn a_0_6_database_moves_to_version_9_keeping_everything() {
             1,
         ),
         (7, PlacedTab::Review, Section::Doing, 0, None, 0),
-        (8, PlacedTab::Review, Section::Todo, 0, None, 0),
+        (8, PlacedTab::Review, Section::Inbox, 0, None, 0),
         (9, PlacedTab::Review, Section::Waiting, 0, None, 0),
     ];
     for (n, tab, section, rank, done_at, done_seq) in want {
@@ -1467,7 +1526,7 @@ fn the_daemon_starts_on_a_0_6_state_directory() {
             at("org/app#5", "done"),
             at("org/app#4", "waiting"),
             at("org/app#1", "doing"),
-            at("org/app#2", "todo"),
+            at("org/app#2", "inbox"),
         ]
     );
     assert_eq!(
@@ -1476,7 +1535,7 @@ fn the_daemon_starts_on_a_0_6_state_directory() {
             at("org/app#6", "done"),
             at("org/app#9", "waiting"),
             at("org/app#7", "doing"),
-            at("org/app#8", "todo"),
+            at("org/app#8", "inbox"),
         ]
     );
     let cards = daemon.ok(json!({"cmd":"list","account":"me","tab":"all"}))["cards"].clone();
@@ -1517,4 +1576,551 @@ fn a_card_without_the_time_it_was_added_sorts_as_the_oldest() {
         .map(|c| c.pr)
         .collect();
     assert_eq!(all.last().map(String::as_str), Some("org/app#8"), "{all:?}");
+}
+
+// ------------------------------------------------------------- from 0.7
+
+/// One of everything 0.7 saves (DESIGN.md, "Updating from 0.7"): two
+/// owners, one with an event table of changed values, Mine's and Review's
+/// sections, a dismissed card, Mute lists, settings, rows of every kind
+/// (unread and read, with and without an avatar), a deleted row, a Dismiss
+/// record, a Reaction baseline and, in `accounts.fetch`, the records of the
+/// account's comments (`created_at` included) and of its threads.
+const SEED_V9: &str = r#"
+INSERT INTO meta (key, value) VALUES ('seq', '6'), ('restore_accounts', 'false');
+INSERT INTO config (key, value) VALUES
+    ('text_size', '15'), ('appearance', '"dark"'), ('confirm_dismiss', 'false');
+INSERT INTO accounts (id, login, color, seq, token, updated_at, dot, teams, graphql_limit,
+    rest_limit, stopped_until, fetch) VALUES (
+    '1001', 'me', 'green', 1, '{"registered":true}', 1799999000, 1,
+    '[{"database_id":42,"slug":"core","org":"org"}]', NULL, NULL, NULL,
+    '{"own":{"C_1":{"id":"C_1","pr_id":"PR_1","url":"https://github.example/c/C_1","text":"my comment","created_at":1799998000,"baseline_done":true},"C_2":{"id":"C_2","pr_id":"PR_7","url":"https://github.example/c/C_2","text":"draft","created_at":1799997000,"baseline_done":false}},"threads":{"T_1":{"id":"T_1","pr_id":"PR_7","mine_at":1799997000,"mention_at":null},"T_2":{"id":"T_2","pr_id":"PR_8","mine_at":null,"mention_at":1799996000}},"retries":{},"pending_signals":[],"notif_last_modified":null,"notif_since":null,"poll_interval":60,"notif_checked_at":1799999000,"status_failures":[],"failed_requests":[],"full_run_started_at":1799999000,"team_windows":{}}');
+INSERT INTO mutes (account, kind, position, name) VALUES
+    ('1001', 'pr', 0, 'org/app#2'), ('1001', 'user', 0, 'example-bot'),
+    ('1001', 'repo', 0, 'org/legacy');
+INSERT INTO owners (id, account, name, kind, github_id, seq, enabled, notify, skip_drafts,
+    watch_started_at, fetched_at) VALUES
+    ('o2', '1001', 'org', 'org', 100, 2, 1, 1, 1, 1799000000, 1799999000),
+    ('o6', '1001', 'Public', 'public', NULL, 6, 1, 1, 0, 1799000000, NULL);
+INSERT INTO owner_events (owner, event, list, notify) VALUES
+    ('o2', 'comment', 1, 0), ('o2', 'checks_passed', 0, 0), ('o2', 'merged_closed', 1, 1);
+INSERT INTO pr_rows (id, account, pr, kind, text, counts, actor, url, occurred_at, comment_id,
+    unread, listed, made_at, notify, actor_avatar_url) VALUES
+    ('1001:R_1', '1001', '1001:PR_1', 'review_requested', 'for you', NULL, 'bob', 'u1',
+     1799999101, NULL, 1, 1, 1799999102, 'delivered', 'https://avatars.example/bob'),
+    ('1001:R_2', '1001', '1001:PR_1', 'team_review_requested', 'for core team', NULL, 'bob',
+     'u2', 1799999102, NULL, 0, 1, 1799999103, 'none', NULL),
+    ('1001:R_3', '1001', '1001:PR_1', 'mentioned', 'hi @me', NULL, 'carol', 'u3', 1799999103,
+     'C_3', 1, 1, 1799999104, 'pending', 'https://avatars.example/carol'),
+    ('1001:R_4', '1001', '1001:PR_1', 'team_mentioned', 'hi @org/core', NULL, 'carol', 'u4',
+     1799999104, 'C_4', 0, 0, 1799999105, 'delivered', NULL),
+    ('1001:R_5', '1001', '1001:PR_1', 'comment', 'hello', NULL, 'alice', 'u5', 1799999105,
+     'C_5', 1, 1, 1799999106, 'pending', NULL),
+    ('1001:R_6', '1001', '1001:PR_1', 'comment_other', 'hey', NULL, 'alice', 'u6', 1799999106,
+     'C_6', 0, 1, 1799999107, 'none', NULL),
+    ('1001:R_7', '1001', '1001:PR_1', 'reply', 'yes', NULL, 'dave', 'u7', 1799999107, 'C_7', 1,
+     1, 1799999108, 'delivered', NULL),
+    ('1001:R_8', '1001', '1001:PR_1', 'reply_mentioned', 'and you', NULL, 'dave', 'u8',
+     1799999108, 'C_8', 0, 1, 1799999109, 'none', NULL),
+    ('1001:R_9', '1001', '1001:PR_1', 'reaction', 'my comment', '{"THUMBS_UP":2}', NULL, 'u9',
+     1799999109, 'C_1', 1, 1, 1799999110, 'none', NULL),
+    ('1001:R_10', '1001', '1001:PR_1', 'approved', NULL, NULL, 'erin', 'u10', 1799999110, NULL,
+     1, 1, 1799999111, 'delivered', 'https://avatars.example/erin'),
+    ('1001:R_11', '1001', '1001:PR_1', 'changes_requested', NULL, NULL, NULL, 'u11',
+     1799999111, NULL, 0, 1, 1799999112, 'none', NULL),
+    ('1001:R_12', '1001', '1001:PR_1', 'checks_failed', 'build', NULL, NULL, 'u12',
+     1799999112, NULL, 1, 1, 1799999113, 'delivered', NULL),
+    ('1001:R_13', '1001', '1001:PR_1', 'checks_passed', NULL, NULL, NULL, 'u13', 1799999113,
+     NULL, 0, 0, 1799999114, 'none', NULL),
+    ('1001:R_14', '1001', '1001:PR_1', 'conflicts', NULL, NULL, NULL, 'u14', 1799999114, NULL,
+     1, 1, 1799999115, 'none', NULL),
+    ('1001:R_15', '1001', '1001:PR_1', 'mergeable', NULL, NULL, NULL, 'u15', 1799999115, NULL,
+     0, 1, 1799999116, 'none', NULL),
+    ('1001:R_16', '1001', '1001:PR_1', 'merge_queue_added', NULL, NULL, 'me', 'u16',
+     1799999116, NULL, 0, 1, 1799999117, 'none', NULL),
+    ('1001:R_17', '1001', '1001:PR_1', 'merge_queue_removed', 'Checks failed · added by me',
+     NULL, 'github-merge-queue', 'u17', 1799999117, NULL, 1, 1, 1799999118, 'pending', NULL),
+    ('1001:R_18', '1001', '1001:PR_5', 'merged', NULL, NULL, 'me', 'u18', 1799999118, NULL, 0,
+     1, 1799999119, 'none', 'https://avatars.example/me'),
+    ('1001:R_19', '1001', '1001:PR_6', 'closed', NULL, NULL, 'bob', 'u19', 1799999119, NULL,
+     1, 1, 1799999120, 'delivered', NULL),
+    ('1001:R_20', '1001', '1001:PR_1', 'reopened', NULL, NULL, 'me', 'u20', 1799999120, NULL,
+     0, 1, 1799999121, 'none', NULL);
+INSERT INTO deleted_rows (id, pr) VALUES ('1001:R_0', '1001:PR_1');
+INSERT INTO dismiss_records (key, account, pr_id, owner, updated_at) VALUES
+    ('1001:PR_R', '1001', 'PR_R', 'o2', 1799990000);
+INSERT INTO reaction_baselines (key, pr, counts) VALUES
+    ('1001:C_1', '1001:PR_1', '{"THUMBS_UP":2}');
+"#;
+
+/// The cards of [`SEED_V9`]: the 0.5 layout with the timeline time of 0.7.
+fn cards_v9() -> String {
+    [
+        cards_v8(),
+        "UPDATE prs SET timeline_updated_at = 1799999300 WHERE key = '1001:PR_1';".to_string(),
+    ]
+    .concat()
+}
+
+/// The `(list, notify)` of each kind of an owner's table, as saved.
+fn saved_cells(db: &Path, owner: &str) -> std::collections::BTreeMap<String, (bool, bool)> {
+    let conn = Connection::open(db).unwrap();
+    let mut statement = conn
+        .prepare("SELECT event, list, notify FROM owner_events WHERE owner = ?1")
+        .unwrap();
+    statement
+        .query_map([owner], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+}
+
+#[test]
+fn a_0_7_database_moves_to_version_10_keeping_everything() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = old_database(dir.path(), 9, "");
+    let counts: Vec<i64> = TABLES.iter().map(|t| count(&db, t)).collect();
+    let rows_before = {
+        let conn = Connection::open(&db).unwrap();
+        let mut statement = conn
+            .prepare(
+                "SELECT id, kind, text, actor, unread, notify, actor_avatar_url, occurred_at
+                 FROM pr_rows ORDER BY id",
+            )
+            .unwrap();
+        statement
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, bool>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, Option<String>>(6)?,
+                    r.get::<_, i64>(7)?,
+                ))
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .collect::<Vec<_>>()
+    };
+    let (store, data) = open(&db);
+    drop(store);
+    assert_eq!(version(&db), 10);
+    let after: Vec<i64> = TABLES.iter().map(|t| count(&db, t)).collect();
+    assert_eq!(
+        after,
+        with_new_cells(&db, &counts),
+        "every row stays; each owner's table gains the three kinds of version 10"
+    );
+    assert!(columns(&db, "prs").contains(&"labels".to_string()));
+    assert!(columns(&db, "prs").contains(&"labels_more".to_string()));
+    assert!(columns(&db, "prs").contains(&"my_review".to_string()));
+    assert!(columns(&db, "accounts").contains(&"avatar_url".to_string()));
+    // The account's verdicts and its avatar wait for the next fetch.
+    assert!(data.prs.values().all(|p| p.my_review.is_none()));
+    assert!(data.accounts.values().all(|a| a.avatar_url.is_none()));
+
+    // The three kinds join every owner's table at their defaults; the other
+    // values stay.
+    let org = saved_cells(&db, "o2");
+    assert_eq!(org["ready_for_review"], (true, true));
+    assert_eq!(org["converted_to_draft"], (true, false));
+    assert_eq!(org["comment"], (true, false));
+    assert_eq!(org["checks_passed"], (false, false));
+    assert_eq!(org["merged_closed"], (true, true));
+    assert_eq!(org["my_review"], (true, false));
+    assert_eq!(org.len(), 6, "the kinds 0.7 never saved stay unsaved");
+    let public = saved_cells(&db, "o6");
+    assert_eq!(public.len(), 3);
+    assert_eq!(public["my_review"], (true, false));
+    assert_eq!(public["ready_for_review"], (true, true));
+    assert_eq!(public["converted_to_draft"], (true, false));
+    let table = &data.owners["o2"].events;
+    assert!(!table.cell(EventKind::ChecksPassed).list);
+    assert!(!table.cell(EventKind::Comment).notify);
+    assert!(table.cell(EventKind::MergedClosed).notify);
+    assert!(table.cell(EventKind::ReadyForReview).notify);
+    assert!(!table.cell(EventKind::ConvertedToDraft).notify);
+    assert!(table.cell(EventKind::ConvertedToDraft).list);
+
+    // Every row keeps its kind, text, actor, unread mark, delivery, avatar
+    // and time.
+    let mut rows: Vec<_> = data.rows.values().collect();
+    rows.sort_by(|a, b| a.id.cmp(&b.id));
+    let now: Vec<_> = rows
+        .iter()
+        .map(|r| {
+            (
+                r.id.clone(),
+                r.kind.as_str().to_string(),
+                r.text.clone(),
+                r.actor.clone(),
+                r.unread,
+                r.notify.as_str().to_string(),
+                r.actor_avatar_url.clone(),
+                r.occurred_at,
+            )
+        })
+        .collect();
+    assert_eq!(now, rows_before);
+    assert_eq!(rows.len(), 20, "one of every kind");
+    assert!(data.deleted_rows.contains_key("1001:R_0"));
+
+    // The records of the account's comments and threads read as 0.7 saved
+    // them, times unchanged.
+    let fetch = &data.accounts["1001"].fetch;
+    assert_eq!(fetch.own["C_1"].created_at, 1_799_998_000);
+    assert!(fetch.own["C_1"].baseline_done);
+    assert_eq!(fetch.own["C_2"].created_at, 1_799_997_000);
+    assert!(!fetch.own["C_2"].baseline_done);
+    assert_eq!(fetch.threads["T_1"].mine_at, Some(1_799_997_000));
+    assert_eq!(fetch.threads["T_2"].mention_at, Some(1_799_996_000));
+    assert_eq!(
+        data.baselines["1001:C_1"].counts,
+        std::collections::BTreeMap::from([("THUMBS_UP".to_string(), 2)])
+    );
+
+    // Every card keeps its place and rank, `todo` read as `inbox`: the
+    // section of an open card and the one a card in Done had before Done,
+    // dismissed (#3) and muted (#2) cards included.
+    let place = |n: u32| {
+        let pr = &data.prs[&format!("1001:PR_{n}")];
+        let p = pr.place.unwrap();
+        (
+            p.tab,
+            p.section,
+            p.rank,
+            pr.done_at,
+            pr.dismissed_at.is_some(),
+        )
+    };
+    let want = [
+        (1, PlacedTab::Mine, Section::Doing, 0, None, false),
+        (2, PlacedTab::Mine, Section::Inbox, 0, None, false),
+        (3, PlacedTab::Mine, Section::Inbox, 1, None, true),
+        (4, PlacedTab::Mine, Section::Waiting, 0, None, false),
+        (
+            5,
+            PlacedTab::Mine,
+            Section::Inbox,
+            2,
+            Some(1_799_999_000),
+            false,
+        ),
+        (
+            6,
+            PlacedTab::Review,
+            Section::Waiting,
+            1,
+            Some(1_799_998_000),
+            false,
+        ),
+        (7, PlacedTab::Review, Section::Doing, 0, None, false),
+        (8, PlacedTab::Review, Section::Inbox, 0, None, false),
+        (9, PlacedTab::Review, Section::Waiting, 0, None, false),
+    ];
+    for (n, tab, section, rank, done_at, dismissed) in want {
+        assert_eq!(place(n), (tab, section, rank, done_at, dismissed), "PR_{n}");
+    }
+    assert_eq!(
+        Connection::open(&db)
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM prs WHERE place_section = 'todo'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0,
+        "no stored `todo` is left"
+    );
+
+    // Dismiss, Mute and settings stay; no PR has labels yet.
+    let pr1 = &data.prs["1001:PR_1"];
+    assert_eq!(pr1.timeline_updated_at, Some(1_799_999_300));
+    assert_eq!(data.prs["1001:PR_3"].dismissed_at, Some(1_799_999_900));
+    assert!(
+        data.prs
+            .values()
+            .all(|p| p.labels.is_empty() && p.labels_more == 0)
+    );
+    let mutes = &data.accounts["1001"].mutes;
+    assert_eq!(mutes.prs, vec!["org/app#2".to_string()]);
+    assert_eq!(mutes.users, vec!["example-bot".to_string()]);
+    assert_eq!(mutes.repos, vec!["org/legacy".to_string()]);
+    assert_eq!(data.config.text_size, 15);
+    assert!(!data.config.confirm_dismiss);
+    assert!(data.config.show_labels, "show_labels starts at its default");
+    assert_eq!(data.records.len(), 1);
+}
+
+#[test]
+fn a_moved_0_7_database_saves_and_opens_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = old_database(dir.path(), 9, "");
+    let (mut store, mut data) = open(&db);
+    let pr = data.prs.get_mut("1001:PR_1").unwrap();
+    pr.labels = vec![
+        LabelRec {
+            name: "bug".into(),
+            color: "d73a4a".into(),
+        },
+        LabelRec {
+            name: "good first issue".into(),
+            color: "7057FF".into(),
+        },
+    ];
+    pr.labels_more = 3;
+    pr.my_review = Some(Verdict::ChangesRequested);
+    data.prs.get_mut("1001:PR_7").unwrap().my_review = Some(Verdict::Dismissed);
+    data.accounts.get_mut("1001").unwrap().avatar_url = Some("https://avatars.example/me".into());
+    data.config.show_labels = false;
+    let engine = shiibar_ghd::engine::Engine::restore(data.clone());
+    let mut dirty = engine.dirty().clone();
+    dirty.prs.insert("1001:PR_1".into());
+    dirty.prs.insert("1001:PR_7".into());
+    dirty.accounts.insert("1001".into());
+    dirty.config = true;
+    store.save(engine.data(), &dirty).unwrap();
+    drop(store);
+    let (_, again) = open(&db);
+    assert_eq!(&again, engine.data(), "nothing lost");
+    assert_eq!(again.prs["1001:PR_1"].labels.len(), 2);
+    assert_eq!(again.prs["1001:PR_1"].labels[1].color, "7057FF");
+    assert_eq!(again.prs["1001:PR_1"].labels_more, 3);
+    assert_eq!(
+        again.prs["1001:PR_1"].my_review,
+        Some(Verdict::ChangesRequested)
+    );
+    assert_eq!(again.prs["1001:PR_7"].my_review, Some(Verdict::Dismissed));
+    assert_eq!(
+        again.accounts["1001"].avatar_url.as_deref(),
+        Some("https://avatars.example/me")
+    );
+    assert!(!again.config.show_labels);
+}
+
+#[test]
+fn a_failed_move_from_0_7_rolls_back_and_leaves_version_9_unreadable() {
+    // A column of version 10 already there makes the move fail after the
+    // first statement; a section no build knows makes the moved state
+    // unreadable. Either way nothing changes.
+    for extra in [
+        "ALTER TABLE prs ADD COLUMN labels_more INTEGER;",
+        "UPDATE prs SET place_section = 'main' WHERE key = '1001:PR_7';",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let db = old_database(dir.path(), 9, extra);
+        let cells = count(&db, "owner_events");
+        let todo = |db: &Path| -> i64 {
+            Connection::open(db)
+                .unwrap()
+                .query_row(
+                    "SELECT count(*) FROM prs WHERE place_section = 'todo'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        let todos = todo(&db);
+        assert!(todos > 0);
+        for start in 1..=2 {
+            assert!(
+                matches!(Store::open(&db).unwrap(), OpenOutcome::Unreadable),
+                "{extra}: start {start}"
+            );
+            assert_eq!(version(&db), 9, "{extra}: start {start}: old version");
+            assert!(
+                !columns(&db, "prs").contains(&"labels".to_string()),
+                "{extra}: start {start}: rolled back"
+            );
+            assert_eq!(count(&db, "owner_events"), cells);
+            assert_eq!(todo(&db), todos, "{extra}: start {start}: `todo` stays");
+        }
+    }
+}
+
+/// The daemon on a 0.7 state directory, with a test Keychain file and no
+/// GitHub: the cards list as before, without labels, the event tables carry
+/// the two new kinds, and `show_labels` answers its default.
+#[cfg(feature = "dev-ingest")]
+#[test]
+fn the_daemon_starts_on_a_0_7_state_directory() {
+    use common::*;
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    old_database(dir.path(), 9, "");
+    let item = dir.path().join("keychain.json");
+    std::fs::write(
+        &item,
+        r#"{"version":2,"accounts":[{"id":"1001","login":"me","token":"ghp_test_only"}]}"#,
+    )
+    .unwrap();
+    let mut command = command(dir.path());
+    command
+        .env("SHIIBAR_GH_DEV_NOW", T0.to_string())
+        .env("SHIIBAR_GH_DEV_TZ", TZ)
+        .env("SHIIBAR_GH_DEV_KEYCHAIN", &item);
+    let daemon = TestDaemon::spawn(dir.path(), command);
+    assert_eq!(daemon.subscribe("cli").snapshot()["db_unreadable"], false);
+    // The cards of 0.7's Todo list in Inbox, in the same order.
+    let mine: Vec<(String, serde_json::Value)> = daemon
+        .ok(json!({"cmd":"list","account":"me","tab":"mine"}))["cards"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            (
+                c["pr"].as_str().unwrap().to_string(),
+                c["placement"].clone(),
+            )
+        })
+        .collect();
+    let at = |pr: &str, section: &str, position: u32| {
+        (
+            pr.to_string(),
+            json!({"tab":"mine","section":section,"position":position}),
+        )
+    };
+    assert_eq!(
+        mine,
+        [
+            at("org/app#5", "done", 0),
+            at("org/app#4", "waiting", 0),
+            at("org/app#1", "doing", 0),
+            at("org/app#2", "inbox", 0),
+        ]
+    );
+    let review = daemon.ok(json!({"cmd":"list","account":"me","tab":"review"}))["cards"].clone();
+    assert_eq!(review[3]["pr"], "org/app#8");
+    assert_eq!(review[3]["placement"]["section"], "inbox");
+    let cards = daemon.ok(json!({"cmd":"list","account":"me","tab":"all"}))["cards"].clone();
+    let cards = cards.as_array().unwrap();
+    assert!(!cards.is_empty());
+    for card in cards {
+        assert_eq!(card["labels"], json!([]), "{}", card["pr"]);
+        assert_eq!(card["labels_more"], 0, "{}", card["pr"]);
+    }
+    let events =
+        daemon.ok(json!({"cmd":"owner_events_get","account":"me","owner":"org"}))["events"].clone();
+    assert_eq!(
+        events["ready_for_review"],
+        json!({"list":true,"notify":true})
+    );
+    assert_eq!(
+        events["converted_to_draft"],
+        json!({"list":true,"notify":false})
+    );
+    assert_eq!(events["comment"], json!({"list":true,"notify":false}));
+    assert_eq!(
+        daemon.ok(json!({"cmd":"config_get","key":"show_labels"}))["value"],
+        true
+    );
+    daemon.stop();
+}
+
+/// DESIGN.md, "Applying the table": My review has no Notify column. A
+/// stored `notify` of 1 for it reads as off and never reaches the wire.
+#[test]
+fn a_stored_notify_of_my_review_reads_as_off() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = old_database(dir.path(), 9, "");
+    let (store, _) = open(&db);
+    drop(store);
+    Connection::open(&db)
+        .unwrap()
+        .execute(
+            "UPDATE owner_events SET notify = 1 WHERE event = 'my_review'",
+            [],
+        )
+        .unwrap();
+    let (_, data) = open(&db);
+    let cell = data.owners["o2"].events.cell(EventKind::MyReview);
+    assert!(cell.list && !cell.notify);
+    let engine = shiibar_ghd::engine::Engine::restore(data);
+    let wire = engine.owner_events("o2")["my_review"];
+    assert!(wire.list && !wire.notify);
+}
+
+/// DESIGN.md, "Updating from 0.7": the account's reviews submitted before
+/// the update make My review rows only inside the range of the first fetch
+/// after it, which starts five minutes before the owner's last success
+/// (1799999000 in [`SEED_V9`]).
+#[cfg(feature = "dev-ingest")]
+#[test]
+fn the_first_fetch_after_the_move_makes_my_review_rows_inside_its_range() {
+    use common::*;
+    use fake_github::*;
+    use serde_json::json;
+    let token = "ghp_test_only";
+    let github = FakeGitHub::start();
+    let review = |id: &str, at: i64| {
+        json!({"__typename":"PullRequestReview","id":id,"url":format!("https://github.com/r/{id}"),
+               "createdAt":iso(at),"publishedAt":iso(at),"submittedAt":iso(at),
+               "state":"APPROVED","bodyText":"","bodyHTML":"",
+               "author":{"__typename":"User","login":"me"}})
+    };
+    github.with(|w| {
+        w.logins.insert(token.into(), "me".into());
+        w.owners.insert("org".into(), "Organization".into());
+        w.owner_ids.insert("org".into(), 100);
+        w.prs.push(pr_node(
+            "PR_7",
+            "org",
+            7,
+            "bob",
+            json!({"updatedAt": iso(1_799_999_600)}),
+        ));
+        w.timeline.insert(
+            "PR_7".into(),
+            vec![
+                review("PRR_BEFORE", 1_799_998_600),
+                review("PRR_OVERLAP", 1_799_998_800),
+                review("PRR_AFTER", 1_799_999_500),
+            ],
+        );
+    });
+    let dir = tempfile::tempdir().unwrap();
+    old_database(dir.path(), 9, "");
+    let item = dir.path().join("keychain.json");
+    std::fs::write(
+        &item,
+        format!(r#"{{"version":2,"accounts":[{{"id":"1001","login":"me","token":"{token}"}}]}}"#),
+    )
+    .unwrap();
+    let mut command = command(dir.path());
+    command
+        .env("SHIIBAR_GH_DEV_NOW", T0.to_string())
+        .env("SHIIBAR_GH_DEV_TZ", TZ)
+        .env("SHIIBAR_GH_DEV_KEYCHAIN", &item)
+        .env("SHIIBAR_GH_DEV_GITHUB_URL", &github.url);
+    let daemon = TestDaemon::spawn(dir.path(), command);
+    daemon.clock(T0 + 100);
+    let events = github
+        .requests()
+        .into_iter()
+        .find(|r| r.op.as_deref() == Some("Events"))
+        .expect("the events of the moved PR were fetched");
+    assert_eq!(events.vars()["since"], iso(1_799_998_700));
+    let cards =
+        daemon.ok(json!({"cmd":"list","account":"me","dismissed":"include"}))["cards"].clone();
+    let card = cards
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["pr"] == "org/app#7")
+        .unwrap()
+        .clone();
+    let mut mine: Vec<String> = card["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["kind"] == "my_review_approved")
+        .map(|r| r["id"].as_str().unwrap().to_string())
+        .collect();
+    mine.sort();
+    assert_eq!(mine, ["1001:PRR_AFTER", "1001:PRR_OVERLAP"]);
+    daemon.stop();
 }

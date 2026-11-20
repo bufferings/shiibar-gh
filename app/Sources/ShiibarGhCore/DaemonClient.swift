@@ -70,7 +70,7 @@ public struct ListQuery: Equatable {
 
 /// Where `place` puts a card in its section (DESIGN.md, "Wire format"):
 /// right before a card, at the top or the bottom, or the default (to
-/// Todo from Doing or Waiting: top; otherwise: bottom).
+/// Inbox from Doing or Waiting: top; otherwise: bottom).
 public enum PlacePosition: Equatable {
     case before(String)
     case top

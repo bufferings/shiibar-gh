@@ -126,18 +126,18 @@ final class SelectionInvariantTests: XCTestCase {
     // MARK: A drop under a section's last card
 
     func testADropUnderTheLastCardOfASectionWithoutMorePRsDoesNotOpenIt() async {
-        // Todo with three cards: no "+ N more PRs" line. A release in the gap
+        // Inbox with three cards: no "+ N more PRs" line. A release in the gap
         // under T3 comes as the section's last line.
         let cards = sampleCards().filter { !["T4", "T5", "T6", "T7"].contains($0.id) }
         let list = await loaded(.review, cards: cards)
-        let todo = list.sections.first { $0.key == "review|todo" }
-        XCTAssertEqual(todo?.more, 0)
+        let inbox = list.sections.first { $0.key == "review|inbox" }
+        XCTAssertEqual(inbox?.more, 0)
         list.beginDrag("W1")
-        XCTAssertTrue(list.drop(.more("review|todo")))
-        XCTAssertFalse(UIStateStore(defaults: defaults).expanded(account: "3407303").contains("review|todo"), "not kept as expanded")
-        XCTAssertFalse(list.data.expanded.contains("review|todo"))
+        XCTAssertTrue(list.drop(.more("review|inbox")))
+        XCTAssertFalse(UIStateStore(defaults: defaults).expanded(account: "3407303").contains("review|inbox"), "not kept as expanded")
+        XCTAssertFalse(list.data.expanded.contains("review|inbox"))
         await settle()
-        XCTAssertEqual(calls("place"), ["place bufferings-work acme-corp/infra#61 review todo bottom"])
+        XCTAssertEqual(calls("place"), ["place bufferings-work acme-corp/infra#61 review inbox bottom"])
     }
 
     // MARK: A press (CardPress)
@@ -253,7 +253,7 @@ final class SelectionInvariantTests: XCTestCase {
     func testMutedHideTakesTheMutedCardsOut() async {
         let list = await loaded(.review)
         list.data.setFilter(ListFilter(muted: .show), tab: .review)
-        list.perform(.toggleMore("review|todo"))
+        list.perform(.toggleMore("review|inbox"))
         list.select(.header(card: "T1"))
         list.click(card: "T6", extent: .toggle)
         XCTAssertEqual(list.selectedCards.cards, ["T1", "T6"])
@@ -265,14 +265,14 @@ final class SelectionInvariantTests: XCTestCase {
     func testFoldingTakesTheHiddenCardsOut() async {
         let list = await loaded(.review)
         list.data.setFilter(ListFilter(muted: .show), tab: .review)
-        list.perform(.toggleMore("review|todo"))
+        list.perform(.toggleMore("review|inbox"))
         list.select(.header(card: "T1"))
         list.click(card: "T7", extent: .toggle)
-        list.perform(.toggleMore("review|todo"))
+        list.perform(.toggleMore("review|inbox"))
         XCTAssertEqual(list.selectedCards.cards, ["T1"], "Show less: T7 folded again")
         list.click(card: "W1", extent: .toggle)
-        list.perform(.toggleSection("review|todo"))
-        XCTAssertEqual(list.selectedCards.cards, ["W1"], "Todo collapsed: T1 hidden")
+        list.perform(.toggleSection("review|inbox"))
+        XCTAssertEqual(list.selectedCards.cards, ["W1"], "Inbox collapsed: T1 hidden")
         assertSelectionConsistent(list)
     }
 
@@ -331,16 +331,16 @@ final class SelectionInvariantTests: XCTestCase {
 
     func testATabWhoseCardsAreAllMutedIsEmptyWithTheDefaultFilter() {
         let cards = sampleCards().filter { ["T6", "T7"].contains($0.id) }
-        XCTAssertEqual(Listing.emptyText(loaded: true, tab: .review, cards: cards, search: "", visibility: shows(mutedHidden)), EmptyState.review)
-        XCTAssertNil(Listing.emptyText(loaded: true, tab: .review, cards: cards, search: "", visibility: shows(mutedShown)))
+        XCTAssertEqual(Listing.emptyText(loaded: true, tab: .review, cards: cards, search: "", visibility: shows(mutedHidden), labels: true), EmptyState.review)
+        XCTAssertNil(Listing.emptyText(loaded: true, tab: .review, cards: cards, search: "", visibility: shows(mutedShown), labels: true))
     }
 
     func testADropWhereOnlySomeCardsMoveSendsEveryRequest() {
         let cards = sampleCards()
-        let sections = layout(.review, expanded: ["review|todo"])
+        let sections = layout(.review, expanded: ["review|inbox"])
         // T2 is right before T3 already; W1 comes from Waiting.
         let moving = cards.filter { ["T2", "W1"].contains($0.id) }
-        let moves = MultiRules.drop(moving, at: DropTarget(section: "review|todo", position: .before("T3")), sections: sections, all: cards)
+        let moves = MultiRules.drop(moving, at: DropTarget(section: "review|inbox", position: .before("T3")), sections: sections, all: cards)
         XCTAssertEqual(moves.map(\.card), ["T2", "W1"], "the whole drop changes the order: both are sent")
         XCTAssertEqual(moves.map(\.position), [.before("T3"), .before("T3")])
     }

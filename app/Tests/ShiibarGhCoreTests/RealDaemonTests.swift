@@ -11,6 +11,11 @@ import XCTest
 final class RealDaemonTests: XCTestCase {
     var dir = ""
     var binary: URL!
+    /// The supervisors and launchers a test started: stopped and their
+    /// daemons ended in `tearDown`, so no daemon outlives its test (a
+    /// supervisor left running starts its daemon again after `shutdown`).
+    var supervisors: [DaemonSupervisor] = []
+    var launchers: [TestLauncher] = []
 
     override func setUpWithError() throws {
         guard let path = ProcessInfo.processInfo.environment["SHIIBAR_GH_TEST_DAEMON"], !path.isEmpty else {
@@ -21,6 +26,12 @@ final class RealDaemonTests: XCTestCase {
     }
 
     override func tearDown() {
+        for supervisor in supervisors {
+            let stopped = expectation(description: "supervisor stopped")
+            supervisor.shutdown(timeout: 2) { stopped.fulfill() }
+            wait(for: [stopped], timeout: 5)
+        }
+        supervisors = []
         if !dir.isEmpty {
             let socket = StateDirectory.socket(root: dir)
             let api = SocketDaemonAPI(socketPath: socket, timeout: 1)
@@ -30,12 +41,19 @@ final class RealDaemonTests: XCTestCase {
                 done.fulfill()
             }
             wait(for: [done], timeout: 5)
+            for launcher in launchers {
+                launcher.kill()
+                launcher.waitUntilExit(timeout: 5)
+            }
+            launchers = []
             try? FileManager.default.removeItem(atPath: dir)
         }
     }
 
     private func launcher() -> TestLauncher {
-        TestLauncher(executable: binary, stateRoot: dir)
+        let launcher = TestLauncher(executable: binary, stateRoot: dir)
+        launchers.append(launcher)
+        return launcher
     }
 
     /// One request line as it is, for the dev-ingest requests.
@@ -72,6 +90,7 @@ final class RealDaemonTests: XCTestCase {
             socketPath: StateDirectory.socket(root: dir), appVersion: "0.1.0", launcher: launcher,
             callbackQueue: .main, backoff: { _ in 0.1 }
         )
+        supervisors.append(supervisor)
         let (defaults, suite) = testDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }
         let api = SocketDaemonAPI(socketPath: StateDirectory.socket(root: dir))
@@ -129,7 +148,7 @@ final class RealDaemonTests: XCTestCase {
         let first = try XCTUnwrap(data.cards.first { $0.pr == "example-org/api#1" })
         XCTAssertTrue(first.awaitingReview)
         XCTAssertTrue(first.reviewRequested)
-        XCTAssertEqual(first.placement, Placement(tab: .review, section: .todo, position: 0), "a review request adds it to Todo")
+        XCTAssertEqual(first.placement, Placement(tab: .review, section: .inbox, position: 0), "a review request adds it to Inbox")
         XCTAssertEqual(first.createdAt, T0 - 3 * 86_400)
         XCTAssertEqual(first.updatedAt, T0)
         XCTAssertEqual(data.cards.first { $0.pr == "example-org/api#2" }?.assignedToMe, true)
@@ -206,7 +225,7 @@ final class RealDaemonTests: XCTestCase {
         XCTAssertEqual(placed.first { $0.pr == "example-org/api#1" }?.placement?.section, .known(.doing), "the daemon moved it")
         XCTAssertNil(data.failure)
 
-        // Mine has Review's sections: `Add to Mine` sends `section: todo`,
+        // Mine has Review's sections: `Add to Mine` sends `section: inbox`,
         // D moves within Mine, `Move to Done`, and `Dismiss all` dismisses
         // Done's cards one `dismiss` each.
         func daemonCard(_ pr: String, _ done: (Card) -> Bool) async throws -> Card? {
@@ -226,9 +245,9 @@ final class RealDaemonTests: XCTestCase {
         let add = try XCTUnwrap(view.rightClick(.header(card: "3407303:PR_3")).compactMap { $0 }.first { $0.title == "Add to Mine" })
         view.perform(add.action)
         var mine = try await daemonCard("example-org/api#3") { $0.placement?.tab == .known(.mine) }
-        XCTAssertEqual(mine?.placement, Placement(tab: .mine, section: .todo, position: 0), "Add to Mine: Todo")
+        XCTAssertEqual(mine?.placement, Placement(tab: .mine, section: .inbox, position: 0), "Add to Mine: Inbox")
         view.openTab(.mine)
-        XCTAssertEqual(view.sections.map(\.key), ["mine|done", "mine|waiting", "mine|doing", "mine|todo"])
+        XCTAssertEqual(view.sections.map(\.key), ["mine|done", "mine|waiting", "mine|doing", "mine|inbox"])
         view.select(.header(card: "3407303:PR_3"))
         view.press(.moveTo(.doing))
         mine = try await daemonCard("example-org/api#3") { $0.placement?.section == .known(.doing) }
@@ -236,15 +255,15 @@ final class RealDaemonTests: XCTestCase {
         // Back to back: the daemon gets them in their order and ends where
         // the screen shows the card.
         view.press(.moveTo(.waiting))
-        view.press(.moveTo(.todo))
+        view.press(.moveTo(.inbox))
         view.press(.moveTo(.doing))
         try await Task.sleep(nanoseconds: 1_000_000_000)
         mine = try await daemonCard("example-org/api#3") { $0.placement?.section == .known(.doing) }
         XCTAssertEqual(mine?.placement?.section, .known(.doing), "the last press wins at the daemon")
         XCTAssertEqual(data.cards.first { $0.pr == "example-org/api#3" }?.placement?.section, .known(.doing))
-        view.perform(.place(PlaceMove(card: "3407303:PR_2", target: .mine(.todo), position: .byDefault, verb: .add)))
+        view.perform(.place(PlaceMove(card: "3407303:PR_2", target: .mine(.inbox), position: .byDefault, verb: .add)))
         mine = try await daemonCard("example-org/api#2") { $0.placement?.tab == .known(.mine) }
-        XCTAssertEqual(mine?.placement, Placement(tab: .mine, section: .todo, position: 0))
+        XCTAssertEqual(mine?.placement, Placement(tab: .mine, section: .inbox, position: 0))
         try await wait { data.cards.first { $0.pr == "example-org/api#2" }?.placement?.tab == .known(.mine) }
         let toDone = try XCTUnwrap(view.rightClick(.header(card: "3407303:PR_2")).compactMap { $0 }.first { $0.title == "Move to Done" })
         view.perform(toDone.action)
@@ -363,6 +382,90 @@ final class RealDaemonTests: XCTestCase {
 
     /// An unreadable test Keychain shows the dialog, and Reset tokens clears
     /// it.
+    /// 0.8 on the real daemon: the labels of a card come as the daemon
+    /// sends them, `show_labels` is read and followed through
+    /// `config_changed`, and the Ready for review and Converted to draft
+    /// rows come with their kinds and the event's URL.
+    @MainActor
+    func testLabelsAndDraftRowsFromTheRealDaemon() async throws {
+        let launcher = launcher()
+        let supervisor = DaemonSupervisor(
+            socketPath: StateDirectory.socket(root: dir), appVersion: "0.1.0", launcher: launcher,
+            callbackQueue: .main, backoff: { _ in 0.1 }
+        )
+        supervisors.append(supervisor)
+        let (defaults, suite) = testDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let api = SocketDaemonAPI(socketPath: StateDirectory.socket(root: dir))
+        let model = AppModel(api: api, store: UIStateStore(defaults: defaults), opener: FakeOpener(), notifier: FakeNotifier())
+        var snapshots = 0
+        supervisor.onEvent = { event in
+            if case .snapshot = event { snapshots += 1 }
+            model.handle(event)
+        }
+        supervisor.onConnectionChange = { model.connectionChanged($0) }
+        supervisor.start()
+        try await wait { snapshots == 1 }
+        await model.loadConfig()
+        XCTAssertTrue(model.showLabels, "on by default")
+
+        try await dev(api, ["cmd": "dev_clock_set", "now": T0, "tz": "UTC"])
+        try await dev(api, [
+            "cmd": "dev_account_add", "id": "3407303", "login": "me", "token": "t1", "avatar_url": "https://example.test/me.png",
+        ])
+        try await dev(api, ["cmd": "dev_owner_add", "account": "me", "owner": "example-org", "kind": "org", "github_id": 100])
+        var labelled = pr("PR_1", number: 1)
+        labelled["labels"] = [["name": "bug", "color": "d73a4a"], ["name": "Needs Triage", "color": "FBCA04"]]
+        labelled["labels_more"] = 2
+        // My review: approved by the account, not waiting.
+        var reviewed = pr("PR_2", number: 2)
+        reviewed["my_review"] = "approved"
+        try await dev(api, ["cmd": "dev_ingest", "account": "me", "ingest": [
+            "prs": [labelled, reviewed],
+            "events": [
+                ["id": "RFR_1", "pr_id": "PR_1", "kind": "ready_for_review", "occurred_at": T0 + 10,
+                 "url": "https://github.example/example-org/api/pull/1#event-11", "actor": "bob", "text": NSNull(), "comment_id": NSNull()],
+                ["id": "CTD_1", "pr_id": "PR_1", "kind": "converted_to_draft", "occurred_at": T0 + 5,
+                 "url": "https://github.example/example-org/api/pull/1#event-10", "actor": NSNull(), "text": NSNull(), "comment_id": NSNull()],
+            ],
+            "succeeded_owners": ["example-org"],
+        ]])
+        let data = model.viewModel("3407303")
+        let view = data.list(.popover)
+        model.surfaceDisplayed(.popover, account: "3407303", true)
+        model.surfaceOpened(.popover, account: "3407303")
+        try await wait { data.cards.count == 2 }
+        let card = try XCTUnwrap(data.cards.first { $0.pr == "example-org/api#1" })
+        XCTAssertEqual(card.labels, [PRLabel(name: "bug", color: "d73a4a"), PRLabel(name: "Needs Triage", color: "FBCA04")])
+        XCTAssertEqual(card.labelsMore, 2)
+        XCTAssertEqual(data.cards.first { $0.pr == "example-org/api#2" }?.labels, [], "a PR without labels")
+        XCTAssertEqual(data.cards.first { $0.pr == "example-org/api#2" }?.myReview, .known(.approved))
+        XCTAssertNil(card.myReview)
+        XCTAssertEqual(model.account("3407303")?.avatarUrl, "https://example.test/me.png")
+        let rows = card.rows.filter { $0.kind == .known(.readyForReview) || $0.kind == .known(.convertedToDraft) }
+        XCTAssertEqual(rows.map(\.kind), [.known(.readyForReview), .known(.convertedToDraft)], "newest first")
+        XCTAssertEqual(rows.map(\.url), [
+            "https://github.example/example-org/api/pull/1#event-11", "https://github.example/example-org/api/pull/1#event-10",
+        ])
+        XCTAssertEqual(rows.map(\.actor), ["bob", nil])
+        XCTAssertEqual(rows.map { RowText.label($0.kind) }, ["Ready for review", "Converted to draft"])
+
+        // The search of the tabs looks at label names while Show labels is on.
+        view.setSearch("triage")
+        XCTAssertEqual(view.sections.flatMap(\.cards).map(\.pr), ["example-org/api#1"])
+        let value = try await api.configSet("show_labels", .bool(false))
+        XCTAssertEqual(value, .bool(false))
+        try await wait { !model.showLabels }
+        XCTAssertEqual(view.sections, [], "off: label names are not searched")
+        XCTAssertEqual(view.emptyText, "Nothing matches")
+        let readBack = try await api.configGet("show_labels")
+        XCTAssertEqual(readBack, .bool(false))
+        _ = try await api.configSet("show_labels", .bool(true))
+        try await wait { model.showLabels }
+        XCTAssertEqual(view.sections.flatMap(\.cards).map(\.pr), ["example-org/api#1"])
+        view.setSearch("")
+    }
+
     @MainActor
     func testTheKeychainDialogFollowsTheDaemon() async throws {
         try "not json".write(toFile: (dir as NSString).appendingPathComponent("keychain.json"), atomically: true, encoding: .utf8)
@@ -371,6 +474,7 @@ final class RealDaemonTests: XCTestCase {
             socketPath: StateDirectory.socket(root: dir), appVersion: "0.1.0", launcher: launcher,
             callbackQueue: .main, backoff: { _ in 0.1 }
         )
+        supervisors.append(supervisor)
         let (defaults, suite) = testDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }
         let api = SocketDaemonAPI(socketPath: StateDirectory.socket(root: dir))
@@ -416,6 +520,7 @@ final class RealDaemonTests: XCTestCase {
             socketPath: StateDirectory.socket(root: dir), appVersion: "0.1.0", launcher: launcher,
             callbackQueue: .main, backoff: { _ in 0.1 }
         )
+        supervisors.append(supervisor)
         var snapshots = 0
         supervisor.onEvent = { if case .snapshot = $0 { snapshots += 1 } }
         supervisor.start()
@@ -469,5 +574,15 @@ final class TestLauncher: DaemonLauncher {
 
     func kill() {
         inner.terminate()
+    }
+
+    /// Waits for the process this launcher started last to end, at most
+    /// `timeout` seconds (the launcher keeps only that one; the
+    /// supervisors are stopped first, so no later one is started).
+    func waitUntilExit(timeout: TimeInterval) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while inner.isRunning, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
     }
 }

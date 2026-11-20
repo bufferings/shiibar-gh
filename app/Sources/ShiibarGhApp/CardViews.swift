@@ -23,8 +23,6 @@ struct CardLine: Equatable {
     var section: String
     /// The placement tag: All only.
     var showsTag: Bool
-    /// Under a second-level group of All (Main.html `.card.in`).
-    var indented: Bool
     var expanded: Bool
     var canDrag: Bool
     /// The card's rows whose body is expanded with `more`.
@@ -37,6 +35,18 @@ struct CardLine: Equatable {
     /// background (DESIGN.md, "Showing what matched"). Part of what the
     /// card's image is drawn from, not of its geometry.
     var search: [String] = []
+    /// `Show labels` (DESIGN.md, "Card", "GitHub labels"): the label line
+    /// ends the heading of a card with labels.
+    var showsLabels = false
+
+    /// The my review mark (`MyReviewMark.of`), and the URL of the
+    /// account's avatar while its image is loaded: without it the mark
+    /// shows the sign alone and keeps no room for the avatar.
+    var myReview: MyReviewMark?
+    var myAvatar: String?
+
+    /// The labels the heading shows: none while `Show labels` is off.
+    var shownLabels: [PRLabel] { showsLabels ? card.labels : [] }
 }
 
 /// The values of a section heading, or of a repository of the Dismissed
@@ -59,9 +69,11 @@ struct HeadingLine: Equatable {
     /// selection. A repository of the Dismissed list does none of these
     /// (DESIGN.md, "Dismissed list").
     var folds = true
-    /// The room above the band: less under the Dismissed list's note
-    /// (Main.html `.dhead + .dnote + .band`).
-    var gap: CGFloat = 8
+    /// The room above the band (`LineLayout.bandSpace`): less under the
+    /// Dismissed list's note (Main.html `.dhead + .dnote + .band`), none
+    /// for the list's first line, which sits right under the Filter row
+    /// with its top line showing.
+    var gap: CGFloat = LineLayout.bandSpace
 
     init(_ section: SectionLayout) {
         key = section.key

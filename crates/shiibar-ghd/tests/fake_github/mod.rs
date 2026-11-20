@@ -73,6 +73,10 @@ pub struct World {
     /// [`default_id`] when absent.
     pub ids: BTreeMap<String, i64>,
     pub unauthorized: BTreeSet<String>,
+    /// Tokens whose `viewer` answers no `avatarUrl` (null).
+    pub no_avatar: BTreeSet<String>,
+    /// Tokens whose `viewer` answers an empty `avatarUrl`.
+    pub empty_avatar: BTreeSet<String>,
     /// Headers on every answer to this token: `x-oauth-scopes`,
     /// `github-authentication-token-expiration`, `X-GitHub-SSO`, ...
     pub token_headers: BTreeMap<String, Vec<(String, String)>>,
@@ -392,6 +396,9 @@ fn search(world: &World, token: &str, query: &str) -> Value {
     json!({"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":nodes})
 }
 
+/// The review threads of a PR. A comment written without `publishedAt` is
+/// published when it was created, like a comment of a review submitted at
+/// once; [`review_comment`] gives the two times apart, or a pending one.
 fn threads(world: &World, id: &str) -> Value {
     let list: Vec<Value> = world
         .threads
@@ -400,7 +407,22 @@ fn threads(world: &World, id: &str) -> Value {
         .unwrap_or_default()
         .into_iter()
         .map(|t| {
-            json!({"id":t["id"],"comments":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":t["comments"]}})
+            let comments: Vec<Value> = t["comments"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|c| {
+                    let mut c = c.clone();
+                    if let Some(map) = c.as_object_mut()
+                        && !map.contains_key("publishedAt")
+                    {
+                        let created = map.get("createdAt").cloned().unwrap_or(Value::Null);
+                        map.insert("publishedAt".into(), created);
+                    }
+                    c
+                })
+                .collect();
+            json!({"id":t["id"],"comments":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":comments}})
         })
         .collect();
     json!({"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":list})
@@ -468,7 +490,15 @@ fn answer(world: &World, req: &Req) -> Resp {
                     .get(&req.token)
                     .copied()
                     .unwrap_or_else(|| default_id(&login));
-                gql(json!({"viewer":{"databaseId":id,"login":login}}))
+                // The account's own avatar, unless the test gives none.
+                let avatar = if world.no_avatar.contains(&req.token) {
+                    Value::Null
+                } else if world.empty_avatar.contains(&req.token) {
+                    json!("")
+                } else {
+                    json!(format!("https://avatars.example/{login}"))
+                };
+                gql(json!({"viewer":{"databaseId":id,"login":login,"avatarUrl":avatar}}))
             }
             "MergeQueue" => {
                 let id = vars["id"].as_str().unwrap_or_default();
@@ -585,10 +615,21 @@ fn answer(world: &World, req: &Req) -> Resp {
                     .cloned()
                     .collect();
                 let empty = json!({"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]});
+                // The submitted reviews of the timeline, read without `since`.
+                let reviews: Vec<Value> = world
+                    .timeline
+                    .get(id)
+                    .into_iter()
+                    .flatten()
+                    .filter(|e| e["__typename"] == "PullRequestReview")
+                    .cloned()
+                    .collect();
+                let reviews =
+                    json!({"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":reviews});
                 gql(json!({"node":{
                     "id":id,"url":pr["url"],"createdAt":pr["createdAt"],"bodyHTML":pr["bodyHTML"],
                     "bodyText":pr["bodyText"],"author":pr["author"],
-                    "comments":empty,"reviews":empty,"reviewThreads":threads(world, id),
+                    "comments":empty,"reviews":reviews,"reviewThreads":threads(world, id),
                     "reviewRequests":pr["reviewRequests"],"requestEvents":{"nodes":requests}
                 }}))
             }
@@ -647,6 +688,15 @@ fn answer(world: &World, req: &Req) -> Resp {
     }
 }
 
+/// The `myReview` connection of a status node: the account's newest review
+/// with a verdict, as `reviews(author:, states:, last: 1)` answers it.
+pub fn my_review(state: Option<&str>) -> Value {
+    match state {
+        Some(state) => json!({"nodes":[{"state":state}]}),
+        None => json!({"nodes":[]}),
+    }
+}
+
 /// A PR status node with every field the status query asks for.
 pub fn pr_node(id: &str, owner: &str, number: u64, author: &str, patch: Value) -> Value {
     let mut node = json!({
@@ -666,9 +716,28 @@ pub fn pr_node(id: &str, owner: &str, number: u64, author: &str, patch: Value) -
     node
 }
 
+/// A conversation comment: published when it is created.
 pub fn issue_comment(id: &str, author: &str, at: i64, html: &str) -> Value {
     json!({"__typename":"IssueComment","id":id,"url":format!("https://github.com/c/{id}"),
-           "createdAt":iso(at),"bodyText":format!("text {id}"),"bodyHTML":html,
+           "createdAt":iso(at),"publishedAt":iso(at),"bodyText":format!("text {id}"),
+           "bodyHTML":html,"author":{"__typename":"User","login":author}})
+}
+
+/// A review comment of a review thread, drafted at `drafted` in a pending
+/// review and published when the review was submitted at `published`;
+/// `None` for a comment of a review still pending (`publishedAt` null,
+/// `state` `PENDING`).
+pub fn review_comment(
+    id: &str,
+    author: &str,
+    drafted: i64,
+    published: Option<i64>,
+    html: &str,
+) -> Value {
+    json!({"id":id,"url":format!("https://github.com/c/{id}"),"createdAt":iso(drafted),
+           "publishedAt":published.map(iso),
+           "state":if published.is_some() { "SUBMITTED" } else { "PENDING" },
+           "bodyText":format!("text {id}"),"bodyHTML":html,
            "author":{"__typename":"User","login":author}})
 }
 

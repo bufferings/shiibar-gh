@@ -278,6 +278,9 @@ public enum RowText {
         }
         switch kind {
         case .reviewRequested, .teamReviewRequested: return "Review requested"
+        // My review reads as the verdict it records (DESIGN.md, "Row labels").
+        case .myReviewApproved: return "Approved"
+        case .myReviewChangesRequested: return "Changes requested"
         case .mentioned: return "Mentioned"
         case .teamMentioned: return "My team mentioned"
         case .comment, .commentOther: return "Comment"
@@ -289,6 +292,8 @@ public enum RowText {
         case .checksPassed: return "Checks passed"
         case .conflicts: return "Conflicts"
         case .mergeable: return "Mergeable"
+        case .readyForReview: return "Ready for review"
+        case .convertedToDraft: return "Converted to draft"
         case .mergeQueueAdded: return "Added to merge queue"
         case .mergeQueueRemoved: return "Removed from merge queue"
         case .merged: return "Merged"
@@ -425,8 +430,88 @@ public enum CardText {
         parts.append("Updated " + RelativeTime.dateTime(card.updatedAt, timeZone: timeZone))
         return parts.joined(separator: " · ")
     }
+}
 
-    public static let reviewRequestedMark = "Review requested"
+/// The my review mark at the left of the status icons on line 1
+/// (DESIGN.md, "Card", "My review mark"): one mark with three states.
+/// Waiting for your review outranks a verdict; none on a merged or closed
+/// PR or on your own PR.
+public enum MyReviewMark: Equatable {
+    case waiting, approved, changesRequested
+
+    public static func of(_ card: Card) -> MyReviewMark? {
+        guard !card.isFinished, !card.authoredByMe else { return nil }
+        if card.awaitingReview { return .waiting }
+        switch card.myReview?.value {
+        case .approved?: return .approved
+        case .changesRequested?: return .changesRequested
+        case nil: return nil
+        }
+    }
+
+    /// Its tooltip, worded as the status icons' (`Review: Approved`).
+    public var toolTip: String {
+        switch self {
+        case .waiting: return "Review requested"
+        case .approved: return "My review: Approved"
+        case .changesRequested: return "My review: Changes requested"
+        }
+    }
+
+    public var sign: BoardIcon {
+        switch self {
+        case .waiting: return BoardIcons.myReviewWaiting
+        case .approved: return BoardIcons.myReviewApproved
+        case .changesRequested: return BoardIcons.myReviewChangesRequested
+        }
+    }
+
+    /// The grid the sign is drawn on and its size at text size 12: the
+    /// eye is the rows' 16 by 16 picture at 12 pt, ✓ and × a 10 by 10
+    /// picture at 10 pt (DESIGN.md, "Constants").
+    public var signGrid: Double { self == .waiting ? 16 : 10 }
+    public var signSize: Double { self == .waiting ? 12 : 10 }
+
+    /// Ground and sign in light, and in dark the color laid over the card
+    /// at an opacity for the ground (DESIGN.md, "Constants").
+    public var lightGround: LabelRGB {
+        switch self {
+        case .waiting: return LabelRGB(hex: 0xFBE3D6)
+        case .approved: return LabelRGB(hex: 0xDDF4E4)
+        case .changesRequested: return LabelRGB(hex: 0xFBE0E0)
+        }
+    }
+
+    public var lightSign: LabelRGB {
+        switch self {
+        case .waiting: return LabelRGB(hex: 0xA0390A)
+        case .approved: return LabelRGB(hex: 0x136C2E)
+        case .changesRequested: return LabelRGB(hex: 0xA1161F)
+        }
+    }
+
+    public var darkOver: (color: LabelRGB, alpha: Double) {
+        switch self {
+        case .waiting: return (LabelRGB(hex: 0xC7420D), 0.30)
+        case .approved: return (LabelRGB(hex: 0x1F8A3E), 0.28)
+        case .changesRequested: return (LabelRGB(hex: 0xA1161F), 0.36)
+        }
+    }
+
+    public var darkSign: LabelRGB {
+        switch self {
+        case .waiting: return LabelRGB(hex: 0xFFA77E)
+        case .approved: return LabelRGB(hex: 0x6CD58C)
+        case .changesRequested: return LabelRGB(hex: 0xFF9A9F)
+        }
+    }
+
+    /// The ground and the sign over `card` (a card that is not selected)
+    /// in light or dark.
+    public func colors(dark: Bool, card: LabelRGB) -> (ground: LabelRGB, sign: LabelRGB) {
+        guard dark else { return (lightGround, lightSign) }
+        return (card.under(darkOver.color, alpha: darkOver.alpha), darkSign)
+    }
 }
 
 // MARK: - API usage
@@ -716,16 +801,17 @@ public enum SettingsText {
 
     /// The event table's rows, grouped as DESIGN.md, "Row kinds and states".
     public static let eventGroups: [(String, [EventKind])] = [
-        ("Reviews and mentions", [.reviewRequested, .teamReviewRequested, .mentioned, .teamMentioned]),
+        ("Reviews and mentions", [.reviewRequested, .teamReviewRequested, .myReview, .mentioned, .teamMentioned]),
         ("Comments", [.comment, .commentOther, .reply, .replyMentioned, .reaction]),
         ("My pull requests", [.approved, .changesRequested, .checksFailed, .checksPassed, .conflicts, .mergeable]),
-        ("Any pull request", [.mergeQueueAdded, .mergeQueueRemoved, .mergedClosed, .reopened]),
+        ("Any pull request", [.readyForReview, .convertedToDraft, .mergeQueueAdded, .mergeQueueRemoved, .mergedClosed, .reopened]),
     ]
 
     public static func eventTitle(_ kind: EventKind) -> String {
         switch kind {
         case .reviewRequested: return "Review requested"
         case .teamReviewRequested: return "Review requested to my team"
+        case .myReview: return "My review"
         case .mentioned: return "Mentioned"
         case .teamMentioned: return "My team mentioned"
         case .comment: return "Comment on my PR"
@@ -739,6 +825,8 @@ public enum SettingsText {
         case .checksPassed: return "Checks passed"
         case .conflicts: return "Conflicts"
         case .mergeable: return "Mergeable"
+        case .readyForReview: return "Ready for review"
+        case .convertedToDraft: return "Converted to draft"
         case .mergeQueueAdded: return "Added to merge queue"
         case .mergeQueueRemoved: return "Removed from merge queue"
         case .mergedClosed: return "Merged / Closed"

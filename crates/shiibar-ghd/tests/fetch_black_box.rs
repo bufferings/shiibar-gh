@@ -3800,7 +3800,7 @@ fn a_team_search_hit_with_only_a_team_request_follows_the_list() {
         match daemon.card("PR_1") {
             Some(card) => {
                 assert!(list, "taken with the List off");
-                assert_eq!(card["placement"]["section"], "todo");
+                assert_eq!(card["placement"]["section"], "inbox");
             }
             None => assert!(!list, "not taken with the List on"),
         }

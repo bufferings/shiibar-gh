@@ -75,6 +75,9 @@ pub fn pr(id: &str) -> IngestPr {
         requested_me: false,
         requested_team: false,
         assignees: vec![],
+        labels: None,
+        labels_more: None,
+        my_review: None,
         links: Links {
             review: format!("https://github.example/{id}/r"),
             checks: format!("https://github.example/{id}/c"),

@@ -98,9 +98,9 @@ public struct CardSelection: Equatable {
 /// multi-card menu.
 public enum MultiOperation: Equatable {
     case dismiss
-    /// `Add to Review` or `Add to Mine` (Todo).
+    /// `Add to Review` or `Add to Mine` (Inbox).
     case add(PlaceTarget)
-    /// `Move to …`, D / T / W.
+    /// `Move to …`, I / D / W.
     case move(PlaceTarget)
     /// `Remove from Review`, `Remove from Mine`.
     case remove
@@ -133,7 +133,7 @@ public enum MultiRules {
     public static func operations(_ tab: ListTab) -> [MultiItem] {
         switch tab {
         case .all:
-            return [MultiItem(title: "Add to Review", operation: .add(.review(.todo))), MultiItem(title: "Add to Mine", operation: .add(.mine(.todo)))]
+            return [MultiItem(title: "Add to Review", operation: .add(.review(.inbox))), MultiItem(title: "Add to Mine", operation: .add(.mine(.inbox)))]
         case .review:
             return PlacementSection.menuOrder.map { MultiItem(title: "Move to " + $0.title, operation: .move(.review($0))) }
                 + [MultiItem(title: "Remove from Review", operation: .remove)]
@@ -222,7 +222,7 @@ public enum MultiRules {
                 }
                 if section == .done {
                     done.append(card)
-                } else if section == .todo,
+                } else if section == .inbox,
                           card.placement?.section.value == .doing || card.placement?.section.value == .waiting {
                     top.append(card)
                 } else {

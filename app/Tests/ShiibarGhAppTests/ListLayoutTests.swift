@@ -21,7 +21,7 @@ final class ListLayoutTests: XCTestCase {
     }
 
     func line(_ card: Card, expanded: Bool = false, bodies: Set<String> = [], tag: Bool = false) -> CardLine {
-        CardLine(card: card, section: "s", showsTag: tag, indented: false, expanded: expanded, canDrag: true, expandedBodies: bodies)
+        CardLine(card: card, section: "s", showsTag: tag, expanded: expanded, canDrag: true, expandedBodies: bodies)
     }
 
     func geometry(_ line: CardLine, width: CGFloat = 460) -> CardGeometry {
@@ -139,7 +139,7 @@ final class ListLayoutTests: XCTestCase {
 final class HeadingValueTests: XCTestCase {
     func section(_ key: String, done: Bool, cards: [Card], collapsed: Bool = false) -> SectionLayout {
         SectionLayout(
-            key: key, title: done ? "Done" : "Todo", level: 1, isLeaf: true, detail: "\(cards.count) PRs", collapsed: collapsed,
+            key: key, title: done ? "Done" : "Inbox", level: 1, isLeaf: true, detail: "\(cards.count) PRs", collapsed: collapsed,
             cards: collapsed ? [] : cards, more: 0, showLess: false, moreMark: .none, matching: cards, accepts: true, isDone: done
         )
     }
@@ -150,7 +150,7 @@ final class HeadingValueTests: XCTestCase {
         XCTAssertTrue(HeadingLine(section("mine|done", done: true, cards: cards)).dismissAll)
         XCTAssertFalse(HeadingLine(section("review|done", done: true, cards: [])).dismissAll, "no card to dismiss")
         XCTAssertFalse(HeadingLine(section("review|done", done: true, cards: cards, collapsed: true)).dismissAll, "collapsed")
-        XCTAssertFalse(HeadingLine(section("review|todo", done: false, cards: cards)).dismissAll, "not Done")
+        XCTAssertFalse(HeadingLine(section("review|inbox", done: false, cards: cards)).dismissAll, "not Done")
         // A change of it is a change of the heading (its image is drawn
         // again).
         XCTAssertNotEqual(HeadingLine(section("review|done", done: true, cards: cards)),
@@ -207,7 +207,7 @@ final class DismissedBandPressTests: XCTestCase {
     }
 
     func rowLine(_ card: Card) -> CardLine {
-        CardLine(card: card, section: "s", showsTag: false, indented: false, expanded: false, canDrag: true)
+        CardLine(card: card, section: "s", showsTag: false, expanded: false, canDrag: true)
     }
 
     func rowShape(_ line: CardLine) -> CardGeometry {
@@ -406,11 +406,199 @@ final class DismissedBandPressTests: XCTestCase {
         // goes again here: this list has no section to keep it on).
         let heading = HeadingLineView(frame: NSRect(x: 0, y: 0, width: 460, height: 31))
         let section = SectionLayout(
-            key: "review|todo", title: "Todo", level: 1, isLeaf: true, detail: "0 PRs", collapsed: false, cards: [], more: 0,
+            key: "review|inbox", title: "Inbox", level: 1, isLeaf: true, detail: "0 PRs", collapsed: false, cards: [], more: 0,
             showLess: false, moreMark: .none, matching: [], accepts: true, isDone: false
         )
         heading.configure(HeadingLine(section), env: env, state: ItemState())
         heading.mouseDown(with: event(.leftMouseDown))
-        XCTAssertEqual(list.data.collapsed, ["review|todo"])
+        XCTAssertEqual(list.data.collapsed, ["review|inbox"])
+    }
+}
+
+/// The section headings (DESIGN.md, "Constants"; Main.html `.band`,
+/// `.grp2`): a band across the whole list, 28 points high at text size 12,
+/// a line on its top and bottom edges, 8 points above and below it, the
+/// first one right at the list's top; its parts where they were in a band
+/// inset by the cards' margin. A second-level heading has no indentation:
+/// its name where the band's name is, a thin line, the count and the
+/// chevron at the right end.
+@MainActor
+final class HeadingBandTests: XCTestCase {
+    static var kept: [AnyObject] = []
+
+    func env(k: CGFloat) -> LineEnvironment {
+        let socket = FileManager.default.temporaryDirectory.appendingPathComponent("no-daemon-\(UUID().uuidString).sock").path
+        let app = AppModel(
+            api: SocketDaemonAPI(socketPath: socket), store: UIStateStore(defaults: ScratchDefaults()),
+            opener: DismissedBandPressTests.NoOpener(), notifier: DismissedBandPressTests.NoNotifier()
+        )
+        let list = app.viewModel("1001").list(.popover)
+        Self.kept += [app, list]
+        return LineEnvironment(k: k, now: 0, autoDismissDays: 3, context: CardContext.of(list, avatars: AvatarStore(loader: DismissedBandPressTests.NoImages())))
+    }
+
+    func section(level: Int, collapsed: Bool = false) -> SectionLayout {
+        SectionLayout(
+            key: level == 1 ? "all|repo" : "all|repo|merged", title: level == 1 ? "example-org/api" : "Merged", level: level, isLeaf: level == 2,
+            detail: "6 PRs", collapsed: collapsed, cards: [], more: 0, showLess: false, moreMark: .none, matching: [], accepts: false,
+            isDone: false
+        )
+    }
+
+    func testTheBandSpansTheListAt28Points() {
+        let want: [Int: CGFloat] = [9: 21, 12: 28, 18: 42]
+        for size in [9, 12, 18] {
+            let k = CGFloat(TextSize.ratio(size))
+            let heading = HeadingLine(section(level: 1))
+            let (frame, height) = LineLayout.heading(heading, width: 460 * k, k: k)
+            XCTAssertEqual(frame.minX, 0, "\(size): from the list's left edge")
+            XCTAssertEqual(frame.width, 460 * k, "\(size): to its right edge")
+            XCTAssertEqual(frame.minY, 8, "\(size): 8 above")
+            XCTAssertEqual(height - frame.maxY, 8, "\(size): 8 below")
+            XCTAssertEqual(frame.height, want[size], "\(size): 28 points times the text scale")
+            // The text line centered in the band.
+            let view = HeadingLineView(frame: NSRect(origin: .zero, size: frame.size))
+            view.configure(heading, env: env(k: k), state: ItemState())
+            let parts = try! XCTUnwrap(view.parts())
+            XCTAssertEqual(parts.title.midY, frame.height / 2, accuracy: 0.001, "\(size)")
+            XCTAssertEqual(parts.detail.midY, frame.height / 2, accuracy: 0.001, "\(size)")
+        }
+        // The list's first heading sits at its top.
+        var first = HeadingLine(section(level: 1))
+        first.gap = 0
+        XCTAssertEqual(LineLayout.heading(first, width: 460, k: 1).frame.minY, 0)
+    }
+
+    /// The band's parts keep their places relative to the cards (12 points
+    /// in): the name 10 points into that, the chevron 8 points from its
+    /// right end.
+    func testTheBandsPartsKeepTheirPlaces() {
+        for k: CGFloat in [1, 1.5] {
+            let width = 460 * k
+            let (frame, _) = LineLayout.heading(HeadingLine(section(level: 1)), width: width, k: k)
+            let view = HeadingLineView(frame: NSRect(origin: .zero, size: frame.size))
+            view.configure(HeadingLine(section(level: 1)), env: env(k: k), state: ItemState())
+            let parts = try! XCTUnwrap(view.parts())
+            XCTAssertEqual(parts.title.minX, 12 + 10, "k \(k)")
+            XCTAssertEqual(try! XCTUnwrap(parts.chevron).maxX, width - 12 - 8, accuracy: 0.01, "k \(k)")
+        }
+    }
+
+    /// Drawn: the band's ground to both edges, square corners, a separator
+    /// line on the top and the bottom rows, in light and dark; selected,
+    /// the selection fills the whole band.
+    func testTheBandAsDrawn() throws {
+        for dark in [false, true] {
+            let (frame, _) = LineLayout.heading(HeadingLine(section(level: 1)), width: 460, k: 1)
+            let view = HeadingLineView(frame: NSRect(origin: .zero, size: frame.size))
+            view.configure(HeadingLine(section(level: 1)), env: env(k: 1), state: ItemState())
+            view.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            let image = try XCTUnwrap(view.renderImage())
+            let scale = CGFloat(image.width) / frame.width
+            let middle = pixel(image, x: 2, y: frame.height / 2, scale: scale)
+            XCTAssertGreaterThan(middle[3], 0, "dark \(dark): the ground at the left edge")
+            XCTAssertEqual(pixel(image, x: frame.width - 1, y: frame.height / 2, scale: scale), middle, "dark \(dark): to the right edge")
+            let top = pixel(image, x: 0, y: 0, scale: scale)
+            let bottom = pixel(image, x: frame.width - 1, y: frame.height - 0.5, scale: scale)
+            XCTAssertGreaterThan(top[3], middle[3], "dark \(dark): a line at the top, in the very corner (square)")
+            XCTAssertEqual(top, bottom, "dark \(dark): the same line at the bottom")
+            XCTAssertEqual(pixel(image, x: 2, y: 1.5, scale: scale), middle, "dark \(dark): 1 point thick")
+
+            let state = ItemState()
+            state.selected = .section(HeadingLine(section(level: 1)).key)
+            view.configure(HeadingLine(section(level: 1)), env: env(k: 1), state: state)
+            let selected = try XCTUnwrap(view.renderImage())
+            let left = pixel(selected, x: 2, y: frame.height / 2, scale: scale)
+            XCTAssertNotEqual(left, middle, "dark \(dark): the selection at the left end")
+            XCTAssertEqual(pixel(selected, x: frame.width - 2, y: frame.height / 2, scale: scale), left, "and at the right end")
+
+            // A drop target: the accent tint over the whole band, an accent
+            // frame along its edges, square.
+            let over = ItemState()
+            over.over = true
+            view.configure(HeadingLine(section(level: 1)), env: env(k: 1), state: over)
+            let target = try XCTUnwrap(view.renderImage())
+            let inside = pixel(target, x: 40, y: frame.height / 2 - 6, scale: scale)
+            XCTAssertNotEqual(inside, middle, "dark \(dark): the drop target's tint")
+            XCTAssertEqual(pixel(target, x: frame.width / 2 + 60, y: frame.height / 2 - 6, scale: scale), inside, "dark \(dark): across the band")
+            let edge = pixel(target, x: 1.5, y: frame.height / 2, scale: scale)
+            XCTAssertNotEqual(edge, inside, "dark \(dark): the frame at the left edge")
+            XCTAssertEqual(pixel(target, x: frame.width - 1.5, y: frame.height / 2, scale: scale), edge, "dark \(dark): and at the right edge")
+            XCTAssertEqual(pixel(target, x: 1.5, y: 1.5, scale: scale), edge, "dark \(dark): square corner")
+        }
+    }
+
+    /// A second-level heading: 4 points above it and 5 under it at every
+    /// text size, its text line in between.
+    func testTheRoomAroundASecondLevelHeading() {
+        for size in [9, 12, 18] {
+            let k = CGFloat(TextSize.ratio(size))
+            let (frame, height) = LineLayout.heading(HeadingLine(section(level: 2)), width: 460 * k, k: k)
+            XCTAssertEqual(frame.minY, 4, "\(size)")
+            XCTAssertEqual(height - frame.maxY, 5, "\(size)")
+            let line = max(Ink.lineHeight(Ink.font(11 * k, .semibold)), Ink.lineHeight(Ink.font(11 * k)), 14 * k)
+            XCTAssertEqual(frame.height, line, "\(size): the text line")
+        }
+    }
+
+    /// The Dismissed list's first band keeps 2 points under the note;
+    /// the others 8.
+    func testTheDismissedListsFirstBand() {
+        let group = DismissedGroup(repository: "example-org/api", detail: "3 PRs", cards: [])
+        XCTAssertEqual(LineLayout.heading(HeadingLine(group, first: true), width: 460, k: 1).frame.minY, 2)
+        XCTAssertEqual(LineLayout.heading(HeadingLine(group, first: false), width: 460, k: 1).frame.minY, 8)
+        XCTAssertEqual(LineLayout.heading(HeadingLine(group, first: true), width: 460, k: 1.5).frame.minY, 2, "at every text size")
+    }
+
+    /// A second-level heading: no indentation, the name where the band's
+    /// name is, a thin line from the name to the count, the chevron at the
+    /// right end where the band's chevron is.
+    func testASecondLevelHeadingIsNotIndented() {
+        for k: CGFloat in [1, 1.5] {
+            let width = 460 * k
+            let (band, _) = LineLayout.heading(HeadingLine(section(level: 1)), width: width, k: k)
+            let (frame, _) = LineLayout.heading(HeadingLine(section(level: 2)), width: width, k: k)
+            XCTAssertEqual(frame.minX, 12, "k \(k): the cards' left edge")
+            XCTAssertEqual(frame.maxX, width - 12, "k \(k): the cards' right edge")
+            let bandView = HeadingLineView(frame: NSRect(origin: .zero, size: band.size))
+            bandView.configure(HeadingLine(section(level: 1)), env: env(k: k), state: ItemState())
+            let view = HeadingLineView(frame: NSRect(origin: .zero, size: frame.size))
+            view.configure(HeadingLine(section(level: 2)), env: env(k: k), state: ItemState())
+            let bandParts = try! XCTUnwrap(bandView.parts())
+            let parts = try! XCTUnwrap(view.parts())
+            XCTAssertEqual(parts.title.minX + frame.minX, bandParts.title.minX + band.minX, "k \(k): the names line up")
+            XCTAssertEqual(try! XCTUnwrap(parts.chevron).maxX + frame.minX, try! XCTUnwrap(bandParts.chevron).maxX + band.minX, accuracy: 0.01,
+                           "k \(k): the chevrons line up")
+            XCTAssertLessThan(parts.detail.maxX, try! XCTUnwrap(parts.chevron).minX, "the count before the chevron")
+            let rule = try! XCTUnwrap(parts.rule, "k \(k)")
+            XCTAssertEqual(rule.height, 1)
+            XCTAssertGreaterThan(rule.minX, parts.title.maxX)
+            XCTAssertLessThan(rule.maxX, parts.detail.minX)
+            XCTAssertEqual(parts.title.width, Ink.width("Merged", Ink.font(11 * k, .semibold)) + 1, accuracy: 0.01, "the name's own width")
+        }
+        // A long name is cut; the line keeps at least 8 points.
+        var long = section(level: 2)
+        long.title = String(repeating: "very-long-group-name-", count: 10)
+        let (frame, _) = LineLayout.heading(HeadingLine(long), width: 460, k: 1)
+        let view = HeadingLineView(frame: NSRect(origin: .zero, size: frame.size))
+        view.configure(HeadingLine(long), env: env(k: 1), state: ItemState())
+        let parts = try! XCTUnwrap(view.parts())
+        let rule = try! XCTUnwrap(parts.rule)
+        XCTAssertEqual(rule.width, 8, accuracy: 0.5)
+        XCTAssertGreaterThan(rule.minX, parts.title.maxX)
+        XCTAssertLessThan(rule.maxX, parts.detail.minX)
+        XCTAssertLessThan(parts.title.width, Ink.width(long.title, Ink.font(11, .semibold)), "the name is cut")
+    }
+
+    func pixel(_ image: CGImage, x: CGFloat, y: CGFloat, scale: CGFloat) -> [UInt8] {
+        var bytes = [UInt8](repeating: 0, count: 4)
+        let context = CGContext(
+            data: &bytes, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        let px = (x * scale).rounded(.down)
+        let py = CGFloat(image.height) - (y * scale).rounded(.down) - 1
+        context.draw(image, in: CGRect(x: -px, y: -py, width: CGFloat(image.width), height: CGFloat(image.height)))
+        return bytes
     }
 }

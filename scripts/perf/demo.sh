@@ -3,7 +3,7 @@
 # read) without touching the real state directory, the Keychain or GitHub.
 #
 #   1. a dev-ingest shiibar-ghd (no Keychain, no GitHub, no token), built
-#      from the working tree (0.7) into $SHIIBAR_GH_PERF_WORK/target-wt
+#      from the working tree (0.8) into $SHIIBAR_GH_PERF_WORK/target-wt
 #      (default under /tmp; printed) unless SHIIBAR_GH_PERF_DAEMON names one;
 #   2. a release build of the app in the working tree;
 #   3. a new state directory under /tmp (the socket path must stay short),
@@ -25,9 +25,10 @@ mkdir -p "$work"
 
 daemon=${SHIIBAR_GH_PERF_DAEMON:-}
 if [ -z "$daemon" ]; then
-    # The working tree's daemon (0.7: its schema with the rows' avatars,
-    # Mine's sections, mute rules, team mentions), built out of the
-    # repository's target/.
+    # The working tree's daemon (0.8: its schema with the labels, the My
+    # review mark, the account's and the rows' avatars, the draft and My
+    # review rows, Mine's sections, mute rules, team mentions), built out of
+    # the repository's target/.
     (cd "$repo" && CARGO_TARGET_DIR="$work/target-wt" cargo build --release -p shiibar-ghd --features dev-ingest)
     daemon="$work/target-wt/release/shiibar-ghd"
 fi

@@ -40,15 +40,15 @@ func review(_ section: PlacementSection, _ position: Int) -> Placement {
     Placement(tab: .review, section: section, position: position)
 }
 
-func mine(_ section: PlacementSection = .todo, _ position: Int) -> Placement {
+func mine(_ section: PlacementSection = .inbox, _ position: Int) -> Placement {
     Placement(tab: .mine, section: section, position: position)
 }
 
 /// The board's Review tab, Mine and All in small:
-/// - Review: Doing R1; Todo T1–T5, then T6 (muted for its author example-bot)
+/// - Review: Doing R1; Inbox T1–T5, then T6 (muted for its author example-bot)
 ///   and T7 (muted by itself and for example-bot; it has an unread mention);
 ///   Waiting W1; Done D1 (merged).
-/// - Mine: Todo M1 (authored, unread blue row), M2 (assigned); Done M3
+/// - Mine: Inbox M1 (authored, unread blue row), M2 (assigned); Done M3
 ///   (closed); Doing and Waiting empty.
 /// - All only: N1 (acme-corp, gray unread row by a muted user).
 /// - Dismissed: X1 (older), X2 (newer, merged).
@@ -71,27 +71,27 @@ private func sampleCardsAsListed() -> [Card] {
     [
         card("R1", pr: "example-org/web#212", author: "mk", reviewRequested: true, placement: review(.doing, 0), updated: T0 - 100,
              rows: [row("r1", pr: "example-org/web#212", kind: .teamReviewRequested, text: "for frontend team")]),
-        card("T1", pr: "example-org/api#407", author: "al", assigned: true, placement: review(.todo, 0), updated: T0 - 40, rows: [
+        card("T1", pr: "example-org/api#407", author: "al", assigned: true, placement: review(.inbox, 0), updated: T0 - 40, rows: [
             row("A", pr: "example-org/api#407", kind: .mentioned, text: "could you check the retry path?", actor: "al", unread: true),
             row("B", pr: "example-org/api#407", text: "pushed a fix", actor: "al"),
             row("C", pr: "example-org/api#407", kind: .reviewRequested, text: "for you"),
             row("D", pr: "example-org/api#407", kind: .reply, text: "keep the cursor", actor: "rk", unread: true),
             row("E", pr: "example-org/api#407", text: "split this?", actor: "jo"),
         ], older: true),
-        card("T2", pr: "example-org/web#230", author: "ts", placement: review(.todo, 1), updated: T0 - 30),
-        card("T3", pr: "example-org/docs#88", author: "jo", placement: review(.todo, 2), updated: T0 - 20),
-        card("T4", pr: "example-org/api#415", author: "rk", placement: review(.todo, 3), updated: T0 - 10),
-        card("T5", pr: "example-org/web#219", author: "jo", placement: review(.todo, 4), updated: T0 - 5),
-        card("T6", pr: "example-org/web#241", author: "example-bot", placement: review(.todo, 5), muted: [.author], updated: T0 - 4,
+        card("T2", pr: "example-org/web#230", author: "ts", placement: review(.inbox, 1), updated: T0 - 30),
+        card("T3", pr: "example-org/docs#88", author: "jo", placement: review(.inbox, 2), updated: T0 - 20),
+        card("T4", pr: "example-org/api#415", author: "rk", placement: review(.inbox, 3), updated: T0 - 10),
+        card("T5", pr: "example-org/web#219", author: "jo", placement: review(.inbox, 4), updated: T0 - 5),
+        card("T6", pr: "example-org/web#241", author: "example-bot", placement: review(.inbox, 5), muted: [.author], updated: T0 - 4,
              rows: [row("t6", pr: "example-org/web#241", kind: .teamReviewRequested, text: "for frontend team", unread: true, muted: true)]),
-        card("T7", pr: "example-org/api#402", author: "example-bot", placement: review(.todo, 6), muted: [.pr, .author], prMute: .mute,
+        card("T7", pr: "example-org/api#402", author: "example-bot", placement: review(.inbox, 6), muted: [.pr, .author], prMute: .mute,
              updated: T0 - 3,
              rows: [row("t7", pr: "example-org/api#402", kind: .mentioned, text: "needs a manual step", actor: "example-bot", unread: true)]),
         card("W1", pr: "acme-corp/infra#61", owner: "o3", author: "dz", placement: review(.waiting, 0), updated: T0 - 200),
         card("D1", pr: "acme-corp/infra#58", owner: "o3", author: "mk", state: .merged, placement: review(.done, 0), updated: T0 - 300),
-        card("M1", pr: "example-org/api#421", author: "bufferings-work", authored: true, placement: mine(.todo, 0), updated: T0 - 60,
+        card("M1", pr: "example-org/api#421", author: "bufferings-work", authored: true, placement: mine(.inbox, 0), updated: T0 - 60,
              rows: [row("m1", pr: "example-org/api#421", kind: .checksPassed, unread: true)]),
-        card("M2", pr: "acme-corp/web#77", owner: "o3", author: "mk", assigned: true, placement: mine(.todo, 1), updated: T0 - 70),
+        card("M2", pr: "acme-corp/web#77", owner: "o3", author: "mk", assigned: true, placement: mine(.inbox, 1), updated: T0 - 70),
         card("M3", pr: "example-org/api#390", author: "bufferings-work", authored: true, state: .closed, placement: mine(.done, 0), updated: T0 - 400),
         card("N1", pr: "acme-corp/web#80", owner: "o3", author: "zz", updated: T0 - 1,
              rows: [row("n1", pr: "acme-corp/web#80", owner: "o3", text: "noise", actor: "bot", unread: true, muted: true)]),
@@ -104,12 +104,12 @@ private func sampleCardsAsListed() -> [Card] {
 func layout(
     _ tab: ListTab, options: ListOptions = ListOptions(), cards: [Card] = sampleCards(), orders: GroupOrders = [:],
     repositories: [String]? = nil, collapsed: Set<String> = [], expanded: Set<String> = [], search: String = "",
-    account: Account = sampleAccount(), filter: ListFilter = mutedShown, kept: Set<String> = []
+    account: Account = sampleAccount(), filter: ListFilter = mutedShown, kept: Set<String> = [], labels: Bool = true
 ) -> [SectionLayout] {
     Listing.sections(
         tab: tab, cards: cards, account: account, options: options, orders: orders,
         repositories: repositories ?? Listing.knownRepositories([], cards: cards),
-        folding: Listing.Folding(collapsed: collapsed, expanded: expanded, search: search, visibility: Visibility(filter: filter, kept: kept))
+        folding: Listing.Folding(collapsed: collapsed, expanded: expanded, search: search, visibility: Visibility(filter: filter, kept: kept), labels: labels)
     )
 }
 

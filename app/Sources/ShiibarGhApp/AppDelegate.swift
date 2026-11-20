@@ -41,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             exit(2)
         }
         if PerfMode.demo { quitOnSignals() }
+        if PerfMode.enabled { failOnSignals() }
         let bundled = Bundle.main.bundleURL.pathExtension == "app" && !perf
         let root = StateDirectory.root() ?? NSTemporaryDirectory()
         let socket = StateDirectory.socket(root: root)
@@ -310,7 +311,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
 
 
+    /// The measurement mode ends with its summary (`PerfRunner.finish`
+    /// exits by itself, without `terminate`). A signal that ends it before
+    /// then (a `pkill` of the measurement, a closed terminal) is reported
+    /// with the signal and a failing status, not as a run that passed.
+    private func failOnSignals() {
+        for number in [SIGINT, SIGTERM, SIGHUP] {
+            signal(number, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
+            source.setEventHandler {
+                FileHandle.standardError.write(Data("perf: ended by signal \(number) before the summary\n".utf8))
+                exit(128 + number)
+            }
+            source.resume()
+            signalSources.append(source)
+        }
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // The measurement mode never quits through `terminate` once it has
+        // its summary: a quit here (the menu, ⌘Q, an Apple event) ended it
+        // early.
+        if PerfMode.enabled {
+            FileHandle.standardError.write(Data("perf: ended before the summary: the app was asked to quit\n".utf8))
+            exit(3)
+        }
         guard let supervisor, !quitting else { return .terminateNow }
         quitting = true
         supervisor.shutdown {

@@ -238,7 +238,7 @@ fn an_account_value_has_the_shape_of_the_wire_format() {
     let public = owners[1]["id"].clone();
     assert_eq!(
         snapshot["accounts"],
-        json!([{"id":"1001","login":"me","color":"none",
+        json!([{"id":"1001","login":"me","color":"none","avatar_url":null,
             "token":{"registered":false,"expires_at":null,"last_test":null},
             "updated_at":null,"unread":false,
             "warnings":[{"kind":"no_token","account":"1001","owner":null,

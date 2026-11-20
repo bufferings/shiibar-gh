@@ -174,12 +174,12 @@ final class SurfaceState {
             let shows = list.showsFilterRow
             return FilterRowState(
                 shows: shows, open: list.filterOpen, dot: shows && list.filterDot, summary: list.filterSummary,
-                showsGrouping: list.showsGroupingButton
+                showsGrouping: list.showsGroupingButton, bandFirst: list.startsWithBand
             )
         }
         options = Derived([listChanges]) { [unowned list] in
             FilterOptionsState(
-                shows: list.showsFilterOptions, lines: list.filterOptions, filter: list.filter, canReset: list.canResetFilter
+                shows: list.showsFilterOptions, filter: list.filter, canReset: list.canResetFilter
             )
         }
         dismissed = Derived([listChanges]) { [unowned list] in

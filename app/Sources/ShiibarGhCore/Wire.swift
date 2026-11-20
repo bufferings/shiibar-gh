@@ -71,6 +71,11 @@ public enum KeychainState: String, Equatable { case ok, unavailable, unreadable 
 
 public enum StateLabel: String, Equatable { case open, draft, mergeable, merged, closed }
 
+/// `card.my_review`: the verdict of the my review mark (DESIGN.md, "Card",
+/// "My review mark"); the daemon applies every condition and sends nil
+/// when the mark shows no verdict.
+public enum MyReview: String, Equatable { case approved, changesRequested = "changes_requested" }
+
 public enum ReviewStatus: String, Equatable {
     case approved, reviewRequired = "review_required", changesRequested = "changes_requested", none
 }
@@ -87,6 +92,9 @@ public enum BaseStatus: String, Equatable {
 public enum RowKind: String, Equatable {
     case reviewRequested = "review_requested"
     case teamReviewRequested = "team_review_requested"
+    /// My review, split as Merged / Closed is (DESIGN.md, "My review rows").
+    case myReviewApproved = "my_review_approved"
+    case myReviewChangesRequested = "my_review_changes_requested"
     case mentioned
     case teamMentioned = "team_mentioned"
     case comment
@@ -100,6 +108,8 @@ public enum RowKind: String, Equatable {
     case checksPassed = "checks_passed"
     case conflicts
     case mergeable
+    case readyForReview = "ready_for_review"
+    case convertedToDraft = "converted_to_draft"
     case mergeQueueAdded = "merge_queue_added"
     case mergeQueueRemoved = "merge_queue_removed"
     case merged
@@ -112,6 +122,9 @@ public enum RowKind: String, Equatable {
 public enum EventKind: String, Equatable, CaseIterable {
     case reviewRequested = "review_requested"
     case teamReviewRequested = "team_review_requested"
+    /// My review: List only; its `notify` is always false (DESIGN.md,
+    /// "Applying the table").
+    case myReview = "my_review"
     case mentioned
     case teamMentioned = "team_mentioned"
     case comment
@@ -125,6 +138,8 @@ public enum EventKind: String, Equatable, CaseIterable {
     case checksPassed = "checks_passed"
     case conflicts
     case mergeable
+    case readyForReview = "ready_for_review"
+    case convertedToDraft = "converted_to_draft"
     case mergeQueueAdded = "merge_queue_added"
     case mergeQueueRemoved = "merge_queue_removed"
     case mergedClosed = "merged_closed"
@@ -144,7 +159,7 @@ public enum PlacementTab: String, Equatable, Codable, CaseIterable { case review
 
 /// `placement.section`: the four sections of Review and of Mine.
 public enum PlacementSection: String, Equatable, Codable, CaseIterable {
-    case doing, todo, waiting, done
+    case doing, inbox, waiting, done
 }
 
 /// What a card is muted for (`card.muted`).
@@ -327,17 +342,21 @@ public struct Account: Equatable, Decodable, Identifiable {
     public var warnings: [Warning]
     public var rateLimit: RateLimit?
     public var owners: [Owner]
+    /// The account's own avatar (`viewer.avatarUrl(size: 32)`), for the my
+    /// review mark; nil until it is read.
+    public var avatarUrl: String?
 
     enum CodingKeys: String, CodingKey {
         case id, login, color, token, unread, warnings, owners
         case updatedAt = "updated_at"
         case rateLimit = "rate_limit"
+        case avatarUrl = "avatar_url"
     }
 
     public init(
         id: String, login: String? = nil, color: AccountColor = .none, token: TokenInfo = TokenInfo(),
         updatedAt: Int64? = nil, unread: Bool = false, warnings: [Warning] = [],
-        rateLimit: RateLimit? = nil, owners: [Owner] = []
+        rateLimit: RateLimit? = nil, owners: [Owner] = [], avatarUrl: String? = nil
     ) {
         self.id = id
         self.login = login ?? id
@@ -348,6 +367,7 @@ public struct Account: Equatable, Decodable, Identifiable {
         self.warnings = warnings
         self.rateLimit = rateLimit
         self.owners = owners
+        self.avatarUrl = avatarUrl
     }
 
     public func owner(_ id: String) -> Owner? {
@@ -469,6 +489,19 @@ public struct Placement: Equatable, Decodable {
     public var isDone: Bool { section.value == .done }
 }
 
+/// A GitHub label of a PR (`card.labels`): `Label.name`, and `Label.color`
+/// as GitHub gives it (six hexadecimal digits without `#`, either case; any
+/// other text is drawn as gray, `LabelColors`).
+public struct PRLabel: Equatable, Hashable, Decodable {
+    public var name: String
+    public var color: String
+
+    public init(name: String, color: String) {
+        self.name = name
+        self.color = color
+    }
+}
+
 public struct Card: Equatable, Decodable, Identifiable {
     public var id: String
     public var pr: String
@@ -483,8 +516,12 @@ public struct Card: Equatable, Decodable, Identifiable {
     /// GitHub's fact: you or your team is asked for a review now. The
     /// Involvement group uses it (DESIGN.md, "What the filters mean").
     public var reviewRequested: Bool
-    /// The app's "waiting for your review": the `Review requested` mark.
+    /// The app's "waiting for your review": the waiting state of the my
+    /// review mark.
     public var awaitingReview: Bool
+    /// The verdict of the my review mark; nil when the mark shows none
+    /// (always nil while `awaitingReview`).
+    public var myReview: Lenient<MyReview>?
     public var stateLabel: Lenient<StateLabel>
     public var review: Lenient<ReviewStatus>
     public var checks: Lenient<ChecksStatus>
@@ -515,6 +552,12 @@ public struct Card: Equatable, Decodable, Identifiable {
     /// Rows of this PR were deleted past the 20 kept (DESIGN.md, "Rows in a
     /// card").
     public var olderRows: Bool
+    /// The PR's GitHub labels fetched, at most 20, in the order the daemon
+    /// sends them (by name); sent whatever `show_labels` says (DESIGN.md,
+    /// "Wire format"). Empty when the daemon sends none.
+    public var labels: [PRLabel]
+    /// The labels not fetched beyond the 20: `+N` after the last label.
+    public var labelsMore: Int
 
     enum CodingKeys: String, CodingKey {
         case id, pr, account, owner, title, url, author, review, checks, base, head
@@ -534,6 +577,9 @@ public struct Card: Equatable, Decodable, Identifiable {
         case autoDismissAt = "auto_dismiss_at"
         case olderRows = "older_rows"
         case prMute = "pr_mute"
+        case myReview = "my_review"
+        case labels
+        case labelsMore = "labels_more"
     }
 
     public init(
@@ -545,7 +591,8 @@ public struct Card: Equatable, Decodable, Identifiable {
         head: String = "topic", addedAt: Int64? = nil,
         createdAt: Int64? = nil, updatedAt: Int64 = 0, links: Links = Links(review: "r", checks: "c", base: "b"), rows: [Row] = [],
         placement: Placement? = nil, muted: [MuteReason] = [], prMute: PrMute = .none, dismissedAt: Int64? = nil,
-        dismissExpiresAt: Int64? = nil, autoDismissAt: Int64? = nil, olderRows: Bool = false
+        dismissExpiresAt: Int64? = nil, autoDismissAt: Int64? = nil, olderRows: Bool = false,
+        labels: [PRLabel] = [], labelsMore: Int = 0, myReview: MyReview? = nil
     ) {
         self.id = id
         self.pr = pr
@@ -577,6 +624,9 @@ public struct Card: Equatable, Decodable, Identifiable {
         self.dismissExpiresAt = dismissExpiresAt
         self.autoDismissAt = autoDismissAt
         self.olderRows = olderRows
+        self.labels = labels
+        self.labelsMore = labelsMore
+        self.myReview = myReview.map(Lenient.known)
     }
 
     public init(from decoder: Decoder) throws {
@@ -611,6 +661,9 @@ public struct Card: Equatable, Decodable, Identifiable {
         dismissExpiresAt = try c.decodeIfPresent(Int64.self, forKey: .dismissExpiresAt)
         autoDismissAt = try c.decodeIfPresent(Int64.self, forKey: .autoDismissAt)
         olderRows = try c.decodeIfPresent(Bool.self, forKey: .olderRows) ?? false
+        labels = try c.decodeIfPresent([PRLabel].self, forKey: .labels) ?? []
+        labelsMore = try c.decodeIfPresent(Int.self, forKey: .labelsMore) ?? 0
+        myReview = try c.decodeIfPresent(Lenient<MyReview>.self, forKey: .myReview)
     }
 
     /// Merged and Closed come after the open PRs (Draft included).

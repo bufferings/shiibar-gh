@@ -88,7 +88,7 @@ public final class SettingsModel: ObservableObject {
 
     public static let keys = [
         "launch_at_login", "appearance", "text_size", "status_interval_minutes", "reactions_interval_minutes",
-        DismissedText.autoDismissKey, DismissedText.keepDaysKey, DismissedText.confirmKey,
+        DismissedText.autoDismissKey, DismissedText.keepDaysKey, DismissedText.confirmKey, ShowLabels.configKey,
     ]
 
     public init(app: AppModel, launch: LaunchAtLogin?) {
@@ -339,6 +339,17 @@ public final class SettingsModel: ObservableObject {
         column == .list || cell.list
     }
 
+    /// My review has no Notify column: your own reviews never notify
+    /// (DESIGN.md, "Applying the table"). Its cell is a dash.
+    nonisolated public static func hasColumn(_ kind: EventKind, _ column: EventColumn) -> Bool {
+        !(kind == .myReview && column == .notify)
+    }
+
+    nonisolated public static let noNotifyHelp = "Your own reviews never notify"
+    /// What assistive apps read for that dash, in the table and in the
+    /// Copy sheet.
+    nonisolated public static let noNotifyLabel = "Notify not available"
+
     /// A refused edit may have dropped a read that was on its way: read the
     /// owner again so the screen shows what the daemon has.
     private func reloadAfterFailedEdit(_ account: Account, _ owner: String) {
@@ -350,6 +361,7 @@ public final class SettingsModel: ObservableObject {
     }
 
     public func setEvent(_ owner: Owner, of account: Account, _ kind: EventKind, _ column: EventColumn, _ on: Bool) {
+        guard Self.hasColumn(kind, column) else { return }
         edited(owner.id)
         let api = app.api
         Task {

@@ -39,8 +39,6 @@ public enum Palette {
     // same in every accent color. The grounds, the lines, the text grays,
     // the selection and the accent color are system colors (Colors.swift).
 
-    /// The `Review requested` mark (Main.html `.rq`), with `orangeText`.
-    public static let reviewMark = Shade(0xFBE3D6, 0x4A2E20)
     /// The state colors of a card (Main.html `.st`, `.sbar`) and the ✓ and
     /// × of its status icons.
     public static let badge = Shade(0xC7420D, 0xE0582A)

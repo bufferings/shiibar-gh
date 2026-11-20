@@ -146,6 +146,11 @@ enum PerfMode {
 @MainActor
 enum PerfCounters {
     static var cards = 0
+    /// Lines in view whose image was behind a pending display when the
+    /// consistency check looked (drawn once the window displayed).
+    static var pendingAtCheck = 0
+    /// Image mismatches with no display flag set: counted as failures.
+    static var unflaggedAtCheck = 0
     static var rows = 0
     /// Table cells made (not reused).
     static var made = 0
@@ -413,7 +418,7 @@ final class PerfRunner: NSObject {
                 for section in Listing.sections(
                     tab: tab, cards: cards, account: account, options: ListOptions(), orders: [:],
                     repositories: Listing.knownRepositories([], cards: cards),
-                    folding: .init(visibility: Visibility(filter: ListFilter(muted: .show), kept: []))
+                    folding: .init(visibility: Visibility(filter: ListFilter(muted: .show), kept: []), labels: true)
                 ) {
                     keys.insert(section.key)
                 }
@@ -616,10 +621,9 @@ final class PerfRunner: NSObject {
                 if let anchor, abs(listFrame.minX - anchor.minX) > 1 || abs(listFrame.maxX - anchor.maxX) > 1 {
                     problems.append("left or right edge off its place")
                 }
-                // The cards' margins left and right are the same (an
-                // indented card's left margin is 12 points more).
-                for (card, indented) in root.cardFrames {
-                    let left = card.minX - listFrame.minX - (indented ? 12 : 0)
+                // The cards' margins left and right are the same.
+                for card in root.cardFrames {
+                    let left = card.minX - listFrame.minX
                     let right = listFrame.maxX - card.maxX
                     if abs(left - right) > 1 || card.maxX > listFrame.maxX {
                         problems.append(String(format: "card margins %.1f left, %.1f right", left, right))
@@ -991,10 +995,48 @@ final class PerfRunner: NSObject {
         guard let controller = tableController(measuredWindow) else { return true }
         consistencyChecks += 1
         PerfCounters.frame.checks += 1
-        let problems = controller.consistencyProblems()
+        var problems = controller.consistencyProblems()
+        // A line whose image is behind a change applied in this pass of the
+        // run loop is drawn at the next display: the window displays what
+        // it has pending and the check looks again. A line that still
+        // differs was not asked to display: that is a failure.
+        // Strict: a line counts as pending only when a display flag of its
+        // view, its layer, its cell or its row view was set before the
+        // window displays; any other mismatch fails as it is.
+        if !problems.isEmpty, problems.allSatisfy({ $0.contains("shows another image") }), let window = measuredWindow {
+            var pending: [String] = []
+            var notPending: [String] = []
+            for problem in problems {
+                guard let open = problem.firstIndex(of: "("), let close = problem[open...].firstIndex(of: ")") else { continue }
+                let id = String(problem[problem.index(after: open)..<close])
+                let flags = controller.displayFlags(id)
+                log("check after \(label): \(id) before the second look: \(flags?.text ?? "not in view")")
+                if flags?.pending == true { pending.append(problem) } else { notPending.append(problem) }
+            }
+            if notPending.isEmpty {
+                window.displayIfNeeded()
+                CATransaction.flush()
+                let again = controller.consistencyProblems()
+                if again.isEmpty {
+                    PerfCounters.pendingAtCheck += pending.count
+                    log("check after \(label): \(pending.count) lines were behind a pending display; none after it")
+                }
+                problems = again
+            } else {
+                PerfCounters.unflaggedAtCheck += notPending.count
+            }
+        }
         guard !problems.isEmpty else { return true }
         consistencyFailures += 1
         log("list check after \(label): FAIL\n  " + problems.prefix(10).joined(separator: "\n  "))
+        // The lines named: their last height change and their label line.
+        var named: [String] = []
+        for problem in problems.prefix(10) {
+            guard let open = problem.firstIndex(of: "("), let close = problem[open...].firstIndex(of: ")") else { continue }
+            let id = String(problem[problem.index(after: open)..<close])
+            if id.contains(":"), !named.contains(id) { named.append(id) }
+        }
+        for id in named { log("  \(id): \(controller.diagnostics(id))") }
         notes.append("list check after \(label): FAIL \(problems.first ?? "")")
         return false
     }
@@ -1095,10 +1137,10 @@ final class PerfRunner: NSObject {
             if let scroll { scrollTo(scroll, y: 0) }
             await pause(0.4)
             let done = SectionKey.placed(.review, .done)
-            let todo = SectionKey.placed(.review, .todo)
+            let inbox = SectionKey.placed(.review, .inbox)
             if let card = cards(.doing).first {
                 snapshot(window, directory + "/p1-before.png")
-                await pointerDrag("Doing → Done", card: card.id, via: .more(todo), to: .header(done))
+                await pointerDrag("Doing → Done", card: card.id, via: .more(inbox), to: .header(done))
                 await pause(1.2)
                 let ok = checkList("pointer drag Doing → Done")
                 snapshot(window, directory + "/p1-after.png")
@@ -1118,15 +1160,15 @@ final class PerfRunner: NSObject {
             await fold()
             if let scroll { scrollTo(scroll, y: 0) }
             await pause(0.4)
-            tableController(window)?.scrollForMeasurement(toLine: "section:" + todo, offset: -20)
+            tableController(window)?.scrollForMeasurement(toLine: "section:" + inbox, offset: -20)
             await pause(0.4)
-            if let card = cards(.todo).first {
+            if let card = cards(.inbox).first {
                 snapshot(window, directory + "/p3-before.png")
-                await pointerDrag("Todo → Done", card: card.id, via: nil, to: .header(done))
+                await pointerDrag("Inbox → Done", card: card.id, via: nil, to: .header(done))
                 await pause(1.2)
-                let ok = checkList("pointer drag Todo → Done")
+                let ok = checkList("pointer drag Inbox → Done")
                 snapshot(window, directory + "/p3-after.png")
-                log("consistency pointer Todo → Done: \(ok ? "ok" : "FAIL")")
+                log("consistency pointer Inbox → Done: \(ok ? "ok" : "FAIL")")
             }
         }
         for pass in ["top", "scrolled", "compact"] {
@@ -1137,13 +1179,13 @@ final class PerfRunner: NSObject {
                 guard let scroll else { return }
                 scrollTo(scroll, y: 0)
                 if pass != "top" {
-                    // Todo's heading in the middle of the list.
-                    tableController(window)?.scrollForMeasurement(toLine: "section:" + SectionKey.placed(.review, .todo), offset: -120)
+                    // Inbox's heading in the middle of the list.
+                    tableController(window)?.scrollForMeasurement(toLine: "section:" + SectionKey.placed(.review, .inbox), offset: -120)
                 }
                 await pause(0.4)
             }
             let done = SectionKey.placed(.review, .done)
-            let todo = SectionKey.placed(.review, .todo)
+            let inbox = SectionKey.placed(.review, .inbox)
             let waiting = SectionKey.placed(.review, .waiting)
             await place()
             if let card = cards(.doing).first {
@@ -1154,17 +1196,17 @@ final class PerfRunner: NSObject {
                 await run("\(pass): Doing → Done card") { drag([card.id], onto: .card(over.id, lowerHalf: false)) }
             }
             await place()
-            if let card = cards(.todo).first {
-                await run("\(pass): Todo → Done heading") { drag([card.id], onto: .header(done)) }
+            if let card = cards(.inbox).first {
+                await run("\(pass): Inbox → Done heading") { drag([card.id], onto: .header(done)) }
             }
             await place()
             if let card = cards(.done).first, let over = cards(.doing).first {
                 await run("\(pass): Done → Doing card") { drag([card.id], onto: .card(over.id, lowerHalf: true)) }
             }
             await place()
-            let two = cards(.todo).prefix(2).map(\.id)
+            let two = cards(.inbox).prefix(2).map(\.id)
             if two.count == 2 {
-                await run("\(pass): two Todo cards → Done") { drag(two, onto: .header(done)) }
+                await run("\(pass): two Inbox cards → Done") { drag(two, onto: .header(done)) }
             }
             await place()
             let pair = cards(.doing).prefix(2).map(\.id)
@@ -1172,8 +1214,8 @@ final class PerfRunner: NSObject {
                 await run("\(pass): two Doing cards → Waiting") { drag(pair, onto: .header(waiting)) }
             }
             await place()
-            if let card = cards(.doing).first, review(.todo)?.more ?? 0 > 0 {
-                await run("\(pass): Doing → Todo's + N more") { drag([card.id], onto: .more(todo)) }
+            if let card = cards(.doing).first, review(.inbox)?.more ?? 0 > 0 {
+                await run("\(pass): Doing → Inbox's + N more") { drag([card.id], onto: .more(inbox)) }
             }
             await fold()
             await place()
@@ -1181,15 +1223,15 @@ final class PerfRunner: NSObject {
                 await run("\(pass): Waiting → Done's + N more") { drag([card.id], onto: .more(done)) }
             }
             await place()
-            if let card = cards(.todo).dropFirst().first {
-                await run("\(pass): Dismiss in Todo") {
+            if let card = cards(.inbox).dropFirst().first {
+                await run("\(pass): Dismiss in Inbox") {
                     list.select(.header(card: card.id))
                     list.press(.delete)
                 }
             }
             await place()
-            await run("\(pass): collapse Todo") { list.perform(.toggleSection(todo)) }
-            await run("\(pass): expand Todo") { list.perform(.toggleSection(todo)) }
+            await run("\(pass): collapse Inbox") { list.perform(.toggleSection(inbox)) }
+            await run("\(pass): expand Inbox") { list.perform(.toggleSection(inbox)) }
             // The unread mark of a collapsed heading (DESIGN.md, "Section
             // size"): it shows on collapsing and goes on expanding.
             await run("\(pass): collapse Done and Waiting") {
@@ -1200,8 +1242,8 @@ final class PerfRunner: NSObject {
                 list.perform(.toggleSection(done))
                 list.perform(.toggleSection(waiting))
             }
-            await run("\(pass): + N more PRs of Todo") { list.perform(.toggleMore(todo)) }
-            await run("\(pass): Show less of Todo") { list.perform(.toggleMore(todo)) }
+            await run("\(pass): + N more PRs of Inbox") { list.perform(.toggleMore(inbox)) }
+            await run("\(pass): Show less of Inbox") { list.perform(.toggleMore(inbox)) }
             await run("\(pass): tab All and back") {
                 list.openTab(.all)
                 list.openTab(.review)
@@ -1283,9 +1325,75 @@ final class PerfRunner: NSObject {
         list.searchFocused = false
         await run("All: search again") { list.setSearch("rows release") }
         await run("All: search cleared") { list.setSearch("") }
+        await labelScenarios(list: list, window: window, run: run)
         await heightScenarios(list: list, window: window)
         log("consistency: \(consistencyChecks - consistencyFailures) of \(consistencyChecks) ok")
         notes.append("consistency: \(consistencyChecks - consistencyFailures) of \(consistencyChecks) ok")
+        notes.append("check: \(PerfCounters.pendingAtCheck) lines behind a pending display when checked, none after it; \(PerfCounters.unflaggedAtCheck) mismatches with no display flag")
+    }
+
+    /// The GitHub labels (docs/tasks/M11.md, "Risks"): the label line
+    /// changes a card's height (wrapping to a second line, `+N`), so each
+    /// change that shows, hides or resizes it is followed by the list's
+    /// consistency check: `Show labels` off and on, a search of a label
+    /// name, Compact, the text sizes 9, 12 and 18; then Review while
+    /// searching (the empty sections stay) and the Dismissed list's line 3.
+    private func labelScenarios(list: SurfaceListModel, window: NSWindow, run: (String, () -> Void) async -> Void) async {
+        let scroll = listScrollView(in: window)
+        func setting(_ key: String, _ value: ConfigValue) {
+            app.handle(.configChanged(key: key, value: value))
+        }
+        list.openTab(.all)
+        if list.compact { list.toggleCompact() }
+        if let scroll { scrollTo(scroll, y: 0) }
+        await pause(0.8)
+        let labelled = Listing.cards(list.data.cards, tab: .all).filter { !$0.labels.isEmpty }
+        let wrapping = labelled.filter { $0.labels.count >= 6 }
+        let more = labelled.filter { $0.labelsMore > 0 }
+        log("consistency labels: \(labelled.count) cards with labels, \(wrapping.count) with six or more, \(more.count) with +N")
+        // A card whose labels wrap, in view.
+        if let card = more.first ?? wrapping.first {
+            await run("All: to a card whose labels wrap") { list.reveal(pr: card.pr, waitForList: false) }
+        }
+        await run("All: Show labels off") { setting(ShowLabels.configKey, .bool(false)) }
+        await run("All: Show labels on") { setting(ShowLabels.configKey, .bool(true)) }
+        let name = (wrapping.first ?? labelled.first)?.labels.first?.name ?? "bug"
+        await run("All: search a label name") { list.setSearch(name) }
+        await run("All: search a label name, Show labels off") { setting(ShowLabels.configKey, .bool(false)) }
+        await run("All: search a label name, Show labels on") { setting(ShowLabels.configKey, .bool(true)) }
+        await run("All: search cleared after the label") { list.setSearch("") }
+        await run("All: Compact on, labels") { list.toggleCompact() }
+        await run("All Compact: scroll down, labels") { if let scroll { scrollTo(scroll, y: scroll.contentView.bounds.origin.y + 1200) } }
+        for size in [9, 18, 12] {
+            await run("All Compact: text size \(size)") { setting(TextSize.configKey, .int(Int64(size))) }
+            await run("All: Compact off, text size \(size)") { list.toggleCompact() }
+            await run("All: text size \(size), scroll") { if let scroll { scrollTo(scroll, y: scroll.contentView.bounds.origin.y + 900) } }
+            await run("All: Compact on again, text size \(size)") { list.toggleCompact() }
+        }
+        if list.compact { await run("All: Compact off, labels") { list.toggleCompact() } }
+        // Review while searching: a word of one card's title leaves the
+        // other sections with their frames.
+        list.openTab(.review)
+        if let scroll { scrollTo(scroll, y: 0) }
+        await pause(0.8)
+        if let card = list.sections.first(where: { $0.key == SectionKey.placed(.review, .inbox) })?.cards.first {
+            await run("Review: search one card's number") { list.setSearch(card.pr) }
+            await run("Review: search with labels off") { setting(ShowLabels.configKey, .bool(false)) }
+            await run("Review: search with labels on") { setting(ShowLabels.configKey, .bool(true)) }
+            await run("Review: search for nothing") { list.setSearch("zzzz-nothing-zzzz") }
+            await run("Review: search cleared") { list.setSearch("") }
+        }
+        // The Dismissed list: line 3 with the branches and the author, at
+        // the three text sizes.
+        await run("Dismissed list opened") { list.openDismissedList() }
+        for size in [9, 18, 12] {
+            await run("Dismissed: text size \(size)") { setting(TextSize.configKey, .int(Int64(size))) }
+        }
+        await run("Dismissed: search a branch") { list.setSearch("release") }
+        await run("Dismissed: search cleared") { list.setSearch("") }
+        await run("Dismissed list closed") { list.closeDismissedList() }
+        list.openTab(.all)
+        await pause(0.5)
     }
 
     /// Mine's four sections, `Dismiss all` showing and going, and the
@@ -1302,34 +1410,34 @@ final class PerfRunner: NSObject {
         let doing = SectionKey.placed(.mine, .doing)
         let waiting = SectionKey.placed(.mine, .waiting)
         let done = SectionKey.placed(.mine, .done)
-        if let card = mine(.todo).first {
-            await run("Mine: Todo → Doing heading") {
+        if let card = mine(.inbox).first {
+            await run("Mine: Inbox → Doing heading") {
                 list.select(.header(card: card.id))
                 list.beginDrag(card.id)
                 list.dragOver(.header(doing))
                 list.drop(.header(doing))
             }
         }
-        if let card = mine(.todo).first {
+        if let card = mine(.inbox).first {
             await run("Mine: D") {
                 list.select(.header(card: card.id))
                 list.press(.moveTo(.doing))
             }
-            await run("Mine: T (from Doing: the top of Todo)") { list.press(.moveTo(.todo)) }
+            await run("Mine: I (from Doing: the top of Inbox)") { list.press(.moveTo(.inbox)) }
             await run("Mine: W") { list.press(.moveTo(.waiting)) }
             await run("Mine: Move to Done") {
                 list.perform(.place(PlaceMove(card: card.id, target: .mine(.done), position: .byDefault, verb: .move)))
             }
         }
-        if let card = mine(.todo).dropFirst().first {
+        if let card = mine(.inbox).dropFirst().first {
             await run("Mine: ⌥↑") {
                 list.select(.header(card: card.id))
                 list.press(.reorder(up: true))
             }
         }
-        let two = mine(.todo).prefix(2).map(\.id)
+        let two = mine(.inbox).prefix(2).map(\.id)
         if two.count == 2 {
-            await run("Mine: two Todo cards → Waiting") {
+            await run("Mine: two Inbox cards → Waiting") {
                 list.select(.header(card: two[0]))
                 list.click(card: two[1], extent: .toggle)
                 list.beginDrag(two[0])
@@ -1389,7 +1497,7 @@ final class PerfRunner: NSObject {
         let waiting = SectionKey.placed(tab, .waiting)
         let done = SectionKey.placed(tab, .done)
         for card in list.data.cards where !card.isDismissed && card.sectionKey == waiting {
-            list.perform(.place(PlaceMove(card: card.id, target: PlaceTarget(tab, .todo), position: .bottom, verb: .move)))
+            list.perform(.place(PlaceMove(card: card.id, target: PlaceTarget(tab, .inbox), position: .bottom, verb: .move)))
         }
         await pause(1.2)
         let frame = window.frame
@@ -1407,7 +1515,7 @@ final class PerfRunner: NSObject {
                 for windowWidth in [frame.width, 400, 520, 360, 600, 640] {
                     let w = windowWidth - margin
                     func fits(_ c: Card) -> Bool {
-                        LineLayout.line3Fits(CardLine(card: c, section: done, showsTag: false, indented: false, expanded: false, canDrag: true),
+                        LineLayout.line3Fits(CardLine(card: c, section: done, showsTag: false, expanded: false, canDrag: true),
                                              width: w, k: k, now: now)
                     }
                     if !fits(card) && fits(plain) {
@@ -1781,10 +1889,10 @@ final class PerfRunner: NSObject {
         await pause(0.8)
         let unbanded = window.frame.height
         log("consistency short window: a failure band: height \(lowest) -> \(banded) -> \(unbanded), list \(listBefore) -> \(listBanded)")
-        let area = FilterOptionsLayout.areaHeight(lines: list.filterOptions.count, k: k)
+        let area = FilterOptionsLayout.areaHeight(filter: list.filter, width: window.contentView?.bounds.width ?? 0, k: k)
         if open, listHeight >= 100 * k - 0.5 || hasWarning, abs(closedHeight - lowest) < 0.5, abs(reopened - lowest) < 0.5,
            abs(banded - lowest) < 0.5, abs(unbanded - lowest) < 0.5, listBanded < listBefore,
-           abs(closedList - listHeight - area) < 1.5 {
+           abs(closedList - listHeight - FilterOptionsLayout.openShift(area: area, bandFirst: list.startsWithBand)) < 1.5 {
             log(String(format: "consistency short window: lowest %.0f pt; the list keeps %.0f pt with the options open (%.0f closed); the options' area %.1f pt; open and close keep the height",
                        lowest, listHeight, closedList, area))
         } else {
@@ -1944,14 +2052,14 @@ final class PerfRunner: NSObject {
             list.endDrag()
             await pause(0.3)
         }
-        // Mine: its four sections; a drag over the upper half of Todo's
+        // Mine: its four sections; a drag over the upper half of Inbox's
         // first card.
         list.openTab(.mine)
         await pause(1)
         if let scroll = listScrollView(in: window) { scrollTo(scroll, y: 0) }
         await pause(0.3)
         snapshot(window, directory + "/mine\(suffix).png")
-        let mine = shownCards(list).filter { $0.1.key == SectionKey.placed(.mine, .todo) }.map(\.0)
+        let mine = shownCards(list).filter { $0.1.key == SectionKey.placed(.mine, .inbox) }.map(\.0)
         if mine.count >= 2 {
             list.beginDrag(mine[1].id)
             list.dragOver(.card(mine[0].id, lowerHalf: false))
@@ -2221,8 +2329,8 @@ final class PerfRunner: NSObject {
         }
         samples = []
         for i in 0..<10 {
-            let target: PlacementSection = i % 2 == 0 ? .waiting : .todo
-            let from: PlacementSection = target == .waiting ? .todo : .waiting
+            let target: PlacementSection = i % 2 == 0 ? .waiting : .inbox
+            let from: PlacementSection = target == .waiting ? .inbox : .waiting
             guard let card = reviewCards(from).first else { break }
             let move = PlaceMove(card: card.id, target: .review(target), position: .byDefault, verb: .move)
             samples.append(await measure("move", "Move to \(target.title) \(card.pr)") { list.perform(.place(move)) })
@@ -2231,17 +2339,17 @@ final class PerfRunner: NSObject {
 
         samples = []
         for i in 0..<10 {
-            let target: PlacementSection = i % 2 == 0 ? .doing : .todo
-            let from: PlacementSection = target == .doing ? .todo : .doing
+            let target: PlacementSection = i % 2 == 0 ? .doing : .inbox
+            let from: PlacementSection = target == .doing ? .inbox : .doing
             guard let card = reviewCards(from).first else { break }
             list.select(.header(card: card.id))
             await pause(0.2)
             samples.append(await measure("move", "\(target.title) key \(card.pr)") { list.press(.moveTo(target)) })
         }
-        record("Review D/T/W", samples)
+        record("Review I/D/W", samples)
 
         samples = []
-        if let card = reviewCards(.todo).dropFirst(2).first {
+        if let card = reviewCards(.inbox).dropFirst(2).first {
             list.select(.header(card: card.id))
             await pause(0.2)
             for i in 0..<10 {
@@ -2252,10 +2360,10 @@ final class PerfRunner: NSObject {
 
         samples = []
         for i in 0..<10 {
-            let todo = reviewCards(.todo)
-            guard todo.count >= 3 else { break }
-            let card = todo[i % 2 == 0 ? 2 : 0]
-            let over = todo[i % 2 == 0 ? 0 : 2]
+            let inbox = reviewCards(.inbox)
+            guard inbox.count >= 3 else { break }
+            let card = inbox[i % 2 == 0 ? 2 : 0]
+            let over = inbox[i % 2 == 0 ? 0 : 2]
             list.beginDrag(card.id)
             list.dragOver(.card(over.id, lowerHalf: i % 2 != 0))
             await pause(0.2)
@@ -2309,10 +2417,10 @@ final class PerfRunner: NSObject {
         record("Review Compact select", samples)
         samples = []
         for i in 0..<10 {
-            let todo = shownCards(list).filter { $0.1.key == SectionKey.placed(.review, .todo) }.map(\.0)
-            guard todo.count >= 3 else { break }
-            let card = todo[i % 2 == 0 ? 2 : 0]
-            let over = todo[i % 2 == 0 ? 0 : 2]
+            let inbox = shownCards(list).filter { $0.1.key == SectionKey.placed(.review, .inbox) }.map(\.0)
+            guard inbox.count >= 3 else { break }
+            let card = inbox[i % 2 == 0 ? 2 : 0]
+            let over = inbox[i % 2 == 0 ? 0 : 2]
             list.beginDrag(card.id)
             list.dragOver(.card(over.id, lowerHalf: i % 2 != 0))
             await pause(0.2)
@@ -2351,8 +2459,8 @@ final class PerfRunner: NSObject {
     }
 
     /// The operations of 0.6 (docs/tasks/M9.md, "Risks"): moves between
-    /// Mine's sections (`Move to …`, D / T / W), `Dismiss all` (its sheet
-    /// and its `Dismiss`, on Review's Done refilled from Todo between the
+    /// Mine's sections (`Move to …`, I / D / W), `Dismiss all` (its sheet
+    /// and its `Dismiss`, on Review's Done refilled from Inbox between the
     /// samples, not measured), and the Dismissed list by repository
     /// (opening and closing it, typing in its search field).
     private func mineOperations(list: SurfaceListModel, window: NSWindow) async {
@@ -2364,8 +2472,8 @@ final class PerfRunner: NSObject {
         await pause(0.8)
         var samples: [Sample] = []
         for i in 0..<10 {
-            let target: PlacementSection = i % 2 == 0 ? .waiting : .todo
-            let from: PlacementSection = target == .waiting ? .todo : .waiting
+            let target: PlacementSection = i % 2 == 0 ? .waiting : .inbox
+            let from: PlacementSection = target == .waiting ? .inbox : .waiting
             guard let card = cards(.mine, from).first else { break }
             let move = PlaceMove(card: card.id, target: .mine(target), position: .byDefault, verb: .move)
             samples.append(await measure("move", "Mine Move to \(target.title) \(card.pr)") { list.perform(.place(move)) })
@@ -2373,14 +2481,14 @@ final class PerfRunner: NSObject {
         record("Mine Move to …", samples)
         samples = []
         for i in 0..<10 {
-            let target: PlacementSection = i % 2 == 0 ? .doing : .todo
-            let from: PlacementSection = target == .doing ? .todo : .doing
+            let target: PlacementSection = i % 2 == 0 ? .doing : .inbox
+            let from: PlacementSection = target == .doing ? .inbox : .doing
             guard let card = cards(.mine, from).first else { break }
             list.select(.header(card: card.id))
             await pause(0.2)
             samples.append(await measure("move", "Mine \(target.title) key \(card.pr)") { list.press(.moveTo(target)) })
         }
-        record("Mine D/T/W", samples)
+        record("Mine I/D/W", samples)
         list.clearSelection()
 
         list.openTab(.review)
@@ -2389,8 +2497,8 @@ final class PerfRunner: NSObject {
         var sheets: [Sample] = []
         var answers: [Sample] = []
         for _ in 0..<10 {
-            // Three cards of Todo into Done, then Done in view.
-            let three = Array(cards(.review, .todo).prefix(3))
+            // Three cards of Inbox into Done, then Done in view.
+            let three = Array(cards(.review, .inbox).prefix(3))
             guard three.count == 3 else { break }
             list.select(.header(card: three[0].id))
             for card in three.dropFirst() { list.click(card: card.id, extent: .toggle) }
@@ -2455,6 +2563,17 @@ final class PerfRunner: NSObject {
                 list.setSearch("")
                 await pause(0.5)
             }
+            // A label name (`Show labels` on: the search looks at the
+            // names, scripts/perf/make-data.py's LABEL_SET).
+            var samples: [Sample] = []
+            let label = "needs triage"
+            for i in 1...label.count {
+                let typed = String(label.prefix(i))
+                samples.append(await measure("search", "\(tab.title) \"\(typed)\"") { list.setSearch(typed) })
+            }
+            record("\(tab.title) search typing a label name", samples)
+            list.setSearch("")
+            await pause(0.5)
         }
     }
 
@@ -2474,6 +2593,35 @@ final class PerfRunner: NSObject {
     /// The demo data searched for words whose matches are hidden (DESIGN.md,
     /// "Showing what matched"): `because` and `Follow`, at the top of All.
     private func demoShots(list: SurfaceListModel, window: NSWindow, directory: String) async {
+        // The my review mark's three states in Review (DESIGN.md, "Card",
+        // "My review mark"), light or dark (`SHIIBAR_GH_PERF_DARK=1`).
+        let dark = ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_DARK"] == "1"
+        if dark {
+            window.appearance = NSAppearance(named: .darkAqua)
+            SystemColors.bump()
+        }
+        list.openTab(.review)
+        if let done = list.sections.first(where: { $0.key == SectionKey.placed(.review, .done) }), !done.collapsed {
+            list.perform(.toggleSection(done.key))
+        }
+        await pause(1)
+        for (mark, name) in [(MyReviewMark.waiting, "waiting"), (.approved, "approved"), (.changesRequested, "changes-requested")] {
+            // In Review if there is one, otherwise in the tab that has one.
+            let shown = Listing.cards(list.data.cards, tab: .all)
+            guard let card = shown.first(where: { MyReviewMark.of($0) == mark && $0.tab == .review })
+                ?? shown.first(where: { MyReviewMark.of($0) == mark }) else {
+                log("demo: no card with the mark \(name)")
+                continue
+            }
+            if card.tab == .all { list.openTab(.all) }
+            list.reveal(pr: card.pr, waitForList: false)
+            await pause(1.2)
+            checkList("demo Review \(name)")
+            snapshot(window, directory + "/review-\(name)\(dark ? "-dark" : "").png")
+            list.openTab(.review)
+        }
+        // The rest checks the yellow of the light appearance.
+        if dark { return }
         list.openTab(.all)
         for text in ["because", "Follow"] {
             if let scroll = listScrollView(in: window) { scrollTo(scroll, y: 0) }
@@ -2512,6 +2660,24 @@ final class PerfRunner: NSObject {
             let kept = list.data.cards.first { $0.id == card.id }?.dismissedAt == nil
             log("confirm sheet: Cancel keeps the card: \(kept ? "ok" : "FAIL")")
         }
+        // The labels (DESIGN.md, "Card", "GitHub labels"): the PR with `+N`,
+        // a label name searched, and the Dismissed list's line 3.
+        if let card = Listing.cards(list.data.cards, tab: .all).first(where: { $0.labelsMore > 0 }) {
+            list.reveal(pr: card.pr, waitForList: false)
+            await pause(1)
+            checkList("demo labels +N")
+            snapshot(window, directory + "/labels-more.png")
+        }
+        list.setSearch("triage")
+        await pause(1)
+        checkList("demo search a label name")
+        snapshot(window, directory + "/search-label.png")
+        list.setSearch("")
+        list.openDismissedList()
+        await pause(1)
+        checkList("demo Dismissed list")
+        snapshot(window, directory + "/dismissed.png")
+        list.closeDismissedList()
     }
 
     /// Every card of the list scrolled through with search text shows a
@@ -2595,6 +2761,7 @@ final class PerfRunner: NSObject {
         }
         if consistencyChecks > 0 {
             notes.append("list checks: \(consistencyChecks - consistencyFailures) of \(consistencyChecks) ok")
+            notes.append("check: \(PerfCounters.pendingAtCheck) lines behind a pending display when checked, none after it; \(PerfCounters.unflaggedAtCheck) mismatches with no display flag")
         }
         lines.append("")
         lines += notes.map { "note: " + $0 }

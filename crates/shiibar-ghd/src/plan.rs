@@ -183,6 +183,8 @@ pub struct Outcome {
     pub ran: bool,
     /// The login `viewer` answered.
     pub login: Option<String>,
+    /// The `avatarUrl(size: 32)` `viewer` answered.
+    pub avatar_url: Option<String>,
     pub teams: Option<Vec<TeamRec>>,
     pub token: TokenObs,
     /// Scopes an endpoint refused this run, and whether the endpoints that

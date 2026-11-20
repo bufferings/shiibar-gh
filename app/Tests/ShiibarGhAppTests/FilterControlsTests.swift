@@ -13,15 +13,12 @@ import XCTest
 
 @MainActor
 final class FilterControlsTests: XCTestCase {
-    func controls() -> [NSControl] {
-        let checkbox = NoFocusCheckbox(checkboxWithTitle: "Unread only", target: nil, action: nil)
+    func controls() -> [NSView] {
+        let checkbox = NoFocusCheckbox(checkboxWithTitle: "Skip", target: nil, action: nil)
         checkbox.refusesFirstResponder = true
-        let segmented = NoFocusSegmentedControl(labels: ["Hide", "Show", "Only"], trackingMode: .selectOne, target: nil, action: nil)
-        segmented.refusesFirstResponder = true
-        let grouping = DrawnButton(title: PushButton.grouping)
-        let reset = NoFocusButton(title: PushButton.reset, target: nil, action: nil)
-        reset.refusesFirstResponder = true
-        return [checkbox, segmented, grouping, reset]
+        let grouping = DrawnButton(title: GroupingButton.title)
+        let options = FilterOptionsView(frame: .zero)
+        return [checkbox, grouping, options]
     }
 
     func testTheOptionsNeverBecomeTheFirstResponder() {
@@ -93,22 +90,23 @@ final class FilterControlsTests: XCTestCase {
     }
 
     /// DESIGN.md, "Constants": `Grouping…` is as tall as the Filter button
-    /// (24 points) with 12-point text, and Restore 22 points with 12-point
-    /// text and 10 points of room on either side, at text size 12; both in
+    /// (26 points) with 12-point text after its 13-point icon (6 points
+    /// between, 4 at either end), and Restore 22 points with 12-point text
+    /// and 10 points of room on either side, at text size 12; both in
     /// proportion to the text size.
     func testGroupingAndRestoreFollowTheTextSize() {
         var widths: [CGFloat] = []
         for size in [9, 12, 18] {
             let k = CGFloat(TextSize.ratio(size))
-            let grouping = DrawnButton.size(PushButton.grouping, k: k)
-            XCTAssertEqual(grouping.height, (24 * k).rounded(), "\(size)")
-            let text = (PushButton.grouping as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12 * k)]).width
-            XCTAssertEqual(grouping.width, (text + 18 * k).rounded(.up), "\(size)")
-            let button = DrawnButton(title: PushButton.grouping)
+            let grouping = DrawnButton.size(GroupingButton.title, k: k)
+            XCTAssertEqual(grouping.height, (26 * k).rounded(), "\(size)")
+            let text = (GroupingButton.title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12 * k)]).width
+            XCTAssertEqual(grouping.width, (text + (8 + 13 + 6) * k).rounded(.up), "\(size)")
+            let button = DrawnButton(title: GroupingButton.title)
             button.k = k
             XCTAssertEqual(button.intrinsicContentSize, grouping)
             XCTAssertEqual(button.accessibilityRole(), .button)
-            XCTAssertEqual(button.accessibilityLabel(), PushButton.grouping)
+            XCTAssertEqual(button.accessibilityLabel(), GroupingButton.title)
             let restore = ListButton.restoreSize(k: k)
             XCTAssertEqual(restore.height, (22 * k).rounded(), "\(size)")
             let restoreText = Ink.width("Restore", Ink.font(12 * k))
@@ -120,11 +118,11 @@ final class FilterControlsTests: XCTestCase {
         for size in [9, 12, 18] {
             let k = CGFloat(TextSize.ratio(size))
             let filter = NSHostingView(rootView: FilterButton(open: false, dot: false, toggle: {}).environment(\.textScale, k)).fittingSize
-            XCTAssertEqual(DrawnButton.size(PushButton.grouping, k: k).height, filter.height, accuracy: 0.5, "\(size)")
+            XCTAssertEqual(DrawnButton.size(GroupingButton.title, k: k).height, filter.height, accuracy: 0.5, "\(size)")
         }
         // Pressing it runs its action, by the mouse or by an assistive app.
         var pressed = 0
-        let button = DrawnButton(title: PushButton.grouping)
+        let button = DrawnButton(title: GroupingButton.title)
         button.press = { pressed += 1 }
         XCTAssertTrue(button.accessibilityPerformPress())
         XCTAssertEqual(pressed, 1)
@@ -166,8 +164,55 @@ final class FilterControlsTests: XCTestCase {
         XCTAssertTrue(FilterSummary.isCut(long, shownWidth: full - 40, k: 1), "cut with …")
         XCTAssertFalse(FilterSummary.isCut(long, shownWidth: 0, k: 1), "not laid out yet")
         XCTAssertTrue(FilterSummary.isCut(long, shownWidth: full, k: 1.5), "a larger text size needs more room")
-        XCTAssertEqual(PushButton.reset, "Reset")
+        XCTAssertEqual(FilterText.reset, "Reset")
         XCTAssertEqual(FilterButton.dotTip, "Unread pull requests are hidden by the filter")
+    }
+
+    /// The `Filter` tab's icon is the board's drawn one, as large as
+    /// `Grouping…`'s, and the tab is as tall as the row (26 points at text
+    /// size 12), open or closed, with the same width, so the summary does
+    /// not move.
+    func testTheFilterTab() {
+        XCTAssertEqual(FilterButton.icon, BoardIcons.filter)
+        XCTAssertEqual(FilterButton.iconSize, DrawnButton.iconSize)
+        XCTAssertEqual(BoardIcons.filter.lineWidth, BoardIcons.grouping.lineWidth)
+        for k: CGFloat in [0.75, 1, 1.5] {
+            let open = NSHostingView(rootView: FilterButton(open: true, dot: false, toggle: {}).environment(\.textScale, k)).fittingSize
+            let closed = NSHostingView(rootView: FilterButton(open: false, dot: false, toggle: {}).environment(\.textScale, k)).fittingSize
+            XCTAssertEqual(open.height, 26 * k, accuracy: 0.5, "k \(k)")
+            XCTAssertEqual(open, closed, "k \(k): the same place open or closed")
+        }
+        // Open, the row gives up its room under it: the tab reaches the box.
+        let openRow = NSHostingView(rootView: FilterRow(value: FilterRowState(shows: true, open: true, dot: false, summary: nil, showsGrouping: false),
+                                                        toggle: {}, openGrouping: {}).environment(\.textScale, 1)).fittingSize
+        let closedRow = NSHostingView(rootView: FilterRow(value: FilterRowState(shows: true, open: false, dot: false, summary: nil, showsGrouping: false),
+                                                          toggle: {}, openGrouping: {}).environment(\.textScale, 1)).fittingSize
+        XCTAssertEqual(openRow.height, 26, accuracy: 0.5)
+        XCTAssertEqual(closedRow.height, 32, accuracy: 0.5)
+    }
+
+    /// `Grouping…` has no border and no ground: only its icon and its text
+    /// in the secondary color are drawn.
+    func testGroupingHasNoBorderAndNoGround() throws {
+        for dark in [false, true] {
+            let button = DrawnButton(title: GroupingButton.title)
+            button.frame = NSRect(origin: .zero, size: button.intrinsicContentSize)
+            button.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            let rep = try XCTUnwrap(button.bitmapImageRepForCachingDisplay(in: button.bounds))
+            button.cacheDisplay(in: button.bounds, to: rep)
+            let scale = CGFloat(rep.pixelsWide) / button.bounds.width
+            // The corners and the edges' middles are empty (no border, no
+            // ground); the icon and the text are drawn.
+            for (x, y) in [(0, 0), (rep.pixelsWide - 1, 0), (0, rep.pixelsHigh - 1), (rep.pixelsWide / 2, 0), (rep.pixelsWide / 2, rep.pixelsHigh - 1)] {
+                XCTAssertEqual(rep.colorAt(x: x, y: y)?.alphaComponent ?? 0, 0, accuracy: 0.01, "dark \(dark) (\(x), \(y))")
+            }
+            let icon = button.iconFrame
+            let inked = (Int(icon.minX * scale)..<Int(icon.maxX * scale)).contains { x in
+                (rep.colorAt(x: x, y: Int(icon.midY * scale))?.alphaComponent ?? 0) > 0.2
+            }
+            XCTAssertTrue(inked, "dark \(dark): the icon")
+            XCTAssertEqual(DrawnButton.icon, BoardIcons.grouping)
+        }
     }
 
     /// The display mode switch (DESIGN.md, "Compact"): two segments,
@@ -228,7 +273,7 @@ enum SearchRowProbe {
     }
 }
 
-/// The Filter row, and `Reset` and `Grouping…` (NoFocusButtons) in it.
+/// The Filter row, and `Grouping…` and any options' box in it.
 @MainActor
 enum FilterRowProbe {
     static func buttons(_ value: FilterRowState, k: CGFloat, width: CGFloat) -> (reset: NSRect?, grouping: NSRect?) {
@@ -237,11 +282,10 @@ enum FilterRowProbe {
         var reset: NSRect?
         var grouping: NSRect?
         Probe.walk(hosting) { view in
-            if let button = view as? DrawnButton, button.title == PushButton.grouping {
+            if let button = view as? DrawnButton, button.title == GroupingButton.title {
                 grouping = button.convert(button.bounds, to: hosting)
             }
-            guard let button = view as? NoFocusButton else { return }
-            if button.title == PushButton.reset { reset = button.convert(button.bounds, to: hosting) }
+            if let options = view as? FilterOptionsView { reset = options.convert(options.geometry.reset.frame, to: hosting) }
         }
         return (reset, grouping)
     }

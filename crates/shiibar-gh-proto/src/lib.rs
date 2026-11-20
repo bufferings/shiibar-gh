@@ -111,6 +111,7 @@ pub enum BaseStatus {
 pub enum EventKind {
     ReviewRequested,
     TeamReviewRequested,
+    MyReview,
     Mentioned,
     TeamMentioned,
     Comment,
@@ -124,6 +125,8 @@ pub enum EventKind {
     ChecksPassed,
     Conflicts,
     Mergeable,
+    ReadyForReview,
+    ConvertedToDraft,
     MergeQueueAdded,
     MergeQueueRemoved,
     MergedClosed,
@@ -131,9 +134,10 @@ pub enum EventKind {
 }
 
 impl EventKind {
-    pub const ALL: [EventKind; 19] = [
+    pub const ALL: [EventKind; 22] = [
         EventKind::ReviewRequested,
         EventKind::TeamReviewRequested,
+        EventKind::MyReview,
         EventKind::Mentioned,
         EventKind::TeamMentioned,
         EventKind::Comment,
@@ -147,6 +151,8 @@ impl EventKind {
         EventKind::ChecksPassed,
         EventKind::Conflicts,
         EventKind::Mergeable,
+        EventKind::ReadyForReview,
+        EventKind::ConvertedToDraft,
         EventKind::MergeQueueAdded,
         EventKind::MergeQueueRemoved,
         EventKind::MergedClosed,
@@ -162,6 +168,8 @@ impl EventKind {
 pub enum IngestKind {
     ReviewRequested,
     TeamReviewRequested,
+    MyReviewApproved,
+    MyReviewChangesRequested,
     Mentioned,
     TeamMentioned,
     Comment,
@@ -169,6 +177,8 @@ pub enum IngestKind {
     Reply,
     ReplyMentioned,
     Approved,
+    ReadyForReview,
+    ConvertedToDraft,
     MergeQueueAdded,
     MergeQueueRemoved,
     Merged,
@@ -182,6 +192,8 @@ pub enum IngestKind {
 pub enum RowKind {
     ReviewRequested,
     TeamReviewRequested,
+    MyReviewApproved,
+    MyReviewChangesRequested,
     Mentioned,
     TeamMentioned,
     Comment,
@@ -195,11 +207,34 @@ pub enum RowKind {
     ChecksPassed,
     Conflicts,
     Mergeable,
+    ReadyForReview,
+    ConvertedToDraft,
     MergeQueueAdded,
     MergeQueueRemoved,
     Merged,
     Closed,
     Reopened,
+}
+
+/// `card.my_review`: the verdict the mark shows (DESIGN.md, "My review
+/// mark"); `null` on the wire when the mark shows no verdict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MyReview {
+    Approved,
+    ChangesRequested,
+}
+
+/// The `state` of the account's newest review with a verdict
+/// (`reviews(author:, states: [APPROVED, CHANGES_REQUESTED, DISMISSED],
+/// last: 1)`), `none` when there is no such review.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewVerdict {
+    Approved,
+    ChangesRequested,
+    Dismissed,
+    None,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -298,13 +333,14 @@ pub enum PlacedTab {
     Mine,
 }
 
-/// A section of Review or Mine: both tabs have `doing`, `todo`, `waiting`
-/// and `done`. DESIGN.md, "Review" and "Mine".
+/// A section of Review or Mine: both tabs have `inbox`, `doing`, `waiting`
+/// and `done`. The `todo` of 0.7 and earlier is no value (DESIGN.md,
+/// "Review", "Mine" and "Wire format").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Section {
     Doing,
-    Todo,
+    Inbox,
     Waiting,
     Done,
 }
@@ -510,7 +546,28 @@ pub struct IngestPr {
     /// Logins of the assignees.
     #[serde(default)]
     pub assignees: Vec<String>,
+    /// The GitHub labels fetched, as GitHub ordered them (by name). `None`
+    /// keeps the labels saved for the PR (DESIGN.md, "Card", "GitHub
+    /// labels").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub labels: Option<Vec<Label>>,
+    /// The labels not fetched (`labels.totalCount` less those fetched); 0
+    /// when left out with `labels` given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub labels_more: Option<u32>,
+    /// The account's newest review with a verdict on the PR. `None` keeps
+    /// the saved value (DESIGN.md, "My review mark").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub my_review: Option<ReviewVerdict>,
     pub links: Links,
+}
+
+/// A GitHub label of a PR: `Label.name`, and `Label.color` as GitHub gives
+/// it (six hexadecimal digits without `#`, upper or lower case).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Label {
+    pub name: String,
+    pub color: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -535,6 +592,8 @@ pub struct IngestReaction {
     pub pr_id: String,
     pub url: String,
     pub text: String,
+    /// The time the comment was published (DESIGN.md, "Comment times"),
+    /// compared with the owner's watch start; the name is the wire's.
     pub comment_created_at: i64,
     /// Absolute count per `ReactionContent` value, without the account's own.
     pub counts: BTreeMap<String, u32>,
@@ -733,6 +792,9 @@ pub enum Request {
         login: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         token: Option<String>,
+        /// The account's own avatar, as a fetch's `viewer` gives it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        avatar_url: Option<String>,
     },
     /// An owner without asking GitHub. `kind` `public` adds Public.
     #[cfg(feature = "dev-ingest")]
@@ -821,6 +883,10 @@ pub struct Account {
     pub id: String,
     pub login: String,
     pub color: Lenient<AccountColor>,
+    /// The account's own avatar (`viewer.avatarUrl(size: 32)`); `null` until
+    /// a fetch saved it.
+    #[serde(default)]
+    pub avatar_url: Option<String>,
     pub token: TokenInfo,
     pub updated_at: Option<i64>,
     /// The blue dot of the menu bar icon.
@@ -878,6 +944,20 @@ pub struct Card {
     pub auto_dismiss_at: Option<i64>,
     /// Rows of the PR were deleted (DESIGN.md, "Rows in a card").
     pub older_rows: bool,
+    /// The GitHub labels fetched, by name, at most 20; sent whatever
+    /// `show_labels` says (DESIGN.md, "Wire format").
+    #[serde(default)]
+    pub labels: Vec<Label>,
+    /// The labels not fetched beyond the 20.
+    #[serde(default)]
+    pub labels_more: u32,
+    /// The verdict of the account's own review mark: `approved`,
+    /// `changes_requested` or `null`. `null` while the PR awaits the
+    /// account's review (`awaiting_review` shows that state), on a merged or
+    /// closed PR, on the account's own PR and on a dismissed card
+    /// (DESIGN.md, "My review mark" and "Wire format").
+    #[serde(default)]
+    pub my_review: Option<Lenient<MyReview>>,
     pub links: Links,
     /// Every row kept, newest first, at most 20.
     pub rows: Vec<Row>,
@@ -1169,7 +1249,7 @@ mod tests {
     #[test]
     fn place_takes_a_section_and_a_position() {
         let request: Request = serde_json::from_str(
-            r#"{"cmd":"place","account":"me","pr":"o/r#1","tab":"review","section":"todo","before":"o/r#2"}"#,
+            r#"{"cmd":"place","account":"me","pr":"o/r#1","tab":"review","section":"inbox","before":"o/r#2"}"#,
         )
         .unwrap();
         assert_eq!(
@@ -1178,7 +1258,7 @@ mod tests {
                 account: "me".into(),
                 pr: "o/r#1".into(),
                 tab: PlaceTab::Review,
-                section: Some(Section::Todo),
+                section: Some(Section::Inbox),
                 before: Some("o/r#2".into()),
                 at: None,
             }
@@ -1196,20 +1276,29 @@ mod tests {
     }
 
     #[test]
-    fn mine_takes_the_sections_of_review_and_main_is_none() {
-        // DESIGN.md, "Wire format": `main` (0.5) is no section.
-        for section in ["doing", "todo", "waiting", "done"] {
+    fn mine_takes_the_sections_of_review_and_main_and_todo_are_none() {
+        // DESIGN.md, "Wire format": `main` (0.5) and `todo` (0.7) are no
+        // section.
+        for section in ["inbox", "doing", "waiting", "done"] {
             let line = format!(
                 r#"{{"cmd":"place","account":"me","pr":"o/r#1","tab":"mine","section":"{section}"}}"#
             );
             assert!(serde_json::from_str::<Request>(&line).is_ok(), "{section}");
         }
-        assert!(
-            serde_json::from_str::<Request>(
-                r#"{"cmd":"place","account":"me","pr":"o/r#1","tab":"mine","section":"main"}"#
-            )
-            .is_err()
-        );
+        for tab in ["review", "mine"] {
+            for section in ["main", "todo"] {
+                let line = format!(
+                    r#"{{"cmd":"place","account":"me","pr":"o/r#1","tab":"{tab}","section":"{section}"}}"#
+                );
+                assert!(
+                    serde_json::from_str::<Request>(&line).is_err(),
+                    "{tab} {section}"
+                );
+            }
+        }
+        let placement: Placement =
+            serde_json::from_str(r#"{"tab":"review","section":"inbox","position":0}"#).unwrap();
+        assert!(placement.section.is(Section::Inbox));
     }
 
     #[test]
@@ -1223,6 +1312,7 @@ mod tests {
             [
                 "review_requested",
                 "team_review_requested",
+                "my_review",
                 "mentioned",
                 "team_mentioned",
                 "comment",
@@ -1236,6 +1326,8 @@ mod tests {
                 "checks_passed",
                 "conflicts",
                 "mergeable",
+                "ready_for_review",
+                "converted_to_draft",
                 "merge_queue_added",
                 "merge_queue_removed",
                 "merged_closed",

@@ -164,12 +164,19 @@ fn list_off_turns_notify_off_and_notify_needs_list() {
 #[test]
 fn the_table_has_two_columns_with_the_design_defaults() {
     // DESIGN.md, "Row kinds and states": every kind List on; Notify off for
-    // Added to merge queue and Merged / Closed only.
+    // My review (no Notify column), Converted to draft, Added to merge queue
+    // and Merged / Closed only.
     let h = H::new();
     let events = h.engine.owner_events(&h.owner_id(ORG));
-    assert_eq!(events.len(), 19);
+    assert_eq!(events.len(), 22);
     for (name, cell) in &events {
-        let quiet = name == "merge_queue_added" || name == "merged_closed";
+        let quiet = [
+            "my_review",
+            "converted_to_draft",
+            "merge_queue_added",
+            "merged_closed",
+        ]
+        .contains(&name.as_str());
         assert!(cell.list, "{name}");
         assert_eq!(cell.notify, !quiet, "{name}");
     }

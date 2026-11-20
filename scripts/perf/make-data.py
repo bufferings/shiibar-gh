@@ -6,14 +6,15 @@ The data: one account `me` (id 1001, no token) with the owner `org` and
 Public; 200 PRs that are not dismissed, 3 rows each (a mention with a body
 long enough for 3 lines on a third of them), spread over 20 repositories so
 every All group (Group by Repository) folds into "+ N more PRs"; Review and
-Mine with Doing, Todo, Waiting and Done, and the cards of one muted user. For
+Mine with Inbox, Doing, Waiting and Done, and the cards of one muted user. For
 the Filter the PRs have the four statuses (open, draft, merged,
 closed), and a quarter of the cards are read (the rest have unread rows).
 30 more PRs are dismissed, for the Dismissed list by repository; they are not
 among the 200.
 The avatars are PNG files in the state directory, referenced by file:// URLs:
 the authors' and the rows' actors' (every fourth row has no avatar URL, as
-a row saved before 0.7, and one actor has a long login).
+a row saved before 0.7, and one actor has a long login). Some cards have
+GitHub labels, a part of them enough to wrap to a second line.
 
 No token is ever passed (a dev-ingest daemon without SHIIBAR_GH_DEV_KEYCHAIN
 has no Keychain at all) and nothing reaches GitHub (no
@@ -23,7 +24,7 @@ not empty, so it never touches a real one.
 Usage: make-data.py <shiibar-ghd built with --features dev-ingest> <empty dir> [--demo]
 
 --demo loads the data of the demo mode (scripts/perf/demo.sh) instead: about
-200 cards over All, Review and Mine (each with Doing, Todo, Waiting, Done and
+200 cards over All, Review and Mine (each with Inbox, Doing, Waiting, Done and
 cards to `Dismiss all` in Done), dismissed cards of several repositories (the
 Dismissed list by repository), the account `me` with the color None and a
 second account with the color Blue (the dot before the name), many
@@ -37,7 +38,16 @@ by itself (Unmute), and team mentions on the muted user's cards. The rows
 show their actors' avatars, some without one and some with a long login; the
 account's own merges, closes and merge queue additions are read rows, a
 removal by the merge queue an unread one, and approvals of your PRs carry no
-body. It needs a 0.7 daemon (the working tree's: the rows' avatars).
+body. Cards carry GitHub labels (none on most, one or a few on many,
+enough to wrap on some, more than 20 with `+N` on one, colors close to
+white and to black, a yellow, upper-case colors and one invalid color);
+Ready for review and Converted to draft rows (some by the account itself,
+read); a dismissed card with a long branch and a long login; the My
+review mark in its three states (waiting for your review, a team's request
+included; approved; changes requested), a card approved and asked again,
+My review rows of both verdicts, and the second account without an avatar.
+It needs a 0.8 daemon (the working tree's: the labels, the row kinds and the
+My review mark).
 """
 
 import json
@@ -70,6 +80,32 @@ MENTION_BODY = (
     "because the CLI of 0.4 still reads it when it lists the rows of a PR. "
     "If we drop it now, the CLI needs a new release at the same time."
 )
+
+
+# GitHub labels, `(name, color)`: GitHub's own defaults, colors close to
+# white and to black, a yellow, upper-case colors and long names.
+LABEL_SET = [
+    ("bug", "d73a4a"), ("documentation", "0075ca"), ("duplicate", "cfd3d7"),
+    ("enhancement", "a2eeef"), ("good first issue", "7057ff"), ("help wanted", "008672"),
+    ("invalid", "e4e669"), ("question", "d876e3"), ("wontfix", "ffffff"),
+    ("needs triage", "FBCA04"), ("blocked", "000000"), ("security", "1B1F23"),
+    ("area: cache and storage", "BFD4F2"), ("priority: high", "B60205"),
+    ("size: XL", "fef2c0"), ("dependencies", "0366d6"),
+    ("breaking change for the public command line interface", "5319e7"),
+]
+
+
+def labels_of(n, wrap):
+    """The labels of PR `n`, by name: none on most, one to three on many,
+    and, with `wrap`, enough long ones to wrap to a second line."""
+    if wrap:
+        picked = LABEL_SET[9:17]
+    elif n % 3 == 0:
+        picked = []
+    else:
+        picked = [LABEL_SET[(n * k) % len(LABEL_SET)] for k in range(1, 1 + n % 4)]
+    unique = {name: color for name, color in picked}
+    return [{"name": name, "color": unique[name]} for name in sorted(unique, key=str.lower)]
 
 
 def png(path, rgb):
@@ -157,6 +193,17 @@ def body(lines):
     return text
 
 
+def demo_labels(n):
+    """The labels of demo PR `n`: more than 20 on PR 2 (with `+5`), every
+    color of the set over the others, an invalid color on PR 4."""
+    if n == 2:
+        names = [(f"area-{i:02d}", LABEL_SET[i % len(LABEL_SET)][1]) for i in range(20)]
+        return [{"name": name, "color": color} for name, color in names]
+    if n == 4:
+        return [{"name": "color not hexadecimal", "color": "not-a-color"}]
+    return labels_of(n, n % 10 == 7)
+
+
 def demo(daemon, colors, start):
     """The demo data (see the module's docstring)."""
     repos = [f"repo-{i:02d}" for i in range(1, 25)]
@@ -185,6 +232,9 @@ def demo(daemon, colors, start):
             "mergeable": False, "failed_check": None, "changes_requested_by": None,
             "updated_at": updated, "created_at": updated - 86_400 * (1 + n % 9),
             "is_private": False, "requested_me": requested, "assignees": [ME] if n % 13 == 0 else [],
+            # A team's request, waiting for your review like your own.
+            "requested_team": author != ME and not requested and n % 10 == 5,
+            "labels": demo_labels(n), "labels_more": 5 if n == 2 else 0,
             "links": {
                 "review": f"https://github.example/{OWNER}/{repo}/pull/{n}/files",
                 "checks": f"https://github.example/{OWNER}/{repo}/pull/{n}/checks",
@@ -219,6 +269,27 @@ def demo(daemon, colors, start):
         elif author == ME and n % 12 == 6:
             # The queue removed your PR: an unread row by the queue.
             rows = [("merge_queue_removed", f"Checks failed · added by {ME}", MERGE_QUEUE), ("merge_queue_added", None, ME)] + rows
+        if n % 7 == 3 and not (merged or closed):
+            # The draft ended (unread), after it was made a draft; on your
+            # own PR both are yours (read rows).
+            who = ME if author == ME else actor
+            rows = [("ready_for_review", None, who), ("converted_to_draft", None, who)] + rows
+        elif n % 11 == 0:
+            # Made a draft again.
+            rows = [("converted_to_draft", None, ME if author == ME else actor)] + rows
+        # Your newest verdict (the My review mark) and the row of that review:
+        # approved or changes requested, and approved then asked again (the
+        # mark waits for your review again, the row stays).
+        verdict = None
+        if author != ME and not (merged or closed):
+            if n % 5 == 2:
+                verdict = "approved"
+            elif n % 5 == 4 and not requested:
+                verdict = "changes_requested"
+        if verdict:
+            rows.append((f"my_review_{verdict}", None, ME))
+            prs[-1]["my_review"] = verdict
+            prs[-1]["my_review_at"] = updated - (len(rows) - 1) * 30
         for j, (kind, text, who) in enumerate(rows):
             events.append({
                 "id": f"E_{n}_{j}", "pr_id": pr_id, "kind": kind, "occurred_at": updated - j * 30,
@@ -243,6 +314,15 @@ def demo(daemon, colors, start):
         if not requested and author != ME and (n % 24 in (7, 9, 14) and n <= 120 or n in (151, 163)):
             dismissed.append(key)
 
+    # A dismissed card whose branches and author do not fit its third line.
+    long_one = prs[8]
+    assert f"{OWNER}/{long_one['repo']}#9" in dismissed
+    long_one.update({
+        "author": LONG_USER, "author_avatar_url": colors[LONG_USER],
+        "base": "release/2027-spring-maintenance-branch",
+        "head": f"{LONG_USER}/rework-the-retry-path-of-the-status-fetch",
+    })
+
     # Your merged and closed PRs were seen open first, so their merge or
     # close makes a row.
     finished_own = [dict(p, state="open") for p in prs if p["author"] == ME and p["state"] != "open"]
@@ -255,21 +335,21 @@ def demo(daemon, colors, start):
     for index, pr in enumerate(review):
         if pr in done:
             continue
-        section = ["doing", "todo", "waiting", "todo"][index % 4]
-        if section != "todo":
+        section = ["doing", "inbox", "waiting", "inbox"][index % 4]
+        if section != "inbox":
             daemon.ok({"cmd": "place", "account": ME, "pr": pr, "tab": "review", "section": section})
     for pr in done:
         daemon.ok({"cmd": "place", "account": ME, "pr": pr, "tab": "review", "section": "done"})
     for pr in mine_done:
         daemon.ok({"cmd": "place", "account": ME, "pr": pr, "tab": "mine", "section": "done"})
-    # Mine: your own open PRs came to Todo; spread them over the sections
+    # Mine: your own open PRs came to Inbox; spread them over the sections
     # (an open one in Done too), and add assigned PRs (`Add to Mine`).
     for index, pr in enumerate(mine_open):
-        section = ["doing", "todo", "waiting", "todo", "done", "todo"][index % 6]
-        if section != "todo":
+        section = ["doing", "inbox", "waiting", "inbox", "done", "inbox"][index % 6]
+        if section != "inbox":
             daemon.ok({"cmd": "place", "account": ME, "pr": pr, "tab": "mine", "section": section})
     for pr in assigned:
-        daemon.ok({"cmd": "place", "account": ME, "pr": pr, "tab": "mine", "section": "todo"})
+        daemon.ok({"cmd": "place", "account": ME, "pr": pr, "tab": "mine", "section": "inbox"})
     for pr in dismissed:
         daemon.ok({"cmd": "dismiss", "account": ME, "pr": pr})
     # `me` without a color (no dot before its name), a second account with
@@ -314,7 +394,9 @@ def main():
     # loads them runs at the start of that hour.
     start = int(time.time()) - 3600
     daemon = Daemon(binary, state, start)
-    daemon.ok({"cmd": "dev_account_add", "id": ACCOUNT_ID, "login": ME})
+    # `me` with its own avatar (the My review mark); `me-two` of the demo
+    # without one.
+    daemon.ok({"cmd": "dev_account_add", "id": ACCOUNT_ID, "login": ME, "avatar_url": colors[ME]})
     daemon.ok({"cmd": "dev_owner_add", "account": ME, "owner": OWNER, "kind": "org", "github_id": 100})
     daemon.ok({"cmd": "dev_owner_add", "account": ME, "owner": "public", "kind": "public"})
 
@@ -352,6 +434,8 @@ def main():
             "mergeable": False, "failed_check": None, "changes_requested_by": None,
             "updated_at": updated, "created_at": updated - 86_400 * (1 + n % 9),
             "is_private": False, "requested_me": requested, "assignees": [ME] if n % 13 == 0 else [],
+            # Labels on some cards, wrapping to a second line on a part.
+            "labels": labels_of(n, n % 10 == 5),
             "links": {
                 "review": f"https://github.example/{OWNER}/{repo}/pull/{n}/files",
                 "checks": f"https://github.example/{OWNER}/{repo}/pull/{n}/checks",
@@ -399,15 +483,15 @@ def main():
             "prs": prs[i:i + 50], "events": [e for e in events if e["pr_id"] in ids],
         }})
 
-    # Review: the requested PRs went to Todo; spread some over the other
-    # sections. Mine likewise: your own PRs came to its Todo.
+    # Review: the requested PRs went to Inbox; spread some over the other
+    # sections. Mine likewise: your own PRs came to its Inbox.
     for index, pr in enumerate(review):
-        section = ["doing", "todo", "waiting", "todo", "done"][index % 5]
-        if section != "todo":
+        section = ["doing", "inbox", "waiting", "inbox", "done"][index % 5]
+        if section != "inbox":
             daemon.ok({"cmd": "place", "account": ME, "pr": pr, "tab": "review", "section": section})
     for index, pr in enumerate(own):
-        section = ["doing", "todo", "waiting", "todo", "done"][index % 5]
-        if section != "todo":
+        section = ["doing", "inbox", "waiting", "inbox", "done"][index % 5]
+        if section != "inbox":
             daemon.ok({"cmd": "place", "account": ME, "pr": pr, "tab": "mine", "section": section})
     daemon.ok({"cmd": "mute", "account": ME, "kind": "user", "name": MUTED_USER})
     # The PRs past the 200: dismissed (the Dismissed list).

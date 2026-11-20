@@ -706,11 +706,19 @@ fn error_codes_table() {
             "not_found",
         ),
         (
-            json!({"cmd":"place","account":"me","pr":"a/b#1","tab":"mine","section":"todo"}),
+            json!({"cmd":"place","account":"me","pr":"a/b#1","tab":"mine","section":"inbox"}),
             "not_found",
         ),
         // DESIGN.md, "Wire format": Review and Mine need a section in every
-        // case, and `main` (0.5) is no section.
+        // case, and `main` (0.5) and `todo` (0.7) are no section.
+        (
+            json!({"cmd":"place","account":"me","pr":"org/app#2","tab":"mine","section":"todo"}),
+            "invalid",
+        ),
+        (
+            json!({"cmd":"place","account":"me","pr":"org/app#2","tab":"review","section":"todo"}),
+            "invalid",
+        ),
         (
             json!({"cmd":"place","account":"me","pr":"org/app#2","tab":"mine"}),
             "invalid",
@@ -740,7 +748,7 @@ fn error_codes_table() {
             "invalid",
         ),
         (
-            json!({"cmd":"place","account":"me","pr":"org/app#2","tab":"review","section":"todo","before":"org/app#9"}),
+            json!({"cmd":"place","account":"me","pr":"org/app#2","tab":"review","section":"inbox","before":"org/app#9"}),
             "invalid",
         ),
         (
@@ -1227,7 +1235,7 @@ fn dismiss_and_its_clocks_over_the_socket() {
     assert_eq!(card["rows"][0]["muted"], false);
     assert_eq!(
         daemon.card("PR_2").unwrap()["placement"],
-        json!({"tab":"mine","section":"todo","position":0})
+        json!({"tab":"mine","section":"inbox","position":0})
     );
     let tab = |tab: &str| {
         daemon.ok(json!({"cmd":"list","tab":tab}))["cards"]
@@ -1380,12 +1388,12 @@ fn mine_sections_over_the_socket() {
     };
     assert_eq!(
         daemon.card("PR_2").unwrap()["placement"],
-        json!({"tab":"mine","section":"todo","position":1})
+        json!({"tab":"mine","section":"inbox","position":1})
     );
-    // `Add to Mine`: the end of Todo.
+    // `Add to Mine`: the end of Inbox.
     assert_eq!(
-        place("org/app#3", "todo"),
-        json!({"tab":"mine","section":"todo","position":2})
+        place("org/app#3", "inbox"),
+        json!({"tab":"mine","section":"inbox","position":2})
     );
     assert_eq!(
         place("org/app#2", "doing"),
@@ -1395,10 +1403,10 @@ fn mine_sections_over_the_socket() {
         place("org/app#1", "waiting"),
         json!({"tab":"mine","section":"waiting","position":0})
     );
-    // From Waiting to Todo: the top.
+    // From Waiting to Inbox: the top.
     assert_eq!(
-        place("org/app#1", "todo"),
-        json!({"tab":"mine","section":"todo","position":0})
+        place("org/app#1", "inbox"),
+        json!({"tab":"mine","section":"inbox","position":0})
     );
     assert_eq!(
         place("org/app#1", "done"),
@@ -1422,12 +1430,12 @@ fn mine_sections_over_the_socket() {
             )
         })
         .collect();
-    // The screen's section order: Done, Waiting, Doing, Todo.
+    // The screen's section order: Done, Waiting, Doing, Inbox.
     let want: Vec<(String, String)> = [
         ("org/app#1", "done"),
         ("org/app#4", "done"),
         ("org/app#2", "doing"),
-        ("org/app#3", "todo"),
+        ("org/app#3", "inbox"),
     ]
     .iter()
     .map(|(p, s)| (p.to_string(), s.to_string()))

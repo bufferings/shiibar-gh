@@ -214,15 +214,17 @@ final class HeaderAndWindowTests: XCTestCase {
 
     /// DESIGN.md, "Minimum height": the least height the surface reports
     /// for text sizes 9, 12 and 18 (the Filter's options open, no band), laid
-    /// out offscreen: the popover with the header's band, the window's
-    /// content with the row only (the title bar is the band). The values
-    /// match the measurement mode's (`SHIIBAR_GH_PERF_SNAPSHOT`).
+    /// out offscreen at the popover's width for the text size: the popover
+    /// with the header's band, the window's content with the row only (the
+    /// title bar is the band). The fixed part, the Filter row (24), the
+    /// options' area (2 + 62 + 6), the list's minimum (100) and the key
+    /// hints, never under 300: at 9 both come to less than 300.
     func testTheLeastHeights() async throws {
         // The popover: the window's content and the band, which does not
         // follow the text size.
         let band = AccountBand.height
         let want: [Int: (popover: CGFloat, window: CGFloat)] = [
-            9: (313 + band, 313), 12: (392 + band, 392), 18: (547 + band, 547),
+            9: (300, 300), 12: (327 + band, 327), 18: (453 + band, 453),
         ]
         for (size, heights) in want.sorted(by: { $0.key < $1.key }) {
             for surface in [Surface.popover, .window] {
@@ -243,9 +245,11 @@ final class HeaderAndWindowTests: XCTestCase {
                 )
                 var reported: CGFloat?
                 root.onMinimumHeight = { reported = $0 }
-                let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 900), styleMask: [.borderless], backing: .buffered, defer: true)
+                // As wide as the popover at this text size.
+                let width = CGFloat(TextSize.width(size))
+                let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 900), styleMask: [.borderless], backing: .buffered, defer: true)
                 window.contentView = root
-                root.frame = NSRect(x: 0, y: 0, width: 460, height: 900)
+                root.frame = NSRect(x: 0, y: 0, width: width, height: 900)
                 list.openTab(.all)
                 if !list.filterOpen { list.toggleFilterOpen() }
                 for _ in 0..<100 where reported == nil {
