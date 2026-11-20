@@ -51,9 +51,12 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      # The template rendered with dummy values. `brew style --cask` wants
-      # the cask inside a tap, so it goes into a throwaway one.
-      - name: Cask template style (brew style --cask)
+      # The template rendered with dummy values. `brew style` applies the
+      # cask rules to a file under `Casks/` of a tap, so it goes into a
+      # throwaway one. The file is given as a path without `--cask`: with
+      # the flag, Homebrew 7 reads the argument as a cask name
+      # (Library/Homebrew/cli/named_args.rb `to_paths`, checked 2026-11-20).
+      - name: Cask template style (brew style)
         run: |
           tapdir="$(brew --repository)/Library/Taps/bufferings/homebrew-shiibar-gh-ci"
           mkdir -p "$tapdir/Casks"
@@ -63,7 +66,7 @@ jobs:
             -e "s/{{SHA256}}/$dummy_sha256/g" \
             packaging/homebrew/shiibar-gh.rb \
             > "$tapdir/Casks/shiibar-gh.rb"
-          brew style --cask "$tapdir/Casks/shiibar-gh.rb"
+          brew style "$tapdir/Casks/shiibar-gh.rb"
 
   deny:
     runs-on: ubuntu-latest
