@@ -20,7 +20,7 @@ macOS menu bar app for the GitHub pull requests you are involved in, per account
 
 ## CLI
 
-`shiibar-gh` exposes every popover and settings operation (see the CLI part of the implementation section of DESIGN.md). Use it from Bash; `--help` and `--json` are enough. Examples:
+`shiibar-gh` exposes every popover and settings operation, except the app's own state on this Mac (global shortcuts, the popover or window form) and Open in window / Open in popover (see the CLI part of the implementation section of DESIGN.md). Use it from Bash; `--help` and `--json` are enough. Examples:
 
 ```sh
 shiibar-gh list --tab review --json
