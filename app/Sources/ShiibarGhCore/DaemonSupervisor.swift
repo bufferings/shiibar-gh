@@ -61,6 +61,17 @@ public enum StartAction: Equatable {
 }
 
 public enum DaemonLifecycle {
+    /// The suffix a development install adds to the bundle's version, so the
+    /// build can be told from a release wherever the version shows.
+    public static let developmentSuffix = "-dev"
+
+    /// The version the daemon is compared with: the bundle's version without
+    /// the development suffix, because the daemon carries the workspace
+    /// version in every build.
+    public static func daemonVersion(bundleVersion: String) -> String {
+        bundleVersion.hasSuffix(developmentSuffix) ? String(bundleVersion.dropLast(developmentSuffix.count)) : bundleVersion
+    }
+
     public static func startAction(running: InfoResponse?, appVersion: String) -> StartAction {
         guard let running else { return .spawn }
         return running.version == appVersion ? .attach : .replace

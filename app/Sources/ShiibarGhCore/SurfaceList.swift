@@ -534,6 +534,14 @@ public final class SurfaceListModel: ObservableObject {
         selection = nil
     }
 
+    /// A switch of form (DESIGN.md, "Surface form"): this surface opens on
+    /// the tab the other one showed, kept as its last tab, with the
+    /// Dismissed list open if it was open there.
+    func receive(_ handoff: SurfaceHandoff) {
+        openTab(handoff.tab)
+        if handoff.dismissed { openDismissedList() }
+    }
+
     /// ← or Esc: back to the tab; the list's search text stays.
     public func closeDismissedList() {
         guard showingDismissed else { return }
@@ -1099,11 +1107,15 @@ public final class SurfaceListModel: ObservableObject {
         keepSelection()
     }
 
+    /// The surface closed: a Dismiss confirmation ends as `Cancel` does
+    /// (nothing is dismissed) and the Grouping sheet closes (its changes
+    /// were applied as they were made; DESIGN.md, "Surface form").
     private func end() {
         openings += 1
         showingDismissed = false
         searchFocused = false
         confirmingDismiss = nil
+        showsGrouping = false
         clearSelectedCards()
         resetLinger()
     }

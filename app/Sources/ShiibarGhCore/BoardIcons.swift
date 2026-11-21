@@ -47,14 +47,24 @@ public struct BoardIcon: Equatable, Sendable {
 
 public enum BoardIcons {
     /// The menu bar glyph of every account and of the shiibar-gh icon while
-    /// there is no account: the placeholder of MenuBarIcon.html (a pull
-    /// request), tinted with the account color. The final glyph is M5.
+    /// there is no account (MenuBarIcon.html), tinted with the account
+    /// color: the app icon's picture, a pull request mark whose lower right
+    /// node is a cat standing in side view, its back running on into the tail
+    /// and the tail into the arrow.
     public static let app = BoardIcon(
         [
-            .circle(cx: 4, cy: 3.5, r: 1.8, dash: nil), .circle(cx: 4, cy: 12.5, r: 1.8, dash: nil),
-            .circle(cx: 12, cy: 8, r: 1.8, dash: nil), .path("M4 5.3v5.4M4 7c0 1.5 2.5 1.5 6.2 1"),
+            .circle(cx: 2.92, cy: 2.73, r: 1.95, dash: nil), .circle(cx: 2.92, cy: 13.11, r: 1.95, dash: nil),
+            .path("M2.92 4.89V10.95"),
+            .path("M12 11.43H13.51C14.59 11.43 15.03 10.57 15.03 9.49V5.76C15.03 4.03 14.16 2.73 12.43 2.73H6.38"),
+            .path("M7.68 0.78L5.73 2.73L7.68 4.68"),
         ],
-        lineWidth: 1.5, roundCaps: true
+        lineWidth: 1.41, roundCaps: true, roundJoins: true,
+        fills: [
+            .rect(x: 8.11, y: 10.73, width: 6.27, height: 2.81, radius: 0),
+            .rect(x: 8.11, y: 10.73, width: 1.41, height: 5.19, radius: 0.7),
+            .rect(x: 12.97, y: 10.73, width: 1.41, height: 5.19, radius: 0.7),
+            .path("M6.9 7.7L6.55 10.73C6.55 11.71 7.34 12.5 8.32 12.5C9.3 12.5 10.1 11.71 10.1 10.73L9.75 7.7L8.61 9.15H8.04Z"),
+        ]
     )
     public static let account = app
     public static let warning = BoardIcon(
@@ -66,6 +76,13 @@ public enum BoardIcons {
     public static let window = BoardIcon(
         [.rect(x: 2, y: 3, width: 12, height: 10, radius: 1.5), .path("M2 6h12")],
         lineWidth: 1.5, roundJoins: true
+    )
+    /// The window's `Open in popover`: a rounded square with the menu bar's
+    /// line near its top and an arrow pointing up under it (DESIGN.md,
+    /// "Constants").
+    public static let openInPopover = BoardIcon(
+        [.rect(x: 2, y: 2.5, width: 12, height: 11, radius: 2.2), .path("M2 5.6h12"), .path("M8 11.6V8M6.1 9.7 8 7.8l1.9 1.9")],
+        lineWidth: 1.5, roundCaps: true, roundJoins: true
     )
     /// The header's Settings button: a gear (Main.html).
     public static let settings = BoardIcon(
@@ -122,9 +139,6 @@ public enum BoardIcons {
     /// `Grouping…` (DESIGN.md, "Filter"): three lines, the lower two
     /// indented. Drawn so its shape matches the board.
     public static let grouping = BoardIcon([.path("M2.5 4h11M5.5 8h8M5.5 12h8")], lineWidth: 1.7, roundCaps: true)
-    /// The ✓ of a Filter Status button that is on (Main.html `.fchip svg`),
-    /// on a 10 by 10 grid.
-    public static let optionCheck = BoardIcon([.path("M1.8 5.4l2.2 2.2 4.2-4.6")], lineWidth: 1.8, roundCaps: true, roundJoins: true)
     /// A section header: expanded (down) and collapsed (right).
     public static let sectionOpen = BoardIcon([.path("M4 6l4 4 4-4")], lineWidth: 1.8, roundCaps: true, roundJoins: true)
     public static let sectionClosed = BoardIcon([.path("M6 4l4 4-4 4")], lineWidth: 1.8, roundCaps: true, roundJoins: true)
@@ -133,10 +147,6 @@ public enum BoardIcons {
     public static let failure = BoardIcon(
         [.circle(cx: 8, cy: 8, r: 6.5, dash: nil), .path("M8 4.5v4.2M8 11.2v.1")], lineWidth: 1.5, roundCaps: true
     )
-    /// The quarter arc of Refresh in progress (Main.html `.iconbtn.busy`),
-    /// drawn over a gray circle.
-    public static let progressArc = BoardIcon([.arc(cx: 8, cy: 8, r: 5.5, start: -90, end: 0)], lineWidth: 2, roundCaps: true)
-    public static let progressTrack = BoardIcon([.circle(cx: 8, cy: 8, r: 5.5, dash: nil)], lineWidth: 2)
 
     // Status icons: drawn filled by the app, with a white mark.
     public static let checkMark = BoardIcon([.path("M4.8 8.3l2.2 2.2 4.4-4.8")], lineWidth: 1.9, roundCaps: true, roundJoins: true)

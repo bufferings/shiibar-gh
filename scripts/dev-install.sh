@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Development install: build the daemon, the CLI and the app in release
-# mode, assemble "Shiibar GH.app" in ~/Applications, sign it with the fixed
+# mode, assemble "Shiibar GH(Dev).app" in ~/Applications, sign it with the fixed
 # local signing identity (created once, in the login keychain), point
 # ~/.local/bin/shiibar-gh at the bundled CLI, and launch the app. The app
 # starts the bundled daemon itself; there is no launchd job.
@@ -22,11 +22,15 @@ source "$ROOT/scripts/lib/bundle.sh"
 # shellcheck source=scripts/lib/app-lifecycle.sh
 source "$ROOT/scripts/lib/app-lifecycle.sh"
 
-APP_PATH="$APP_DIR/$APP_NAME"
-# The same version as a release (the app and the daemon compare it), and a
-# fresh CFBundleVersion per install: LaunchServices and the icon cache key on
-# the bundle id and version, so a constant one keeps stale icons.
-VERSION="$(read_workspace_version "$ROOT/Cargo.toml")"
+APP_PATH="$APP_DIR/$DEV_APP_NAME"
+# A development install made before the bundle had its own name.
+OLD_APP_PATH="$APP_DIR/$APP_NAME"
+# The workspace version with a -dev suffix, so this build can be told from a
+# release wherever the version shows (About, Finder's Get Info). The app
+# drops the suffix when it compares its version with the daemon's. A fresh
+# CFBundleVersion per install: LaunchServices and the icon cache key on the
+# bundle id and version, so a constant one keeps stale icons.
+VERSION="$(read_workspace_version "$ROOT/Cargo.toml")-dev"
 BUILD_STAMP="$(date +%Y%m%d%H%M%S)"
 
 echo "==> Building shiibar-ghd and shiibar-gh (release)"
@@ -39,6 +43,11 @@ APP_BIN_DIR="$(cd "$ROOT/app" && swift build -c release --show-bin-path)"
 
 echo "==> Stopping the running app and daemon, if any"
 stop_app_and_daemon "$APP_PATH"
+if [ -d "$OLD_APP_PATH" ]; then
+  echo "==> Removing the development install under the release's name ($OLD_APP_PATH)"
+  stop_app_and_daemon "$OLD_APP_PATH"
+  rm -rf "$OLD_APP_PATH"
+fi
 
 echo "==> Assembling $APP_PATH (version $VERSION, build $BUILD_STAMP)"
 mkdir -p "$APP_DIR"
@@ -48,7 +57,8 @@ assemble_app_bundle \
   "$TARGET_DIR/release/shiibar-ghd" \
   "$TARGET_DIR/release/shiibar-gh" \
   "$VERSION" \
-  "$BUILD_STAMP"
+  "$BUILD_STAMP" \
+  "$DEV_DISPLAY_NAME"
 
 echo "==> Signing with the local identity $SIGNING_IDENTITY_CN"
 SIGN_ID="$(find_signing_identity || true)"

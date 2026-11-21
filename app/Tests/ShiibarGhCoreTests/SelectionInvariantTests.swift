@@ -72,7 +72,7 @@ final class SelectionInvariantTests: XCTestCase {
         api.clearCalls()
         list.press(.delete)
         await settle()
-        XCTAssertEqual(calls("dismiss"), ["dismiss bufferings-work acme-corp/infra#61"], "W1 only")
+        XCTAssertEqual(calls("dismiss"), ["dismiss example-work acme-corp/infra#61"], "W1 only")
     }
 
     func testANotificationInTheSameTabReplacesSeveralSelectedCards() async {
@@ -88,7 +88,7 @@ final class SelectionInvariantTests: XCTestCase {
         api.clearCalls()
         list.press(.delete)
         await settle()
-        XCTAssertEqual(calls("dismiss"), ["dismiss bufferings-work example-org/web#219"], "T5 only")
+        XCTAssertEqual(calls("dismiss"), ["dismiss example-work example-org/web#219"], "T5 only")
     }
 
     func testEverySelectionChangeKeepsTheItemAndTheCardsTogether() async {
@@ -137,7 +137,7 @@ final class SelectionInvariantTests: XCTestCase {
         XCTAssertFalse(UIStateStore(defaults: defaults).expanded(account: "3407303").contains("review|inbox"), "not kept as expanded")
         XCTAssertFalse(list.data.expanded.contains("review|inbox"))
         await settle()
-        XCTAssertEqual(calls("place"), ["place bufferings-work acme-corp/infra#61 review inbox bottom"])
+        XCTAssertEqual(calls("place"), ["place example-work acme-corp/infra#61 review inbox bottom"])
     }
 
     // MARK: A press (CardPress)

@@ -1863,8 +1863,8 @@ class LineView: PressView {
 /// and bottom edges (Main.html `.band`), or a small heading of a
 /// second-level group: its name, a thin line filling the room, the count
 /// and the chevron, at the cards' place (`.grp2`). Pressing it folds the
-/// section. The Done of Review and Mine has `Dismiss all` between the count
-/// and the chevron. A repository of the Dismissed list is a band without
+/// section. The Done of Review and Mine has `Dismiss all` left of the
+/// count. A repository of the Dismissed list is a band without
 /// the chevron, which a press does nothing to.
 final class HeadingLineView: LineView {
     var heading: HeadingLine?
@@ -1914,6 +1914,10 @@ final class HeadingLineView: LineView {
         var rule: CGRect?
     }
 
+    /// Between `Show less` and `Dismiss all`'s room (its 2 points either
+    /// side not counted): DESIGN.md, "Constants".
+    static let lessToDismissAll: CGFloat = 16
+
     func parts() -> Parts? {
         guard let heading else { return nil }
         let level1 = heading.level == 1
@@ -1929,26 +1933,29 @@ final class HeadingLineView: LineView {
         let detailWidth = Ink.width(heading.detail, detailFont)
         let lessSize = heading.showLess ? ListButton.textSize("Show less", size: 11 * k) : nil
         if level1 {
-            // From the right: the chevron, `Dismiss all`, the count
-            // (DESIGN.md, "Section size").
+            // From the right: the chevron, the count, `Dismiss all`, `Show
+            // less` (DESIGN.md, "Section size"): the count sits at the same
+            // place, left of the chevron, in every heading.
             var end = right
             var chevron: CGRect?
             if heading.folds {
                 chevron = CGRect(x: right - chevronSize, y: LineLayout.center(chevronSize, in: line), width: chevronSize, height: chevronSize)
                 end = chevron!.minX - spacing
             }
+            let detail = CGRect(x: end - detailWidth, y: LineLayout.center(Ink.lineHeight(detailFont), in: line), width: detailWidth, height: Ink.lineHeight(detailFont))
+            var titleRight = detail.minX - spacing
             var dismissAll: CGRect?
             if heading.dismissAll {
                 // The board's `.dall`: 2 points of room on either side.
                 let size = ListButton.textSize(DismissedText.dismissAll, size: 11 * k)
-                dismissAll = CGRect(x: end - 2 - size.width, y: LineLayout.center(size.height, in: line), width: size.width, height: size.height)
-                end = dismissAll!.minX - 2 - spacing
+                dismissAll = CGRect(x: titleRight - 2 - size.width, y: LineLayout.center(size.height, in: line), width: size.width, height: size.height)
+                titleRight = dismissAll!.minX - 2 - spacing
             }
-            let detail = CGRect(x: end - detailWidth, y: LineLayout.center(Ink.lineHeight(detailFont), in: line), width: detailWidth, height: Ink.lineHeight(detailFont))
-            var titleRight = detail.minX - spacing
             var less: CGRect?
             if let lessSize {
-                less = CGRect(x: titleRight - lessSize.width, y: LineLayout.center(lessSize.height, in: line), width: lessSize.width, height: lessSize.height)
+                // 16 points before `Dismiss all`'s room (8 elsewhere).
+                let right = dismissAll == nil ? titleRight : titleRight - (Self.lessToDismissAll - spacing)
+                less = CGRect(x: right - lessSize.width, y: LineLayout.center(lessSize.height, in: line), width: lessSize.width, height: lessSize.height)
                 titleRight = less!.minX - spacing
             }
             // Main.html `.band > .dot`: the band's gap less 2 points.

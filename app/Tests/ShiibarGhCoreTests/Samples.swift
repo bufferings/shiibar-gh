@@ -3,10 +3,10 @@
 import Foundation
 @testable import ShiibarGhCore
 
-/// bufferings-work with example-org (o2), acme-corp (o3) and Public (o4).
+/// example-work with example-org (o2), acme-corp (o3) and Public (o4).
 func sampleAccount(disabled: Set<String> = []) -> Account {
     Account(
-        id: "3407303", login: "bufferings-work", color: .red, unread: true,
+        id: "3407303", login: "example-work", color: .red, unread: true,
         owners: [
             Owner(id: "o2", name: "example-org", kind: .org, enabled: !disabled.contains("o2"), prCount: 4),
             Owner(id: "o3", name: "acme-corp", kind: .org, enabled: !disabled.contains("o3"), prCount: 1),
@@ -89,10 +89,10 @@ private func sampleCardsAsListed() -> [Card] {
              rows: [row("t7", pr: "example-org/api#402", kind: .mentioned, text: "needs a manual step", actor: "example-bot", unread: true)]),
         card("W1", pr: "acme-corp/infra#61", owner: "o3", author: "dz", placement: review(.waiting, 0), updated: T0 - 200),
         card("D1", pr: "acme-corp/infra#58", owner: "o3", author: "mk", state: .merged, placement: review(.done, 0), updated: T0 - 300),
-        card("M1", pr: "example-org/api#421", author: "bufferings-work", authored: true, placement: mine(.inbox, 0), updated: T0 - 60,
+        card("M1", pr: "example-org/api#421", author: "example-work", authored: true, placement: mine(.inbox, 0), updated: T0 - 60,
              rows: [row("m1", pr: "example-org/api#421", kind: .checksPassed, unread: true)]),
         card("M2", pr: "acme-corp/web#77", owner: "o3", author: "mk", assigned: true, placement: mine(.inbox, 1), updated: T0 - 70),
-        card("M3", pr: "example-org/api#390", author: "bufferings-work", authored: true, state: .closed, placement: mine(.done, 0), updated: T0 - 400),
+        card("M3", pr: "example-org/api#390", author: "example-work", authored: true, state: .closed, placement: mine(.done, 0), updated: T0 - 400),
         card("N1", pr: "acme-corp/web#80", owner: "o3", author: "zz", updated: T0 - 1,
              rows: [row("n1", pr: "acme-corp/web#80", owner: "o3", text: "noise", actor: "bot", unread: true, muted: true)]),
         card("X1", pr: "example-org/web#205", author: "ts", dismissedAt: T0 - 86_400, expires: T0 + 5 * 86_400),

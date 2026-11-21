@@ -9,6 +9,7 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var model: SettingsModel
     @ObservedObject var app: AppModel
+    var shortcuts: GlobalShortcutCenter
 
     var body: some View {
         VStack(spacing: 0) {
@@ -40,7 +41,7 @@ struct SettingsView: View {
                 case .general:
                     ScrollView { VStack(alignment: .leading, spacing: 14) { GeneralTab(model: model) }.padding(pane) }
                 case .accounts:
-                    AccountsTab(model: model, app: app)
+                    AccountsTab(model: model, app: app, shortcuts: shortcuts)
                 case .dismissed:
                     ScrollView { VStack(alignment: .leading, spacing: 14) { DismissedTab(model: model) }.padding(pane) }
                 }

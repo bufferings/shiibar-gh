@@ -125,25 +125,32 @@ public struct IconFillShape: Shape {
 }
 
 public struct HeaderButton: View {
+    /// The button's side at text size 12 (DESIGN.md, "Constants": header
+    /// row 2's buttons).
+    public static let side: CGFloat = 24
     public var icon: BoardIcon
     public var size: CGFloat
     public var label: String
     /// The tooltip, when it says more than the label (`Refresh (⌘R)`).
     public var help: String?
+    /// The ratio of the text size to 12: the button and its icon, strokes
+    /// included, follow it unrounded; the hover fill's radius does not.
+    public var scale: CGFloat
     public var action: () -> Void
 
-    public init(icon: BoardIcon, size: CGFloat, label: String, help: String? = nil, action: @escaping () -> Void) {
+    public init(icon: BoardIcon, size: CGFloat, label: String, help: String? = nil, scale: CGFloat = 1, action: @escaping () -> Void) {
         self.icon = icon
         self.size = size
         self.label = label
         self.help = help
+        self.scale = scale
         self.action = action
     }
 
     public var body: some View {
         Button(action: action) {
-            IconView(icon: icon, size: size, color: Palette.secondary.color)
-                .frame(width: 24, height: 24)
+            IconView(icon: icon, size: size * scale, color: Palette.secondary.color)
+                .frame(width: Self.side * scale, height: Self.side * scale)
                 .contentShape(Rectangle())
         }
         .buttonStyle(HoverButtonStyle())
@@ -153,18 +160,24 @@ public struct HeaderButton: View {
 }
 
 public struct HoverButtonStyle: ButtonStyle {
+    /// The hover fill's corner radius: the same at every text size.
+    public static let radius: CGFloat = 6
     @State private var hovering = false
     /// The fill while the pointer is away (the pin's tint while on).
     public var idle: Color
+    /// False while the button takes no press (Refresh running): no fill
+    /// under the pointer.
+    public var active: Bool
 
-    public init(idle: Color = .clear) {
+    public init(idle: Color = .clear, active: Bool = true) {
         self.idle = idle
+        self.active = active
     }
 
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .foregroundColor(Palette.secondary.color)
-            .background(RoundedRectangle(cornerRadius: 6).fill(hovering || configuration.isPressed ? Palette.fill.color : idle))
+            .background(RoundedRectangle(cornerRadius: Self.radius).fill(active && (hovering || configuration.isPressed) ? Palette.fill.color : idle))
             .onHover { hovering = $0 }
     }
 }
@@ -197,14 +210,18 @@ public struct MenuIconButton: View {
     public var label: String
     public var items: [IconMenuItem?]
 
-    public init(icon: BoardIcon, label: String, items: [IconMenuItem?]) {
+    /// The ratio of the text size to 12 (`HeaderButton.scale`).
+    public var scale: CGFloat
+
+    public init(icon: BoardIcon, label: String, items: [IconMenuItem?], scale: CGFloat = 1) {
         self.icon = icon
         self.label = label
         self.items = items
+        self.scale = scale
     }
 
     public var body: some View {
-        HeaderButton(icon: icon, size: 14, label: label) {
+        HeaderButton(icon: icon, size: 14, label: label, scale: scale) {
             IconMenu.popUp(items)
         }
     }
@@ -251,9 +268,10 @@ public enum IconMenu {
 }
 
 /// The menu bar image of one account (docs/design/MenuBarIcon.html): the
-/// placeholder glyph in the account color, the dot in the accent color at the
-/// top right and
-/// the triangle at the bottom left, each cut out of the glyph so it reads on
+/// glyph in the account color at the image's full height, the dot in the
+/// accent color with a light ring on the arrow's corner and the warning sign (a round-cornered
+/// yellow triangle with an exclamation mark) on the lower ring. The marks lie
+/// on the glyph, inside its height, and each is cut out of it so it reads on
 /// any menu bar.
 ///
 /// The colors are resolved for `appearance`, the status button's effective
@@ -269,7 +287,11 @@ public enum IconMenu {
 /// and the dot's accent color.
 public enum MenuBarImage {
     public static let width: CGFloat = 26
-    public static let height: CGFloat = 22
+    public static let height: CGFloat = 18
+    static let markRing = CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.85)
+    /// The warning sign's colors, fixed for both appearances.
+    static let warningYellow = CGColor(srgbRed: 1, green: 0.8, blue: 0, alpha: 1)
+    static let warningInk = CGColor(srgbRed: 0.106, green: 0.106, blue: 0.118, alpha: 1)
 
     /// The accent color of the dot as drawn for `appearance`, in sRGB: the
     /// image is drawn with it, and the status item's look keeps it
@@ -308,14 +330,22 @@ public enum MenuBarImage {
         // colors": black in light, white in dark).
         let plain: NSColor = dark ? .white : .black
         let tint = (color.nsColor ?? plain).cgColor
-        let glyph = CGRect(x: 3, y: 3, width: 16, height: 16)
+        // The picture fills the image's height (17.3 of 18 pt) and sits in
+        // the middle of its width.
+        let side: CGFloat = 17.5
+        let glyph = CGRect(x: (width - side) / 2, y: (height - side) / 2, width: side, height: side)
         let icon = BoardIcons.account
         context.addPath(IconPath.cgPath(icon, in: glyph, flipY: true))
         context.setStrokeColor(tint)
-        context.setLineWidth(icon.lineWidth)
+        context.setLineWidth(icon.lineWidth * side / 16)
         context.setLineCap(icon.roundCaps ? .round : .butt)
         context.setLineJoin(icon.roundJoins ? .round : .miter)
         context.strokePath()
+        if let fill = IconPath.fillPath(icon, in: glyph, flipY: true) {
+            context.addPath(fill)
+            context.setFillColor(tint)
+            context.fillPath()
+        }
 
         func knockOut(_ path: CGPath) {
             context.saveGState()
@@ -325,22 +355,60 @@ public enum MenuBarImage {
             context.restoreGState()
         }
 
+        // The marks lie on the picture and stay inside its height: the dot
+        // on the arrow's corner with its top at the picture's top, the
+        // warning sign on the lower ring with its bottom at the picture's
+        // bottom.
+        let top = glyph.maxY - 0.09, bottom = glyph.minY + 0.09
+        // Both marks take a light ring on their edge, as the dot of the
+        // shiibar-cc icon, so they stand out on a dark menu bar. The picture
+        // is cut out under a mark up to the ring's outer edge, so nothing of
+        // the menu bar shows between the ring and the picture.
+        let ring: CGFloat = 0.9
         if marks.dot {
-            let center = CGPoint(x: 20, y: height - 4.5)
-            knockOut(CGPath(ellipseIn: CGRect(x: center.x - 5, y: center.y - 5, width: 10, height: 10), transform: nil))
+            let radius: CGFloat = 3.6
+            let center = CGPoint(x: glyph.minX + 15.03 * side / 16, y: top - radius - ring / 2)
+            let cut = radius + ring / 2
+            knockOut(CGPath(ellipseIn: CGRect(x: center.x - cut, y: center.y - cut, width: 2 * cut, height: 2 * cut), transform: nil))
             context.setFillColor(dot)
-            context.fillEllipse(in: CGRect(x: center.x - 3.5, y: center.y - 3.5, width: 7, height: 7))
+            context.fillEllipse(in: CGRect(x: center.x - radius, y: center.y - radius, width: 2 * radius, height: 2 * radius))
+            context.setStrokeColor(markRing)
+            context.setLineWidth(ring)
+            context.strokeEllipse(in: CGRect(x: center.x - radius, y: center.y - radius, width: 2 * radius, height: 2 * radius))
         }
         if marks.triangle {
-            // M5 .5 9.5 9.5 H.5z of the board, at the bottom left.
+            // The warning sign: a triangle drawn with a round line, so its
+            // corners are round, in the warning's yellow with a dark
+            // exclamation mark, the same on a light and a dark menu bar.
+            // About 10 pt wide and high, centered on the lower ring: smaller,
+            // the exclamation mark does not read at menu bar size.
+            let scale: CGFloat = 1.3
+            var place = CGAffineTransform(translationX: glyph.minX + 2.92 * side / 16 - 5 * scale, y: bottom + ring / 2 - 0.5 * scale).scaledBy(x: scale, y: scale)
             let triangle = CGMutablePath()
-            triangle.move(to: CGPoint(x: 5, y: 9.5))
-            triangle.addLine(to: CGPoint(x: 9.5, y: 0.5))
-            triangle.addLine(to: CGPoint(x: 0.5, y: 0.5))
+            triangle.move(to: CGPoint(x: 5, y: 7.49), transform: place)
+            triangle.addLine(to: CGPoint(x: 8.04, y: 1.4), transform: place)
+            triangle.addLine(to: CGPoint(x: 1.96, y: 1.4), transform: place)
             triangle.closeSubpath()
-            knockOut(triangle.copy(strokingWithWidth: 3, lineCap: .round, lineJoin: .round, miterLimit: 1))
+            knockOut(triangle.copy(strokingWithWidth: 1.8 * scale + ring, lineCap: .round, lineJoin: .round, miterLimit: 1))
+            knockOut(triangle)
+            context.setLineJoin(.round)
             context.addPath(triangle)
-            context.setFillColor(tint)
+            context.setFillColor(markRing)
+            context.setStrokeColor(markRing)
+            context.setLineWidth(1.8 * scale + ring)
+            context.drawPath(using: .fillStroke)
+            context.addPath(triangle)
+            context.setFillColor(warningYellow)
+            context.setStrokeColor(warningYellow)
+            context.setLineWidth(1.8 * scale - ring)
+            context.drawPath(using: .fillStroke)
+            let bar = CGMutablePath()
+            bar.move(to: CGPoint(x: 5, y: 6.3), transform: place)
+            bar.addLine(to: CGPoint(x: 5, y: 3.6), transform: place)
+            context.setFillColor(warningInk)
+            context.addPath(bar.copy(strokingWithWidth: 1.2 * scale, lineCap: .round, lineJoin: .round, miterLimit: 1))
+            context.fillPath()
+            context.addPath(CGPath(ellipseIn: CGRect(x: 5 - 0.65, y: 1.9 - 0.65, width: 1.3, height: 1.3), transform: &place))
             context.fillPath()
         }
         return true

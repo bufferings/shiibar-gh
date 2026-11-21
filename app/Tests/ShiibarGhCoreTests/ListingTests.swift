@@ -589,7 +589,7 @@ final class MenuTests: XCTestCase {
 
     /// Main.html, "Right-click on a card header in Review › Inbox".
     func testACardInInbox() {
-        let menu = PopoverLogic.menu(for: .header(card: "T1"), view: view(.review), login: "bufferings-work")
+        let menu = PopoverLogic.menu(for: .header(card: "T1"), view: view(.review), login: "example-work")
         XCTAssertEqual(titles(menu), [
             "Open on GitHub", "Copy link", "-", "Move to Doing", "Move to Waiting", "Move to Done", "Remove from Review", "-",
             "Mute this pull request", "Mute example-org/api", "Mute @al", "-", "Dismiss", "-", "Mark all as read",
@@ -602,7 +602,7 @@ final class MenuTests: XCTestCase {
 
     /// An assigned card in Mine: no `Copy` item (no text can be selected).
     func testAnAssignedCardInMine() {
-        let menu = PopoverLogic.menu(for: .header(card: "M2"), view: view(.all), login: "bufferings-work")
+        let menu = PopoverLogic.menu(for: .header(card: "M2"), view: view(.all), login: "example-work")
         XCTAssertEqual(titles(menu), [
             "Open on GitHub", "Copy link", "-", "Move to Doing", "Move to Waiting", "Move to Done", "Remove from Mine", "-",
             "Mute this pull request", "Mute acme-corp/web", "Mute @mk", "-", "Dismiss", "-", "Mark all as read",
@@ -618,7 +618,7 @@ final class MenuTests: XCTestCase {
     func testACardInDone() {
         let all = view(.all)
         func items(_ id: String) -> [MenuEntry?] {
-            PopoverLogic.menu(for: .header(card: id), view: all, login: "bufferings-work")
+            PopoverLogic.menu(for: .header(card: id), view: all, login: "example-work")
         }
         let d1 = items("D1")
         XCTAssertEqual(Array(titles(d1)[2...7]), ["-", "Move to Inbox", "Move to Doing", "Move to Waiting", "Remove from Review", "-"])
@@ -633,7 +633,7 @@ final class MenuTests: XCTestCase {
     func testPlacementItemsLeaveOutWhatDoesNotApply() {
         let all = view(.all)
         func items(_ id: String) -> [String] {
-            titles(PopoverLogic.menu(for: .header(card: id), view: all, login: "bufferings-work"))
+            titles(PopoverLogic.menu(for: .header(card: id), view: all, login: "example-work"))
         }
         XCTAssertFalse(items("M1").contains("Remove from Mine"), "your own PR stays in Mine")
         XCTAssertFalse(items("M1").contains { $0.hasPrefix("Mute @") }, "no Mute @<your login>")
@@ -656,7 +656,7 @@ final class MenuTests: XCTestCase {
     /// Main.html, "Right-click on a row".
     func testARowMenu() {
         let review = view(.review)
-        let menu = PopoverLogic.menu(for: .row(id: "A", card: "T1"), view: review, login: "bufferings-work")
+        let menu = PopoverLogic.menu(for: .row(id: "A", card: "T1"), view: review, login: "example-work")
         XCTAssertEqual(titles(menu), ["Open on GitHub", "Copy link", "-", "Mute @al", "-", "Mark all as read"])
         XCTAssertEqual(menu[0]?.action, .open("https://github.com/c/A", read: "A"))
         XCTAssertEqual(titles(PopoverLogic.menu(for: .row(id: "A", card: "T1"), view: review, login: "AL")),

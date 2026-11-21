@@ -78,6 +78,10 @@ public final class UIStateStore {
     static let tabKey = prefix + "tab."
     static let windowFrameKey = prefix + "window.frame."
     static let keepOnTopKey = prefix + "window.keepOnTop."
+    /// The surface form (`popover` or `window`; DESIGN.md, "Surface form").
+    static let formKey = prefix + "form."
+    /// The global shortcut, as `GlobalShortcutCodec` writes it.
+    static let shortcutKey = prefix + "shortcut."
     /// Not UI state: whether the Launch at login default was applied once.
     /// Kept from 0.3 so an update does not register the login item again.
     static let didApplyLaunchDefaultKey = "launchAtLogin.didApplyDefault"
@@ -272,6 +276,36 @@ public final class UIStateStore {
 
     public func setKeepOnTop(_ on: Bool, account: String) {
         defaults.set(on, forKey: Self.keepOnTopKey + account)
+    }
+
+    /// The account's surface form: the popover unless the window is saved.
+    public func surfaceForm(account: String) -> SurfaceForm {
+        defaults.string(forKey: Self.formKey + account).flatMap(SurfaceForm.init(rawValue:)) ?? .popover
+    }
+
+    public func setSurfaceForm(_ form: SurfaceForm, account: String) {
+        defaults.set(form.rawValue, forKey: Self.formKey + account)
+    }
+
+    /// The account's global shortcut: nil when none is saved, or the saved
+    /// value does not read as one that can be registered.
+    public func shortcut(account: String) -> GlobalShortcut? {
+        GlobalShortcutCodec.decode(defaults.object(forKey: Self.shortcutKey + account))
+    }
+
+    public func setShortcut(_ shortcut: GlobalShortcut?, account: String) {
+        if let shortcut {
+            defaults.set(GlobalShortcutCodec.encode(shortcut), forKey: Self.shortcutKey + account)
+        } else {
+            defaults.removeObject(forKey: Self.shortcutKey + account)
+        }
+    }
+
+    /// The account was removed (`account_removed`): its surface form and
+    /// its global shortcut go (DESIGN.md, "Saving state").
+    public func forgetRemovedAccount(_ account: String) {
+        defaults.removeObject(forKey: Self.formKey + account)
+        defaults.removeObject(forKey: Self.shortcutKey + account)
     }
 
     public var didApplyLaunchDefault: Bool {

@@ -372,7 +372,7 @@ fn has_class(attrs: &str, class: &str) -> bool {
 /// its class and an href pointing at the user's page, the login compared
 /// without case. A quote of a mention renders without the class and does
 /// not count (DESIGN.md, "Needs action decisions"; checked on
-/// bufferings-hello/hello-merge-queue#10, 2026-11-05). The markup is not an
+/// a pull request of a test repository, 2026-11-05). The markup is not an
 /// API contract (DESIGN.md, open questions).
 pub fn mentions_user(html: &str, login: &str) -> bool {
     if login.is_empty() {

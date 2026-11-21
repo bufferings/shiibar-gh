@@ -43,8 +43,12 @@ final class FilterBoxTests: XCTestCase {
         XCTAssertEqual(g.unread.first?.frame.minX, g.headings[2].frame.maxX + 6)
         XCTAssertEqual(g.reset.frame.maxX, width - 10, "Reset at the right end")
         XCTAssertEqual(g.reset.frame.minY, 34)
-        // A button that is on is wider by the ✓ and its room.
-        XCTAssertGreaterThanOrEqual(Geometry.chipWidth("Open", on: true, k: 1) - Geometry.chipWidth("Open", on: false, k: 1), 13)
+        // A button is as wide on as off: the name and the padding only
+        // (DESIGN.md, "Filter": no ✓, the regular weight).
+        XCTAssertEqual(Geometry.chipWidth("Open", k: 1), (Ink.width("Open", Ink.font(12)) + 20).rounded(.up))
+        let off = Geometry(filter: ListFilter(statuses: [.draft]), width: width, k: 1)
+        XCTAssertEqual(off.chips.map(\.frame.width), g.chips.map(\.frame.width), "the same widths on and off")
+        XCTAssertEqual(off.chips.map(\.on), [false, true, false, false])
         let all = ListFilter()
         XCTAssertEqual(Geometry(filter: all, width: width, k: 1).unread.map(\.on), [true, false], "All while Unread only is off")
     }
@@ -338,6 +342,43 @@ final class FilterBoxTests: XCTestCase {
     final class NoNotifier: NotificationPresenting {
         func requestAuthorization() {}
         func present(_ notification: DaemonNotification) {}
+    }
+
+    /// DESIGN.md, "Constants", "Filter option colors": on is the
+    /// selection's accent tint with the accent color's text (a Status
+    /// button also the accent line); off the slightly darker ground with the
+    /// label color's text and the separator. Drawn, an on button has the
+    /// ground of the selected segment and an off one that of a segment not
+    /// selected.
+    func testTheColorsOfOnAndOff() throws {
+        XCTAssertEqual(FilterOptionsView.ground(on: true), Palette.selection)
+        XCTAssertEqual(FilterOptionsView.ground(on: false), Palette.optionOff)
+        XCTAssertEqual(FilterOptionsView.ink(on: true), Palette.accent)
+        XCTAssertEqual(FilterOptionsView.ink(on: false), Palette.text)
+        XCTAssertEqual(FilterOptionsView.chipBorder(on: true), Palette.accentLine)
+        XCTAssertEqual(FilterOptionsView.chipBorder(on: false), Palette.border)
+        XCTAssertEqual(Palette.selection.resolved(dark: false).alphaComponent, 0.16, accuracy: 0.001)
+        XCTAssertEqual(Palette.accentLine.resolved(dark: false).alphaComponent, 0.5, accuracy: 0.001)
+        for dark in [false, true] {
+            let filter = ListFilter(muted: .show, statuses: [.open, .draft, .merged])
+            let state = FilterOptionsState(shows: true, filter: filter, canReset: true)
+            let view = host(FilterOptions(list: list(), state: state).environment(\.textScale, 1), width: 460, dark: dark)
+            let rep = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+            view.cacheDisplay(in: view.bounds, to: rep)
+            let scale = CGFloat(rep.pixelsWide) / 460
+            let g = Geometry(filter: filter, width: FilterOptionsLayout.boxWidth(surface: 460), k: 1)
+            // The box starts at the cards' inset (12), under the tab's room.
+            func color(_ frame: CGRect) -> NSColor {
+                rep.colorAt(x: Int((12 + frame.minX + 3) * scale), y: Int((frame.minY + 3) * scale))!.usingColorSpace(.sRGB)!
+            }
+            func same(_ a: NSColor, _ b: NSColor) -> Bool {
+                abs(a.redComponent - b.redComponent) + abs(a.greenComponent - b.greenComponent) + abs(a.blueComponent - b.blueComponent) < 0.02
+            }
+            let on = color(g.chips[0].frame), off = color(g.chips[3].frame)
+            XCTAssertFalse(same(on, off), "dark \(dark): on and off differ")
+            XCTAssertTrue(same(on, color(g.muted[1].frame)), "dark \(dark): an on button as the selected segment")
+            XCTAssertTrue(same(off, color(g.muted[0].frame)), "dark \(dark): an off button as a segment not selected")
+        }
     }
 
     func list() -> SurfaceListModel {

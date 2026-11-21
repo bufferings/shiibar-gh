@@ -1,5 +1,7 @@
 # shiibar-gh
 
+<img src="docs/assets/app-icon.png" width="120" alt="Shiibar GH app icon" align="left" hspace="16">
+
 macOS menu bar app for the GitHub pull requests you are involved in. It
 tells you what happened on them (unread marks and notifications), and you
 keep the PRs you review and your own PRs in the order you choose: the
@@ -18,7 +20,19 @@ classic personal access token (scopes `repo`, `notifications`, `read:org`).
 Under an account you add owners (organizations or personal accounts) and,
 if you like, Public.
 
-**Upgrading.** Version 0.8 keeps everything from 0.7, 0.6, 0.5 and 0.4; the
+**Popover or window.** Each account opens in a popover under its menu bar
+icon, or in a window: Open in window and Open in popover switch between the
+two, and the choice is remembered per account. In the window form a click on
+the icon opens the window, brings it to the front, or closes it when it is
+already in front. Keep on top (the pin) keeps the window above other
+windows.
+
+**Global shortcut.** Each account can have a key combination (Settings ›
+Accounts › the account › Global shortcut) that does what a click on its menu
+bar icon does, from any app.
+
+**Upgrading.** Version 0.9 keeps everything from 0.8 and changes only the
+app. Version 0.8 keeps everything from 0.7, 0.6, 0.5 and 0.4; the
 section Todo is now named Inbox, and from 0.5 and 0.4 the cards of Mine start
 in Inbox. Version 0.7 and earlier cannot read the saved state once 0.8 has
 run. From 0.3 and 0.2 it keeps only the accounts (with their colors and order) and their tokens:

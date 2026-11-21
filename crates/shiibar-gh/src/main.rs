@@ -1294,8 +1294,8 @@ mod tests {
                 "Scopes: ✓ OK",
             ),
             (
-                result(TestItem::Account, TestOutcome::Ok, "bufferings"),
-                "Scopes: bufferings",
+                result(TestItem::Account, TestOutcome::Ok, "example-user"),
+                "Scopes: example-user",
             ),
             (
                 result(TestItem::Owner, TestOutcome::CantCheck, "Can't check"),

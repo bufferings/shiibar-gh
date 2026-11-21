@@ -762,6 +762,7 @@ public enum SettingsText {
     /// "Settings").
     public static let loginItemBlocked = "Allow \(MainMenu.appName) in System Settings › General › Login Items"
     public static let colorDetail = "Tints this account's icon and the square next to its name."
+    public static let shortcutDetail = "Opens this account's popover or window from any app."
     public static let removeAccountDetail =
         "Deletes this account and its owners from \(MainMenu.appName): token, PRs, mutes and settings. Nothing changes on GitHub."
     public static let removeOwnerDetail =

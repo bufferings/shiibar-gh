@@ -5,8 +5,10 @@
 //
 // writes <output-dir>/AppIcon.iconset/icon_*.png in the standard ten sizes;
 // the caller turns it into AppIcon.icns with `iconutil -c icns`. The design
-// is a placeholder (docs/tasks/M3.md): the globe of Public's menu bar icon
-// (docs/design/MenuBarIcon.html) on a rounded tile in the beige of Public.
+// (the app icon part of docs/DESIGN.md): a pull request mark whose lower right
+// node is a cat standing in side view, its back running on into the tail and
+// the tail into the arrow that reaches the upper node, on a dark rounded tile with a blue dot at the upper
+// right. This file is the source of truth for the geometry.
 // Any failure exits non-zero.
 
 import AppKit
@@ -23,16 +25,22 @@ guard arguments.count == 2 else {
 let iconset = URL(fileURLWithPath: arguments[1], isDirectory: true)
     .appendingPathComponent("AppIcon.iconset", isDirectory: true)
 
-func rgb(_ hex: UInt32) -> CGColor {
+func rgb(_ hex: UInt32, alpha: CGFloat = 1) -> CGColor {
     CGColor(
         srgbRed: CGFloat((hex >> 16) & 0xFF) / 255, green: CGFloat((hex >> 8) & 0xFF) / 255,
-        blue: CGFloat(hex & 0xFF) / 255, alpha: 1
+        blue: CGFloat(hex & 0xFF) / 255, alpha: alpha
     )
 }
 
-let tile = rgb(0xF7F1E3)
-let tileEdge = rgb(0xE6DCC6)
-let ink = rgb(0x1D1D1F)
+let tile = rgb(0x1B1B1E)
+let ink = rgb(0xF2F0EC)
+// An icon image cannot follow the accent color setting, so the dot is a fixed
+// blue close to the default accent color, with a light halo.
+let dot = rgb(0x0A84FF)
+let halo = rgb(0xFFFFFF, alpha: 0.9)
+
+// At or below this many pixels the dot is too fine to read and is left out.
+let dotThreshold = 32
 
 let sizes: [(String, Int)] = [
     ("icon_16x16.png", 16), ("icon_16x16@2x.png", 32), ("icon_32x32.png", 32),
@@ -57,31 +65,77 @@ func render(_ pixels: Int) -> CGImage {
     context.addPath(CGPath(roundedRect: rect, cornerWidth: side * 0.224, cornerHeight: side * 0.224, transform: nil))
     context.setFillColor(tile)
     context.fillPath()
-    context.addPath(CGPath(roundedRect: rect.insetBy(dx: size * 0.004, dy: size * 0.004), cornerWidth: side * 0.22, cornerHeight: side * 0.22, transform: nil))
-    context.setStrokeColor(tileEdge)
-    context.setLineWidth(max(1, size * 0.008))
+
+    // From here on: the tile's own space, 100 units a side, y down.
+    context.translateBy(x: margin, y: size - margin)
+    context.scaleBy(x: side / 100, y: -side / 100)
+
+    // The mark is drawn on its own grid (x 11.5...83.5, y 13.5...87, lines 7
+    // wide) and placed with its center on the tile's center.
+    context.saveGState()
+    context.translateBy(x: 50, y: 50)
+    context.scaleBy(x: 0.81, y: 0.81)
+    context.translateBy(x: -47.5, y: -50.25)
+    context.setStrokeColor(ink)
+    context.setFillColor(ink)
+    context.setLineCap(.round)
+    context.setLineJoin(.round)
+
+    // The base branch: two ring nodes joined by a line.
+    let lines = CGMutablePath()
+    lines.move(to: CGPoint(x: 24, y: 36))
+    lines.addLine(to: CGPoint(x: 24, y: 64))
+    lines.addEllipse(in: CGRect(x: 15, y: 17, width: 18, height: 18))
+    lines.addEllipse(in: CGRect(x: 15, y: 65, width: 18, height: 18))
+    // The cat's back runs on into the tail, which rises and turns into the arrow.
+    lines.move(to: CGPoint(x: 66, y: 66.5))
+    lines.addLine(to: CGPoint(x: 73, y: 66.5))
+    lines.addCurve(to: CGPoint(x: 80, y: 57.5), control1: CGPoint(x: 78, y: 66.5), control2: CGPoint(x: 80, y: 62.5))
+    lines.addLine(to: CGPoint(x: 80, y: 40))
+    lines.addCurve(to: CGPoint(x: 68, y: 26), control1: CGPoint(x: 80, y: 32), control2: CGPoint(x: 76, y: 26))
+    // The arrowhead's tip meets the upper ring.
+    lines.addLine(to: CGPoint(x: 40, y: 26))
+    lines.move(to: CGPoint(x: 46, y: 17))
+    lines.addLine(to: CGPoint(x: 37, y: 26))
+    lines.addLine(to: CGPoint(x: 46, y: 35))
+    context.addPath(lines)
+    context.setLineWidth(7)
     context.strokePath()
 
-    // The globe on the board's 16 by 16 grid, y down, scaled into the tile.
-    let grid = side * 0.62 / 16
-    let origin = CGPoint(x: margin + (side - 16 * grid) / 2, y: margin + (side - 16 * grid) / 2)
-    func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
-        CGPoint(x: origin.x + x * grid, y: origin.y + (16 - y) * grid)
+    // The cat: a straight body, two legs with round feet, and a head whose ear
+    // lines run straight down to the cheeks above a round chin. The cheeks sit
+    // on the line of the back, so the head meets the back without a notch.
+    let cat = CGMutablePath()
+    cat.addRect(CGRect(x: 48, y: 63, width: 29, height: 13))
+    for x in [CGFloat(48), 70] {
+        cat.addRect(CGRect(x: x, y: 63, width: 7, height: 20.5))
+        cat.addEllipse(in: CGRect(x: x, y: 80, width: 7, height: 7))
     }
-    let globe = CGMutablePath()
-    globe.addEllipse(in: CGRect(x: origin.x + 1.5 * grid, y: origin.y + 1.5 * grid, width: 13 * grid, height: 13 * grid))
-    globe.move(to: p(1.5, 8))
-    globe.addLine(to: p(14.5, 8))
-    // M8 1.5c2.2 2 2.2 11 0 13 and its mirror.
-    for sign in [CGFloat(1), -1] {
-        globe.move(to: p(8, 1.5))
-        globe.addCurve(to: p(8, 14.5), control1: p(8 + sign * 2.2, 3.5), control2: p(8 + sign * 2.2, 12.5))
+    context.addPath(cat)
+    context.fillPath()
+    let head = CGMutablePath()
+    head.move(to: CGPoint(x: 42.4, y: 49))
+    head.addLine(to: CGPoint(x: 40.8, y: 63))
+    // The chin: the lower half of a circle of radius 8.2 around (49, 63).
+    head.addCurve(to: CGPoint(x: 49, y: 71.2), control1: CGPoint(x: 40.8, y: 67.53), control2: CGPoint(x: 44.47, y: 71.2))
+    head.addCurve(to: CGPoint(x: 57.2, y: 63), control1: CGPoint(x: 53.53, y: 71.2), control2: CGPoint(x: 57.2, y: 67.53))
+    head.addLine(to: CGPoint(x: 55.6, y: 49))
+    head.addLine(to: CGPoint(x: 50.3, y: 55.7))
+    head.addLine(to: CGPoint(x: 47.7, y: 55.7))
+    head.closeSubpath()
+    context.addPath(head)
+    context.setLineWidth(1.2)
+    context.drawPath(using: .fillStroke)
+    context.restoreGState()
+
+    if pixels > dotThreshold {
+        let circle = CGRect(x: 78 - 7, y: 22 - 7, width: 14, height: 14)
+        context.setFillColor(dot)
+        context.fillEllipse(in: circle)
+        context.setStrokeColor(halo)
+        context.setLineWidth(7 * 0.22)
+        context.strokeEllipse(in: circle)
     }
-    context.addPath(globe)
-    context.setStrokeColor(ink)
-    context.setLineWidth(1.5 * grid * (pixels <= 32 ? 1.3 : 1))
-    context.setLineCap(.round)
-    context.strokePath()
 
     guard let image = context.makeImage() else {
         FileHandle.standardError.write(Data("cannot render \(pixels) px\n".utf8))

@@ -27,50 +27,53 @@ source "$ROOT/scripts/lib/app-lifecycle.sh"
 
 BIN_DIR="${SHIIBAR_GH_BIN_DIR:-$HOME/.local/bin}"
 APP_DIR="${SHIIBAR_GH_APP_DIR:-$HOME/Applications}"
-APP_PATH="$APP_DIR/$APP_NAME"
 STATE_DIR="${SHIIBAR_GH_STATE_DIR:-$HOME/.local/state/shiibar-gh}"
 
-if [ -d "$APP_PATH" ]; then
-  echo "==> Stopping the app and its daemon"
-  stop_app_and_daemon "$APP_PATH"
+# The development install, and one made before the bundle had its own name.
+for APP_PATH in "$APP_DIR/$DEV_APP_NAME" "$APP_DIR/$APP_NAME"; do
+  if [ -d "$APP_PATH" ]; then
+    echo "==> Stopping the app and its daemon"
+    stop_app_and_daemon "$APP_PATH"
 
-  if [ "$PURGE" -eq 1 ] && [ -x "$APP_PATH/Contents/Helpers/shiibar-gh" ]; then
-    echo "==> Deleting the saved tokens (token reset deletes the Keychain item)"
-    # The daemon is the only one that touches the Keychain, so it does it.
-    "$APP_PATH/Contents/Helpers/shiibar-ghd" --foreground 2>/dev/null &
-    daemon_pid=$!
-    for _ in $(seq 1 50); do
-      "$APP_PATH/Contents/Helpers/shiibar-gh" account list >/dev/null 2>&1 && break
-      sleep 0.1
-    done
-    # `token reset` needs readable saved state; an unreadable database is
-    # set aside first (the state directory goes below anyway).
-    if ! "$APP_PATH/Contents/Helpers/shiibar-gh" token reset; then
-      "$APP_PATH/Contents/Helpers/shiibar-gh" reset >/dev/null 2>&1 || true
-      "$APP_PATH/Contents/Helpers/shiibar-gh" token reset \
-        || echo "    could not delete the Keychain item shiibar-gh / accounts; delete it in Keychain Access"
+    if [ "$PURGE" -eq 1 ] && [ -x "$APP_PATH/Contents/Helpers/shiibar-gh" ]; then
+      echo "==> Deleting the saved tokens (token reset deletes the Keychain item)"
+      # The daemon is the only one that touches the Keychain, so it does it.
+      "$APP_PATH/Contents/Helpers/shiibar-ghd" --foreground 2>/dev/null &
+      daemon_pid=$!
+      for _ in $(seq 1 50); do
+        "$APP_PATH/Contents/Helpers/shiibar-gh" account list >/dev/null 2>&1 && break
+        sleep 0.1
+      done
+      # `token reset` needs readable saved state; an unreadable database is
+      # set aside first (the state directory goes below anyway).
+      if ! "$APP_PATH/Contents/Helpers/shiibar-gh" token reset; then
+        "$APP_PATH/Contents/Helpers/shiibar-gh" reset >/dev/null 2>&1 || true
+        "$APP_PATH/Contents/Helpers/shiibar-gh" token reset \
+          || echo "    could not delete the Keychain item shiibar-gh / accounts; delete it in Keychain Access"
+      fi
+      printf '{"cmd":"shutdown"}\n' | nc -U -w 2 "$STATE_DIR/shiibar-ghd.sock" >/dev/null 2>&1 \
+        || kill "$daemon_pid" 2>/dev/null || true
+      wait "$daemon_pid" 2>/dev/null || true
+      echo "    a 0.1 Keychain item (shiibar-gh / tokens) is not touched;"
+      echo "    delete it in Keychain Access if you want it gone"
     fi
-    printf '{"cmd":"shutdown"}\n' | nc -U -w 2 "$STATE_DIR/shiibar-ghd.sock" >/dev/null 2>&1 \
-      || kill "$daemon_pid" 2>/dev/null || true
-    wait "$daemon_pid" 2>/dev/null || true
-    echo "    a 0.1 Keychain item (shiibar-gh / tokens) is not touched;"
-    echo "    delete it in Keychain Access if you want it gone"
+
+    echo "==> Unregistering the login item"
+    # SMAppService.mainApp can only be unregistered from inside the bundle.
+    open -W -a "$APP_PATH" --args --unregister-login-item 2>/dev/null || true
+
+    echo "==> Removing $APP_PATH"
+    rm -rf "$APP_PATH"
+  else
+    echo "no $APP_PATH; skipping it"
   fi
-
-  echo "==> Unregistering the login item"
-  # SMAppService.mainApp can only be unregistered from inside the bundle.
-  open -W -a "$APP_PATH" --args --unregister-login-item 2>/dev/null || true
-
-  echo "==> Removing $APP_PATH"
-  rm -rf "$APP_PATH"
-else
-  echo "no $APP_PATH; skipping the app"
-fi
+done
 
 # A daemon whose socket is gone cannot be asked to stop. The daemon always
-# runs as "<path>/Shiibar GH.app/Contents/Helpers/shiibar-ghd --foreground";
-# -x matches that whole command line only.
+# runs as "<path>/<bundle>/Contents/Helpers/shiibar-ghd --foreground"; -x
+# matches that whole command line only.
 pkill -xf '/.*/Shiibar GH\.app/Contents/Helpers/shiibar-ghd --foreground' || true
+pkill -xf '/.*/Shiibar GH\(Dev\)\.app/Contents/Helpers/shiibar-ghd --foreground' || true
 
 if [ -L "$BIN_DIR/shiibar-gh" ] || [ -e "$BIN_DIR/shiibar-gh" ]; then
   rm -f "$BIN_DIR/shiibar-gh"
@@ -90,4 +93,4 @@ fi
 
 echo
 echo "The notification permission has no removal command: System Settings ›"
-echo "Notifications › Shiibar GH."
+echo "Notifications › Shiibar GH(Dev)."

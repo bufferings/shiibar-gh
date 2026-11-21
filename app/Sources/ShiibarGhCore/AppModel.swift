@@ -97,11 +97,13 @@ public final class AppModel: ObservableObject {
     /// (`UnreadLinger`).
     public let linger: LingerTiming
 
-    /// Asks the app to show an account's popover (a summary notification).
-    public var onOpenPopover: ((String) -> Void)?
-    /// Asks the app to show an account on a surface: the window brought to
-    /// the front, or the popover opened (an individual notification).
+    /// Asks the app to show an account on a surface for a clicked
+    /// notification: the window opened or brought to the front, or the
+    /// popover opened; never closed.
     public var onShowAccount: ((String, Surface) -> Void)?
+    /// An account was removed (`account_removed`): its global shortcut is
+    /// unregistered.
+    public var onAccountRemoved: ((String) -> Void)?
     /// Asks the app to show Settings.
     public var onOpenSettings: ((SettingsDestination) -> Void)?
     /// Asks the app to show a Keychain dialog.
@@ -199,6 +201,11 @@ public final class AppModel: ObservableObject {
             }
         case .accountRemoved(let id):
             accounts.removeAll { $0.id == id }
+            // Only `account_removed` deletes the surface form and the
+            // global shortcut: an account missing from a snapshot (the
+            // database unreadable) keeps them (DESIGN.md, "Saving state").
+            store.forgetRemovedAccount(id)
+            onAccountRemoved?(id)
             surfaces.forget(id)
             checks.forget(id)
             displayed[id] = nil
@@ -380,18 +387,25 @@ public final class AppModel: ObservableObject {
         copier?.copy(text)
     }
 
+    /// The demo mode only: seconds the answer of Refresh is held before it
+    /// shows, so the running Refresh can be looked at (the demo daemon
+    /// answers at once). 0 otherwise.
+    public var refreshAnswerDelay: TimeInterval = 0
+
     /// Refresh asks GitHub: the button shows progress until the answer.
     public func refresh(_ account: String?) {
         let login = account.flatMap { self.account($0)?.login }
         if account != nil && login == nil { return }
         if let account { refreshing.insert(account) }
         let api = self.api
+        let delay = refreshAnswerDelay
         Task {
             do {
                 _ = try await api.refresh(login)
             } catch {
                 lastError = "\(error)"
             }
+            if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
             if let account { refreshing.remove(account) }
         }
     }
@@ -399,6 +413,12 @@ public final class AppModel: ObservableObject {
     /// ⌘R (DESIGN.md, "Keyboard"): the header's Refresh, except while the
     /// account's refresh is still running (the button shows its progress).
     public func refreshByKey(_ account: String) {
+        refreshIfIdle(account)
+    }
+
+    /// The header's Refresh and ⌘R: nothing while the account's refresh is
+    /// running, whatever a view still shows.
+    public func refreshIfIdle(_ account: String) {
         guard !refreshing.contains(account) else { return }
         refresh(account)
     }
@@ -463,23 +483,25 @@ public final class AppModel: ObservableObject {
         }
     }
 
-    /// A clicked notification (DESIGN.md, "macOS notifications"): a summary
-    /// opens the account's popover on its last tab (the window in front
-    /// instead while it is open); an individual one shows
-    /// the account (the window in front if it is open, else the popover),
-    /// opens the tab of the PR's placement (All without one) and selects the
-    /// card, unfolding it. Rows are not read.
+    /// A clicked notification (DESIGN.md, "macOS notifications"): the
+    /// account's surface of its form opens, or comes to the front, and is
+    /// never closed (`onShowAccount`). A summary shows the surface's last
+    /// tab; an individual one opens the tab of the PR's placement (All
+    /// without one) and selects the card, unfolding it. Rows are not read.
     public func notificationClicked(type: NotificationType?, account: String, url: String?, pr: String? = nil) {
         guard self.account(account) != nil else { return }
-        let surface = SurfaceRules.surfaceToShow(windowOpen: displayed[account]?.contains(.window) == true)
-        if type == .summary {
-            // The last tab; the window in front when it is open, as a click
-            // on the menu bar icon (DESIGN.md, "macOS notifications").
-            if surface == .window { onShowAccount?(account, .window) } else { onOpenPopover?(account) }
-            return
-        }
+        let surface = notificationSurface(account)
         onShowAccount?(account, surface)
+        if type == .summary { return }
         if let pr { viewModel(account).list(surface).reveal(pr: pr) }
+    }
+
+    /// The surface a notification shows: the open window (the popover and
+    /// the window of an account never show together), else the account's
+    /// form.
+    public func notificationSurface(_ account: String) -> Surface {
+        if displayed[account]?.contains(.window) == true { return .window }
+        return store.surfaceForm(account: account).surface
     }
 
     /// A Save was answered: Token shows Checking… until the new test.

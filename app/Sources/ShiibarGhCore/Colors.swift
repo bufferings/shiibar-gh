@@ -60,21 +60,25 @@ extension Palette {
         light: { NSColor.controlBackgroundColor.blended(withFraction: lightGroundGray, of: .systemGray) ?? .windowBackgroundColor },
         dark: { darkGround }
     )
-    /// The share of gray in the light ground: enough that the ground is
-    /// visibly off the white cards, light enough that the gray heading
-    /// bands stand out from it.
-    public static let lightGroundGray: CGFloat = 0.05
+    /// The share of gray in the light ground (shiibar-cc's value): dark
+    /// enough that the white cards read against it, with the heading bands
+    /// darker still.
+    public static let lightGroundGray: CGFloat = 0.10
     private static var darkGround: NSColor {
         NSColor.windowBackgroundColor.blended(withFraction: 0.3, of: .black) ?? .windowBackgroundColor
     }
     /// A card, and the fields and boxes on the list's ground: the control
-    /// background on light; on dark, white at 0.07 over the ground, made
+    /// background on light; on dark, white at 0.10 over the ground, made
     /// opaque because the card's text is drawn into an image of its own
     /// (shiibar-cc draws the same veil translucent).
     public static let surface = Tone(
         light: { .controlBackgroundColor },
-        dark: { over(darkGround, white: 0.07) }
+        dark: { over(darkGround, white: darkSurfaceWhite) }
     )
+
+    /// The white of a card over the dark ground (shiibar-cc's value): on
+    /// dark the ground, the band and the card get lighter in that order.
+    public static let darkSurfaceWhite: CGFloat = 0.10
 
     /// White at `white` alpha composited over `ground` in sRGB, as the
     /// translucent veil would draw (`blended(withFraction:of:)` mixes in
@@ -100,22 +104,18 @@ extension Palette {
 
     // MARK: Fills
 
-    /// A section's or a group's band heading: a light gray veil, lighter on
-    /// light (the list's ground there is lighter too).
+    /// A section's or a group's band heading: a gray veil over the list's
+    /// ground (shiibar-cc's values).
     public static let band = Tone(NSColor(name: nil) { appearance in
         NSColor.systemGray.withAlphaComponent(appearance.isDark ? bandAlpha.dark : bandAlpha.light)
     })
     /// The band's opacity of system gray on light and on dark.
-    public static let bandAlpha: (light: CGFloat, dark: CGFloat) = (0.09, 0.12)
+    public static let bandAlpha: (light: CGFloat, dark: CGFloat) = (0.12, 0.08)
     /// The ground of a Filter option button or switch segment that is off,
-    /// and of one that is on (selected), over the options' box: black on
-    /// light, white on dark, at these opacities. On and off differ by at
-    /// least 0.10 in either appearance, so the state reads without color.
+    /// over the options' box: black on light, white on dark, at these
+    /// opacities. One that is on has the ground of a selection.
     public static let optionOff = Tone(NSColor(name: nil) { appearance in
         appearance.isDark ? NSColor.white.withAlphaComponent(0.06) : NSColor.black.withAlphaComponent(0.04)
-    })
-    public static let optionOn = Tone(NSColor(name: nil) { appearance in
-        appearance.isDark ? NSColor.white.withAlphaComponent(0.22) : NSColor.black.withAlphaComponent(0.14)
     })
     /// A hovered icon button and a key chip of the key hints.
     public static let fill = Tone(NSColor(name: nil) { _ in NSColor.systemGray.withAlphaComponent(0.16) })

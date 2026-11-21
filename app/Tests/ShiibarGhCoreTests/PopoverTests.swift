@@ -70,7 +70,7 @@ final class AppModelTests: XCTestCase {
             api: api, store: UIStateStore(defaults: defaults), opener: opener, notifier: notifier,
             copier: copier, failureDuration: 0.8, clock: { T0 }
         )
-        model.handle(.snapshot(accounts: [sampleAccount(), Account(id: "583231", login: "bufferings")], keychain: .known(.ok), dbUnreadable: false))
+        model.handle(.snapshot(accounts: [sampleAccount(), Account(id: "583231", login: "example-user")], keychain: .known(.ok), dbUnreadable: false))
     }
 
     override func tearDown() async throws {
@@ -99,7 +99,7 @@ final class AppModelTests: XCTestCase {
         api.cards = sampleCards()
         model.surfaceDisplayed(.popover, account: "3407303", true)
         await settle()
-        XCTAssertEqual(lists(), ["list bufferings-work dismissed=include"])
+        XCTAssertEqual(lists(), ["list example-work dismissed=include"])
         api.clearCalls()
         view.openTab(.all)
         view.data.setGroupBy(.involvement)
@@ -267,7 +267,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(view.data.app.confirmDismiss, "the setting stays")
         await settle()
         XCTAssertEqual(calls("dismiss").count, 6)
-        XCTAssertTrue(calls("dismiss").contains("dismiss bufferings-work acme-corp/infra#58"))
+        XCTAssertTrue(calls("dismiss").contains("dismiss example-work acme-corp/infra#58"))
         XCTAssertFalse(calls("dismiss").contains { $0.hasSuffix("#306") }, "the muted card the Filter hides stays")
     }
 
@@ -317,14 +317,14 @@ final class AppModelTests: XCTestCase {
         view.answerDismiss(true)
         await settle()
         XCTAssertEqual(Set(calls("dismiss")), [
-            "dismiss bufferings-work acme-corp/infra#58", "dismiss bufferings-work example-org/web#305",
+            "dismiss example-work acme-corp/infra#58", "dismiss example-work example-org/web#305",
         ])
     }
 
     /// `Don't ask again` turns `confirm_dismiss` off for × and `Dismiss
     /// all`; off, `Dismiss all` dismisses at once.
     func testDismissAllFollowsConfirmDismiss() async {
-        let m4 = card("M4", pr: "example-org/api#391", author: "bufferings-work", authored: true, state: .merged, placement: mine(.done, 1))
+        let m4 = card("M4", pr: "example-org/api#391", author: "example-work", authored: true, state: .merged, placement: mine(.done, 1))
         let view = await loaded(doneCards() + [m4])
         view.openTab(.mine)
         view.perform(.dismissAll(section: "mine|done"))
@@ -392,13 +392,13 @@ final class AppModelTests: XCTestCase {
         for _ in 0..<200 where sent().count < 7 { await settle() }
         await settle()
         XCTAssertEqual(sent(), [
-            "place bufferings-work acme-corp/web#77 mine doing",
-            "place bufferings-work acme-corp/web#77 mine inbox",
-            "dismiss bufferings-work acme-corp/web#80",
-            "restore bufferings-work example-org/web#205",
-            "mute bufferings-work repo acme-corp/web",
+            "place example-work acme-corp/web#77 mine doing",
+            "place example-work acme-corp/web#77 mine inbox",
+            "dismiss example-work acme-corp/web#80",
+            "restore example-work example-org/web#205",
+            "mute example-work repo acme-corp/web",
             "read m1",
-            "place bufferings-work example-org/api#407 review waiting",
+            "place example-work example-org/api#407 review waiting",
         ])
         XCTAssertEqual(view.data.failure, "Couldn't restore: Pull request not found")
     }
@@ -450,7 +450,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertNil(view.selection)
         try? await Task.sleep(nanoseconds: 200_000_000)
         await settle()
-        XCTAssertEqual(calls("dismiss"), ["dismiss bufferings-work example-org/api#407"])
+        XCTAssertEqual(calls("dismiss"), ["dismiss example-work example-org/api#407"])
         XCTAssertTrue(view.sections[3].matching.contains { $0.id == "T1" }, "back where it was")
         XCTAssertEqual(view.data.failure, "Couldn't dismiss: daemon not running")
         // The next operation clears the band.
@@ -459,7 +459,7 @@ final class AppModelTests: XCTestCase {
         view.perform(.restore(card: "X1"))
         XCTAssertNil(view.data.failure)
         await settle()
-        XCTAssertEqual(calls("restore"), ["restore bufferings-work example-org/web#205"])
+        XCTAssertEqual(calls("restore"), ["restore example-work example-org/web#205"])
     }
 
     func testAMoveWaitsInPlaceForTheAnswerAndTheNextList() async throws {
@@ -480,7 +480,7 @@ final class AppModelTests: XCTestCase {
         api.cards = moved
         try await Task.sleep(nanoseconds: 300_000_000)
         await settle()
-        XCTAssertEqual(calls("place"), ["place bufferings-work example-org/docs#88 review doing"])
+        XCTAssertEqual(calls("place"), ["place example-work example-org/docs#88 review doing"])
         XCTAssertEqual(lists().count, 3, "read again after the answer")
         XCTAssertEqual(view.sections[2].cards.map(\.id), ["R1", "T3"])
         api.clearCalls()
@@ -488,7 +488,7 @@ final class AppModelTests: XCTestCase {
         view.select(.header(card: "T4"))
         view.press(.reorder(up: true))
         await settle()
-        XCTAssertEqual(calls("place"), ["place bufferings-work example-org/api#415 review inbox before example-org/web#230"],
+        XCTAssertEqual(calls("place"), ["place example-work example-org/api#415 review inbox before example-org/web#230"],
                        "`before` names the PR")
     }
 
@@ -516,8 +516,8 @@ final class AppModelTests: XCTestCase {
         try? await Task.sleep(nanoseconds: 200_000_000)
         await settle()
         XCTAssertEqual(calls("place"), [
-            "place bufferings-work example-org/api#415 review done",
-            "place bufferings-work example-org/api#415 review doing top",
+            "place example-work example-org/api#415 review done",
+            "place example-work example-org/api#415 review doing top",
         ])
         // A drop where the card already is sends nothing.
         api.clearCalls()
@@ -535,7 +535,7 @@ final class AppModelTests: XCTestCase {
         view.perform(.mute(.repo, "example-org/web"))
         XCTAssertTrue(view.data.cards[0].isMuted)
         await settle()
-        XCTAssertEqual(calls("mute"), ["mute bufferings-work repo example-org/web"])
+        XCTAssertEqual(calls("mute"), ["mute example-work repo example-org/web"])
         XCTAssertEqual(view.data.mutes, Mutes(repos: ["example-org/web"]))
         api.refuse["unmute"] = DaemonError(code: .notFound, message: "Not muted")
         view.perform(.unmute(.user, "example-bot"))
@@ -590,7 +590,7 @@ final class AppModelTests: XCTestCase {
         view.perform(.copyLink("https://github.com/c/A"))
         await settle()
         XCTAssertEqual(calls("read"), ["read A"])
-        XCTAssertEqual(calls("mutes_get"), ["mutes_get bufferings-work"], "a row's menu reads the mutes once")
+        XCTAssertEqual(calls("mutes_get"), ["mutes_get example-work"], "a row's menu reads the mutes once")
         XCTAssertEqual(copier.copied, ["https://github.com/c/A"])
     }
 
@@ -649,7 +649,7 @@ final class AppModelTests: XCTestCase {
         view.select(.header(card: "X2"))
         view.press(.delete)
         await settle()
-        XCTAssertEqual(calls("restore"), ["restore bufferings-work acme-corp/infra#55"])
+        XCTAssertEqual(calls("restore"), ["restore example-work acme-corp/infra#55"])
         view.press(.back)
         XCTAssertFalse(view.showingDismissed)
         XCTAssertEqual(view.search, "retry", "the tab's search stays")
@@ -885,9 +885,7 @@ final class AppModelTests: XCTestCase {
     func testAClickedNotificationShowsTheCard() async {
         let view = await loaded()
         var shown: [String] = []
-        var popovers: [String] = []
         model.onShowAccount = { shown.append("\($0) \($1)") }
-        model.onOpenPopover = { popovers.append($0) }
         view.openTab(.mine)
         view.setSearch("keep")
         view.openTab(.review)
@@ -922,11 +920,10 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(shown.last, "3407303 window")
         XCTAssertEqual(view.data.list(.window).selection, .header(card: "M1"))
         model.notificationClicked(type: .summary, account: "583231", url: nil)
-        XCTAssertEqual(popovers, ["583231"])
-        // A summary with the window open: the window comes to the front, as
-        // for a click on the menu bar icon.
+        XCTAssertEqual(shown.last, "583231 popover", "the popover form: its popover")
+        // A summary with the window open: the window comes to the front,
+        // never closed (DESIGN.md, "macOS notifications").
         model.notificationClicked(type: .summary, account: "3407303", url: nil)
-        XCTAssertEqual(popovers, ["583231"])
         XCTAssertEqual(shown.last, "3407303 window")
     }
 
@@ -956,7 +953,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.refreshing, ["3407303"])
         await settle()
         XCTAssertEqual(model.refreshing, [])
-        XCTAssertEqual(api.calls.last, "refresh bufferings-work")
+        XCTAssertEqual(api.calls.last, "refresh example-work")
     }
 
     /// ⌘R (DESIGN.md, "Keyboard"): Refresh, but nothing while the account's
@@ -967,7 +964,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.refreshing, ["3407303"])
         model.refreshByKey("3407303")
         await settle()
-        XCTAssertEqual(api.calls.filter { $0.hasPrefix("refresh") }, ["refresh bufferings-work"], "once")
+        XCTAssertEqual(api.calls.filter { $0.hasPrefix("refresh") }, ["refresh example-work"], "once")
         model.refreshByKey("3407303")
         await settle()
         XCTAssertEqual(api.calls.filter { $0.hasPrefix("refresh") }.count, 2, "again once the first answered")
@@ -1087,10 +1084,10 @@ final class AppModelTests: XCTestCase {
         model.surfaceOpened(.window, account: "3407303")
         model.surfaceClosed(.popover, account: "3407303")
         await settle()
-        XCTAssertEqual(api.calls.filter { $0.hasPrefix("popover") }, ["popover_opened bufferings-work"])
+        XCTAssertEqual(api.calls.filter { $0.hasPrefix("popover") }, ["popover_opened example-work"])
         model.surfaceClosed(.window, account: "3407303")
         await settle()
-        XCTAssertEqual(api.calls.filter { $0.hasPrefix("popover") }, ["popover_opened bufferings-work", "popover_closed bufferings-work"])
+        XCTAssertEqual(api.calls.filter { $0.hasPrefix("popover") }, ["popover_opened example-work", "popover_closed example-work"])
     }
 
     func testAReconnectSendsPopoverOpenedAgainForOpenAccounts() async {
@@ -1100,7 +1097,7 @@ final class AppModelTests: XCTestCase {
         model.connectionChanged(false)
         model.connectionChanged(true)
         await settle()
-        XCTAssertEqual(api.calls.filter { $0.hasPrefix("popover") }, ["popover_opened bufferings"])
+        XCTAssertEqual(api.calls.filter { $0.hasPrefix("popover") }, ["popover_opened example-user"])
     }
 
     func testAccountsChangeAndGoAway() {

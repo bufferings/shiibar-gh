@@ -229,11 +229,21 @@ final class MuteRuleTests: XCTestCase {
 }
 
 final class SmallRulesTests: XCTestCase {
-    /// DESIGN.md, "Screens": the icon of an account brings its open window
-    /// to the front instead of the popover.
+    /// DESIGN.md, "Surface form": the icon of an account with its window
+    /// open brings the window to the front instead of opening the popover,
+    /// and closes it once it is in front.
     func testTheMenuBarIconWithTheWindowOpen() {
-        XCTAssertEqual(SurfaceRules.surfaceToShow(windowOpen: true), .window)
-        XCTAssertEqual(SurfaceRules.surfaceToShow(windowOpen: false), .popover)
+        for form in [SurfaceForm.popover, .window] {
+            XCTAssertEqual(
+                SurfaceToggle.decide(form: form, popoverShownForAccount: false, windowOpen: true, windowFront: false, sheetShown: false), .raiseWindow
+            )
+            XCTAssertEqual(
+                SurfaceToggle.decide(form: form, popoverShownForAccount: false, windowOpen: true, windowFront: true, sheetShown: false), .closeWindow
+            )
+        }
+        XCTAssertEqual(
+            SurfaceToggle.decide(form: .popover, popoverShownForAccount: false, windowOpen: false, windowFront: false, sheetShown: false), .openPopover
+        )
     }
 
     /// DESIGN.md, "Row body": 1 line, 3 for an unread mention of you or

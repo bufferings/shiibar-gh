@@ -14,6 +14,13 @@ _BUNDLE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck disable=SC2034 # used by the scripts that source this file
 APP_NAME="Shiibar GH.app"
+# A development install carries its own name, in the file and in the bundle,
+# so it can be told from a release in Finder, the Dock and the app switcher.
+# The identifiers below are the same for both.
+# shellcheck disable=SC2034 # used by the scripts that source this file
+DEV_DISPLAY_NAME="Shiibar GH(Dev)"
+# shellcheck disable=SC2034 # used by the scripts that source this file
+DEV_APP_NAME="$DEV_DISPLAY_NAME.app"
 APP_EXECUTABLE="ShiibarGhApp"
 BUNDLE_ID="shiibar.gh"
 DAEMON_ID="shiibar.gh.daemon"
@@ -35,10 +42,13 @@ read_workspace_version() {
   ' "$cargo_toml"
 }
 
-# assemble_app_bundle <app_path> <app_bin> <daemon_bin> <cli_bin> <version> <bundle_version>
+# assemble_app_bundle <app_path> <app_bin> <daemon_bin> <cli_bin> <version> <bundle_version> [display_name]
+#
+# display_name is the bundle's name (CFBundleName and CFBundleDisplayName);
+# "Shiibar GH" when left out.
 assemble_app_bundle() {
   local app_path="$1" app_bin="$2" daemon_bin="$3" cli_bin="$4"
-  local version="$5" bundle_version="$6"
+  local version="$5" bundle_version="$6" display_name="${7:-Shiibar GH}"
 
   rm -rf "$app_path"
   mkdir -p "$app_path/Contents/MacOS" "$app_path/Contents/Helpers" "$app_path/Contents/Resources"
@@ -57,9 +67,9 @@ assemble_app_bundle() {
 	<key>CFBundleIdentifier</key>
 	<string>$BUNDLE_ID</string>
 	<key>CFBundleName</key>
-	<string>Shiibar GH</string>
+	<string>$display_name</string>
 	<key>CFBundleDisplayName</key>
-	<string>Shiibar GH</string>
+	<string>$display_name</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$version</string>
 	<key>CFBundleVersion</key>

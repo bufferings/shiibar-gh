@@ -2108,21 +2108,21 @@ fn the_poll_interval_holds_across_a_restart() {
     daemon.stop();
 }
 
-/// The shapes seen on bufferings-hello/hello-merge-queue#10 (2026-11-05):
+/// The shapes seen on a pull request of a test repository (2026-11-05):
 /// a conversation comment and an inline comment that mention the viewer
 /// with a `user-mention` link, and a Quote reply whose quoted mention lost
 /// the class. No MENTIONED_EVENT is read.
 #[test]
 fn mentions_come_from_the_links_in_the_posts() {
     let github = world();
-    let author = json!({"__typename":"User","login":"bufferings-test"});
+    let author = json!({"__typename":"User","login":"example-user"});
     let mention = "<p><a class=\"user-mention notranslate\" data-hovercard-type=\"user\" href=\"https://github.com/me\">@me</a> test</p>";
     let quote = "<blockquote><p><a href=\"https://github.com/me\">@me</a> inline test</p></blockquote><p>ok</p>";
     github.with(|w| {
         w.prs.push(pr_node("PR_10", "org", 10, "me", json!({})));
         w.timeline.insert(
             "PR_10".into(),
-            vec![issue_comment("IC_1", "bufferings-test", T0 + 15, mention)],
+            vec![issue_comment("IC_1", "example-user", T0 + 15, mention)],
         );
         let inline = |id: &str, at: i64, html: &str| {
             json!({"id":id,"url":format!("https://github.com/r/{id}"),"createdAt":iso(at),
