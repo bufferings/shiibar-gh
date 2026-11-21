@@ -7,7 +7,7 @@
 // the caller turns it into AppIcon.icns with `iconutil -c icns`. The design
 // (the app icon part of docs/DESIGN.md): a pull request mark whose lower right
 // node is a cat standing in side view, its back running on into the tail and
-// the tail into the arrow, on a dark rounded tile with a blue dot at the upper
+// the tail into the arrow that reaches the upper node, on a dark rounded tile with a blue dot at the upper
 // right. This file is the source of truth for the geometry.
 // Any failure exits non-zero.
 
@@ -93,10 +93,11 @@ func render(_ pixels: Int) -> CGImage {
     lines.addCurve(to: CGPoint(x: 80, y: 57.5), control1: CGPoint(x: 78, y: 66.5), control2: CGPoint(x: 80, y: 62.5))
     lines.addLine(to: CGPoint(x: 80, y: 40))
     lines.addCurve(to: CGPoint(x: 68, y: 26), control1: CGPoint(x: 80, y: 32), control2: CGPoint(x: 76, y: 26))
-    lines.addLine(to: CGPoint(x: 56, y: 26))
-    lines.move(to: CGPoint(x: 63, y: 17))
-    lines.addLine(to: CGPoint(x: 54, y: 26))
-    lines.addLine(to: CGPoint(x: 63, y: 35))
+    // The arrowhead's tip meets the upper ring.
+    lines.addLine(to: CGPoint(x: 40, y: 26))
+    lines.move(to: CGPoint(x: 46, y: 17))
+    lines.addLine(to: CGPoint(x: 37, y: 26))
+    lines.addLine(to: CGPoint(x: 46, y: 35))
     context.addPath(lines)
     context.setLineWidth(7)
     context.strokePath()
