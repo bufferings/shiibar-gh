@@ -100,7 +100,7 @@ final class StoreTests: XCTestCase {
 
     /// The grounds follow the system colors with shiibar-cc's expressions:
     /// the list's ground is darker than the card on dark and grayer on
-    /// light, and the card on dark is white at 0.07 over the ground, opaque.
+    /// light, and the card on dark is white at 0.10 over the ground, opaque.
     func testGroundsFollowTheSystemColors() {
         for dark in [false, true] {
             let ground = Palette.background.resolved(dark: dark)
@@ -111,21 +111,21 @@ final class StoreTests: XCTestCase {
         }
         let ground = Palette.background.resolved(dark: true)
         let card = Palette.surface.resolved(dark: true)
-        XCTAssertEqual(card.redComponent, ground.redComponent * 0.93 + 0.07, accuracy: 0.01)
+        XCTAssertEqual(card.redComponent, ground.redComponent * 0.90 + 0.10, accuracy: 0.01)
         let light = Palette.surface.resolved(dark: false)
         let control = Tone(.controlBackgroundColor).resolved(dark: false)
         XCTAssertEqual(light.redComponent, control.redComponent, accuracy: 0.001)
     }
 
     /// DESIGN.md, "Colors": on light the list's ground is the control
-    /// background with 5% system gray and the band system gray at 0.09; on
+    /// background with 10% system gray and the band system gray at 0.12; on
     /// dark the ground is the window background with 30% black and the band
-    /// system gray at 0.12. The Filter options' grounds differ by 0.10 or
+    /// system gray at 0.08. The Filter options' grounds differ by 0.10 or
     /// more between off and on in either appearance.
     func testTheGroundAndTheBandValues() {
-        XCTAssertEqual(Palette.lightGroundGray, 0.05)
+        XCTAssertEqual(Palette.lightGroundGray, 0.10)
         let light = Palette.background.resolved(dark: false)
-        let mixed = Tone(light: { NSColor.controlBackgroundColor.blended(withFraction: 0.05, of: .systemGray)! }, dark: { .black })
+        let mixed = Tone(light: { NSColor.controlBackgroundColor.blended(withFraction: 0.10, of: .systemGray)! }, dark: { .black })
             .resolved(dark: false)
         XCTAssertEqual(light.redComponent, mixed.redComponent, accuracy: 0.001)
         XCTAssertEqual(light.blueComponent, mixed.blueComponent, accuracy: 0.001)
@@ -133,8 +133,8 @@ final class StoreTests: XCTestCase {
         let darkWant = Tone(light: { .white }, dark: { NSColor.windowBackgroundColor.blended(withFraction: 0.3, of: .black)! })
             .resolved(dark: true)
         XCTAssertEqual(dark.redComponent, darkWant.redComponent, accuracy: 0.001, "dark ground unchanged")
-        XCTAssertEqual(Palette.band.resolved(dark: false).alphaComponent, 0.09, accuracy: 0.001)
-        XCTAssertEqual(Palette.band.resolved(dark: true).alphaComponent, 0.12, accuracy: 0.001)
+        XCTAssertEqual(Palette.band.resolved(dark: false).alphaComponent, 0.12, accuracy: 0.001)
+        XCTAssertEqual(Palette.band.resolved(dark: true).alphaComponent, 0.08, accuracy: 0.001)
         let gray = Tone(.systemGray)
         for dark in [false, true] {
             let band = Palette.band.resolved(dark: dark)
