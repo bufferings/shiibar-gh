@@ -125,25 +125,32 @@ public struct IconFillShape: Shape {
 }
 
 public struct HeaderButton: View {
+    /// The button's side at text size 12 (DESIGN.md, "Constants": header
+    /// row 2's buttons).
+    public static let side: CGFloat = 24
     public var icon: BoardIcon
     public var size: CGFloat
     public var label: String
     /// The tooltip, when it says more than the label (`Refresh (⌘R)`).
     public var help: String?
+    /// The ratio of the text size to 12: the button and its icon, strokes
+    /// included, follow it unrounded; the hover fill's radius does not.
+    public var scale: CGFloat
     public var action: () -> Void
 
-    public init(icon: BoardIcon, size: CGFloat, label: String, help: String? = nil, action: @escaping () -> Void) {
+    public init(icon: BoardIcon, size: CGFloat, label: String, help: String? = nil, scale: CGFloat = 1, action: @escaping () -> Void) {
         self.icon = icon
         self.size = size
         self.label = label
         self.help = help
+        self.scale = scale
         self.action = action
     }
 
     public var body: some View {
         Button(action: action) {
-            IconView(icon: icon, size: size, color: Palette.secondary.color)
-                .frame(width: 24, height: 24)
+            IconView(icon: icon, size: size * scale, color: Palette.secondary.color)
+                .frame(width: Self.side * scale, height: Self.side * scale)
                 .contentShape(Rectangle())
         }
         .buttonStyle(HoverButtonStyle())
@@ -153,18 +160,24 @@ public struct HeaderButton: View {
 }
 
 public struct HoverButtonStyle: ButtonStyle {
+    /// The hover fill's corner radius: the same at every text size.
+    public static let radius: CGFloat = 6
     @State private var hovering = false
     /// The fill while the pointer is away (the pin's tint while on).
     public var idle: Color
+    /// False while the button takes no press (Refresh running): no fill
+    /// under the pointer.
+    public var active: Bool
 
-    public init(idle: Color = .clear) {
+    public init(idle: Color = .clear, active: Bool = true) {
         self.idle = idle
+        self.active = active
     }
 
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .foregroundColor(Palette.secondary.color)
-            .background(RoundedRectangle(cornerRadius: 6).fill(hovering || configuration.isPressed ? Palette.fill.color : idle))
+            .background(RoundedRectangle(cornerRadius: Self.radius).fill(active && (hovering || configuration.isPressed) ? Palette.fill.color : idle))
             .onHover { hovering = $0 }
     }
 }
@@ -197,14 +210,18 @@ public struct MenuIconButton: View {
     public var label: String
     public var items: [IconMenuItem?]
 
-    public init(icon: BoardIcon, label: String, items: [IconMenuItem?]) {
+    /// The ratio of the text size to 12 (`HeaderButton.scale`).
+    public var scale: CGFloat
+
+    public init(icon: BoardIcon, label: String, items: [IconMenuItem?], scale: CGFloat = 1) {
         self.icon = icon
         self.label = label
         self.items = items
+        self.scale = scale
     }
 
     public var body: some View {
-        HeaderButton(icon: icon, size: 14, label: label) {
+        HeaderButton(icon: icon, size: 14, label: label, scale: scale) {
             IconMenu.popUp(items)
         }
     }

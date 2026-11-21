@@ -108,14 +108,10 @@ extension Palette {
     /// The band's opacity of system gray on light and on dark.
     public static let bandAlpha: (light: CGFloat, dark: CGFloat) = (0.09, 0.12)
     /// The ground of a Filter option button or switch segment that is off,
-    /// and of one that is on (selected), over the options' box: black on
-    /// light, white on dark, at these opacities. On and off differ by at
-    /// least 0.10 in either appearance, so the state reads without color.
+    /// over the options' box: black on light, white on dark, at these
+    /// opacities. One that is on has the ground of a selection.
     public static let optionOff = Tone(NSColor(name: nil) { appearance in
         appearance.isDark ? NSColor.white.withAlphaComponent(0.06) : NSColor.black.withAlphaComponent(0.04)
-    })
-    public static let optionOn = Tone(NSColor(name: nil) { appearance in
-        appearance.isDark ? NSColor.white.withAlphaComponent(0.22) : NSColor.black.withAlphaComponent(0.14)
     })
     /// A hovered icon button and a key chip of the key hints.
     public static let fill = Tone(NSColor(name: nil) { _ in NSColor.systemGray.withAlphaComponent(0.16) })

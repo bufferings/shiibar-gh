@@ -27,6 +27,7 @@ enum AccountsSheet: Identifiable {
 struct AccountsTab: View {
     @ObservedObject var model: SettingsModel
     @ObservedObject var app: AppModel
+    var shortcuts: GlobalShortcutCenter
     @State private var sheet: AccountsSheet?
 
     var body: some View {
@@ -44,7 +45,7 @@ struct AccountsTab: View {
                                 sheet = .copy(account: account.id, owner: owner.id)
                             }
                         } else if let account = model.selectedAccount {
-                            AccountPane(model: model, app: app, account: account) { sheet = $0 }
+                            AccountPane(model: model, app: app, shortcuts: shortcuts, account: account) { sheet = $0 }
                         } else {
                             // No account: the message and Add account… on
                             // the right (DESIGN.md, "Settings › Accounts").
@@ -59,6 +60,15 @@ struct AccountsTab: View {
                     .padding(EdgeInsets(top: 14, leading: 16, bottom: 16, trailing: 16))
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        // Another row selected: a recording ends (DESIGN.md, "Global
+        // shortcut field").
+        .onChange(of: model.selection) { _, selection in
+            if case .account(let id) = selection {
+                shortcuts.selectionChanged(to: id)
+            } else {
+                shortcuts.selectionChanged(to: nil)
             }
         }
         .sheet(item: $sheet) { sheet in
@@ -138,19 +148,48 @@ struct Sidebar: View {
 struct AccountPane: View {
     @ObservedObject var model: SettingsModel
     @ObservedObject var app: AppModel
+    @ObservedObject var shortcuts: GlobalShortcutCenter
     var account: Account
     var open: (AccountsSheet) -> Void
     @State private var confirmRemove = false
 
-    var body: some View {
-        Section2(title: "Account") {
+    /// The rows under the Account heading, in this order (DESIGN.md,
+    /// "Settings › Accounts").
+    enum AccountRow: CaseIterable {
+        case token, color, shortcut
+
+        var title: String {
+            switch self {
+            case .token: return "Token"
+            case .color: return "Menu bar icon color"
+            case .shortcut: return GlobalShortcutField.label
+            }
+        }
+    }
+
+    /// The line under a row's description: the failure of the color, the
+    /// shortcut field's message (shown as Text size's out of range text is;
+    /// DESIGN.md, "Global shortcut field").
+    static func message(_ row: AccountRow, account: String, errors: [String: String], shortcuts: GlobalShortcutCenter) -> String? {
+        switch row {
+        case .token: return nil
+        case .color: return errors["color:" + account]
+        case .shortcut: return shortcuts.hints[account]?.text
+        }
+    }
+
+    @ViewBuilder
+    private func accountRow(_ row: AccountRow) -> some View {
+        let message = Self.message(row, account: account.id, errors: model.errors, shortcuts: shortcuts)
+        switch row {
+        case .token:
             // Redrawn every few seconds so Checking… also goes away when the
             // check runs out of time (TokenChecks.limit) without an event.
             TimelineView(.periodic(from: .now, by: 5)) { _ in
                 let checking = app.isChecking(account.id)
                 let label = TokenState.label(account: account, keychain: app.keychain, checking: checking, now: app.now)
                 Item(first: true) {
-                    Label2(title: "Token", sub: TokenState.expiry(account))
+                    Label2(title: row.title, sub: TokenState.expiry(account))
                     Control {
                         if let label { StateText(label: label) }
                         if TokenState.canEdit(keychain: app.keychain) {
@@ -159,7 +198,8 @@ struct AccountPane: View {
                     }
                 }
             }
-            SettingRow(title: "Menu bar icon color", sub: SettingsText.colorDetail, error: model.errors["color:" + account.id]) {
+        case .color:
+            SettingRow(title: row.title, sub: SettingsText.colorDetail, error: message) {
                 Picker("", selection: Binding(get: { account.accountColor }, set: { model.setColor(account, $0) })) {
                     ForEach(AccountColor.allCases, id: \.self) { color in
                         Label {
@@ -173,6 +213,21 @@ struct AccountPane: View {
                 .labelsHidden()
                 .pickerStyle(.menu)
                 .fixedSize()
+            }
+        case .shortcut:
+            SettingRow(title: row.title, sub: SettingsText.shortcutDetail, error: message) {
+                GlobalShortcutField(center: shortcuts, account: account.id)
+                    // A new field for another account: the old one's
+                    // monitors go with it.
+                    .id(account.id)
+            }
+        }
+    }
+
+    var body: some View {
+        Section2(title: "Account") {
+            ForEach(AccountRow.allCases, id: \.self) { row in
+                accountRow(row)
             }
         }
         Section2(title: "Owners") {

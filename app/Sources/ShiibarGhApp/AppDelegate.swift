@@ -4,6 +4,7 @@
 // (docs/tasks/M3.md, "Daemon lifecycle").
 
 import AppKit
+import Combine
 import ShiibarGhCore
 import SwiftUI
 
@@ -15,6 +16,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var settings: SettingsModel!
     private var settingsWindow: NSWindow?
     private var launch: LaunchAtLogin?
+    private var shortcuts: GlobalShortcutCenter!
+    /// The About panel, once shown (`about()`).
+    private weak var aboutPanel: NSWindow?
     private var presenter: UserNotificationPresenter?
     private var quitting = false
 
@@ -63,12 +67,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         model = AppModel(
             api: api, store: store, opener: WorkspaceOpener(), notifier: notifier, copier: PasteboardCopier(), linger: linger
         )
+        model.refreshAnswerDelay = PerfMode.demoRefreshSeconds
         let avatars = perf
             ? AvatarStore(loader: FileImageLoader(), schemes: ["file"])
             : AvatarStore(loader: URLSessionImageLoader())
         surfaces = SurfaceController(app: model, avatars: avatars) { [weak self] account in
             SurfaceActions(
-                openWindow: account.map { id in { self?.surfaces.openWindow(account: id) } },
+                openWindow: account.map { id in { self?.surfaces.openInWindow(account: id) } },
                 openSettings: { destination in self?.showSettings(destination) },
                 about: { self?.about() },
                 quit: { self?.quit() }
@@ -77,6 +82,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         surfaces.onQuit = { [weak self] in self?.quit() }
         surfaces.onWindowOpened = { [weak self] account in self?.regularWindowOpened("window:" + account) }
         surfaces.onWindowClosed = { [weak self] account in self?.regularWindowClosed("window:" + account) }
+        surfaces.onHoldPopover = { [weak self] in self?.regularWindows.holdPopover() }
+        surfaces.onPopoverClosed = { [weak self] replaced in
+            guard let self, self.regularWindows.popoverClosed(replaced: replaced) else { return }
+            NSApp.setActivationPolicy(.accessory)
+        }
+        surfaces.onPinsChanged = { [weak self] closing in self?.applyAuxiliaryLevels(closing: closing) }
+        // The global shortcuts: registered in the demo mode too (its saved
+        // values live in memory only), never in the measurement mode.
+        shortcuts = GlobalShortcutCenter(store: store, registrar: CarbonHotKeyRegistrar(), enabled: !PerfMode.enabled)
+        surfaces.director.attach(shortcuts)
+        model.onAccountRemoved = { [weak self] account in self?.shortcuts.accountRemoved(account) }
+        // Only the accounts of the list the daemon sent are registered; an
+        // unreadable database lists none. Delivered on the main queue, which
+        // also runs while a menu tracks or a window resizes (the main run
+        // loop's default mode does not). A list delivered after
+        // `account_removed` cannot bring a removed account back: its saved
+        // shortcut is deleted before then.
+        accountWatch = model.$accounts.combineLatest(model.$dbUnreadable)
+            .map { accounts, unreadable in unreadable ? [] : accounts.map(\.id) }
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] ids in self?.shortcuts.accountsListed(ids) }
         if bundled {
             launch = LaunchAtLogin(service: MainAppLoginItem(), api: api, store: store)
         }
@@ -101,14 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 Task { await launch.configChanged(key: key, value: value) }
             }
         }
-        model.onOpenPopover = { [weak self] account in self?.surfaces.showPopover(account: account) }
-        model.onShowAccount = { [weak self] account, surface in
-            if surface == .window {
-                self?.surfaces.openWindow(account: account)
-            } else {
-                self?.surfaces.showPopover(account: account)
-            }
-        }
+        model.onShowAccount = { [weak self] account, _ in self?.surfaces.showForNotification(account: account) }
         model.onOpenSettings = { [weak self] destination in self?.showSettings(destination) }
         // Shown from the next turn of the run loop so a dialog never runs
         // inside the event handler that raised it.
@@ -173,12 +193,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var appearance: AppearanceFollower?
     private var appearanceObservation: NSKeyValueObservation?
     private var regularWindows = RegularWindows()
+    private var accountWatch: AnyCancellable?
     private var settingsTitle: Any?
 
     // MARK: - Regular app while a window is open
 
-    /// DESIGN.md, "Switching to a regular app": a Dock icon, ⌘Tab and the
-    /// menu bar while a pinned window or Settings exists.
+    /// DESIGN.md, "Switching to a regular app": the app shows in the Dock,
+    /// in ⌘Tab and with its menu bar while an account's window or Settings
+    /// is open, or the popover `Open in popover` opened shows
+    /// (`RegularWindows`), so those windows can be reached like any app's.
     private func regularWindowOpened(_ id: String) {
         guard regularWindows.opened(id) else { return }
         NSApp.setActivationPolicy(.regular)
@@ -229,6 +252,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func showSettings(_ destination: SettingsDestination) {
+        // Settings keeps the app regular before the popover closes (a
+        // popover `Open in popover` opened goes without the app becoming an
+        // accessory app in between).
+        regularWindowOpened("settings")
         surfaces.closePopover()
         settings.show(destination)
         if settingsWindow == nil {
@@ -242,7 +269,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 setting: appearance?.current ?? .system, systemDark: NSApp.effectiveAppearance.isDark
             )))
             window.isReleasedWhenClosed = false
-            window.contentViewController = NSHostingController(rootView: SettingsView(model: settings, app: model))
+            window.contentViewController = NSHostingController(rootView: SettingsView(model: settings, app: model, shortcuts: shortcuts))
             window.setContentSize(NSSize(width: 720, height: 640))
             // The title is the tab (Settings.html).
             settingsTitle = settings.$tab.sink { [weak window] tab in window?.title = tab.rawValue }
@@ -251,7 +278,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             settingsWindow = window
         }
         settings.windowOpened()
-        regularWindowOpened("settings")
+        applyAuxiliaryLevels(closing: nil)
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
     }
@@ -259,16 +286,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     nonisolated func windowWillClose(_ notification: Notification) {
         MainActor.assumeIsolated {
             if (notification.object as? NSWindow) === settingsWindow {
+                shortcuts.abandonRecording()
                 settings.windowClosed()
                 regularWindowClosed("settings")
             }
         }
     }
 
+    /// The standard About panel. The panel is the window the call brings on
+    /// screen (or, shown already, the one taken before): its level follows
+    /// the pinned windows.
     private func about() {
         surfaces.closePopover()
         NSApp.activate(ignoringOtherApps: true)
+        let visible = Set(NSApp.windows.filter(\.isVisible).map(ObjectIdentifier.init))
         NSApp.orderFrontStandardAboutPanel(nil)
+        if let shown = NSApp.windows.first(where: { $0.isVisible && !visible.contains(ObjectIdentifier($0)) }) {
+            aboutPanel = shown
+        }
+        applyAuxiliaryLevels(closing: nil)
+    }
+
+    /// Settings and the About panel float while a window with Keep on top
+    /// on is open (`AuxiliaryWindows`); `closing` is a window that is
+    /// closing and still on screen.
+    private func applyAuxiliaryLevels(closing: String?) {
+        auxiliary.settings = settingsWindow
+        auxiliary.about = aboutPanel
+        auxiliary.apply(pins: surfaces?.windowPins ?? [:], closing: closing)
+    }
+
+    private let auxiliary = AuxiliaryWindows()
+
+    func applicationWillTerminate(_ notification: Notification) {
+        shortcuts?.unregisterAll()
     }
 
     func quit() {
@@ -342,5 +393,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             NSApp.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
+    }
+}
+
+/// Settings and the About panel (DESIGN.md, "Open in window"): floating
+/// while a window with Keep on top on is open (minimized ones included), so
+/// they open in front of it; normal otherwise. Only the level changes: they
+/// stay in front while the app is not active, as the pinned window does.
+@MainActor
+final class AuxiliaryWindows {
+    weak var settings: NSWindow?
+    weak var about: NSWindow?
+
+    func apply(pins: [String: Bool], closing: String?) {
+        let level: NSWindow.Level = AuxiliaryLevel.level(pins: pins, closing: closing) == .floating ? .floating : .normal
+        for window in [settings, about].compactMap({ $0 }) where window.level != level {
+            window.level = level
+        }
     }
 }

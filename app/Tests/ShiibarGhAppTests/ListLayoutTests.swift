@@ -590,6 +590,48 @@ final class HeadingBandTests: XCTestCase {
         XCTAssertLessThan(parts.title.width, Ink.width(long.title, Ink.font(11, .semibold)), "the name is cut")
     }
 
+    /// DESIGN.md, "Section size", "Constants": a band's parts from the
+    /// left are the name, `Show less`, `Dismiss all`, the count and the
+    /// chevron; the count sits left of the chevron in every heading; 8
+    /// points between the parts, 16 between `Show less` and `Dismiss
+    /// all`'s room (its 2 points either side not counted).
+    func testDismissAllSitsLeftOfTheCount() {
+        func done(less: Bool, dismissAll: Bool) -> SectionLayout {
+            let cards = dismissAll ? [Card(id: "a"), Card(id: "b")] : []
+            return SectionLayout(
+                key: SectionKey.placed(.review, .done), title: "Done", level: 1, isLeaf: true, detail: "12 PRs", collapsed: false,
+                cards: cards, more: 0, showLess: less, moreMark: .none, matching: cards, accepts: true, isDone: dismissAll
+            )
+        }
+        for k: CGFloat in [0.75, 1, 1.5] {
+            let width = 460 * k
+            func parts(_ section: SectionLayout) -> HeadingLineView.Parts {
+                let line = HeadingLine(section)
+                let (frame, _) = LineLayout.heading(line, width: width, k: k)
+                let view = HeadingLineView(frame: NSRect(origin: .zero, size: frame.size))
+                view.configure(line, env: env(k: k), state: ItemState())
+                return try! XCTUnwrap(view.parts())
+            }
+            let plain = parts(done(less: false, dismissAll: false))
+            let both = parts(done(less: true, dismissAll: true))
+            let dismissOnly = parts(done(less: false, dismissAll: true))
+            let lessOnly = parts(done(less: true, dismissAll: false))
+            for p in [both, dismissOnly, lessOnly] {
+                XCTAssertEqual(p.detail, plain.detail, "k \(k): the count at the same place")
+                XCTAssertEqual(try! XCTUnwrap(p.chevron).minX - p.detail.maxX, 8, accuracy: 0.01, "k \(k): 8 before the chevron")
+            }
+            let all = try! XCTUnwrap(both.dismissAll)
+            let less = try! XCTUnwrap(both.showLess)
+            XCTAssertEqual(both.detail.minX - (all.maxX + 2), 8, accuracy: 0.01, "k \(k): Dismiss all's room, then 8, then the count")
+            XCTAssertEqual((all.minX - 2) - less.maxX, 16, accuracy: 0.01, "k \(k): 16 between Show less and Dismiss all")
+            XCTAssertEqual(less.minX - both.title.maxX, 8, accuracy: 0.01, "k \(k): 8 after the name")
+            XCTAssertEqual(try! XCTUnwrap(dismissOnly.dismissAll), all, "k \(k)")
+            XCTAssertEqual(try! XCTUnwrap(lessOnly.showLess).maxX, lessOnly.detail.minX - 8, accuracy: 0.01, "k \(k): without Dismiss all, 8")
+            XCTAssertNil(plain.dismissAll)
+            XCTAssertLessThan(both.title.maxX, plain.title.maxX, "the name has less room")
+        }
+    }
+
     func pixel(_ image: CGImage, x: CGFloat, y: CGFloat, scale: CGFloat) -> [UInt8] {
         var bytes = [UInt8](repeating: 0, count: 4)
         let context = CGContext(

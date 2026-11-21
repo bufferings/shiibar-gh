@@ -67,6 +67,13 @@ public enum BoardIcons {
         [.rect(x: 2, y: 3, width: 12, height: 10, radius: 1.5), .path("M2 6h12")],
         lineWidth: 1.5, roundJoins: true
     )
+    /// The window's `Open in popover`: a rounded square with the menu bar's
+    /// line near its top and an arrow pointing up under it (DESIGN.md,
+    /// "Constants").
+    public static let openInPopover = BoardIcon(
+        [.rect(x: 2, y: 2.5, width: 12, height: 11, radius: 2.2), .path("M2 5.6h12"), .path("M8 11.6V8M6.1 9.7 8 7.8l1.9 1.9")],
+        lineWidth: 1.5, roundCaps: true, roundJoins: true
+    )
     /// The header's Settings button: a gear (Main.html).
     public static let settings = BoardIcon(
         [
@@ -122,9 +129,6 @@ public enum BoardIcons {
     /// `Grouping…` (DESIGN.md, "Filter"): three lines, the lower two
     /// indented. Drawn so its shape matches the board.
     public static let grouping = BoardIcon([.path("M2.5 4h11M5.5 8h8M5.5 12h8")], lineWidth: 1.7, roundCaps: true)
-    /// The ✓ of a Filter Status button that is on (Main.html `.fchip svg`),
-    /// on a 10 by 10 grid.
-    public static let optionCheck = BoardIcon([.path("M1.8 5.4l2.2 2.2 4.2-4.6")], lineWidth: 1.8, roundCaps: true, roundJoins: true)
     /// A section header: expanded (down) and collapsed (right).
     public static let sectionOpen = BoardIcon([.path("M4 6l4 4 4-4")], lineWidth: 1.8, roundCaps: true, roundJoins: true)
     public static let sectionClosed = BoardIcon([.path("M6 4l4 4-4 4")], lineWidth: 1.8, roundCaps: true, roundJoins: true)
@@ -133,10 +137,6 @@ public enum BoardIcons {
     public static let failure = BoardIcon(
         [.circle(cx: 8, cy: 8, r: 6.5, dash: nil), .path("M8 4.5v4.2M8 11.2v.1")], lineWidth: 1.5, roundCaps: true
     )
-    /// The quarter arc of Refresh in progress (Main.html `.iconbtn.busy`),
-    /// drawn over a gray circle.
-    public static let progressArc = BoardIcon([.arc(cx: 8, cy: 8, r: 5.5, start: -90, end: 0)], lineWidth: 2, roundCaps: true)
-    public static let progressTrack = BoardIcon([.circle(cx: 8, cy: 8, r: 5.5, dash: nil)], lineWidth: 2)
 
     // Status icons: drawn filled by the app, with a white mark.
     public static let checkMark = BoardIcon([.path("M4.8 8.3l2.2 2.2 4.4-4.8")], lineWidth: 1.9, roundCaps: true, roundJoins: true)

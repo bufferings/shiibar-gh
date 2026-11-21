@@ -385,9 +385,6 @@ struct FilterOptionsGeometry: Equatable {
     /// Inside a Status button or a switch segment, at either side.
     static let padding: CGFloat = 10
     static let chipGap: CGFloat = 4
-    /// The ✓ of a Status button that is on, and its room before the name.
-    static let check: CGFloat = 9
-    static let checkGap: CGFloat = 4
     /// Between the Muted switch and the heading `Unread`, and the least
     /// room before `Reset`.
     static let groupGap: CGFloat = 14
@@ -410,24 +407,25 @@ struct FilterOptionsGeometry: Equatable {
     var lines: Int
     var height: CGFloat
 
-    static func font(_ size: CGFloat, on: Bool) -> NSFont { Ink.font(size, on ? .semibold : .regular) }
+    /// The text of the buttons and the segments: the regular weight, on or
+    /// off (DESIGN.md, "Filter"), so a button is as wide on as off.
+    static func font(_ size: CGFloat) -> NSFont { Ink.font(size) }
 
-    /// A Status button's width: the name, the ✓ when on, the padding.
-    static func chipWidth(_ title: String, on: Bool, k: CGFloat) -> CGFloat {
-        let text = Ink.width(title, font(fontSize * k, on: on))
-        return ((on ? check * k + checkGap * k : 0) + text + 2 * padding * k).rounded(.up)
+    /// A Status button's width: the name and the padding, the same on and off.
+    static func chipWidth(_ title: String, k: CGFloat) -> CGFloat {
+        (Ink.width(title, font(fontSize * k)) + 2 * padding * k).rounded(.up)
     }
 
-    static func segmentWidth(_ title: String, on: Bool, k: CGFloat) -> CGFloat {
-        (Ink.width(title, font(fontSize * k, on: on)) + 2 * padding * k).rounded(.up)
+    static func segmentWidth(_ title: String, k: CGFloat) -> CGFloat {
+        (Ink.width(title, font(fontSize * k)) + 2 * padding * k).rounded(.up)
     }
 
     /// The segments of a switch from `x` on the row at `y`, each as wide as
-    /// its text (semibold when selected), a 1-point line between them.
+    /// its text, a 1-point line between them.
     private static func segments(_ titles: [(Target, String, Bool)], x: CGFloat, y: CGFloat, k: CGFloat) -> [Part] {
         var x = x
         return titles.map { target, title, on in
-            let width = segmentWidth(title, on: on, k: k)
+            let width = segmentWidth(title, k: k)
             defer { x += width + 1 }
             return Part(target: target, title: title, frame: CGRect(x: x, y: y, width: width, height: rowHeight * k), on: on)
         }
@@ -463,7 +461,7 @@ struct FilterOptionsGeometry: Equatable {
 
         // Row 1: Status, the buttons wrapping within their column.
         headings.append(heading(FilterOption.status.title, x: left, y: y, width: Self.headingWidth * k))
-        let statuses = PRStatus.allCases.map { status in (status, filter.shows(status), Self.chipWidth(status.title, on: filter.shows(status), k: k)) }
+        let statuses = PRStatus.allCases.map { status in (status, filter.shows(status), Self.chipWidth(status.title, k: k)) }
         let first = start(statuses.map(\.2).max() ?? 0)
         var x = first
         var statusLines = 1
@@ -482,13 +480,13 @@ struct FilterOptionsGeometry: Equatable {
         newLine()
         headings.append(heading(FilterOption.muted.title, x: left, y: y, width: Self.headingWidth * k))
         let mutedChoices = MuteChoice.allCases.map { (Target.muted($0), $0.title, filter.muted == $0) }
-        let mutedWidth = mutedChoices.reduce(CGFloat(-1)) { $0 + Self.segmentWidth($1.1, on: $1.2, k: k) + 1 }
+        let mutedWidth = mutedChoices.reduce(CGFloat(-1)) { $0 + Self.segmentWidth($1.1, k: k) + 1 }
         muted = Self.segments(mutedChoices, x: start(mutedWidth), y: y, k: k)
         let resetFont = Ink.font(Self.fontSize * k)
         let resetWidth = (Ink.width(FilterText.reset, resetFont) + 2 * Self.resetPadding * k).rounded(.up)
         let unreadTitle = FilterOption.unread.title
         let unreadChoices: [(Target, String, Bool)] = [(.unread(false), "All", !filter.unreadOnly), (.unread(true), "Only", filter.unreadOnly)]
-        let unreadWidth = unreadChoices.reduce(CGFloat(-1)) { $0 + Self.segmentWidth($1.1, on: $1.2, k: k) + 1 }
+        let unreadWidth = unreadChoices.reduce(CGFloat(-1)) { $0 + Self.segmentWidth($1.1, k: k) + 1 }
         let mutedEnd = muted.last?.frame.maxX ?? column
         let unreadHeading = Ink.width(unreadTitle, headingFont).rounded(.up)
         let inline = mutedEnd + Self.groupGap * k + unreadHeading + Self.headingGap * k + unreadWidth + Self.groupGap * k + resetWidth <= right
@@ -597,16 +595,18 @@ final class FilterOptionsView: NSView {
             Ink.drawLine(heading.title, headingFont, Palette.secondary.nsColor, in: heading.frame.insetBy(dx: -0.5, dy: 0))
         }
         let radius = FilterOptionsGeometry.radius * k
+        let font = FilterOptionsGeometry.font(FilterOptionsGeometry.fontSize * k)
         for chip in geometry.chips {
-            drawGround(NSBezierPath(roundedRect: chip.frame.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius), on: chip.on || pressed == chip.target)
-            let font = FilterOptionsGeometry.font(FilterOptionsGeometry.fontSize * k, on: chip.on)
-            var x = chip.frame.minX + FilterOptionsGeometry.padding * k
-            if chip.on {
-                let side = FilterOptionsGeometry.check * k
-                Shapes.icon(BoardIcons.optionCheck, in: CGRect(x: x, y: chip.frame.midY - side / 2, width: side, height: side), color: Palette.text.nsColor, grid: 10)
-                x += side + FilterOptionsGeometry.checkGap * k
-            }
-            Ink.drawLine(chip.title, font, Palette.text.nsColor, in: CGRect(x: x, y: chip.frame.minY, width: chip.frame.maxX - x, height: chip.frame.height))
+            // Pressed: the ground of on, the text and the border of the
+            // button's state now (DESIGN.md, "Filter").
+            let path = NSBezierPath(roundedRect: chip.frame.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
+            Self.ground(on: chip.on || pressed == chip.target).nsColor.setFill()
+            path.fill()
+            Self.chipBorder(on: chip.on).nsColor.setStroke()
+            path.lineWidth = 1
+            path.stroke()
+            let x = chip.frame.minX + FilterOptionsGeometry.padding * k
+            Ink.drawLine(chip.title, font, Self.ink(on: chip.on).nsColor, in: CGRect(x: x, y: chip.frame.minY, width: chip.frame.maxX - x, height: chip.frame.height))
         }
         drawSwitch(geometry.muted, k: k)
         drawSwitch(geometry.unread, k: k)
@@ -630,13 +630,14 @@ final class FilterOptionsView: NSView {
         return path
     }
 
-    private func drawGround(_ path: NSBezierPath, on: Bool) {
-        (on ? Palette.optionOn : Palette.optionOff).nsColor.setFill()
-        path.fill()
-        Palette.border.nsColor.setStroke()
-        path.lineWidth = 1
-        path.stroke()
-    }
+    /// DESIGN.md, "Constants", "Filter option colors": on (a Status
+    /// button on, the selected segment) is the accent tint of a selection
+    /// with the accent color's text; off is the box's ground darkened (or,
+    /// on dark, lightened) slightly with the label color's text. Only a
+    /// Status button's border follows the state; a switch keeps its lines.
+    static func ground(on: Bool) -> Tone { on ? Palette.selection : Palette.optionOff }
+    static func ink(on: Bool) -> Tone { on ? Palette.accent : Palette.text }
+    static func chipBorder(on: Bool) -> Tone { on ? Palette.accentLine : Palette.border }
 
     private func drawSwitch(_ segments: [FilterOptionsGeometry.Part], k: CGFloat) {
         guard !segments.isEmpty else { return }
@@ -648,9 +649,14 @@ final class FilterOptionsView: NSView {
         NSGraphicsContext.saveGraphicsState()
         outline.addClip()
         for segment in segments where segment.on || pressed == segment.target {
-            Palette.optionOn.nsColor.setFill()
-            // Over the line on either side, which is drawn again below.
-            segment.frame.insetBy(dx: -1, dy: 0).fill()
+            // The tint over the box's ground, as a Status button's (not over
+            // the off ground); over the line on either side, which is drawn
+            // again below.
+            let rect = segment.frame.insetBy(dx: -1, dy: 0)
+            Palette.surface.nsColor.setFill()
+            rect.fill()
+            Self.ground(on: true).nsColor.setFill()
+            rect.fill(using: .sourceOver)
         }
         Palette.border.nsColor.setFill()
         for segment in segments.dropFirst() {
@@ -660,9 +666,9 @@ final class FilterOptionsView: NSView {
         Palette.border.nsColor.setStroke()
         outline.lineWidth = 1
         outline.stroke()
+        let font = FilterOptionsGeometry.font(FilterOptionsGeometry.fontSize * k)
         for segment in segments {
-            let font = FilterOptionsGeometry.font(FilterOptionsGeometry.fontSize * k, on: segment.on)
-            Ink.drawLine(segment.title, font, Palette.text.nsColor, in: segment.frame.insetBy(dx: FilterOptionsGeometry.padding * k, dy: 0).insetBy(dx: -0.5, dy: 0))
+            Ink.drawLine(segment.title, font, Self.ink(on: segment.on).nsColor, in: segment.frame.insetBy(dx: FilterOptionsGeometry.padding * k, dy: 0).insetBy(dx: -0.5, dy: 0))
         }
     }
 

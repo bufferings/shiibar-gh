@@ -11,7 +11,7 @@ import ShiibarGhCore
 import SwiftUI
 
 @MainActor
-final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
+final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate, SurfaceHosting {
     private let app: AppModel
     private let avatars: AvatarStore
     private let actions: (String?) -> SurfaceActions
@@ -27,7 +27,8 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
     /// "UI": the image is not set again while it is the same).
     private var looks = StatusItemLooks()
     private let popover = NSPopover()
-    private var popoverAccount: String?
+    private(set) var popoverAccount: String?
+    let director: SurfaceDirector
     private var panels: [String: NSWindow] = [:]
     /// The title of each window: the account's mark and name.
     private var titles: [String: WindowTitle] = [:]
@@ -38,6 +39,30 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
     private var surfaceAppearance = NSAppearance(named: .aqua)
     var onWindowOpened: ((String) -> Void)?
     var onWindowClosed: ((String) -> Void)?
+    /// `Open in popover`: called before its window closes, so the app stays
+    /// a regular app under the popover it opens (`RegularWindows`).
+    var onHoldPopover: (() -> Void)?
+    /// The popover closed; `replaced` when another popover takes its place
+    /// at once (another account's icon).
+    var onPopoverClosed: ((_ replaced: Bool) -> Void)?
+    /// Keep on top of the open windows changed, or a window opened or
+    /// closed: Settings and the About panel follow (`AuxiliaryLevel`).
+    /// The account given is a window that is closing.
+    var onPinsChanged: ((_ closing: String?) -> Void)?
+    /// A popover is being replaced by another one (`toggle`).
+    private var replacingPopover = false
+    /// When each window last became key, and when the app last became
+    /// active (system uptime): a state gained by the press itself does not
+    /// count as held before it (`StateAtPress`).
+    private var becameKeyAt: [String: TimeInterval] = [:]
+    private var becameActiveAt: TimeInterval?
+    /// When the mouse last went down on a menu bar icon (system uptime):
+    /// the click's action runs when the button is released.
+    private var iconPressedAt: TimeInterval?
+    private var mouseMonitor: Any?
+    /// Menus being tracked (the ⌄ menu, a right-click menu): the icons and
+    /// the global shortcuts do nothing meanwhile (DESIGN.md, "Surface form").
+    private var menusTracking = 0
     /// Called on ⌘Q while a surface has the focus.
     var onQuit: (() -> Void)?
 
@@ -49,7 +74,9 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         self.app = app
         self.avatars = avatars
         self.actions = actions
+        director = SurfaceDirector(app: app)
         super.init()
+        director.host = self
         popover.behavior = .transient
         popover.animates = false
         popover.delegate = self
@@ -85,7 +112,25 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)
             .sink { [weak self] _ in MainActor.assumeIsolated { self?.appResignedActive() } }
             .store(in: &cancellables)
+        NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in MainActor.assumeIsolated { self?.becameActiveAt = ProcessInfo.processInfo.systemUptime } }
+            .store(in: &cancellables)
+        NotificationCenter.default.publisher(for: NSMenu.didBeginTrackingNotification)
+            .sink { [weak self] _ in MainActor.assumeIsolated { self?.menusTracking += 1 } }
+            .store(in: &cancellables)
+        NotificationCenter.default.publisher(for: NSMenu.didEndTrackingNotification)
+            .sink { [weak self] _ in MainActor.assumeIsolated { self?.menusTracking = max(0, (self?.menusTracking ?? 1) - 1) } }
+            .store(in: &cancellables)
+        // The press on a menu bar icon, before its action runs on release.
+        mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            if let self, let window = event.window, self.isStatusItemWindow(window) { self.iconPressedAt = event.timestamp }
+            return event
+        }
         update()
+    }
+
+    private func isStatusItemWindow(_ window: NSWindow) -> Bool {
+        items.values.contains { $0.button?.window === window } || fallback?.button?.window === window
     }
 
     /// The app lost the focus: the popover closes, as it would by itself
@@ -228,34 +273,52 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
 
     @objc private func clicked(_ sender: NSStatusBarButton) {
         guard let id = sender.identifier?.rawValue else { return }
-        // The account's window open: it comes to the front with the focus
-        // instead of the popover (DESIGN.md, "Screens"); the focus sends
-        // `popover_opened` (windowDidBecomeKey).
-        if SurfaceRules.surfaceToShow(windowOpen: panels[id] != nil) == .window {
-            openWindow(account: id)
-            return
-        }
-        toggle(account: id, from: sender)
+        let pressedAt = iconPressedAt ?? NSApp.currentEvent?.timestamp
+        iconPressedAt = nil
+        toggle(account: id, pressedAt: pressedAt)
     }
 
     @objc private func clickedFallback(_ sender: NSStatusBarButton) {
-        toggle(account: nil, from: sender)
+        iconPressedAt = nil
+        guard !blocked else { return }
+        if popover.isShown {
+            if popoverAccount == nil {
+                popover.performClose(nil)
+                return
+            }
+            replacingPopover = true
+            popover.performClose(nil)
+        }
+        present(account: nil, from: sender)
+        replacingPopover = false
+    }
+
+    /// An app-modal dialog or a menu is open: the icons and the global
+    /// shortcuts do nothing (DESIGN.md, "Surface form").
+    var blocked: Bool {
+        NSApp.modalWindow != nil || menusTracking > 0
+    }
+
+    /// The account's menu bar icon or its global shortcut (`SurfaceDirector`).
+    func toggle(account: String, pressedAt: TimeInterval?) {
+        director.toggle(account: account, pressedAt: pressedAt)
+    }
+
+    /// A clicked notification: the account's surface opens or comes to the
+    /// front, never closes (DESIGN.md, "macOS notifications").
+    func showForNotification(account: String) {
+        director.showForNotification(account: account)
     }
 
     // MARK: - Popover
 
+    /// Opens the account's popover (another account's closes); nothing
+    /// while it shows already, or while the account's window is open.
     func showPopover(account: String) {
-        guard let button = items[account]?.button else { return }
-        if popover.isShown && popoverAccount == account { return }
-        toggle(account: account, from: button)
+        director.showPopover(account: account)
     }
 
-    private func toggle(account: String?, from button: NSStatusBarButton) {
-        if popover.isShown {
-            let same = popoverAccount == account
-            popover.performClose(nil)
-            if same { return }
-        }
+    private func present(account: String?, from button: NSStatusBarButton) {
         popoverAccount = account
         let content: AnyView?
         if let account {
@@ -375,7 +438,20 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             }
             popoverAccount = nil
             popover.contentViewController = nil
+            onPopoverClosed?(replacingPopover || popover.isShown)
         }
+    }
+
+    // MARK: - Switching the form
+
+    /// `Open in window` (DESIGN.md, "`Open in popover`"; `SurfaceDirector`).
+    func openInWindow(account: String) {
+        director.openInWindow(account: account)
+    }
+
+    /// `Open in popover` (`SurfaceDirector`).
+    func openInPopover(account: String) {
+        director.openInPopover(account: account)
     }
 
     // MARK: - Window
@@ -385,11 +461,57 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         panels[account]
     }
 
+    /// Opens the account's window in front, or brings it to the front
+    /// (`SurfaceDirector.openWindow`): the form does not change (the
+    /// measurement and demo modes open windows this way too).
     func openWindow(account: String) {
-        popover.performClose(nil)
+        director.openWindow(account: account)
+    }
+
+    // MARK: - SurfaceHosting
+
+    var popoverShown: Bool { popover.isShown }
+
+    func windowFacts(_ account: String) -> WindowFacts? {
+        guard let panel = panels[account] else { return nil }
+        return WindowFacts(
+            appActive: NSApp.isActive, becameActiveAt: becameActiveAt, key: panel.isKeyWindow, becameKeyAt: becameKeyAt[account],
+            sheetKey: panel.attachedSheet?.isKeyWindow == true, miniaturized: panel.isMiniaturized, onActiveSpace: panel.isOnActiveSpace,
+            attachedSheet: panel.attachedSheet != nil
+        )
+    }
+
+    func presentPopover(_ account: String) -> Bool {
+        guard let button = items[account]?.button else { return false }
+        if popover.isShown {
+            replacingPopover = true
+            popover.performClose(nil)
+        }
+        present(account: account, from: button)
+        replacingPopover = false
+        return popover.isShown
+    }
+
+    func closeWindow(_ account: String) {
+        // The red button's path: `windowWillClose` cleans up and the app goes
+        // back to an accessory app if nothing else keeps it regular.
+        panels[account]?.close()
+    }
+
+    func windowWillShow(_ account: String) {
+        onWindowOpened?(account)
+    }
+
+    func holdPopover() {
+        onHoldPopover?()
+    }
+
+    func popoverHoldEnded() {
+        onPopoverClosed?(false)
+    }
+
+    func presentWindow(_ account: String) {
         if let panel = panels[account] {
-            // A minimized window comes back from the Dock (DESIGN.md, "Open
-            // in window").
             if panel.isMiniaturized { panel.deminiaturize(nil) }
             NSApp.activate(ignoringOtherApps: true)
             panel.makeKeyAndOrderFront(nil)
@@ -397,6 +519,7 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         }
         var surface = actions(account)
         surface.openWindow = nil
+        surface.openPopover = { [weak self] in self?.openInPopover(account: account) }
         let model = app.viewModel(account)
         let panel = Self.makeWindow(width: popoverWidth, height: Self.popoverHeight)
         let root = PopoverView.root(app: app, model: model, list: model.list(.window), avatars: avatars, actions: surface, surface: .window)
@@ -412,7 +535,10 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         panel.identifier = NSUserInterfaceItemIdentifier(account)
         panel.delegate = self
         if let saved = app.store.windowFrame(account: account) {
-            panel.setFrame(NSRectFromString(saved), display: false)
+            // A saved size under the least one opens at the least size, the
+            // top and left edges staying (DESIGN.md, "Open in window").
+            let least = panel.frameRect(forContentRect: NSRect(origin: .zero, size: panel.contentMinSize)).size
+            panel.setFrame(WindowMinimum.frame(NSRectFromString(saved), minimum: least), display: false)
         } else {
             panel.center()
         }
@@ -426,10 +552,11 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         // Keep on top: the panel floats above normal windows while on
         // (NSWindow.level; .floating is in front of every normal-level
         // window). Applied now and whenever the pin is pressed.
-        pinWatch[account] = app.viewModel(account).$keepOnTop.sink { [weak panel] on in
+        pinWatch[account] = app.viewModel(account).$keepOnTop.sink { [weak self, weak panel] on in
             panel?.level = on ? .floating : .normal
+            // `$keepOnTop` sends before the value changes: read it after.
+            DispatchQueue.main.async { self?.onPinsChanged?(nil) }
         }
-        onWindowOpened?(account)
         // The window becomes key at once below, and `surfaceOpened` reads
         // the lists after `popover_opened`.
         app.surfaceDisplayed(.window, account: account, true, opening: true)
@@ -444,8 +571,10 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
     /// name (`WindowTitle`). The content starts at part 2. The green button
     /// zooms instead of going full screen
     /// (`NSWindowCollectionBehaviorFullScreenNone`, NSWindow.h: "The window
-    /// can not be made fullscreen when this bit is set"); the other
-    /// collection behaviors stay as 0.6's panel had them (none).
+    /// can not be made fullscreen when this bit is set"), as a window kept
+    /// on top has no use in full screen; it moves to the current Space when
+    /// brought forward (`moveToActiveSpace`). Nothing else is set, so macOS
+    /// decides the rest (a full-screen Space of another app included).
     static let windowStyle: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
 
     static func makeWindow(width: CGFloat, height: CGFloat) -> NSWindow {
@@ -456,7 +585,16 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
         )
         window.isReleasedWhenClosed = false
         window.collectionBehavior.insert(.fullScreenNone)
+        // Brought to the front from another Space, the window comes to the
+        // current Space instead of switching Spaces
+        // (`NSWindowCollectionBehaviorMoveToActiveSpace`, NSWindow.h).
+        window.collectionBehavior.insert(.moveToActiveSpace)
         return window
+    }
+
+    /// Keep on top of each open window, by account (`AuxiliaryLevel`).
+    var windowPins: [String: Bool] {
+        panels.keys.reduce(into: [:]) { $0[$1] = app.viewModel($1).keepOnTop }
     }
 
     /// The window's least content height: its minimum size, and its
@@ -482,6 +620,7 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
     nonisolated func windowDidBecomeKey(_ notification: Notification) {
         MainActor.assumeIsolated {
             if let account = account(of: notification), panels[account] != nil {
+                becameKeyAt[account] = ProcessInfo.processInfo.systemUptime
                 app.surfaceOpened(.window, account: account)
             }
         }
@@ -513,9 +652,12 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate {
             guard let account = account(of: notification), panels[account] != nil else { return }
             app.surfaceClosed(.window, account: account)
             app.surfaceDisplayed(.window, account: account, false)
+            // Still on screen while it closes: left out of the pins.
+            onPinsChanged?(account)
             panels[account] = nil
             titles[account] = nil
             pinWatch[account] = nil
+            becameKeyAt[account] = nil
             onWindowClosed?(account)
         }
     }

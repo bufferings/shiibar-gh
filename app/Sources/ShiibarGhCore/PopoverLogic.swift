@@ -540,13 +540,6 @@ public enum SurfaceRules {
         dbUnreadable ? .unreadable : .noAccounts
     }
 
-    /// What a click on an account's menu bar icon (or on a summary
-    /// notification) shows: the window, brought to the front with the
-    /// focus, while it is open; else the popover (DESIGN.md, "Screens").
-    public static func surfaceToShow(windowOpen: Bool) -> Surface {
-        windowOpen ? .window : .popover
-    }
-
     /// DESIGN.md, "Screens" and "UI": the popover closes when the app
     /// stops being active (`NSApplication.didResignActiveNotification`),
     /// except the measurement mode's (`measuring`, its behavior

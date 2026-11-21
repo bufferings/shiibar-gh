@@ -139,14 +139,9 @@ final class StoreTests: XCTestCase {
         for dark in [false, true] {
             let band = Palette.band.resolved(dark: dark)
             XCTAssertEqual(band.redComponent, gray.resolved(dark: dark).redComponent, accuracy: 0.001, "dark=\(dark)")
-            let off = Palette.optionOff.resolved(dark: dark).alphaComponent
-            let on = Palette.optionOn.resolved(dark: dark).alphaComponent
-            XCTAssertGreaterThanOrEqual(on - off, 0.10 - 0.0001, "dark=\(dark)")
         }
         XCTAssertEqual(Palette.optionOff.resolved(dark: false).alphaComponent, 0.04, accuracy: 0.001)
-        XCTAssertEqual(Palette.optionOn.resolved(dark: false).alphaComponent, 0.14, accuracy: 0.001)
         XCTAssertEqual(Palette.optionOff.resolved(dark: true).alphaComponent, 0.06, accuracy: 0.001)
-        XCTAssertEqual(Palette.optionOn.resolved(dark: true).alphaComponent, 0.22, accuracy: 0.001)
     }
 
     /// Text grays are the label colors; the selection is the accent color

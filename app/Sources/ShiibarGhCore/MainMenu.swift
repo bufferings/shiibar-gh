@@ -1,4 +1,4 @@
-// The app's main menu. While the app is a regular app (a pinned window or
+// The app's main menu. While the app is a regular app (an account's window or
 // Settings is open) the menu bar shows it; while it is an accessory app it
 // is not shown but its key equivalents still work. DESIGN.md, "Switching to
 // a regular app": the app menu has About Shiibar GH, Settings… (⌘,), Close
@@ -90,25 +90,49 @@ public enum MainMenu {
     }
 }
 
-/// The windows that make the app a regular app: a pinned window of any
-/// account and Settings (DESIGN.md, "Switching to a regular app").
+/// What makes the app a regular app (DESIGN.md, "Switching to a regular
+/// app"): a window of any account, Settings, and the popover `Open in
+/// popover` opened (or the popover that replaced it from another account's
+/// icon) until no popover shows. Going back to an accessory app while a
+/// popover shows can deactivate the app, which closes the popover.
 public struct RegularWindows: Equatable {
     private var open: Set<String> = []
+    /// `Open in popover` closed a window: the popover it opens keeps the
+    /// app regular.
+    public private(set) var popoverHold = false
 
     public init() {}
 
-    /// True when this is the first such window: switch to regular.
+    public var isRegular: Bool { !open.isEmpty || popoverHold }
+
+    /// True when the app was not regular: switch to regular. Added before
+    /// the held popover closes (`Open in window`, Settings from it), the
+    /// app stays regular throughout.
     public mutating func opened(_ id: String) -> Bool {
-        let first = open.isEmpty
+        let was = isRegular
         open.insert(id)
-        return first
+        return !was
     }
 
-    /// True when the last one closed: back to the accessory app.
+    /// True when nothing keeps the app regular any more: back to the
+    /// accessory app.
     public mutating func closed(_ id: String) -> Bool {
         guard open.remove(id) != nil else { return false }
-        return open.isEmpty
+        return !isRegular
     }
 
-    public var isRegular: Bool { !open.isEmpty }
+    /// `Open in popover`: set before its window closes, so the close does
+    /// not make the app an accessory app under the popover it opens.
+    public mutating func holdPopover() {
+        popoverHold = true
+    }
+
+    /// The popover closed. `replaced`: another account's icon put its
+    /// popover in its place, which keeps holding. True when nothing keeps
+    /// the app regular any more.
+    public mutating func popoverClosed(replaced: Bool) -> Bool {
+        guard popoverHold, !replaced else { return false }
+        popoverHold = false
+        return !isRegular
+    }
 }

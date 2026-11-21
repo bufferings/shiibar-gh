@@ -28,7 +28,10 @@ extension EnvironmentValues {
 
 /// What the surface around the list does for it.
 struct SurfaceActions {
+    /// `Open in window` (the popover of an account).
     var openWindow: (() -> Void)?
+    /// `Open in popover` (the window of an account).
+    var openPopover: (() -> Void)?
     var openSettings: (SettingsDestination) -> Void
     var about: () -> Void
     var quit: () -> Void
@@ -238,7 +241,7 @@ struct PopoverView: View {
                 login: account?.login ?? "", color: account?.accountColor ?? .none,
                 updated: value.dbUnreadable ? nil : RelativeTime.updated(account?.updatedAt, now: now),
                 usage: value.usage, keepOnTop: value.keepOnTop, toggleKeepOnTop: { [model] in model.toggleKeepOnTop() },
-                surface: surface, refreshing: value.refreshing, actions: actions, refresh: { [app, model] in app.refresh(model.accountId) }
+                surface: surface, refreshing: value.refreshing, actions: actions, refresh: { [app, model] in app.refreshIfIdle(model.accountId) }
             )
             .background {
                 ZStack {
@@ -481,55 +484,115 @@ struct Header: View {
     }
 
     /// Part 2: `Updated …` and the API usage at the left, the buttons at
-    /// the right.
+    /// the right. The buttons never shrink: short of room, the API usage
+    /// goes whole first, then `Updated …` is cut with `…` at its end
+    /// (DESIGN.md, "Screens"; `HeaderRowFit`).
     private var row: some View {
-        HStack(spacing: 6) {
-            Group {
-                if let updated {
-                    // "Updated 1 min ago · API [25%]" (DESIGN.md, "Rate
-                    // limits").
-                    HStack(spacing: 0) {
-                        Text(updated + " · ").foregroundColor(Palette.secondary.color)
-                        UsageView(usage: usage)
+        let slots = Self.buttons(surface: surface, canOpenWindow: actions.openWindow != nil)
+        return GeometryReader { geometry in
+            let fit = HeaderRowFit.fit(
+                width: geometry.size.width, k: k, buttons: slots.count,
+                updated: updated.map { Ink.width($0, Ink.font(11 * k)) } ?? 0,
+                usage: updated.map { Ink.width($0 + " · ", Ink.font(11 * k)) + UsageView.width(usage, k: k) } ?? 0
+            )
+            HStack(spacing: Self.buttonGap) {
+                Group {
+                    if let updated {
+                        if fit.showsUsage {
+                            // "Updated 1 min ago · API [25%]" (DESIGN.md,
+                            // "Rate limits").
+                            HStack(spacing: 0) {
+                                Text(updated + " · ").foregroundColor(Palette.secondary.color)
+                                UsageView(usage: usage)
+                            }
+                            .fixedSize()
+                        } else {
+                            Text(updated)
+                                .foregroundColor(Palette.secondary.color)
+                                .truncationMode(.tail)
+                                .frame(maxWidth: fit.updatedWidth, alignment: .leading)
+                        }
                     }
-                    .font(.system(size: 11 * k))
-                    .lineLimit(1)
                 }
-            }
-            // A press on the texts goes to what is behind them: in the
-            // window, the drag area that moves it.
-            .allowsHitTesting(false)
-            Spacer(minLength: 0)
-            ForEach(Self.buttons(surface: surface, canOpenWindow: actions.openWindow != nil), id: \.self) { button in
-                switch button {
-                case .refresh:
-                    if refreshing {
-                        RefreshProgress()
-                    } else {
-                        HeaderButton(icon: BoardIcons.refresh, size: 16, label: "Refresh", help: Header.refreshHelp, action: refresh)
+                .font(.system(size: 11 * k))
+                .lineLimit(1)
+                // A press on the texts goes to what is behind them: in the
+                // window, the drag area that moves it.
+                .allowsHitTesting(false)
+                Spacer(minLength: 0)
+                ForEach(slots, id: \.self) { button in
+                    Group {
+                        switch button {
+                        case .refresh:
+                            RefreshButton(refreshing: refreshing, scale: k, action: refresh)
+                        case .pin:
+                            PinButton(on: keepOnTop, scale: k, toggle: toggleKeepOnTop)
+                        case .openWindow:
+                            HeaderButton(icon: BoardIcons.window, size: 15, label: "Open in window", scale: k) { actions.openWindow?() }
+                        case .openPopover:
+                            HeaderButton(icon: BoardIcons.openInPopover, size: 15, label: "Open in popover", scale: k) { actions.openPopover?() }
+                        case .settings:
+                            HeaderButton(icon: BoardIcons.settings, size: 16, label: "Settings", scale: k) { actions.openSettings(.general) }
+                        case .more:
+                            MenuIconButton(icon: BoardIcons.chevron, label: "More", items: actions.menuItems, scale: k)
+                        }
                     }
-                case .pin:
-                    PinButton(on: keepOnTop, toggle: toggleKeepOnTop)
-                case .openWindow:
-                    HeaderButton(icon: BoardIcons.window, size: 15, label: "Open in window") { actions.openWindow?() }
-                case .settings:
-                    HeaderButton(icon: BoardIcons.settings, size: 16, label: "Settings") { actions.openSettings(.general) }
-                case .more:
-                    MenuIconButton(icon: BoardIcons.chevron, label: "More", items: actions.menuItems)
+                    .fixedSize()
                 }
             }
         }
+        .frame(height: HeaderButton.side * k)
     }
 
-    enum Slot: Hashable { case refresh, openWindow, pin, settings, more }
+    /// Between the buttons: the same at every text size.
+    static let buttonGap: CGFloat = 6
 
-    /// DESIGN.md, "Screens": Refresh, Open in window (the pin in its place
-    /// in the window), Settings, ⌄, as shiibar-cc's header.
+    enum Slot: Hashable { case refresh, openWindow, openPopover, pin, settings, more }
+
+    /// DESIGN.md, "Screens", "Open in window": the popover has Refresh,
+    /// Open in window, Settings, ⌄; the window has Refresh, Open in
+    /// popover, the pin, Settings, ⌄.
     static func buttons(surface: Surface, canOpenWindow: Bool) -> [Slot] {
-        var out: [Slot] = [.refresh]
-        if surface == .window { out.append(.pin) }
-        if canOpenWindow { out.append(.openWindow) }
-        return out + [.settings, .more]
+        switch surface {
+        case .popover:
+            return [.refresh] + (canOpenWindow ? [.openWindow] : []) + [.settings, .more]
+        case .window:
+            return [.refresh, .openPopover, .pin, .settings, .more]
+        }
+    }
+}
+
+/// Header row 2 at a width (DESIGN.md, "Screens", "Constants"): the
+/// buttons, each 24 × 24 points times k, 6 points apart, at the right end;
+/// left of them `Updated …` with the API usage when the whole of it fits,
+/// else `Updated …` alone, cut to the room left. The bar is never cut.
+enum HeaderRowFit {
+    struct Fit: Equatable {
+        var showsUsage: Bool
+        /// The room `Updated …` is shown in (alone, or with the usage).
+        var updatedWidth: CGFloat
+        /// The buttons, left to right, in the row's coordinates.
+        var buttons: [CGRect]
+    }
+
+    /// `width`: the row inside its insets. `updated`: the width of
+    /// `Updated …`; `usage`: of `Updated … · ` and the usage together.
+    static func fit(width: CGFloat, k: CGFloat, buttons count: Int, updated: CGFloat, usage: CGFloat) -> Fit {
+        let side = HeaderButton.side * k
+        let gap = Header.buttonGap
+        let buttonsWidth = CGFloat(count) * side + CGFloat(max(0, count - 1)) * gap
+        var x = width - buttonsWidth
+        var rects: [CGRect] = []
+        for _ in 0..<count {
+            rects.append(CGRect(x: x, y: 0, width: side, height: side))
+            x += side + gap
+        }
+        // The left part, the spacer and the buttons are 6 points apart.
+        let room = max(0, width - buttonsWidth - 2 * gap)
+        // 2 points to spare: SwiftUI's text may come a fraction wider than
+        // the measured one, and the usage is never cut.
+        let shows = usage.rounded(.up) + 2 <= room
+        return Fit(showsUsage: shows, updatedWidth: shows ? usage : min(updated.rounded(.up), room), buttons: rects)
     }
 }
 
@@ -540,6 +603,14 @@ struct Header: View {
 struct UsageView: View {
     var usage: ApiUsage
     @Environment(\.textScale) var k
+
+    /// The width it takes at the ratio k: `API` (semibold while warning),
+    /// then the 40-point bar 5 points after it, or ` –` without a value.
+    static func width(_ usage: ApiUsage, k: CGFloat) -> CGFloat {
+        let api = Ink.width("API", Ink.font(11 * k, usage.warn ? .semibold : .regular))
+        guard usage.fraction != nil, usage.percent != nil else { return api + Ink.width(" \u{2013}", Ink.font(11 * k)) }
+        return api + 5 + 40 * k
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -569,28 +640,82 @@ struct UsageView: View {
     }
 }
 
-/// Refresh in progress (Main.html `.iconbtn.busy`): a gray circle with a
-/// turning arc in the accent color, in place of the button until the answer.
-struct RefreshProgress: View {
-    @State private var turning = false
+/// Refresh (DESIGN.md, "Screens"; Main.html `.iconbtn.busy`): while it
+/// runs, the icon itself turns clockwise, one turn per second at an even
+/// speed, the button takes no press and shows at 40% opacity, with the
+/// tooltip and name `Refreshing…`. With Reduce Motion on it does not turn.
+/// When it ends, the icon is upright again at full opacity.
+///
+/// The button stays enabled for SwiftUI and ignores presses itself, so the
+/// pointer still reaches it and the tooltip shows; the turn is worked out
+/// from the time inside the button only, so it draws nothing else.
+struct RefreshButton: View {
+    static let helpWhileRefreshing = "Refreshing\u{2026}"
+    static let opacityWhileRefreshing = 0.4
+    /// Seconds per turn.
+    static let period: Double = 1
+
+    var refreshing: Bool
+    var scale: CGFloat
+    var action: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// The icon's angle in degrees, clockwise, `elapsed` seconds into a
+    /// refresh: 0 when it is not running or motion is reduced.
+    static func angle(elapsed: Double, refreshing: Bool, reduceMotion: Bool) -> Double {
+        guard refreshing, !reduceMotion else { return 0 }
+        let turns = elapsed / period
+        return (turns - turns.rounded(.down)) * 360
+    }
+
+    /// A press: the action, only while Refresh is not running.
+    static func press(refreshing: Bool, action: () -> Void) {
+        if !refreshing { action() }
+    }
 
     var body: some View {
-        ZStack {
-            IconView(icon: BoardIcons.progressTrack, size: 16, color: Palette.quaternary.color)
-            IconView(icon: BoardIcons.progressArc, size: 16, color: Palette.accent.color)
-                .rotationEffect(.degrees(turning ? 360 : 0))
-                .animation(.linear(duration: 1).repeatForever(autoreverses: false), value: turning)
+        Button {
+            Self.press(refreshing: refreshing, action: action)
+        } label: {
+            RefreshIcon(refreshing: refreshing, turning: refreshing && !reduceMotion, scale: scale)
+                .frame(width: HeaderButton.side * scale, height: HeaderButton.side * scale)
+                .contentShape(Rectangle())
         }
-        .frame(width: 24, height: 24)
-        .onAppear { turning = true }
-        .quickHelp("Refreshing")
-        .accessibilityLabel("Refreshing")
+        .buttonStyle(HoverButtonStyle(active: !refreshing))
+        .opacity(refreshing ? Self.opacityWhileRefreshing : 1)
+        .quickHelp(refreshing ? Self.helpWhileRefreshing : Header.refreshHelp)
+        // Assistive apps read a button that is disabled while it runs.
+        .accessibilityRepresentation {
+            Button(refreshing ? Self.helpWhileRefreshing : "Refresh", action: action)
+                .disabled(refreshing)
+        }
+    }
+}
+
+/// The Refresh icon, turning while `turning`.
+private struct RefreshIcon: View {
+    var refreshing: Bool
+    var turning: Bool
+    var scale: CGFloat
+    @State private var start = Date()
+
+    var body: some View {
+        TimelineView(.animation(paused: !turning)) { context in
+            IconView(icon: BoardIcons.refresh, size: 16 * scale, color: Palette.secondary.color)
+                .rotationEffect(.degrees(RefreshButton.angle(
+                    elapsed: context.date.timeIntervalSince(start), refreshing: refreshing, reduceMotion: !turning
+                )))
+        }
+        .onChange(of: turning) { _, now in
+            if now { start = Date() }
+        }
     }
 }
 
 /// Keep on top (Main.html `.pin`): filled in the accent color while on, outlined while off.
 struct PinButton: View {
     var on: Bool
+    var scale: CGFloat = 1
     var toggle: () -> Void
 
     var body: some View {
@@ -599,11 +724,11 @@ struct PinButton: View {
                 if on {
                     IconShape(icon: BoardIcons.pin).fill(Palette.accent.color)
                 } else {
-                    IconView(icon: BoardIcons.pin, size: 14, color: Palette.secondary.color)
+                    IconView(icon: BoardIcons.pin, size: 14 * scale, color: Palette.secondary.color)
                 }
             }
-            .frame(width: 14, height: 14)
-            .frame(width: 24, height: 24)
+            .frame(width: 14 * scale, height: 14 * scale)
+            .frame(width: HeaderButton.side * scale, height: HeaderButton.side * scale)
             .contentShape(Rectangle())
         }
         // The hover fill of the other header buttons (Main.html `.pin.hov`).

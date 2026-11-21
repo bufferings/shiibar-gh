@@ -885,9 +885,7 @@ final class AppModelTests: XCTestCase {
     func testAClickedNotificationShowsTheCard() async {
         let view = await loaded()
         var shown: [String] = []
-        var popovers: [String] = []
         model.onShowAccount = { shown.append("\($0) \($1)") }
-        model.onOpenPopover = { popovers.append($0) }
         view.openTab(.mine)
         view.setSearch("keep")
         view.openTab(.review)
@@ -922,11 +920,10 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(shown.last, "3407303 window")
         XCTAssertEqual(view.data.list(.window).selection, .header(card: "M1"))
         model.notificationClicked(type: .summary, account: "583231", url: nil)
-        XCTAssertEqual(popovers, ["583231"])
-        // A summary with the window open: the window comes to the front, as
-        // for a click on the menu bar icon.
+        XCTAssertEqual(shown.last, "583231 popover", "the popover form: its popover")
+        // A summary with the window open: the window comes to the front,
+        // never closed (DESIGN.md, "macOS notifications").
         model.notificationClicked(type: .summary, account: "3407303", url: nil)
-        XCTAssertEqual(popovers, ["583231"])
         XCTAssertEqual(shown.last, "3407303 window")
     }
 

@@ -139,6 +139,16 @@ enum PerfMode {
 
     /// The measurement or the demo mode: the sandbox either way.
     static var sandboxed: Bool { enabled || demo }
+
+    /// The demo mode's `SHIIBAR_GH_DEMO_REFRESH_SECONDS`: the answer of
+    /// Refresh is held this many seconds (the demo daemon answers at once),
+    /// so the running Refresh can be looked at. 0 outside the demo mode, or
+    /// without a number from 0 to 60.
+    static var demoRefreshSeconds: Double {
+        guard demo, let text = ProcessInfo.processInfo.environment["SHIIBAR_GH_DEMO_REFRESH_SECONDS"],
+              let seconds = Double(text), seconds >= 0, seconds <= 60 else { return 0 }
+        return seconds
+    }
 }
 
 /// How many times cards were drawn (`cards`) and configured for a table
@@ -785,8 +795,9 @@ final class PerfRunner: NSObject {
         other.makeKeyAndOrderFront(nil)
         await map("another window of the app in front")
         other.close()
-        // The popover of the same account opened and closed.
-        if let account = app.accounts.first {
+        // Another account's popover opened and closed: the popover and the
+        // window of one account never show together.
+        if let account = app.accounts.first(where: { surfaces.window(account: $0.id) == nil }) {
             surfaces.showPopoverForMeasurement(account: account.id)
             await pause(0.5)
             surfaces.closePopover()
@@ -1453,6 +1464,25 @@ final class PerfRunner: NSObject {
         // `Dismiss all` goes with the collapse and comes back.
         await run("Mine: collapse Done (no Dismiss all)") { list.perform(.toggleSection(done)) }
         await run("Mine: expand Done (Dismiss all)") { list.perform(.toggleSection(done)) }
+        // Expanded, the heading has `Show less` and `Dismiss all` together,
+        // the count left of the chevron (DESIGN.md, "Section size").
+        func showLessWithDismissAll(_ name: String, _ key: String) async -> Bool {
+            guard (list.sections.first(where: { $0.key == key })?.more ?? 0) > 0 else { return false }
+            await run("\(name): + N more PRs of Done (Show less and Dismiss all)") { list.perform(.toggleMore(key)) }
+            await run("\(name): Show less of Done") { list.perform(.toggleMore(key)) }
+            return true
+        }
+        var showedLessWithDismissAll = await showLessWithDismissAll("Mine", done)
+        // Header row 2 at text sizes 9, 12 and 18: the buttons and their
+        // icons scale, the band above does not.
+        for size in [9, 18, 12] {
+            // The size shows once the daemon answers each step.
+            for _ in 0..<20 where app.textSize != size {
+                app.changeTextSize(app.textSize < size ? .larger : .smaller)
+                await pause(0.4)
+            }
+            await run("header buttons at text size \(size)") {}
+        }
         // One card left in Done: its × does the same, no `Dismiss all`.
         let one = list.sections.first(where: { $0.key == done })?.matching.first
         await run("Mine: search without a Done card (no Dismiss all)") { list.setSearch("zz-no-such-text") }
@@ -1467,6 +1497,8 @@ final class PerfRunner: NSObject {
         let reviewDone = SectionKey.placed(.review, .done)
         tableController(window)?.scrollForMeasurement(toLine: "section:" + reviewDone, offset: -40)
         await pause(0.4)
+        if !showedLessWithDismissAll { showedLessWithDismissAll = await showLessWithDismissAll("Review", reviewDone) }
+        if !showedLessWithDismissAll { log("consistency: no Done with more than five cards, no Show less with Dismiss all") }
         await run("Review: Dismiss all, its sheet") { list.perform(.dismissAll(section: reviewDone)) }
         await run("Review: Dismiss all, Cancel") { list.answerDismiss(false) }
         // The Dismissed list by repository: open, searched, a Restore.

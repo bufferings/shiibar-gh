@@ -10,11 +10,22 @@
 #      filled by `make-data.py --demo`;
 #   4. the app in its demo mode (SHIIBAR_GH_DEMO=1, app/Sources/ShiibarGhApp/
 #      Perf.swift): a scratch UserDefaults suite, that state directory and
-#      daemon, no login item, no notification permission. It runs next to an
+#      daemon, no login item, no notification permission. Global shortcuts
+#      recorded in the demo are registered with the system while it runs. It runs next to an
 #      installed Shiibar GH (a second menu bar icon), which keeps its own
 #      state directory and daemon.
 #
 # Usage: scripts/perf/demo.sh
+#
+# SHIIBAR_GH_DEMO_REFRESH_SECONDS=5 holds the answer of Refresh (the header
+# button or ⌘R) for that many seconds (0 to 60), so the turning Refresh icon
+# can be looked at; the demo daemon answers at once otherwise.
+#
+# The two accounts (`me` and `me-two`) each keep their own surface form and
+# global shortcut in the demo's memory-only defaults: a shortcut recorded for
+# one is refused for the other, and a pinned window of either puts Settings
+# and About in front. Review's and Mine's Done have more than five cards, so
+# `Show less` and `Dismiss all` show together once Done is expanded.
 # Quit with the demo's ⌄ menu › Quit (or Ctrl-C here); the script
 # then stops the demo daemon and removes the state directory.
 set -eu
