@@ -64,6 +64,8 @@ SHIIBAR_GH_TEST_DAEMON=$PWD/target/debug/shiibar-ghd swift test --package-path a
 
 `SHIIBAR_GH_TEST_DAEMON` を指定しないと、実際のデーモンを使用するテストは省略される。
 
+デモのモード（`scripts/perf/demo.sh`）は、作成したデータを持つ `dev-ingest` のデーモンと、メモリーだけの UserDefaults を使用するアプリを起動し、実際の状態ディレクトリ、Keychain、GitHub に触れずに画面を操作できる。`SHIIBAR_GH_DEMO_REFRESH_SECONDS`（0〜60 の秒数。デモのモードだけ）を指定すると、Refresh（見出しのボタンまたは ⌘R）の応答をその秒数だけ保ち、回転する Refresh のアイコンを確認できる。指定しなければ、デモのデーモンはすぐに応答する。
+
 ## 開発版のインストール
 
 `scripts/dev-install.sh` は、デーモン、CLI、アプリをリリースモードでビルドし、`~/Applications/Shiibar GH.app` を組み立てて、ローカルの固定の署名の ID（`shiibar-gh-local-signing`。初回にログインキーチェーンに作成する）で hardened runtime を付けて署名し、`~/.local/bin/shiibar-gh` を同梱の CLI へのリンクにして、アプリを起動する。実行中のアプリとデーモンは先に止める。`CFBundleVersion` は実行の時刻にする。アイコンのキャッシュが版で区別されるためである。
