@@ -115,7 +115,7 @@ final class PresentationTests: XCTestCase {
         let marks = MenuBarMarks(Account(id: "a", unread: true, warnings: [Warning(kind: .tokenExpiring)]))
         XCTAssertEqual(marks, MenuBarMarks(dot: true, triangle: true))
         XCTAssertEqual(MenuBarMarks(Account(id: "a", warnings: [Warning(kind: .statusFetchFailed)])), MenuBarMarks(dot: false, triangle: false))
-        XCTAssertEqual(BoardIcons.account, BoardIcons.app, "one placeholder glyph for every account")
+        XCTAssertEqual(BoardIcons.account, BoardIcons.app, "one glyph for every account")
     }
 
     /// DESIGN.md, "Screens" and MenuBarIcon.html.

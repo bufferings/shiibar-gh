@@ -47,14 +47,24 @@ public struct BoardIcon: Equatable, Sendable {
 
 public enum BoardIcons {
     /// The menu bar glyph of every account and of the shiibar-gh icon while
-    /// there is no account: the placeholder of MenuBarIcon.html (a pull
-    /// request), tinted with the account color. The final glyph is M5.
+    /// there is no account (MenuBarIcon.html), tinted with the account
+    /// color: the app icon's picture, a pull request mark whose lower right
+    /// node is a cat standing in side view, its back running on into the tail
+    /// and the tail into the arrow.
     public static let app = BoardIcon(
         [
-            .circle(cx: 4, cy: 3.5, r: 1.8, dash: nil), .circle(cx: 4, cy: 12.5, r: 1.8, dash: nil),
-            .circle(cx: 12, cy: 8, r: 1.8, dash: nil), .path("M4 5.3v5.4M4 7c0 1.5 2.5 1.5 6.2 1"),
+            .circle(cx: 3.65, cy: 3.51, r: 1.67, dash: nil), .circle(cx: 3.65, cy: 12.39, r: 1.67, dash: nil),
+            .path("M3.65 5.36V10.54"),
+            .path("M11.42 11.1H12.72C13.64 11.1 14.01 10.36 14.01 9.43V6.1C14.01 4.62 13.27 3.51 11.79 3.51H9.57"),
+            .path("M10.87 1.85L9.2 3.51L10.87 5.18"),
         ],
-        lineWidth: 1.5, roundCaps: true
+        lineWidth: 1.5, roundCaps: true, roundJoins: true,
+        fills: [
+            .rect(x: 8.09, y: 10.36, width: 5.37, height: 2.4, radius: 0),
+            .rect(x: 8.09, y: 10.36, width: 1.48, height: 4.44, radius: 0.74),
+            .rect(x: 11.98, y: 10.36, width: 1.48, height: 4.44, radius: 0.74),
+            .path("M7.06 7.77L6.76 10.36C6.76 11.2 7.44 11.88 8.28 11.88C9.12 11.88 9.79 11.2 9.79 10.36L9.5 7.77L8.52 9.01H8.04Z"),
+        ]
     )
     public static let account = app
     public static let warning = BoardIcon(

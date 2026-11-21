@@ -268,7 +268,7 @@ public enum IconMenu {
 }
 
 /// The menu bar image of one account (docs/design/MenuBarIcon.html): the
-/// placeholder glyph in the account color, the dot in the accent color at the
+/// glyph in the account color, the dot in the accent color at the
 /// top right and
 /// the triangle at the bottom left, each cut out of the glyph so it reads on
 /// any menu bar.
@@ -333,6 +333,11 @@ public enum MenuBarImage {
         context.setLineCap(icon.roundCaps ? .round : .butt)
         context.setLineJoin(icon.roundJoins ? .round : .miter)
         context.strokePath()
+        if let fill = IconPath.fillPath(icon, in: glyph, flipY: true) {
+            context.addPath(fill)
+            context.setFillColor(tint)
+            context.fillPath()
+        }
 
         func knockOut(_ path: CGPath) {
             context.saveGState()
