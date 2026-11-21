@@ -4,12 +4,12 @@ import XCTest
 
 final class WireTests: XCTestCase {
     static let accountJSON = """
-    {"id":"3407303","login":"me","color":"teal","token":{"registered":true,"expires_at":1800086400,
+    {"id":"1000001","login":"me","color":"teal","token":{"registered":true,"expires_at":1800086400,
      "last_test":{"at":1799990000,"results":[{"item":"account","label":"Account","owner":null,"outcome":"ok","text":"me","url":null},
        {"item":"later","label":"New","owner":null,"outcome":"maybe","text":"?","url":null}]}},
      "updated_at":1800000000,"review_count":3,"unread":true,"later":1,
-     "warnings":[{"kind":"token_expiring","account":"3407303","owner":null,"message":"Token expires in 1 day","until":1800086400,"url":null},
-                 {"kind":"something_new","account":"3407303","owner":null,"message":"x","until":null,"url":null}],
+     "warnings":[{"kind":"token_expiring","account":"1000001","owner":null,"message":"Token expires in 1 day","until":1800086400,"url":null},
+                 {"kind":"something_new","account":"1000001","owner":null,"message":"x","until":null,"url":null}],
      "rate_limit":{"graphql":{"used":1240,"limit":5000,"reset_at":1800003600},"rest":null},
      "owners":[{"id":"o2","name":"example-org","kind":"enterprise","github_id":21955855,"enabled":true,"notify":true,
                 "skip_drafts":false,"review_count":2,"pr_count":4}]}
@@ -61,16 +61,16 @@ final class WireTests: XCTestCase {
 
     func testACardCarriesItsAvatarFiltersAndRows() throws {
         let line = """
-        {"id":"3407303:PR_1","pr":"org/app#1","account":"3407303","owner":"o2","title":"T","url":"u","author":"alice",
+        {"id":"1000001:PR_1","pr":"org/app#1","account":"1000001","owner":"o2","title":"T","url":"u","author":"alice",
          "author_avatar_url":"https://avatars.example/a?s=32","authored_by_me":false,"assigned_to_me":true,
          "review_requested":true,"awaiting_review":true,"state_label":"mergeable",
          "review":"approved","checks":"in_progress","base_status":"behind","base":"main","head":"x",
          "added_at":null,"created_at":null,"updated_at":1799990000,"links":{"review":"r","checks":"c","base":"b"},
          "placement":{"tab":"review","section":"waiting","position":2},"muted":["repo","author","later"],
          "dismissed_at":null,"dismiss_expires_at":null,"older_rows":true,
-         "rows":[{"id":"3407303:E_1","pr":"org/app#1","pr_title":"T","account":"3407303","owner":"o2","kind":"team_mentioned",
+         "rows":[{"id":"1000001:E_1","pr":"org/app#1","pr_title":"T","account":"1000001","owner":"o2","kind":"team_mentioned",
                   "text":"hi","counts":{"THUMBS_UP":3},"actor":null,"url":"u","occurred_at":5,"unread":true,"muted":true},
-                 {"id":"3407303:E_2","pr":"org/app#1","pr_title":"T","account":"3407303","owner":"o2","kind":"reopened",
+                 {"id":"1000001:E_2","pr":"org/app#1","pr_title":"T","account":"1000001","owner":"o2","kind":"reopened",
                   "text":null,"counts":null,"actor":"bob","url":"u","occurred_at":4,"unread":false,"muted":false}]}
         """
         let card = try JSONDecoder().decode(Card.self, from: Data(line.utf8))
@@ -131,13 +131,13 @@ final class WireTests: XCTestCase {
 
     func testANotificationDecodes() throws {
         let line = """
-        {"event":"notify","notification":{"id":"n1","type":"summary","account":"3407303","owner":"o2","rows":["a","b"],"pr":null,
+        {"event":"notify","notification":{"id":"n1","type":"summary","account":"1000001","owner":"o2","rows":["a","b"],"pr":null,
          "url":null,"title":"me · 2 new events","subtitle":"org · in 2 PRs","body":null}}
         """
         let event = try JSONDecoder().decode(SubscribeEvent.self, from: Data(line.utf8))
         guard case .notify(let note) = event else { return XCTFail("\(event)") }
         XCTAssertEqual(note.type, .known(.summary))
-        XCTAssertEqual(note.account, "3407303")
+        XCTAssertEqual(note.account, "1000001")
         XCTAssertEqual(note.subtitle, "org · in 2 PRs")
         XCTAssertNil(note.body)
     }

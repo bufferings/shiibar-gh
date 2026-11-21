@@ -54,7 +54,7 @@ final class LifecycleTests: XCTestCase {
 
 final class PresentationTests: XCTestCase {
     func account(_ warnings: [Warning], token: TokenInfo = TokenInfo()) -> Account {
-        Account(id: "3407303", login: "example-work", token: token, warnings: warnings)
+        Account(id: "1000001", login: "example-work", token: token, warnings: warnings)
     }
 
     func testBannerLinesFollowTheTableOrderWordingAndButtons() {

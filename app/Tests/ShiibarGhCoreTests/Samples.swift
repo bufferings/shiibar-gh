@@ -6,7 +6,7 @@ import Foundation
 /// example-work with example-org (o2), acme-corp (o3) and Public (o4).
 func sampleAccount(disabled: Set<String> = []) -> Account {
     Account(
-        id: "3407303", login: "example-work", color: .red, unread: true,
+        id: "1000001", login: "example-work", color: .red, unread: true,
         owners: [
             Owner(id: "o2", name: "example-org", kind: .org, enabled: !disabled.contains("o2"), prCount: 4),
             Owner(id: "o3", name: "acme-corp", kind: .org, enabled: !disabled.contains("o3"), prCount: 1),

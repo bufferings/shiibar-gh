@@ -175,7 +175,7 @@ final class SurfaceFormModelTests: XCTestCase {
         (defaults, suite) = testDefaults()
         api = FakeAPI()
         model = AppModel(api: api, store: UIStateStore(defaults: defaults), opener: FakeOpener(), notifier: FakeNotifier(), clock: { T0 })
-        model.handle(.snapshot(accounts: [sampleAccount(), Account(id: "583231", login: "example-user")], keychain: .known(.ok), dbUnreadable: false))
+        model.handle(.snapshot(accounts: [sampleAccount(), Account(id: "200001", login: "example-user")], keychain: .known(.ok), dbUnreadable: false))
     }
 
     override func tearDown() async throws {
@@ -186,28 +186,28 @@ final class SurfaceFormModelTests: XCTestCase {
     /// value reads as the popover.
     func testTheFormIsSavedPerAccount() {
         let store = UIStateStore(defaults: defaults)
-        XCTAssertEqual(store.surfaceForm(account: "3407303"), .popover, "nothing saved")
-        store.setSurfaceForm(.window, account: "3407303")
-        XCTAssertEqual(store.surfaceForm(account: "3407303"), .window)
-        XCTAssertEqual(store.surfaceForm(account: "583231"), .popover, "the other account's stays")
-        XCTAssertEqual(defaults.string(forKey: "v4.form.3407303"), "window")
-        defaults.set("sheet", forKey: "v4.form.583231")
-        XCTAssertEqual(store.surfaceForm(account: "583231"), .popover, "unreadable")
-        defaults.set(3, forKey: "v4.form.583231")
-        XCTAssertEqual(store.surfaceForm(account: "583231"), .popover, "not a string")
-        store.setSurfaceForm(.popover, account: "3407303")
-        XCTAssertEqual(defaults.string(forKey: "v4.form.3407303"), "popover")
+        XCTAssertEqual(store.surfaceForm(account: "1000001"), .popover, "nothing saved")
+        store.setSurfaceForm(.window, account: "1000001")
+        XCTAssertEqual(store.surfaceForm(account: "1000001"), .window)
+        XCTAssertEqual(store.surfaceForm(account: "200001"), .popover, "the other account's stays")
+        XCTAssertEqual(defaults.string(forKey: "v4.form.1000001"), "window")
+        defaults.set("sheet", forKey: "v4.form.200001")
+        XCTAssertEqual(store.surfaceForm(account: "200001"), .popover, "unreadable")
+        defaults.set(3, forKey: "v4.form.200001")
+        XCTAssertEqual(store.surfaceForm(account: "200001"), .popover, "not a string")
+        store.setSurfaceForm(.popover, account: "1000001")
+        XCTAssertEqual(defaults.string(forKey: "v4.form.1000001"), "popover")
     }
 
     /// Closing a surface does not change the form: only `Open in window`
     /// and `Open in popover` do.
     func testClosingKeepsTheForm() {
-        model.store.setSurfaceForm(.window, account: "3407303")
-        model.surfaceDisplayed(.window, account: "3407303", true, opening: true)
-        model.surfaceOpened(.window, account: "3407303")
-        model.surfaceClosed(.window, account: "3407303")
-        model.surfaceDisplayed(.window, account: "3407303", false)
-        XCTAssertEqual(model.store.surfaceForm(account: "3407303"), .window)
+        model.store.setSurfaceForm(.window, account: "1000001")
+        model.surfaceDisplayed(.window, account: "1000001", true, opening: true)
+        model.surfaceOpened(.window, account: "1000001")
+        model.surfaceClosed(.window, account: "1000001")
+        model.surfaceDisplayed(.window, account: "1000001", false)
+        XCTAssertEqual(model.store.surfaceForm(account: "1000001"), .window)
     }
 
     /// `account_removed` deletes the form and the global shortcut; an
@@ -215,25 +215,25 @@ final class SurfaceFormModelTests: XCTestCase {
     func testOnlyARemovedAccountLosesItsFormAndShortcut() {
         let store = model.store
         let shortcut = GlobalShortcut(keyCode: 0x31, modifiers: [.control, .option], keyName: "Space")
-        for account in ["3407303", "583231"] {
+        for account in ["1000001", "200001"] {
             store.setSurfaceForm(.window, account: account)
             store.setShortcut(shortcut, account: account)
         }
         var removed: [String] = []
         model.onAccountRemoved = { removed.append($0) }
         model.handle(.snapshot(accounts: [], keychain: .known(.ok), dbUnreadable: true))
-        XCTAssertEqual(store.surfaceForm(account: "3407303"), .window, "unreadable: kept")
-        XCTAssertEqual(store.shortcut(account: "3407303"), shortcut)
+        XCTAssertEqual(store.surfaceForm(account: "1000001"), .window, "unreadable: kept")
+        XCTAssertEqual(store.shortcut(account: "1000001"), shortcut)
         XCTAssertEqual(removed, [])
-        model.handle(.snapshot(accounts: [sampleAccount(), Account(id: "583231", login: "example-user")], keychain: .known(.ok), dbUnreadable: false))
-        model.handle(.accountRemoved("3407303"))
-        XCTAssertEqual(removed, ["3407303"])
-        XCTAssertEqual(store.surfaceForm(account: "3407303"), .popover)
-        XCTAssertNil(store.shortcut(account: "3407303"))
-        XCTAssertNil(defaults.object(forKey: "v4.form.3407303"))
-        XCTAssertNil(defaults.object(forKey: "v4.shortcut.3407303"))
-        XCTAssertEqual(store.surfaceForm(account: "583231"), .window, "the other account's stay")
-        XCTAssertEqual(store.shortcut(account: "583231"), shortcut)
+        model.handle(.snapshot(accounts: [sampleAccount(), Account(id: "200001", login: "example-user")], keychain: .known(.ok), dbUnreadable: false))
+        model.handle(.accountRemoved("1000001"))
+        XCTAssertEqual(removed, ["1000001"])
+        XCTAssertEqual(store.surfaceForm(account: "1000001"), .popover)
+        XCTAssertNil(store.shortcut(account: "1000001"))
+        XCTAssertNil(defaults.object(forKey: "v4.form.1000001"))
+        XCTAssertNil(defaults.object(forKey: "v4.shortcut.1000001"))
+        XCTAssertEqual(store.surfaceForm(account: "200001"), .window, "the other account's stay")
+        XCTAssertEqual(store.shortcut(account: "200001"), shortcut)
     }
 
     /// A notification shows the surface of the account's form; the open
@@ -241,22 +241,22 @@ final class SurfaceFormModelTests: XCTestCase {
     func testANotificationFollowsTheForm() {
         var shown: [String] = []
         model.onShowAccount = { shown.append("\($0) \($1)") }
-        model.notificationClicked(type: .summary, account: "3407303", url: nil)
-        XCTAssertEqual(shown.last, "3407303 popover")
-        model.store.setSurfaceForm(.window, account: "3407303")
-        model.notificationClicked(type: .summary, account: "3407303", url: nil)
-        XCTAssertEqual(shown.last, "3407303 window", "the window form, closed: the window opens")
-        model.notificationClicked(type: .single, account: "3407303", url: nil, pr: "example-org/api#402")
-        XCTAssertEqual(shown.last, "3407303 window")
-        model.notificationClicked(type: .summary, account: "583231", url: nil)
-        XCTAssertEqual(shown.last, "583231 popover", "each account its own form")
+        model.notificationClicked(type: .summary, account: "1000001", url: nil)
+        XCTAssertEqual(shown.last, "1000001 popover")
+        model.store.setSurfaceForm(.window, account: "1000001")
+        model.notificationClicked(type: .summary, account: "1000001", url: nil)
+        XCTAssertEqual(shown.last, "1000001 window", "the window form, closed: the window opens")
+        model.notificationClicked(type: .single, account: "1000001", url: nil, pr: "example-org/api#402")
+        XCTAssertEqual(shown.last, "1000001 window")
+        model.notificationClicked(type: .summary, account: "200001", url: nil)
+        XCTAssertEqual(shown.last, "200001 popover", "each account its own form")
     }
 
     // MARK: Switching the form
 
     func cards() async -> AccountViewModel {
         api.cards = sampleCards()
-        let data = model.viewModel("3407303")
+        let data = model.viewModel("1000001")
         data.reload()
         await settle()
         return data
@@ -271,29 +271,29 @@ final class SurfaceFormModelTests: XCTestCase {
                 for dismissed in [false, true] {
                     let source = data.list(from)
                     let target = data.list(to)
-                    model.surfaceDisplayed(from, account: "3407303", true, opening: true)
-                    model.surfaceOpened(from, account: "3407303")
+                    model.surfaceDisplayed(from, account: "1000001", true, opening: true)
+                    model.surfaceOpened(from, account: "1000001")
                     source.openTab(tab)
                     source.setSearch("api")
                     if dismissed { source.openDismissedList() }
                     let handoff = SurfaceHandoff.read(from: source)
                     // The source closes (a popover ends; a window closes).
-                    model.surfaceClosed(from, account: "3407303")
-                    if from == .window { model.surfaceDisplayed(.window, account: "3407303", false) }
-                    model.surfaceDisplayed(from, account: "3407303", false)
+                    model.surfaceClosed(from, account: "1000001")
+                    if from == .window { model.surfaceDisplayed(.window, account: "1000001", false) }
+                    model.surfaceDisplayed(from, account: "1000001", false)
                     XCTAssertFalse(source.showingDismissed, "closing drops the source's Dismissed list")
                     handoff.apply(to: target)
-                    model.surfaceDisplayed(to, account: "3407303", true, opening: true)
-                    model.surfaceOpened(to, account: "3407303")
+                    model.surfaceDisplayed(to, account: "1000001", true, opening: true)
+                    model.surfaceOpened(to, account: "1000001")
                     XCTAssertEqual(target.tab, tab, "\(from) → \(to)")
                     XCTAssertEqual(target.showingDismissed, dismissed, "\(from) → \(to) \(tab)")
-                    XCTAssertEqual(model.store.lastTab(account: "3407303", surface: to), tab, "kept as the last tab")
+                    XCTAssertEqual(model.store.lastTab(account: "1000001", surface: to), tab, "kept as the last tab")
                     XCTAssertEqual(target.data.search(.tab(tab)), "api", "the account's search text")
                     XCTAssertNil(target.selection, "no selection carried")
                     if dismissed { target.closeDismissedList() }
-                    model.surfaceClosed(to, account: "3407303")
-                    if to == .window { model.surfaceDisplayed(.window, account: "3407303", false) }
-                    model.surfaceDisplayed(to, account: "3407303", false)
+                    model.surfaceClosed(to, account: "1000001")
+                    if to == .window { model.surfaceDisplayed(.window, account: "1000001", false) }
+                    model.surfaceDisplayed(to, account: "1000001", false)
                     source.setSearch("")
                 }
             }
@@ -304,16 +304,16 @@ final class SurfaceFormModelTests: XCTestCase {
     func testTheSelectionStaysBehind() async {
         let data = await cards()
         let popover = data.list(.popover)
-        model.surfaceDisplayed(.popover, account: "3407303", true, opening: true)
+        model.surfaceDisplayed(.popover, account: "1000001", true, opening: true)
         popover.openTab(.review)
         popover.select(.header(card: "T1"))
         let handoff = SurfaceHandoff.read(from: popover)
         XCTAssertEqual(handoff, SurfaceHandoff(tab: .review, dismissed: false))
-        model.surfaceClosed(.popover, account: "3407303")
-        model.surfaceDisplayed(.popover, account: "3407303", false)
+        model.surfaceClosed(.popover, account: "1000001")
+        model.surfaceDisplayed(.popover, account: "1000001", false)
         let window = data.list(.window)
         handoff.apply(to: window)
-        model.surfaceDisplayed(.window, account: "3407303", true, opening: true)
+        model.surfaceDisplayed(.window, account: "1000001", true, opening: true)
         XCTAssertEqual(window.tab, .review)
         XCTAssertNil(window.selection)
         XCTAssertTrue(window.selectedCards.isEmpty)
@@ -331,7 +331,7 @@ extension FilterModelTests {
         await settle()
         XCTAssertEqual(list.lingering, ["U1"])
         let handoff = SurfaceHandoff.read(from: list)
-        model.surfaceClosed(.popover, account: "3407303")
+        model.surfaceClosed(.popover, account: "1000001")
         show(.popover, false)
         let window = list.data.list(.window)
         handoff.apply(to: window)

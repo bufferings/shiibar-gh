@@ -28,15 +28,15 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(again.windowFrame(account: "1001"), "{{10, 20}, {460, 620}}")
         XCTAssertEqual(again.options(account: "1001"), ListOptions(groupBy: .status, thenBy: .owner, sort: .recentlyAdded))
         XCTAssertFalse(again.keepOnTop(account: "1001"))
-        XCTAssertTrue(again.keepOnTop(account: "583231"))
+        XCTAssertTrue(again.keepOnTop(account: "200001"))
         XCTAssertEqual(again.collapsed(account: "1001"), ["review|inbox"])
         XCTAssertEqual(again.expanded(account: "1001"), ["mine|done"])
         XCTAssertEqual(again.groupOrders(account: "1001"), [.status: ["closed", "open"]])
         XCTAssertEqual(again.repositories(account: "1001"), ["o/b", "o/a"])
         XCTAssertEqual(again.lastTab(account: "1001", surface: .popover), .review)
         XCTAssertEqual(again.lastTab(account: "1001", surface: .window), .mine)
-        XCTAssertNil(again.windowFrame(account: "583231"), "another account has its own")
-        XCTAssertEqual(again.options(account: "583231"), ListOptions())
+        XCTAssertNil(again.windowFrame(account: "200001"), "another account has its own")
+        XCTAssertEqual(again.options(account: "200001"), ListOptions())
         XCTAssertTrue(defaults.dictionaryRepresentation().keys.filter { $0.contains("1001") }.allSatisfy { $0.hasPrefix("v4.") })
     }
 
@@ -48,14 +48,14 @@ final class StoreTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(["mine|done", "mine|main", "review|todo"], forKey: "v4.collapsed.1001")
         defaults.set(["mine|main"], forKey: "v4.expanded.1001")
-        defaults.set(["mine|main", "mine|done"], forKey: "v4.expanded.583231")
+        defaults.set(["mine|main", "mine|done"], forKey: "v4.expanded.200001")
         let store = UIStateStore(defaults: defaults)
         XCTAssertEqual(store.collapsed(account: "1001"), ["mine|done", "review|inbox"], "Todo's key read as Inbox's")
         XCTAssertEqual(defaults.stringArray(forKey: "v4.collapsed.1001"), ["mine|done", "review|inbox"], "saved without it")
         XCTAssertEqual(store.expanded(account: "1001"), [])
         XCTAssertEqual(defaults.stringArray(forKey: "v4.expanded.1001"), [])
-        XCTAssertEqual(defaults.stringArray(forKey: "v4.expanded.583231"), ["mine|main", "mine|done"], "another account until it is read")
-        XCTAssertEqual(store.expanded(account: "583231"), ["mine|done"])
+        XCTAssertEqual(defaults.stringArray(forKey: "v4.expanded.200001"), ["mine|main", "mine|done"], "another account until it is read")
+        XCTAssertEqual(store.expanded(account: "200001"), ["mine|done"])
         // Mine's new sections start from the defaults.
         let sections = layout(.mine, collapsed: store.collapsed(account: "1001"), expanded: store.expanded(account: "1001"))
         XCTAssertEqual(sections.map(\.collapsed), [true, false, false, false], "Done, at the top, stays collapsed")
@@ -70,13 +70,13 @@ final class StoreTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(["review|todo", "mine|done"], forKey: "v4.collapsed.1001")
         defaults.set(["mine|todo", "review|todo", "repository|none|example-org/api|"], forKey: "v4.expanded.1001")
-        defaults.set(["review|todo", "review|inbox"], forKey: "v4.expanded.583231")
+        defaults.set(["review|todo", "review|inbox"], forKey: "v4.expanded.200001")
         let store = UIStateStore(defaults: defaults)
         XCTAssertEqual(store.collapsed(account: "1001"), ["review|inbox", "mine|done"])
         XCTAssertEqual(defaults.stringArray(forKey: "v4.collapsed.1001"), ["mine|done", "review|inbox"])
         XCTAssertEqual(store.expanded(account: "1001"), ["mine|inbox", "review|inbox", "repository|none|example-org/api|"])
-        XCTAssertEqual(store.expanded(account: "583231"), ["review|inbox"], "both keys: one Inbox")
-        XCTAssertEqual(defaults.stringArray(forKey: "v4.expanded.583231"), ["review|inbox"])
+        XCTAssertEqual(store.expanded(account: "200001"), ["review|inbox"], "both keys: one Inbox")
+        XCTAssertEqual(defaults.stringArray(forKey: "v4.expanded.200001"), ["review|inbox"])
         let sections = layout(.review, collapsed: store.collapsed(account: "1001"), expanded: store.expanded(account: "1001"))
         XCTAssertEqual(sections.last?.key, "review|inbox")
         XCTAssertEqual(sections.last?.collapsed, true, "Inbox stays collapsed as Todo was")
@@ -171,7 +171,7 @@ final class SettingsModelTests: XCTestCase {
         (defaults, suite) = testDefaults()
         api = FakeAPI()
         app = AppModel(api: api, store: UIStateStore(defaults: defaults), opener: FakeOpener(), notifier: FakeNotifier(), clock: { T0 })
-        app.handle(.snapshot(accounts: [sampleAccount(), Account(id: "583231", login: "example-user")], keychain: .known(.ok), dbUnreadable: false))
+        app.handle(.snapshot(accounts: [sampleAccount(), Account(id: "200001", login: "example-user")], keychain: .known(.ok), dbUnreadable: false))
     }
 
     override func tearDown() async throws {
@@ -195,25 +195,25 @@ final class SettingsModelTests: XCTestCase {
 
     func testDestinationsAndSelection() async {
         let settings = SettingsModel(app: app, launch: nil)
-        settings.show(.account("583231"))
+        settings.show(.account("200001"))
         XCTAssertEqual(settings.tab, .accounts)
-        XCTAssertEqual(settings.selection, .account("583231"))
+        XCTAssertEqual(settings.selection, .account("200001"))
         settings.show(.general)
         XCTAssertEqual(settings.tab, .general)
         // An owner is one page without tabs (DESIGN.md, "Settings rules" 7).
-        settings.select(.owner(account: "3407303", owner: "o2"))
-        XCTAssertEqual(settings.selection, .owner(account: "3407303", owner: "o2"))
+        settings.select(.owner(account: "1000001", owner: "o2"))
+        XCTAssertEqual(settings.selection, .owner(account: "1000001", owner: "o2"))
         XCTAssertEqual(SettingsTab.allCases.map(\.rawValue), ["General", "Accounts", "Dismissed"])
-        settings.select(.owner(account: "3407303", owner: "o3"))
+        settings.select(.owner(account: "1000001", owner: "o3"))
         XCTAssertEqual(settings.selectedOwner?.name, "acme-corp")
         await settle()
         XCTAssertTrue(api.calls.contains("owner_events_get example-work acme-corp"))
-        app.handle(.accountRemoved("3407303"))
+        app.handle(.accountRemoved("1000001"))
         settings.ensureSelection()
-        XCTAssertEqual(settings.selection, .account("583231"), "a removed account moves the selection")
-        settings.select(.owner(account: "583231", owner: "gone"))
+        XCTAssertEqual(settings.selection, .account("200001"), "a removed account moves the selection")
+        settings.select(.owner(account: "200001", owner: "gone"))
         settings.ensureSelection()
-        XCTAssertEqual(settings.selection, .account("583231"))
+        XCTAssertEqual(settings.selection, .account("200001"))
     }
 
     /// My review has no Notify column: the dash sends nothing; its List
@@ -259,7 +259,7 @@ final class SettingsModelTests: XCTestCase {
         }
         XCTAssertFalse(api.calls.contains { $0.contains("user  ") }, "an empty name is not sent")
         _ = org
-        XCTAssertEqual(settings.selection, .account("3407303"), "removing an owner selects its account")
+        XCTAssertEqual(settings.selection, .account("1000001"), "removing an owner selects its account")
     }
 
     func testAReadStartedBeforeAChangeDoesNotUndoIt() async {
@@ -268,7 +268,7 @@ final class SettingsModelTests: XCTestCase {
         let org = account.owners[0]
         api.events = ["mentioned": EventCell(list: true, notify: true)]
         api.eventsDelay = 200_000_000
-        settings.select(.owner(account: "3407303", owner: "o2"))
+        settings.select(.owner(account: "1000001", owner: "o2"))
         await settle()
         // The user unticks Notify while the read is still on its way.
         api.events = ["mentioned": EventCell(list: true, notify: false)]
@@ -279,7 +279,7 @@ final class SettingsModelTests: XCTestCase {
         // A read started after the change is kept.
         api.eventsDelay = 0
         api.events = ["mentioned": EventCell(list: false, notify: false)]
-        settings.loadOwner(account: "3407303", owner: "o2")
+        settings.loadOwner(account: "1000001", owner: "o2")
         await settle()
         XCTAssertEqual(settings.cell("o2", .mentioned), EventCell(list: false, notify: false))
     }
@@ -291,7 +291,7 @@ final class SettingsModelTests: XCTestCase {
         let saved = ["mentioned": EventCell(list: true, notify: true)]
         api.events = saved
         api.eventsDelay = 200_000_000
-        settings.select(.owner(account: "3407303", owner: "o2"))
+        settings.select(.owner(account: "1000001", owner: "o2"))
         await settle()
         // The edit is refused while the first read is still on its way.
         api.failNext = DaemonError(code: .invalid, message: "invalid: refused")
@@ -312,42 +312,42 @@ final class SettingsModelTests: XCTestCase {
         let account = sampleAccount()
         api.mutes = Mutes(repos: ["example-org/legacy"], users: ["example-bot"], prs: [])
         settings.windowOpened()
-        settings.show(.account("3407303"))
+        settings.show(.account("1000001"))
         await settle()
-        XCTAssertEqual(settings.mutes(.repo, of: "3407303"), ["example-org/legacy"])
-        XCTAssertFalse(settings.canAddMute(.repo, "Example-Org/Legacy", of: "3407303"))
-        XCTAssertFalse(settings.canAddMute(.repo, "sandbox", of: "3407303"))
-        XCTAssertTrue(settings.canAddMute(.repo, "example-org/sandbox", of: "3407303"))
-        XCTAssertFalse(settings.canAddMute(.pr, "example-org/api", of: "3407303"))
-        XCTAssertTrue(settings.canAddMute(.pr, "example-org/api#402", of: "3407303"))
+        XCTAssertEqual(settings.mutes(.repo, of: "1000001"), ["example-org/legacy"])
+        XCTAssertFalse(settings.canAddMute(.repo, "Example-Org/Legacy", of: "1000001"))
+        XCTAssertFalse(settings.canAddMute(.repo, "sandbox", of: "1000001"))
+        XCTAssertTrue(settings.canAddMute(.repo, "example-org/sandbox", of: "1000001"))
+        XCTAssertFalse(settings.canAddMute(.pr, "example-org/api", of: "1000001"))
+        XCTAssertTrue(settings.canAddMute(.pr, "example-org/api#402", of: "1000001"))
         api.mutes.prs = ["example-org/api#402"]
         XCTAssertTrue(settings.addMute(.pr, "example-org/api#402", of: account))
         await settle()
-        XCTAssertEqual(settings.mutes(.pr, of: "3407303"), ["example-org/api#402"])
+        XCTAssertEqual(settings.mutes(.pr, of: "1000001"), ["example-org/api#402"])
         var cleared = 0
         api.refuse["mute"] = DaemonError(code: .notFound, message: "not found: PR example-org/api#999")
         XCTAssertTrue(settings.addMute(.pr, "example-org/api#999", of: account) { cleared += 1 })
         await settle()
         XCTAssertEqual(
-            settings.errors[SettingsModel.muteErrorKey(.pr, "3407303")], "Couldn't mute: pull request not found"
+            settings.errors[SettingsModel.muteErrorKey(.pr, "1000001")], "Couldn't mute: pull request not found"
         )
         XCTAssertEqual(cleared, 0, "the field keeps the text after a refusal")
         api.refuse["mute"] = DaemonError(code: .invalid, message: "invalid: bad name")
         XCTAssertTrue(settings.addMute(.repo, "example-org/x", of: account))
         await settle()
-        XCTAssertEqual(settings.errors[SettingsModel.muteErrorKey(.repo, "3407303")], "Couldn't mute: invalid: bad name")
+        XCTAssertEqual(settings.errors[SettingsModel.muteErrorKey(.repo, "1000001")], "Couldn't mute: invalid: bad name")
         api.refuse = [:]
         XCTAssertTrue(settings.addMute(.repo, "example-org/y", of: account) { cleared += 1 })
         await settle()
         XCTAssertEqual(cleared, 1, "cleared once the daemon took it")
-        XCTAssertNil(settings.errors[SettingsModel.muteErrorKey(.repo, "3407303")])
+        XCTAssertNil(settings.errors[SettingsModel.muteErrorKey(.repo, "1000001")])
         api.refuse = [:]
         api.clearCalls()
         api.mutes.users = []
         app.handle(.accountChanged(sampleAccount()))
         await settle()
         XCTAssertEqual(api.calls.filter { $0.hasPrefix("mutes_get") }, ["mutes_get example-work"])
-        XCTAssertEqual(settings.mutes(.user, of: "3407303"), [])
+        XCTAssertEqual(settings.mutes(.user, of: "1000001"), [])
     }
 
     func testAddAccountFromNoAccountsYetShowsTheSheet() {
@@ -445,7 +445,7 @@ final class SheetTests: XCTestCase {
     func testTheResultListIsReservedBeforeTheTest() async {
         let add = TokenSheetModel(mode: .add, app: app)
         XCTAssertEqual(add.resultRows, ["Account", "Scopes", "Notifications", "Team membership"].map(ResultRow.placeholder))
-        let edit = TokenSheetModel(mode: .edit("3407303"), app: app)
+        let edit = TokenSheetModel(mode: .edit("1000001"), app: app)
         XCTAssertEqual(edit.resultRows, ["Account", "Scopes", "Notifications", "Team membership", "example-org", "acme-corp"].map(ResultRow.placeholder), "Public has none")
         let result = TestResult(item: .scopes, label: "Scopes", outcome: .ok, text: "OK")
         let org = TestResult(item: .owner, label: "example-org", owner: "o2", outcome: .ok, text: "OK")
@@ -506,7 +506,7 @@ final class SheetTests: XCTestCase {
     }
 
     func testEditTestsTheSavedTokenUntilANewOneIsPasted() async {
-        let sheet = TokenSheetModel(mode: .edit("3407303"), app: app)
+        let sheet = TokenSheetModel(mode: .edit("1000001"), app: app)
         XCTAssertEqual(sheet.title, "Token for example-work")
         XCTAssertEqual(sheet.placeholder, TokenState.masked)
         XCTAssertTrue(sheet.canTest, "the saved token")
@@ -523,24 +523,24 @@ final class SheetTests: XCTestCase {
         await settle()
         XCTAssertEqual(saved, true)
         XCTAssertEqual(api.calls.last, "token_set example-work")
-        XCTAssertTrue(app.isChecking("3407303"))
+        XCTAssertTrue(app.isChecking("1000001"))
         var same = sampleAccount()
         same.token = TokenInfo(lastTest: nil)
         app.handle(.accountChanged(same))
-        XCTAssertTrue(app.isChecking("3407303"), "the save cleared last_test; still checking")
+        XCTAssertTrue(app.isChecking("1000001"), "the save cleared last_test; still checking")
         same.token = TokenInfo(lastTest: LastTest(at: 100, results: []))
         app.handle(.accountChanged(same))
-        XCTAssertTrue(app.isChecking("3407303"), "the old test does not end it")
+        XCTAssertTrue(app.isChecking("1000001"), "the old test does not end it")
         same.token = TokenInfo(lastTest: LastTest(at: T0, results: []))
         app.handle(.accountChanged(same))
-        XCTAssertFalse(app.isChecking("3407303"))
+        XCTAssertFalse(app.isChecking("1000001"))
     }
 
     func testEditOfAnAccountWithoutATokenStartsEmpty() {
         var me = sampleAccount()
         me.token = TokenInfo(registered: false)
         app.handle(.accountChanged(me))
-        let sheet = TokenSheetModel(mode: .edit("3407303"), app: app)
+        let sheet = TokenSheetModel(mode: .edit("1000001"), app: app)
         XCTAssertEqual(sheet.placeholder, "")
         XCTAssertFalse(sheet.canTest)
     }
@@ -548,7 +548,7 @@ final class SheetTests: XCTestCase {
     func testAddOwnerShowsWhyItFailedAndStaysOpen() async {
         api.ownerErrors["nobody"] = DaemonError(code: .notFound, message: "not found: owner nobody")
         api.ownerErrors["offline"] = DaemonError(code: .unreachable, message: "unreachable")
-        let sheet = AddOwnerModel(account: "3407303", app: app)
+        let sheet = AddOwnerModel(account: "1000001", app: app)
         XCTAssertFalse(sheet.canAdd, "nothing typed")
         XCTAssertTrue(sheet.hasPublic)
         XCTAssertFalse(sheet.canAddPublic, "Public is there already")
@@ -570,8 +570,8 @@ final class SheetTests: XCTestCase {
     }
 
     func testAddPublicAndTheKeychainRule() async {
-        app.handle(.accountChanged(Account(id: "3407303", login: "example-work")))
-        let sheet = AddOwnerModel(account: "3407303", app: app)
+        app.handle(.accountChanged(Account(id: "1000001", login: "example-work")))
+        let sheet = AddOwnerModel(account: "1000001", app: app)
         XCTAssertTrue(sheet.canAddPublic)
         var closed = false
         sheet.addPublic { closed = true }

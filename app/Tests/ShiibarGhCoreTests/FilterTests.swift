@@ -406,19 +406,19 @@ final class FilterModelTests: XCTestCase {
 
     func loaded(_ tab: ListTab, cards: [Card], surface: Surface = .popover) async -> SurfaceListModel {
         api.cards = cards
-        let data = model.viewModel("3407303")
+        let data = model.viewModel("1000001")
         data.reload()
         await settle()
         let list = data.list(surface)
         // Shown, as the popover or the window is while open.
-        model.surfaceDisplayed(surface, account: "3407303", true, opening: true)
+        model.surfaceDisplayed(surface, account: "1000001", true, opening: true)
         list.openTab(tab)
         return list
     }
 
     /// Shows a surface of the account (opens it), or hides it.
     func show(_ surface: Surface, _ shown: Bool) {
-        model.surfaceDisplayed(surface, account: "3407303", shown, opening: true)
+        model.surfaceDisplayed(surface, account: "1000001", shown, opening: true)
     }
 
     func ids(_ list: SurfaceListModel) -> [String] {
@@ -447,10 +447,10 @@ final class FilterModelTests: XCTestCase {
         let window = list.data.list(.window)
         window.openTab(.review)
         XCTAssertEqual(window.filter, list.filter, "the popover and the window share it")
-        let saved = UIStateStore(defaults: defaults).filters(account: "3407303")
+        let saved = UIStateStore(defaults: defaults).filters(account: "1000001")
         XCTAssertEqual(saved[.all], ListFilter(muted: .only))
         XCTAssertEqual(saved[.review], ListFilter(statuses: [.draft, .merged, .closed]))
-        XCTAssertEqual(UIStateStore(defaults: defaults).filters(account: "583231")[.all], ListFilter(), "another account")
+        XCTAssertEqual(UIStateStore(defaults: defaults).filters(account: "200001")[.all], ListFilter(), "another account")
         // Group by and the sort are not in the summary.
         list.data.setGroupBy(.status)
         list.data.setSort(.recentlyAdded)
@@ -478,7 +478,7 @@ final class FilterModelTests: XCTestCase {
         XCTAssertFalse(popover.filterOpen, "Mine is closed")
         popover.openTab(.review)
         XCTAssertTrue(popover.showsFilterOptions, "back to Review: open")
-        XCTAssertEqual(UIStateStore(defaults: defaults).filtersOpen(account: "3407303"), [.all, .review], "saved per tab")
+        XCTAssertEqual(UIStateStore(defaults: defaults).filtersOpen(account: "1000001"), [.all, .review], "saved per tab")
         XCTAssertEqual(UIStateStore(defaults: defaults).filtersOpen(account: "1"), [], "per account")
         popover.openDismissedList()
         XCTAssertTrue(popover.filterOpen, "the Dismissed list leaves it as it is")
@@ -554,7 +554,7 @@ final class FilterModelTests: XCTestCase {
         XCTAssertTrue(list.filterOpen, "the options stay open")
         XCTAssertEqual(list.data.filter(.all), ListFilter(muted: .only), "other tabs stay")
         XCTAssertEqual(list.data.filter(.mine), ListFilter(unreadOnly: true))
-        XCTAssertEqual(UIStateStore(defaults: defaults).filters(account: "3407303")[.review], ListFilter(), "saved")
+        XCTAssertEqual(UIStateStore(defaults: defaults).filters(account: "1000001")[.review], ListFilter(), "saved")
         window.openTab(.review)
         XCTAssertEqual(window.filter, ListFilter(), "the window's too")
         // With all defaults there is nothing to reset.
@@ -653,7 +653,7 @@ final class FilterModelTests: XCTestCase {
     func testANotificationChangesOnlyWhatHidesTheCard() async {
         let list = await loaded(.all, cards: sampleCards())
         list.data.setFilter(ListFilter(muted: .hide, statuses: [.merged], unreadOnly: true), tab: .review)
-        model.notificationClicked(type: .single, account: "3407303", url: nil, pr: "example-org/api#402")
+        model.notificationClicked(type: .single, account: "1000001", url: nil, pr: "example-org/api#402")
         XCTAssertEqual(list.tab, .review)
         XCTAssertEqual(list.filter, ListFilter(muted: .show, statuses: [.open, .merged], unreadOnly: true),
                        "Mute to Show, Open on; T7 has a blue mention: Unread only stays")
@@ -661,12 +661,12 @@ final class FilterModelTests: XCTestCase {
         XCTAssertEqual(list.data.filter(.all), ListFilter(), "other tabs stay")
         // Only shows a muted card: it stays Only.
         list.data.setFilter(ListFilter(muted: .only), tab: .review)
-        model.notificationClicked(type: .single, account: "3407303", url: nil, pr: "example-org/api#402")
+        model.notificationClicked(type: .single, account: "1000001", url: nil, pr: "example-org/api#402")
         XCTAssertEqual(list.filter, ListFilter(muted: .only))
         XCTAssertEqual(list.selection, .header(card: "T7"))
         // A read card under Unread only: Unread only goes off.
         list.data.setFilter(ListFilter(unreadOnly: true), tab: .review)
-        model.notificationClicked(type: .single, account: "3407303", url: nil, pr: "example-org/web#230")
+        model.notificationClicked(type: .single, account: "1000001", url: nil, pr: "example-org/web#230")
         XCTAssertEqual(list.filter, ListFilter())
         XCTAssertEqual(list.selection, .header(card: "T2"))
     }
@@ -841,8 +841,8 @@ final class FilterModelTests: XCTestCase {
         list.select(.row(id: "k", card: "K"))
         await settle()
         XCTAssertEqual(list.lingering, ["K"])
-        model.surfaceOpened(.popover, account: "3407303")
-        model.surfaceClosed(.popover, account: "3407303")
+        model.surfaceOpened(.popover, account: "1000001")
+        model.surfaceClosed(.popover, account: "1000001")
         XCTAssertEqual(list.lingering, [])
         XCTAssertEqual(ids(list), [])
         assertSelectionConsistent(list)
@@ -903,8 +903,8 @@ final class FilterModelTests: XCTestCase {
         show(.window, true)
         window.openTab(.review)
         // The popover closed; U1 read in the window.
-        model.surfaceOpened(.popover, account: "3407303")
-        model.surfaceClosed(.popover, account: "3407303")
+        model.surfaceOpened(.popover, account: "1000001")
+        model.surfaceClosed(.popover, account: "1000001")
         show(.popover, false)
         window.select(.row(id: "u1", card: "U1"))
         await settle()
@@ -971,7 +971,7 @@ final class FilterModelTests: XCTestCase {
         await settle()
         list.select(.header(card: "U3"))
         clock.advance(2)
-        model.notificationClicked(type: .single, account: "3407303", url: nil, pr: "example-org/api#2")
+        model.notificationClicked(type: .single, account: "1000001", url: nil, pr: "example-org/api#2")
         XCTAssertEqual(list.selection, .header(card: "U2"))
         XCTAssertEqual(list.lingering, ["U1"], "still kept, still counting")
         clock.advance(3)
@@ -1082,7 +1082,7 @@ final class FilterModelTests: XCTestCase {
         list.data.setSort(.recentlyAdded)
         XCTAssertEqual(list.shownCards, ["C", "A", "B"], "applied at once, the sheet still open")
         XCTAssertTrue(list.showsGrouping)
-        XCTAssertEqual(UIStateStore(defaults: defaults).options(account: "3407303").sort, .recentlyAdded)
+        XCTAssertEqual(UIStateStore(defaults: defaults).options(account: "1000001").sort, .recentlyAdded)
         XCTAssertNil(list.filter.summary, "not in the Filter's summary")
         list.data.setSort(.recentActivity)
         XCTAssertEqual(list.shownCards, ["B", "C", "A"])
