@@ -269,7 +269,7 @@ public enum IconMenu {
 
 /// The menu bar image of one account (docs/design/MenuBarIcon.html): the
 /// glyph in the account color at the image's full height, the dot in the
-/// accent color on the arrow's corner and the warning sign (a round-cornered
+/// accent color with a light ring on the arrow's corner and the warning sign (a round-cornered
 /// yellow triangle with an exclamation mark) on the lower ring. The marks lie
 /// on the glyph, inside its height, and each is cut out of it so it reads on
 /// any menu bar.
@@ -288,6 +288,7 @@ public enum IconMenu {
 public enum MenuBarImage {
     public static let width: CGFloat = 26
     public static let height: CGFloat = 18
+    static let dotRing = CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.85)
     /// The warning sign's colors, fixed for both appearances.
     static let warningYellow = CGColor(srgbRed: 1, green: 0.8, blue: 0, alpha: 1)
     static let warningInk = CGColor(srgbRed: 0.106, green: 0.106, blue: 0.118, alpha: 1)
@@ -365,6 +366,11 @@ public enum MenuBarImage {
             knockOut(CGPath(ellipseIn: CGRect(x: center.x - 4.5, y: center.y - 4.5, width: 9, height: 9), transform: nil))
             context.setFillColor(dot)
             context.fillEllipse(in: CGRect(x: center.x - radius, y: center.y - radius, width: 2 * radius, height: 2 * radius))
+            // A light ring on the dot's edge, as on the shiibar-cc icon, so
+            // the dot stands out on a dark menu bar.
+            context.setStrokeColor(dotRing)
+            context.setLineWidth(0.9)
+            context.strokeEllipse(in: CGRect(x: center.x - radius, y: center.y - radius, width: 2 * radius, height: 2 * radius))
         }
         if marks.triangle {
             // The warning sign: a triangle drawn with a round line, so its
