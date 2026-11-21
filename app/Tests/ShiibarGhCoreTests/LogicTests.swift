@@ -14,6 +14,16 @@ final class LifecycleTests: XCTestCase {
         }
     }
 
+    func testADevelopmentBuildComparesTheDaemonWithoutItsSuffix() {
+        XCTAssertEqual(DaemonLifecycle.daemonVersion(bundleVersion: "0.9.0-dev"), "0.9.0")
+        XCTAssertEqual(DaemonLifecycle.daemonVersion(bundleVersion: "0.9.0"), "0.9.0")
+        XCTAssertEqual(
+            DaemonLifecycle.startAction(
+                running: InfoResponse(version: "0.9.0", startedAt: 1),
+                appVersion: DaemonLifecycle.daemonVersion(bundleVersion: "0.9.0-dev")),
+            .attach)
+    }
+
     func testRespawnOnlyWhenNothingAnswersAndOursIsNotRunning() {
         let cases: [(Bool, Bool, Bool, Bool)] = [
             // answers, canLaunch, ownRunning, respawn

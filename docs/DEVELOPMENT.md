@@ -68,7 +68,7 @@ SHIIBAR_GH_TEST_DAEMON=$PWD/target/debug/shiibar-ghd swift test --package-path a
 
 ## 開発版のインストール
 
-`scripts/dev-install.sh` は、デーモン、CLI、アプリをリリースモードでビルドし、`~/Applications/Shiibar GH.app` を組み立てて、ローカルの固定の署名の ID（`shiibar-gh-local-signing`。初回にログインキーチェーンに作成する）で hardened runtime を付けて署名し、`~/.local/bin/shiibar-gh` を同梱の CLI へのリンクにして、アプリを起動する。実行中のアプリとデーモンは先に止める。`CFBundleVersion` は実行の時刻にする。アイコンのキャッシュが版で区別されるためである。
+`scripts/dev-install.sh` は、デーモン、CLI、アプリをリリースモードでビルドし、`~/Applications/Shiibar GH(Dev).app` を組み立てて（アプリの名前も `Shiibar GH(Dev)` にする。Finder、Dock、アプリの切り替えで、リリースのビルドと区別するためである。アプリの識別子はリリースと同じなので、Keychain、通知の許可、設定は共通である。以前の名前 `~/Applications/Shiibar GH.app` の開発用のインストールが残っていれば、止めて削除する）、ローカルの固定の署名の ID（`shiibar-gh-local-signing`。初回にログインキーチェーンに作成する）で hardened runtime を付けて署名し、`~/.local/bin/shiibar-gh` を同梱の CLI へのリンクにして、アプリを起動する。実行中のアプリとデーモンは先に止める。`CFBundleShortVersionString` は、ワークスペースのバージョンに `-dev` を付けた値にする（`0.9.0-dev`）。About の画面と Finder の「情報を見る」で、リリースのビルドと区別するためである。デーモンのバージョンには付けない。アプリは、デーモンのバージョンと比較するときに `-dev` を除く。`CFBundleVersion` は実行の時刻にする。アイコンのキャッシュが版で区別されるためである。
 
 `scripts/dev-uninstall.sh` は、ログイン項目の登録、アプリ、CLI のリンク、残ったデーモン、署名の ID を削除する。`--purge` を付けると、状態ディレクトリ、アプリの UserDefaults、Keychain のトークンの項目（`shiibar-gh token reset`）も削除する。0.1 の Keychain の項目（service `shiibar-gh`、account `tokens`）は削除しない。通知の許可は、システム設定の通知から利用者が削除する。
 

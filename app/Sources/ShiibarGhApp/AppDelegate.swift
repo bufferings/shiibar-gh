@@ -142,7 +142,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.model.notificationClicked(type: type, account: account, url: url, pr: pr)
         }
 
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
+        let version = DaemonLifecycle.daemonVersion(
+            bundleVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0")
         let helpers = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/shiibar-ghd")
         var launcher: DaemonLauncher? = bundled && FileManager.default.isExecutableFile(atPath: helpers.path)
             ? ProcessDaemonLauncher(executable: helpers, stateRoot: root)
