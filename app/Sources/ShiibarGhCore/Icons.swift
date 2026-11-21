@@ -270,8 +270,9 @@ public enum IconMenu {
 /// The menu bar image of one account (docs/design/MenuBarIcon.html): the
 /// glyph in the account color, the dot in the accent color at the
 /// top right and
-/// the triangle at the bottom left, each cut out of the glyph so it reads on
-/// any menu bar.
+/// the warning sign (a round-cornered triangle with an exclamation mark cut
+/// out) at the bottom left, each cut out of the glyph so it reads on any menu
+/// bar.
 ///
 /// The colors are resolved for `appearance`, the status button's effective
 /// appearance, inside `performAsCurrentDrawingAppearance` (Apple:
@@ -354,16 +355,28 @@ public enum MenuBarImage {
             context.fillEllipse(in: CGRect(x: center.x - 3.5, y: center.y - 3.5, width: 7, height: 7))
         }
         if marks.triangle {
-            // M5 .5 9.5 9.5 H.5z of the board, at the bottom left.
+            // The warning sign at the bottom left (the board's M5 .5 9.5 9.5
+            // H.5z): the triangle drawn 0.9 pt inside that outline with a
+            // round 1.8 pt line, so its corners are round and its size is the
+            // outline's, and the exclamation mark cut out of it.
             let triangle = CGMutablePath()
-            triangle.move(to: CGPoint(x: 5, y: 9.5))
-            triangle.addLine(to: CGPoint(x: 9.5, y: 0.5))
-            triangle.addLine(to: CGPoint(x: 0.5, y: 0.5))
+            triangle.move(to: CGPoint(x: 5, y: 7.49))
+            triangle.addLine(to: CGPoint(x: 8.04, y: 1.4))
+            triangle.addLine(to: CGPoint(x: 1.96, y: 1.4))
             triangle.closeSubpath()
-            knockOut(triangle.copy(strokingWithWidth: 3, lineCap: .round, lineJoin: .round, miterLimit: 1))
+            knockOut(triangle.copy(strokingWithWidth: 4.8, lineCap: .round, lineJoin: .round, miterLimit: 1))
+            knockOut(triangle)
             context.addPath(triangle)
             context.setFillColor(tint)
-            context.fillPath()
+            context.setStrokeColor(tint)
+            context.setLineWidth(1.8)
+            context.setLineJoin(.round)
+            context.drawPath(using: .fillStroke)
+            let bar = CGMutablePath()
+            bar.move(to: CGPoint(x: 5, y: 6.3))
+            bar.addLine(to: CGPoint(x: 5, y: 3.6))
+            knockOut(bar.copy(strokingWithWidth: 1.2, lineCap: .round, lineJoin: .round, miterLimit: 1))
+            knockOut(CGPath(ellipseIn: CGRect(x: 5 - 0.65, y: 1.9 - 0.65, width: 1.3, height: 1.3), transform: nil))
         }
         return true
     }
