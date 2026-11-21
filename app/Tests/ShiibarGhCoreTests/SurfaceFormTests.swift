@@ -175,7 +175,7 @@ final class SurfaceFormModelTests: XCTestCase {
         (defaults, suite) = testDefaults()
         api = FakeAPI()
         model = AppModel(api: api, store: UIStateStore(defaults: defaults), opener: FakeOpener(), notifier: FakeNotifier(), clock: { T0 })
-        model.handle(.snapshot(accounts: [sampleAccount(), Account(id: "583231", login: "bufferings")], keychain: .known(.ok), dbUnreadable: false))
+        model.handle(.snapshot(accounts: [sampleAccount(), Account(id: "583231", login: "example-user")], keychain: .known(.ok), dbUnreadable: false))
     }
 
     override func tearDown() async throws {
@@ -225,7 +225,7 @@ final class SurfaceFormModelTests: XCTestCase {
         XCTAssertEqual(store.surfaceForm(account: "3407303"), .window, "unreadable: kept")
         XCTAssertEqual(store.shortcut(account: "3407303"), shortcut)
         XCTAssertEqual(removed, [])
-        model.handle(.snapshot(accounts: [sampleAccount(), Account(id: "583231", login: "bufferings")], keychain: .known(.ok), dbUnreadable: false))
+        model.handle(.snapshot(accounts: [sampleAccount(), Account(id: "583231", login: "example-user")], keychain: .known(.ok), dbUnreadable: false))
         model.handle(.accountRemoved("3407303"))
         XCTAssertEqual(removed, ["3407303"])
         XCTAssertEqual(store.surfaceForm(account: "3407303"), .popover)

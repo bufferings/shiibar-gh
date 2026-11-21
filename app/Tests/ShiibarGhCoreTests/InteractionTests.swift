@@ -312,8 +312,8 @@ final class SelectedCardsTests: XCTestCase {
         await settle()
         await settle()
         XCTAssertEqual(calls("dismiss"), [
-            "dismiss bufferings-work example-org/api#407", "dismiss bufferings-work example-org/web#230",
-            "dismiss bufferings-work example-org/docs#88",
+            "dismiss example-work example-org/api#407", "dismiss example-work example-org/web#230",
+            "dismiss example-work example-org/docs#88",
         ], "in the order shown, one after another")
         XCTAssertTrue(list.selectedCards.contains("T2"), "the refused card comes back selected")
         XCTAssertEqual(list.data.failure, "Couldn't dismiss: not found: PR example-org/web#230", "one band")
@@ -328,8 +328,8 @@ final class SelectedCardsTests: XCTestCase {
         await settle()
         // In the order shown: Done first.
         XCTAssertEqual(calls("place"), [
-            "place bufferings-work acme-corp/infra#58 review doing bottom",
-            "place bufferings-work example-org/api#407 review doing bottom",
+            "place example-work acme-corp/infra#58 review doing bottom",
+            "place example-work example-org/api#407 review doing bottom",
         ])
         XCTAssertEqual(list.selectedCards.cards, ["T1", "D1"], "the moved cards stay selected")
         api.clearCalls()
@@ -337,7 +337,7 @@ final class SelectedCardsTests: XCTestCase {
         list.press(.delete)
         await settle()
         await settle()
-        XCTAssertEqual(calls("dismiss"), ["dismiss bufferings-work example-org/web#230"], "one card selected: that card")
+        XCTAssertEqual(calls("dismiss"), ["dismiss example-work example-org/web#230"], "one card selected: that card")
     }
 
     func testTheMenuOnASelectedCardActsOnAllAndCopyTakesEveryLink() async {
@@ -400,8 +400,8 @@ final class SelectedCardsTests: XCTestCase {
         await settle()
         await settle()
         XCTAssertEqual(calls("place"), [
-            "place bufferings-work acme-corp/infra#61 review inbox before example-org/web#230",
-            "place bufferings-work example-org/web#212 review inbox before example-org/web#230",
+            "place example-work acme-corp/infra#61 review inbox before example-org/web#230",
+            "place example-work example-org/web#212 review inbox before example-org/web#230",
         ])
         XCTAssertEqual(list.selectedCards.cards, ["R1", "W1"], "the moved cards are the selection")
         api.clearCalls()
@@ -410,7 +410,7 @@ final class SelectedCardsTests: XCTestCase {
         list.drop(.header("review|inbox"))
         await settle()
         await settle()
-        XCTAssertEqual(calls("place"), ["place bufferings-work example-org/docs#88 review inbox top"])
+        XCTAssertEqual(calls("place"), ["place example-work example-org/docs#88 review inbox top"])
         XCTAssertEqual(list.selectedCards.cards, ["T3"], "the dropped card is the selection")
     }
 
@@ -425,7 +425,7 @@ final class SelectedCardsTests: XCTestCase {
         XCTAssertEqual(list.selectedCards.cards, ["W1"])
         await settle()
         await settle()
-        XCTAssertEqual(calls("place"), ["place bufferings-work acme-corp/infra#61 review inbox before example-org/web#241"])
+        XCTAssertEqual(calls("place"), ["place example-work acme-corp/infra#61 review inbox before example-org/web#241"])
     }
 
     func testHoveringOverMorePRsWhileDraggingLeavesTheSectionFolded() async {
@@ -451,7 +451,7 @@ final class SelectedCardsTests: XCTestCase {
         XCTAssertEqual(list.sections[3].cards.map(\.id), ["M2", "M1"], "shown at once")
         await settle()
         await settle()
-        XCTAssertEqual(calls("place"), ["place bufferings-work acme-corp/web#77 mine inbox top"])
+        XCTAssertEqual(calls("place"), ["place example-work acme-corp/web#77 mine inbox top"])
     }
 
     /// A drop on an empty section of Mine (its frame or its heading).
@@ -463,13 +463,13 @@ final class SelectedCardsTests: XCTestCase {
         XCTAssertEqual(list.sections[2].cards.map(\.id), ["M2"], "shown at once")
         await settle()
         await settle()
-        XCTAssertEqual(calls("place"), ["place bufferings-work acme-corp/web#77 mine doing top"])
+        XCTAssertEqual(calls("place"), ["place example-work acme-corp/web#77 mine doing top"])
         api.clearCalls()
         list.beginDrag("M1")
         XCTAssertTrue(list.drop(.header("mine|done")))
         await settle()
         await settle()
-        XCTAssertEqual(calls("place"), ["place bufferings-work example-org/api#421 mine done"])
+        XCTAssertEqual(calls("place"), ["place example-work example-org/api#421 mine done"])
     }
 
     func testOptionUpMovesToTheTopOfMine() async {
@@ -479,7 +479,7 @@ final class SelectedCardsTests: XCTestCase {
         XCTAssertEqual(list.sections[3].cards.map(\.id), ["M2", "M1"])
         await settle()
         await settle()
-        XCTAssertEqual(calls("place"), ["place bufferings-work acme-corp/web#77 mine inbox top"])
+        XCTAssertEqual(calls("place"), ["place example-work acme-corp/web#77 mine inbox top"])
     }
 
     /// I / D / W move the selected card in Mine as in Review; in All they
@@ -494,7 +494,7 @@ final class SelectedCardsTests: XCTestCase {
         XCTAssertEqual(list.sections[3].cards.map(\.id), ["M2", "M1"], "from Doing: the top of Inbox")
         await settle()
         await settle()
-        XCTAssertEqual(calls("place"), ["place bufferings-work acme-corp/web#77 mine doing", "place bufferings-work acme-corp/web#77 mine inbox"])
+        XCTAssertEqual(calls("place"), ["place example-work acme-corp/web#77 mine doing", "place example-work acme-corp/web#77 mine inbox"])
         // Several cards (the fake daemon kept them in Inbox).
         api.clearCalls()
         list.select(.header(card: "M2"))

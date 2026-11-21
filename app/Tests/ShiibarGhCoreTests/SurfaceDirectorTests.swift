@@ -71,7 +71,7 @@ final class SurfaceDirectorTests: XCTestCase {
         (defaults, suite) = testDefaults()
         api = FakeAPI()
         model = AppModel(api: api, store: UIStateStore(defaults: defaults), opener: FakeOpener(), notifier: FakeNotifier(), clock: { T0 })
-        model.handle(.snapshot(accounts: [sampleAccount(), Account(id: b, login: "bufferings")], keychain: .known(.ok), dbUnreadable: false))
+        model.handle(.snapshot(accounts: [sampleAccount(), Account(id: b, login: "example-user")], keychain: .known(.ok), dbUnreadable: false))
         host = FakeSurfaceHost()
         director = SurfaceDirector(app: model)
         director.host = host

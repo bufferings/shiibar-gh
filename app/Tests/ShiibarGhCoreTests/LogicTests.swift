@@ -54,7 +54,7 @@ final class LifecycleTests: XCTestCase {
 
 final class PresentationTests: XCTestCase {
     func account(_ warnings: [Warning], token: TokenInfo = TokenInfo()) -> Account {
-        Account(id: "3407303", login: "bufferings-work", token: token, warnings: warnings)
+        Account(id: "3407303", login: "example-work", token: token, warnings: warnings)
     }
 
     func testBannerLinesFollowTheTableOrderWordingAndButtons() {
@@ -130,9 +130,9 @@ final class PresentationTests: XCTestCase {
 
     /// DESIGN.md, "Screens" and MenuBarIcon.html.
     func testTheMenuBarIconsAccessibilityText() {
-        XCTAssertEqual(MenuBarMarks.accessibilityLabel(Account(id: "a", login: "bufferings-work", unread: true, warnings: [Warning(kind: .fetchFailed)])),
-                       "Shiibar GH, bufferings-work, unread, needs attention")
-        XCTAssertEqual(MenuBarMarks.accessibilityLabel(Account(id: "a", login: "bufferings", unread: true)), "Shiibar GH, bufferings, unread")
+        XCTAssertEqual(MenuBarMarks.accessibilityLabel(Account(id: "a", login: "example-work", unread: true, warnings: [Warning(kind: .fetchFailed)])),
+                       "Shiibar GH, example-work, unread, needs attention")
+        XCTAssertEqual(MenuBarMarks.accessibilityLabel(Account(id: "a", login: "example-user", unread: true)), "Shiibar GH, example-user, unread")
         XCTAssertEqual(MenuBarMarks.accessibilityLabel(Account(id: "a", login: "me", warnings: [Warning(kind: .noToken)])), "Shiibar GH, me, needs attention")
         XCTAssertEqual(MenuBarMarks.accessibilityLabel(Account(id: "a", login: "me")), "Shiibar GH, me")
         XCTAssertEqual(MenuBarMarks.noAccountsLabel, "Shiibar GH, no accounts")
@@ -362,14 +362,14 @@ final class PresentationTests: XCTestCase {
 
     func testTestResultsRead() {
         let results = [
-            TestResult(item: .account, label: "Account", outcome: .ok, text: "bufferings-work"),
+            TestResult(item: .account, label: "Account", outcome: .ok, text: "example-work"),
             TestResult(item: .scopes, label: "Scopes", outcome: .failed, text: "Missing (read:org)"),
             TestResult(item: .notifications, label: "Notifications", outcome: .ok, text: "OK"),
             TestResult(item: .owner, label: "example-org", owner: "o2", outcome: .ssoRequired, text: "SSO authorization required", url: "https://sso"),
             TestResult(item: .teamMembership, label: "Team membership", outcome: .cantCheck, text: "Can't check"),
         ]
         let lines = results.map(TestResultLine.init)
-        XCTAssertEqual(lines.map(\.text), ["bufferings-work", "✗ Missing (read:org)", "✓ OK", "SSO authorization required", "Can't check"])
+        XCTAssertEqual(lines.map(\.text), ["example-work", "✗ Missing (read:org)", "✓ OK", "SSO authorization required", "Can't check"])
         XCTAssertEqual(lines.map(\.tone), [.neutral, .bad, .good, .caution, .neutral])
         XCTAssertEqual(lines[3].authorize, "https://sso")
         XCTAssertEqual(TestResultLine(TestResult(item: .owner, label: "x", outcome: .ssoRequired, text: "SSO authorization required")).authorize, CreateTokenURL.tokenSettings)
