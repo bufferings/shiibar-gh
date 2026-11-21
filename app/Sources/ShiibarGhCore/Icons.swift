@@ -268,11 +268,11 @@ public enum IconMenu {
 }
 
 /// The menu bar image of one account (docs/design/MenuBarIcon.html): the
-/// glyph in the account color, the dot in the accent color at the
-/// top right and
-/// the warning sign (a round-cornered triangle with an exclamation mark cut
-/// out) at the bottom left, each cut out of the glyph so it reads on any menu
-/// bar.
+/// glyph in the account color at the image's full height, the dot in the
+/// accent color on the arrow's corner and the warning sign (a round-cornered
+/// yellow triangle with an exclamation mark) on the lower ring. The marks lie
+/// on the glyph, inside its height, and each is cut out of it so it reads on
+/// any menu bar.
 ///
 /// The colors are resolved for `appearance`, the status button's effective
 /// appearance, inside `performAsCurrentDrawingAppearance` (Apple:
@@ -287,7 +287,10 @@ public enum IconMenu {
 /// and the dot's accent color.
 public enum MenuBarImage {
     public static let width: CGFloat = 26
-    public static let height: CGFloat = 22
+    public static let height: CGFloat = 18
+    /// The warning sign's colors, fixed for both appearances.
+    static let warningYellow = CGColor(srgbRed: 1, green: 0.8, blue: 0, alpha: 1)
+    static let warningInk = CGColor(srgbRed: 0.106, green: 0.106, blue: 0.118, alpha: 1)
 
     /// The accent color of the dot as drawn for `appearance`, in sRGB: the
     /// image is drawn with it, and the status item's look keeps it
@@ -326,11 +329,14 @@ public enum MenuBarImage {
         // colors": black in light, white in dark).
         let plain: NSColor = dark ? .white : .black
         let tint = (color.nsColor ?? plain).cgColor
-        let glyph = CGRect(x: 3, y: 3, width: 16, height: 16)
+        // The picture fills the image's height (17.3 of 18 pt) and sits in
+        // the middle of its width.
+        let side: CGFloat = 17.5
+        let glyph = CGRect(x: (width - side) / 2, y: (height - side) / 2, width: side, height: side)
         let icon = BoardIcons.account
         context.addPath(IconPath.cgPath(icon, in: glyph, flipY: true))
         context.setStrokeColor(tint)
-        context.setLineWidth(icon.lineWidth)
+        context.setLineWidth(icon.lineWidth * side / 16)
         context.setLineCap(icon.roundCaps ? .round : .butt)
         context.setLineJoin(icon.roundJoins ? .round : .miter)
         context.strokePath()
@@ -348,35 +354,45 @@ public enum MenuBarImage {
             context.restoreGState()
         }
 
+        // The marks lie on the picture and stay inside its height: the dot
+        // on the arrow's corner with its top at the picture's top, the
+        // warning sign on the lower ring with its bottom at the picture's
+        // bottom.
+        let top = glyph.maxY - 0.09, bottom = glyph.minY + 0.09, left = glyph.minX + 0.29
         if marks.dot {
-            let center = CGPoint(x: 20, y: height - 4.5)
-            knockOut(CGPath(ellipseIn: CGRect(x: center.x - 5, y: center.y - 5, width: 10, height: 10), transform: nil))
+            let radius: CGFloat = 3.6
+            let center = CGPoint(x: glyph.minX + 15.03 * side / 16, y: top - radius)
+            knockOut(CGPath(ellipseIn: CGRect(x: center.x - 4.5, y: center.y - 4.5, width: 9, height: 9), transform: nil))
             context.setFillColor(dot)
-            context.fillEllipse(in: CGRect(x: center.x - 3.5, y: center.y - 3.5, width: 7, height: 7))
+            context.fillEllipse(in: CGRect(x: center.x - radius, y: center.y - radius, width: 2 * radius, height: 2 * radius))
         }
         if marks.triangle {
-            // The warning sign at the bottom left (the board's M5 .5 9.5 9.5
-            // H.5z): the triangle drawn 0.9 pt inside that outline with a
-            // round 1.8 pt line, so its corners are round and its size is the
-            // outline's, and the exclamation mark cut out of it.
+            // The warning sign: a triangle drawn with a round line, so its
+            // corners are round, in the warning's yellow with a dark
+            // exclamation mark, the same on a light and a dark menu bar.
+            let scale: CGFloat = 0.9
+            var place = CGAffineTransform(translationX: left - 1.06 * scale, y: bottom - 0.5 * scale).scaledBy(x: scale, y: scale)
             let triangle = CGMutablePath()
-            triangle.move(to: CGPoint(x: 5, y: 7.49))
-            triangle.addLine(to: CGPoint(x: 8.04, y: 1.4))
-            triangle.addLine(to: CGPoint(x: 1.96, y: 1.4))
+            triangle.move(to: CGPoint(x: 5, y: 7.49), transform: place)
+            triangle.addLine(to: CGPoint(x: 8.04, y: 1.4), transform: place)
+            triangle.addLine(to: CGPoint(x: 1.96, y: 1.4), transform: place)
             triangle.closeSubpath()
-            knockOut(triangle.copy(strokingWithWidth: 4.8, lineCap: .round, lineJoin: .round, miterLimit: 1))
+            knockOut(triangle.copy(strokingWithWidth: 4.8 * scale, lineCap: .round, lineJoin: .round, miterLimit: 1))
             knockOut(triangle)
             context.addPath(triangle)
-            context.setFillColor(tint)
-            context.setStrokeColor(tint)
-            context.setLineWidth(1.8)
+            context.setFillColor(warningYellow)
+            context.setStrokeColor(warningYellow)
+            context.setLineWidth(1.8 * scale)
             context.setLineJoin(.round)
             context.drawPath(using: .fillStroke)
             let bar = CGMutablePath()
-            bar.move(to: CGPoint(x: 5, y: 6.3))
-            bar.addLine(to: CGPoint(x: 5, y: 3.6))
-            knockOut(bar.copy(strokingWithWidth: 1.2, lineCap: .round, lineJoin: .round, miterLimit: 1))
-            knockOut(CGPath(ellipseIn: CGRect(x: 5 - 0.65, y: 1.9 - 0.65, width: 1.3, height: 1.3), transform: nil))
+            bar.move(to: CGPoint(x: 5, y: 6.3), transform: place)
+            bar.addLine(to: CGPoint(x: 5, y: 3.6), transform: place)
+            context.setFillColor(warningInk)
+            context.addPath(bar.copy(strokingWithWidth: 1.2 * scale, lineCap: .round, lineJoin: .round, miterLimit: 1))
+            context.fillPath()
+            context.addPath(CGPath(ellipseIn: CGRect(x: 5 - 0.65, y: 1.9 - 0.65, width: 1.3, height: 1.3), transform: &place))
+            context.fillPath()
         }
         return true
     }

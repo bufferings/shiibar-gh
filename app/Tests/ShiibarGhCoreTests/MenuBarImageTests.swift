@@ -73,7 +73,10 @@ final class MenuBarImageTests: XCTestCase {
         let dot = Palette.accent.resolved(dark: false)
         XCTAssertFalse(plain.contains { close($0, dot) && !close($0, resolved(.systemBlue, dark: false)) })
         XCTAssertFalse(marked.contains { close($0, .black.usingColorSpace(.sRGB)!) }, "no number in the menu bar text color")
-        XCTAssertGreaterThan(marked.count, plain.count, "the dot and the triangle add ink")
+        let yellow = NSColor(srgbRed: 1, green: 0.8, blue: 0, alpha: 1)
+        XCTAssertFalse(plain.contains { close($0, yellow) })
+        XCTAssertGreaterThan(marked.filter { close($0, yellow) }.count, 10, "the warning sign is yellow whatever the account color")
+        XCTAssertGreaterThan(marked.filter { close($0, dot) }.count, 10, "the dot")
     }
 
     /// The dot is drawn in the accent color the image is made with (the

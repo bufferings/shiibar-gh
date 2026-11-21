@@ -53,17 +53,17 @@ public enum BoardIcons {
     /// and the tail into the arrow.
     public static let app = BoardIcon(
         [
-            .circle(cx: 3.65, cy: 3.51, r: 1.67, dash: nil), .circle(cx: 3.65, cy: 12.39, r: 1.67, dash: nil),
-            .path("M3.65 5.36V10.54"),
-            .path("M11.42 11.1H12.72C13.64 11.1 14.01 10.36 14.01 9.43V6.1C14.01 4.62 13.27 3.51 11.79 3.51H9.57"),
-            .path("M10.87 1.85L9.2 3.51L10.87 5.18"),
+            .circle(cx: 2.92, cy: 2.73, r: 1.95, dash: nil), .circle(cx: 2.92, cy: 13.11, r: 1.95, dash: nil),
+            .path("M2.92 4.89V10.95"),
+            .path("M12 11.43H13.51C14.59 11.43 15.03 10.57 15.03 9.49V5.76C15.03 4.03 14.16 2.73 12.43 2.73H9.84"),
+            .path("M11.35 0.78L9.41 2.73L11.35 4.68"),
         ],
-        lineWidth: 1.5, roundCaps: true, roundJoins: true,
+        lineWidth: 1.41, roundCaps: true, roundJoins: true,
         fills: [
-            .rect(x: 8.09, y: 10.36, width: 5.37, height: 2.4, radius: 0),
-            .rect(x: 8.09, y: 10.36, width: 1.48, height: 4.44, radius: 0.74),
-            .rect(x: 11.98, y: 10.36, width: 1.48, height: 4.44, radius: 0.74),
-            .path("M7.06 7.77L6.76 10.36C6.76 11.2 7.44 11.88 8.28 11.88C9.12 11.88 9.79 11.2 9.79 10.36L9.5 7.77L8.52 9.01H8.04Z"),
+            .rect(x: 8.11, y: 10.73, width: 6.27, height: 2.81, radius: 0),
+            .rect(x: 8.11, y: 10.73, width: 1.41, height: 5.19, radius: 0.7),
+            .rect(x: 12.97, y: 10.73, width: 1.41, height: 5.19, radius: 0.7),
+            .path("M6.9 7.7L6.55 10.73C6.55 11.71 7.34 12.5 8.32 12.5C9.3 12.5 10.1 11.71 10.1 10.73L9.75 7.7L8.61 9.15H8.04Z"),
         ]
     )
     public static let account = app
