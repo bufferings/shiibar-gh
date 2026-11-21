@@ -258,7 +258,7 @@ final class SelectedCardsTests: XCTestCase {
 
     func loaded(_ tab: ListTab) async -> SurfaceListModel {
         api.cards = sampleCards()
-        let data = model.viewModel("3407303")
+        let data = model.viewModel("1000001")
         data.reload()
         await settle()
         let list = data.list(.popover)
@@ -373,8 +373,8 @@ final class SelectedCardsTests: XCTestCase {
         list.closeDismissedList()
         list.click(card: "N1", extent: .toggle)
         list.click(card: "T1", extent: .toggle)
-        model.surfaceOpened(.popover, account: "3407303")
-        model.surfaceClosed(.popover, account: "3407303")
+        model.surfaceOpened(.popover, account: "1000001")
+        model.surfaceClosed(.popover, account: "1000001")
         XCTAssertFalse(list.multiple, "closing the popover")
     }
 
@@ -571,7 +571,7 @@ final class SelectedCardsTests: XCTestCase {
     func testADropOnDonesMorePRsDoesNotOpenIt() async {
         let done = (0..<7).map { card("Q\($0)", placement: review(.done, $0), updated: T0 - Int64($0)) }
         api.cards = sampleCards() + done
-        let data = model.viewModel("3407303")
+        let data = model.viewModel("1000001")
         data.reload()
         await settle()
         let list = data.list(.popover)

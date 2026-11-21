@@ -64,8 +64,8 @@ final class SurfaceDirectorTests: XCTestCase {
     var model: AppModel!
     var host: FakeSurfaceHost!
     var director: SurfaceDirector!
-    let a = "3407303"
-    let b = "583231"
+    let a = "1000001"
+    let b = "200001"
 
     override func setUp() async throws {
         (defaults, suite) = testDefaults()

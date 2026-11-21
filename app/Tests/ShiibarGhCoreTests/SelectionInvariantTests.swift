@@ -41,7 +41,7 @@ final class SelectionInvariantTests: XCTestCase {
 
     func loaded(_ tab: ListTab, cards: [Card] = sampleCards()) async -> SurfaceListModel {
         api.cards = cards
-        let data = model.viewModel("3407303")
+        let data = model.viewModel("1000001")
         data.reload()
         await settle()
         let list = data.list(.popover)
@@ -134,7 +134,7 @@ final class SelectionInvariantTests: XCTestCase {
         XCTAssertEqual(inbox?.more, 0)
         list.beginDrag("W1")
         XCTAssertTrue(list.drop(.more("review|inbox")))
-        XCTAssertFalse(UIStateStore(defaults: defaults).expanded(account: "3407303").contains("review|inbox"), "not kept as expanded")
+        XCTAssertFalse(UIStateStore(defaults: defaults).expanded(account: "1000001").contains("review|inbox"), "not kept as expanded")
         XCTAssertFalse(list.data.expanded.contains("review|inbox"))
         await settle()
         XCTAssertEqual(calls("place"), ["place example-work acme-corp/infra#61 review inbox bottom"])
@@ -323,9 +323,9 @@ final class SelectionInvariantTests: XCTestCase {
 
     func testThePopoverHeightIsKeptPerAccount() {
         let store = UIStateStore(defaults: defaults)
-        XCTAssertNil(store.popoverHeight(account: "3407303"), "nothing until dragged: the default height")
-        store.setPopoverHeight(712, account: "3407303")
-        XCTAssertEqual(UIStateStore(defaults: defaults).popoverHeight(account: "3407303"), 712)
+        XCTAssertNil(store.popoverHeight(account: "1000001"), "nothing until dragged: the default height")
+        store.setPopoverHeight(712, account: "1000001")
+        XCTAssertEqual(UIStateStore(defaults: defaults).popoverHeight(account: "1000001"), 712)
         XCTAssertNil(store.popoverHeight(account: "other"))
     }
 

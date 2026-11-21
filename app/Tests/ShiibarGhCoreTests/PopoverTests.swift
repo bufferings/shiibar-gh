@@ -24,19 +24,19 @@ final class SurfaceRuleTests: XCTestCase {
         XCTAssertFalse(surfaces.closed(.popover, account: "1001"), "the window still has the focus")
         XCTAssertTrue(surfaces.closed(.window, account: "1001"))
         XCTAssertFalse(surfaces.closed(.window, account: "1001"), "closing twice sends nothing")
-        XCTAssertTrue(surfaces.opened(.window, account: "583231"))
-        XCTAssertEqual(surfaces.openAccounts, ["583231"])
+        XCTAssertTrue(surfaces.opened(.window, account: "200001"))
+        XCTAssertEqual(surfaces.openAccounts, ["200001"])
     }
 
     func testTokenChecksRunFromTheSaveAnswerToANewTest() {
         var checks = TokenChecks()
-        let old = Account(id: "3407303", token: TokenInfo(lastTest: LastTest(at: 100, results: [])))
+        let old = Account(id: "1000001", token: TokenInfo(lastTest: LastTest(at: 100, results: [])))
         checks.started(old, before: 100, now: T0)
-        XCTAssertTrue(checks.isChecking("3407303", now: T0))
-        checks.update(Account(id: "3407303", token: TokenInfo(lastTest: nil)))
-        XCTAssertTrue(checks.isChecking("3407303", now: T0), "the save clears last_test first")
-        checks.update(Account(id: "3407303", token: TokenInfo(lastTest: LastTest(at: 200, results: []))))
-        XCTAssertFalse(checks.isChecking("3407303", now: T0), "the new test ends it")
+        XCTAssertTrue(checks.isChecking("1000001", now: T0))
+        checks.update(Account(id: "1000001", token: TokenInfo(lastTest: nil)))
+        XCTAssertTrue(checks.isChecking("1000001", now: T0), "the save clears last_test first")
+        checks.update(Account(id: "1000001", token: TokenInfo(lastTest: LastTest(at: 200, results: []))))
+        XCTAssertFalse(checks.isChecking("1000001", now: T0), "the new test ends it")
 
         checks.started(Account(id: "9919001"), before: nil, now: T0)
         XCTAssertTrue(checks.isChecking("9919001", now: T0))
@@ -70,7 +70,7 @@ final class AppModelTests: XCTestCase {
             api: api, store: UIStateStore(defaults: defaults), opener: opener, notifier: notifier,
             copier: copier, failureDuration: 0.8, clock: { T0 }
         )
-        model.handle(.snapshot(accounts: [sampleAccount(), Account(id: "583231", login: "example-user")], keychain: .known(.ok), dbUnreadable: false))
+        model.handle(.snapshot(accounts: [sampleAccount(), Account(id: "200001", login: "example-user")], keychain: .known(.ok), dbUnreadable: false))
     }
 
     override func tearDown() async throws {
@@ -80,7 +80,7 @@ final class AppModelTests: XCTestCase {
     /// The popover's list model with the sample cards loaded.
     func loaded(_ cards: [Card] = sampleCards()) async -> SurfaceListModel {
         api.cards = cards
-        let data = model.viewModel("3407303")
+        let data = model.viewModel("1000001")
         data.reload()
         await settle()
         return data.list(.popover)
@@ -95,9 +95,9 @@ final class AppModelTests: XCTestCase {
     }
 
     func testTheListIsAskedOnceWithDismissedCardsAndWorkedOutHere() async {
-        let view = model.viewModel("3407303").list(.popover)
+        let view = model.viewModel("1000001").list(.popover)
         api.cards = sampleCards()
-        model.surfaceDisplayed(.popover, account: "3407303", true)
+        model.surfaceDisplayed(.popover, account: "1000001", true)
         await settle()
         XCTAssertEqual(lists(), ["list example-work dismissed=include"])
         api.clearCalls()
@@ -111,15 +111,15 @@ final class AppModelTests: XCTestCase {
         await settle()
         XCTAssertEqual(lists(), [], "tabs, Group by, sort, search and the Dismissed list ask the daemon nothing")
         let store = UIStateStore(defaults: defaults)
-        XCTAssertEqual(store.options(account: "3407303"), ListOptions(groupBy: .involvement, thenBy: .status, sort: .recentlyAdded), "kept per account")
-        XCTAssertEqual(store.options(account: "583231"), ListOptions())
+        XCTAssertEqual(store.options(account: "1000001"), ListOptions(groupBy: .involvement, thenBy: .status, sort: .recentlyAdded), "kept per account")
+        XCTAssertEqual(store.options(account: "200001"), ListOptions())
     }
 
     /// No wait after `account_changed`; changes during a read make one
     /// more read after it (DESIGN.md, "Showing what an operation did").
     func testAccountChangesReadTheListAtOnceAndOnceMoreAfterABurst() async {
         _ = await loaded()
-        model.surfaceDisplayed(.popover, account: "3407303", true)
+        model.surfaceDisplayed(.popover, account: "1000001", true)
         await settle()
         api.clearCalls()
         model.handle(.accountChanged(sampleAccount()))
@@ -622,9 +622,9 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(popover.unreadCount(.review), 2)
         XCTAssertEqual(popover.unreadCount(.mine), 1)
         let store = UIStateStore(defaults: defaults)
-        XCTAssertEqual(store.lastTab(account: "3407303", surface: .popover), .review)
-        XCTAssertEqual(store.lastTab(account: "3407303", surface: .window), .mine)
-        let again = AccountViewModel(account: "3407303", app: model)
+        XCTAssertEqual(store.lastTab(account: "1000001", surface: .popover), .review)
+        XCTAssertEqual(store.lastTab(account: "1000001", surface: .window), .mine)
+        let again = AccountViewModel(account: "1000001", app: model)
         XCTAssertEqual(again.list(.popover).tab, .review)
         XCTAssertEqual(again.list(.window).tab, .mine)
         popover.press(.tab(.mine))
@@ -634,7 +634,7 @@ final class AppModelTests: XCTestCase {
 
     func testTheDismissedListHasItsOwnSearchAndKeepsIt() async {
         let view = await loaded()
-        model.surfaceOpened(.popover, account: "3407303")
+        model.surfaceOpened(.popover, account: "1000001")
         view.openTab(.review)
         view.setSearch("retry")
         view.openDismissedList()
@@ -659,7 +659,7 @@ final class AppModelTests: XCTestCase {
         view.press(.tab(.all))
         XCTAssertFalse(view.showingDismissed, "⌘1 opens the tab")
         view.openDismissedList()
-        model.surfaceClosed(.popover, account: "3407303")
+        model.surfaceClosed(.popover, account: "1000001")
         XCTAssertFalse(view.showingDismissed, "the next opening shows the tab")
         XCTAssertEqual(view.data.search(.dismissed), "zzz-none", "closing the popover keeps it")
         XCTAssertEqual(view.data.search(.tab(.review)), "retry")
@@ -670,7 +670,7 @@ final class AppModelTests: XCTestCase {
 
     func testSearchIsPerTabAndKeptWhenThePopoverCloses() async {
         let view = await loaded()
-        model.surfaceOpened(.popover, account: "3407303")
+        model.surfaceOpened(.popover, account: "1000001")
         view.press(.find)
         XCTAssertTrue(view.searchFocused)
         view.setSearch("retry")
@@ -685,15 +685,15 @@ final class AppModelTests: XCTestCase {
         view.leaveSearch(clearing: true)
         XCTAssertEqual(view.search, "", "Esc clears it")
         view.setSearch("x")
-        model.surfaceClosed(.popover, account: "3407303")
+        model.surfaceClosed(.popover, account: "1000001")
         XCTAssertEqual(view.search, "x", "closing the popover keeps it")
         XCTAssertFalse(view.searchFocused)
-        model.surfaceOpened(.popover, account: "3407303")
+        model.surfaceOpened(.popover, account: "1000001")
         XCTAssertEqual(view.search, "x", "the next opening shows it")
         XCTAssertFalse(view.searchFocused, "the field does not take the keyboard")
         view.setSearch("")
         XCTAssertEqual(view.search, "", "the clear button empties it")
-        XCTAssertEqual(UIStateStore(defaults: defaults).searches(account: "3407303"), [:], "nothing left saved")
+        XCTAssertEqual(UIStateStore(defaults: defaults).searches(account: "1000001"), [:], "nothing left saved")
     }
 
     /// DESIGN.md, "Search field": the search text is kept like the Filter:
@@ -702,8 +702,8 @@ final class AppModelTests: XCTestCase {
     func testTheSearchTextIsTheAccountsSharedAndKept() async {
         let popover = await loaded()
         let window = popover.data.list(.window)
-        model.surfaceDisplayed(.window, account: "3407303", true)
-        model.surfaceOpened(.window, account: "3407303")
+        model.surfaceDisplayed(.window, account: "1000001", true)
+        model.surfaceOpened(.window, account: "1000001")
         popover.openTab(.review)
         window.openTab(.review)
         window.setSearch("retry")
@@ -720,16 +720,16 @@ final class AppModelTests: XCTestCase {
         popover.openDismissedList()
         XCTAssertEqual(popover.search, "infra", "shared too")
         popover.closeDismissedList()
-        model.surfaceClosed(.window, account: "3407303")
+        model.surfaceClosed(.window, account: "1000001")
         XCTAssertEqual(window.search, "infra", "losing the focus keeps it")
-        model.surfaceDisplayed(.window, account: "3407303", false)
+        model.surfaceDisplayed(.window, account: "1000001", false)
         XCTAssertFalse(window.showingDismissed, "closing the window closes its Dismissed list")
         XCTAssertEqual(window.search, "api", "closing the window keeps the texts")
         XCTAssertEqual(popover.data.search(.dismissed), "infra")
-        model.surfaceClosed(.popover, account: "3407303")
+        model.surfaceClosed(.popover, account: "1000001")
 
         // Another account has its own.
-        let other = model.viewModel("583231")
+        let other = model.viewModel("200001")
         XCTAssertEqual(other.search(.tab(.review)), "")
         other.setSearch("dark", .tab(.review))
         XCTAssertEqual(popover.data.search(.tab(.review)), "retry")
@@ -737,13 +737,13 @@ final class AppModelTests: XCTestCase {
         // A restart: a new store over the same UserDefaults.
         let store = UIStateStore(defaults: defaults)
         XCTAssertEqual(
-            store.searches(account: "3407303"), [.tab(.review): "retry", .tab(.mine): "api", .dismissed: "infra"]
+            store.searches(account: "1000001"), [.tab(.review): "retry", .tab(.mine): "api", .dismissed: "infra"]
         )
-        XCTAssertEqual(store.searches(account: "583231"), [.tab(.review): "dark"])
+        XCTAssertEqual(store.searches(account: "200001"), [.tab(.review): "dark"])
         let again = AppModel(
             api: api, store: UIStateStore(defaults: defaults), opener: opener, notifier: notifier, copier: copier, clock: { T0 }
         )
-        let data = AccountViewModel(account: "3407303", app: again)
+        let data = AccountViewModel(account: "1000001", app: again)
         let restarted = data.list(.popover)
         restarted.openTab(.review)
         XCTAssertEqual(restarted.search, "retry")
@@ -765,17 +765,17 @@ final class AppModelTests: XCTestCase {
         window.openTab(.review)
         XCTAssertEqual(window.sections[3].cards.count, 7, "the expansion is the account's")
         XCTAssertTrue(window.sections[1].collapsed)
-        model.surfaceOpened(.popover, account: "3407303")
-        model.surfaceClosed(.popover, account: "3407303")
+        model.surfaceOpened(.popover, account: "1000001")
+        model.surfaceClosed(.popover, account: "1000001")
         XCTAssertEqual(popover.sections[3].foldLine, "Show less", "kept across openings")
         let store = UIStateStore(defaults: defaults)
-        XCTAssertEqual(store.expanded(account: "3407303"), ["review|inbox"])
-        XCTAssertEqual(store.collapsed(account: "3407303"), ["review|waiting"])
+        XCTAssertEqual(store.expanded(account: "1000001"), ["review|inbox"])
+        XCTAssertEqual(store.collapsed(account: "1000001"), ["review|waiting"])
         popover.select(.more("review|inbox"))
         popover.press(.open)
         XCTAssertEqual(popover.sections[3].foldLine, "+ 2 more PRs")
         XCTAssertEqual(popover.selection, .more("review|inbox"))
-        XCTAssertEqual(store.expanded(account: "3407303"), [])
+        XCTAssertEqual(store.expanded(account: "1000001"), [])
     }
 
     /// DESIGN.md, "Rows in a card": "+ N more" stays expanded until `Show
@@ -793,24 +793,24 @@ final class AppModelTests: XCTestCase {
         view.select(.olderActivity(card: "T1"))
         view.press(.open)
         XCTAssertEqual(opener.opened.map(\.absoluteString), ["https://github.com/p/T1"])
-        model.surfaceOpened(.popover, account: "3407303")
-        model.surfaceClosed(.popover, account: "3407303")
+        model.surfaceOpened(.popover, account: "1000001")
+        model.surfaceClosed(.popover, account: "1000001")
         XCTAssertEqual(view.expandedRows, ["T1"], "closing keeps it")
         XCTAssertEqual(view.data.list(.window).expandedRows, ["T1"], "the window shares it")
         let store = UIStateStore(defaults: defaults)
-        XCTAssertEqual(store.expandedRows(account: "3407303"), ["T1"])
-        XCTAssertEqual(AccountViewModel(account: "3407303", app: model).expandedRows, ["T1"], "read back")
+        XCTAssertEqual(store.expandedRows(account: "1000001"), ["T1"])
+        XCTAssertEqual(AccountViewModel(account: "1000001", app: model).expandedRows, ["T1"], "read back")
         view.select(.lessRows(card: "T1"))
         XCTAssertEqual(view.selectedCards.cards, ["T1"], "Show less selects its card")
         view.press(.open)
         XCTAssertEqual(view.expandedRows, [])
         XCTAssertEqual(view.selection, .moreRows(card: "T1"), "+ N more takes the place of Show less")
-        XCTAssertEqual(store.expandedRows(account: "3407303"), [])
+        XCTAssertEqual(store.expandedRows(account: "1000001"), [])
         view.perform(.expandRows(card: "T1"))
         api.cards = sampleCards().filter { $0.id != "T1" }
         view.data.reload()
         await settle()
-        XCTAssertEqual(store.expandedRows(account: "3407303"), [], "the card is gone")
+        XCTAssertEqual(store.expandedRows(account: "1000001"), [], "the card is gone")
     }
 
     /// DESIGN.md, "Row body": `more` and `less` keep the selection and the
@@ -827,9 +827,9 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(calls("read"), [], "not read")
         XCTAssertEqual(view.data.list(.window).expandedBodies, ["A"])
         let store = UIStateStore(defaults: defaults)
-        XCTAssertEqual(store.expandedBodies(account: "3407303"), ["A"])
-        model.surfaceOpened(.popover, account: "3407303")
-        model.surfaceClosed(.popover, account: "3407303")
+        XCTAssertEqual(store.expandedBodies(account: "1000001"), ["A"])
+        model.surfaceOpened(.popover, account: "1000001")
+        model.surfaceClosed(.popover, account: "1000001")
         XCTAssertEqual(view.expandedBodies, ["A"], "kept across closing")
         view.perform(.toggleBody(row: "A"))
         XCTAssertEqual(view.expandedBodies, [])
@@ -839,7 +839,7 @@ final class AppModelTests: XCTestCase {
         api.cards = gone
         view.data.reload()
         await settle()
-        XCTAssertEqual(store.expandedBodies(account: "3407303"), [], "the row was deleted")
+        XCTAssertEqual(store.expandedBodies(account: "1000001"), [], "the row was deleted")
     }
 
     func testGroupOrdersAreKeptAndNewRepositoriesComeLast() async {
@@ -858,26 +858,26 @@ final class AppModelTests: XCTestCase {
         await settle()
         XCTAssertEqual(data.repositories.last, "aaa/first", "a new repository comes at the end")
         let store = UIStateStore(defaults: defaults)
-        XCTAssertEqual(store.repositories(account: "3407303").first, "example-org/web")
-        XCTAssertEqual(store.groupOrders(account: "3407303")[.status], ["closed", "merged", "open", "draft"])
-        XCTAssertEqual(AccountViewModel(account: "3407303", app: model).groups(.status).first?.title, "Closed")
+        XCTAssertEqual(store.repositories(account: "1000001").first, "example-org/web")
+        XCTAssertEqual(store.groupOrders(account: "1000001")[.status], ["closed", "merged", "open", "draft"])
+        XCTAssertEqual(AccountViewModel(account: "1000001", app: model).groups(.status).first?.title, "Closed")
     }
 
     /// 0.4 reads no UI state of 0.3 (DESIGN.md, "Updating from 0.3 and
     /// 0.2").
     func testTheUIStateOf03IsNotRead() {
         let options = try! JSONEncoder().encode(["groupBy": "status", "sort": "recently_added"])
-        defaults.set(options, forKey: "popover.filter.3407303")
-        defaults.set(["owner:o2": true], forKey: "popover.collapsed.3407303")
-        defaults.set(false, forKey: "window.keepOnTop.3407303")
-        defaults.set("{{0, 0}, {10, 10}}", forKey: "window.frame.3407303")
+        defaults.set(options, forKey: "popover.filter.1000001")
+        defaults.set(["owner:o2": true], forKey: "popover.collapsed.1000001")
+        defaults.set(false, forKey: "window.keepOnTop.1000001")
+        defaults.set("{{0, 0}, {10, 10}}", forKey: "window.frame.1000001")
         let store = UIStateStore(defaults: defaults)
-        XCTAssertEqual(store.options(account: "3407303"), ListOptions())
-        XCTAssertEqual(store.collapsed(account: "3407303"), [])
-        XCTAssertTrue(store.keepOnTop(account: "3407303"))
-        XCTAssertNil(store.windowFrame(account: "3407303"))
-        store.setKeepOnTop(false, account: "3407303")
-        XCTAssertEqual(defaults.object(forKey: "v4.window.keepOnTop.3407303") as? Bool, false)
+        XCTAssertEqual(store.options(account: "1000001"), ListOptions())
+        XCTAssertEqual(store.collapsed(account: "1000001"), [])
+        XCTAssertTrue(store.keepOnTop(account: "1000001"))
+        XCTAssertNil(store.windowFrame(account: "1000001"))
+        store.setKeepOnTop(false, account: "1000001")
+        XCTAssertEqual(defaults.object(forKey: "v4.window.keepOnTop.1000001") as? Bool, false)
     }
 
     /// DESIGN.md, "macOS notifications": an individual notification opens
@@ -891,40 +891,40 @@ final class AppModelTests: XCTestCase {
         view.openTab(.review)
         view.setSearch("nothing")
         view.perform(.toggleSection("review|inbox"))
-        let note = DaemonNotification(id: "n", type: .single, account: "3407303", pr: "example-org/api#402", url: "https://github.com/x", title: "t")
+        let note = DaemonNotification(id: "n", type: .single, account: "1000001", pr: "example-org/api#402", url: "https://github.com/x", title: "t")
         model.handle(.notify(note))
         XCTAssertEqual(notifier.shown, [note])
-        model.notificationClicked(type: .single, account: "3407303", url: "https://github.com/x", pr: "example-org/api#402")
-        XCTAssertEqual(shown, ["3407303 popover"])
+        model.notificationClicked(type: .single, account: "1000001", url: "https://github.com/x", pr: "example-org/api#402")
+        XCTAssertEqual(shown, ["1000001 popover"])
         XCTAssertEqual(view.data.filter(.review).muted, .show, "T7 is muted: Review's Muted goes to Show to show it")
         XCTAssertEqual(view.data.filter(.all), ListFilter(), "the other tabs' Filters stay")
         XCTAssertEqual(view.tab, .review)
         XCTAssertEqual(view.search, "")
         XCTAssertEqual(view.data.list(.window).data.search(.tab(.review)), "", "the account's text: the window's too")
-        XCTAssertEqual(UIStateStore(defaults: defaults).searches(account: "3407303"), [.tab(.mine): "keep"], "and the saved one")
+        XCTAssertEqual(UIStateStore(defaults: defaults).searches(account: "1000001"), [.tab(.mine): "keep"], "and the saved one")
         XCTAssertEqual(view.data.search(.tab(.mine)), "keep", "the other tabs' texts stay")
         XCTAssertEqual(view.selection, .header(card: "T7"))
         XCTAssertTrue(view.sections[3].cards.contains { $0.id == "T7" }, "unfolded and expanded")
         XCTAssertEqual(opener.opened, [], "no browser, no read")
         XCTAssertEqual(calls("read"), [])
         // A PR without a placement opens All; a dismissed one only its tab.
-        model.notificationClicked(type: .single, account: "3407303", url: nil, pr: "acme-corp/web#80")
+        model.notificationClicked(type: .single, account: "1000001", url: nil, pr: "acme-corp/web#80")
         XCTAssertEqual(view.tab, .all)
         XCTAssertEqual(view.selection, .header(card: "N1"))
-        model.notificationClicked(type: .single, account: "3407303", url: nil, pr: "acme-corp/infra#55")
+        model.notificationClicked(type: .single, account: "1000001", url: nil, pr: "acme-corp/infra#55")
         XCTAssertEqual(view.tab, .review)
         XCTAssertNil(view.selection)
         // With the window open, the window shows it.
-        model.surfaceDisplayed(.window, account: "3407303", true)
-        model.notificationClicked(type: .single, account: "3407303", url: nil, pr: "example-org/api#421")
-        XCTAssertEqual(shown.last, "3407303 window")
+        model.surfaceDisplayed(.window, account: "1000001", true)
+        model.notificationClicked(type: .single, account: "1000001", url: nil, pr: "example-org/api#421")
+        XCTAssertEqual(shown.last, "1000001 window")
         XCTAssertEqual(view.data.list(.window).selection, .header(card: "M1"))
-        model.notificationClicked(type: .summary, account: "583231", url: nil)
-        XCTAssertEqual(shown.last, "583231 popover", "the popover form: its popover")
+        model.notificationClicked(type: .summary, account: "200001", url: nil)
+        XCTAssertEqual(shown.last, "200001 popover", "the popover form: its popover")
         // A summary with the window open: the window comes to the front,
         // never closed (DESIGN.md, "macOS notifications").
-        model.notificationClicked(type: .summary, account: "3407303", url: nil)
-        XCTAssertEqual(shown.last, "3407303 window")
+        model.notificationClicked(type: .summary, account: "1000001", url: nil)
+        XCTAssertEqual(shown.last, "1000001 window")
     }
 
     /// The notification came before the list: the card shows once it is
@@ -932,8 +932,8 @@ final class AppModelTests: XCTestCase {
     func testANotificationBeforeTheListShowsTheCardWhenItComes() async {
         model.onShowAccount = { _, _ in }
         api.cards = sampleCards()
-        model.notificationClicked(type: .single, account: "3407303", url: nil, pr: "acme-corp/web#77")
-        let view = model.viewModel("3407303").list(.popover)
+        model.notificationClicked(type: .single, account: "1000001", url: nil, pr: "acme-corp/web#77")
+        let view = model.viewModel("1000001").list(.popover)
         XCTAssertNil(view.selection)
         view.data.reload()
         await settle()
@@ -949,8 +949,8 @@ final class AppModelTests: XCTestCase {
     }
 
     func testRefreshShowsProgressUntilTheAnswer() async {
-        model.refresh("3407303")
-        XCTAssertEqual(model.refreshing, ["3407303"])
+        model.refresh("1000001")
+        XCTAssertEqual(model.refreshing, ["1000001"])
         await settle()
         XCTAssertEqual(model.refreshing, [])
         XCTAssertEqual(api.calls.last, "refresh example-work")
@@ -960,12 +960,12 @@ final class AppModelTests: XCTestCase {
     /// refresh still runs.
     func testCommandRRefreshesUnlessARefreshRuns() async {
         api.clearCalls()
-        model.refreshByKey("3407303")
-        XCTAssertEqual(model.refreshing, ["3407303"])
-        model.refreshByKey("3407303")
+        model.refreshByKey("1000001")
+        XCTAssertEqual(model.refreshing, ["1000001"])
+        model.refreshByKey("1000001")
         await settle()
         XCTAssertEqual(api.calls.filter { $0.hasPrefix("refresh") }, ["refresh example-work"], "once")
-        model.refreshByKey("3407303")
+        model.refreshByKey("1000001")
         await settle()
         XCTAssertEqual(api.calls.filter { $0.hasPrefix("refresh") }.count, 2, "again once the first answered")
     }
@@ -985,10 +985,10 @@ final class AppModelTests: XCTestCase {
     /// once `popover_opened` is answered.
     func testTheListWaitsForPopoverOpened() async throws {
         api.popoverOpenedDelay = 200_000_000
-        let list = model.viewModel("3407303").list(.popover)
+        let list = model.viewModel("1000001").list(.popover)
         list.searchFocused = true
-        model.surfaceDisplayed(.popover, account: "3407303", true, opening: true)
-        model.surfaceOpened(.popover, account: "3407303")
+        model.surfaceDisplayed(.popover, account: "1000001", true, opening: true)
+        model.surfaceOpened(.popover, account: "1000001")
         XCTAssertFalse(list.searchFocused, "the search field does not take the keyboard on open")
         try await Task.sleep(nanoseconds: 100_000_000)
         XCTAssertEqual(lists(), [], "nothing before the answer")
@@ -1070,28 +1070,28 @@ final class AppModelTests: XCTestCase {
     }
 
     func testKeepOnTopIsKeptPerAccount() {
-        let view = model.viewModel("3407303").list(.popover)
+        let view = model.viewModel("1000001").list(.popover)
         XCTAssertTrue(view.data.keepOnTop, "on by default")
         view.data.toggleKeepOnTop()
         XCTAssertFalse(view.data.keepOnTop)
-        XCTAssertFalse(UIStateStore(defaults: defaults).keepOnTop(account: "3407303"))
-        XCTAssertTrue(model.viewModel("583231").keepOnTop)
-        XCTAssertFalse(AccountViewModel(account: "3407303", app: model).keepOnTop, "read back")
+        XCTAssertFalse(UIStateStore(defaults: defaults).keepOnTop(account: "1000001"))
+        XCTAssertTrue(model.viewModel("200001").keepOnTop)
+        XCTAssertFalse(AccountViewModel(account: "1000001", app: model).keepOnTop, "read back")
     }
 
     func testPopoverAndWindowShareOneOpenStatePerAccountAndSendTheLogin() async {
-        model.surfaceOpened(.popover, account: "3407303")
-        model.surfaceOpened(.window, account: "3407303")
-        model.surfaceClosed(.popover, account: "3407303")
+        model.surfaceOpened(.popover, account: "1000001")
+        model.surfaceOpened(.window, account: "1000001")
+        model.surfaceClosed(.popover, account: "1000001")
         await settle()
         XCTAssertEqual(api.calls.filter { $0.hasPrefix("popover") }, ["popover_opened example-work"])
-        model.surfaceClosed(.window, account: "3407303")
+        model.surfaceClosed(.window, account: "1000001")
         await settle()
         XCTAssertEqual(api.calls.filter { $0.hasPrefix("popover") }, ["popover_opened example-work", "popover_closed example-work"])
     }
 
     func testAReconnectSendsPopoverOpenedAgainForOpenAccounts() async {
-        model.surfaceOpened(.popover, account: "583231")
+        model.surfaceOpened(.popover, account: "200001")
         await settle()
         api.clearCalls()
         model.connectionChanged(false)
@@ -1104,11 +1104,11 @@ final class AppModelTests: XCTestCase {
         var changed = sampleAccount()
         changed.login = "renamed"
         model.handle(.accountChanged(changed))
-        XCTAssertEqual(model.account("3407303")?.login, "renamed")
+        XCTAssertEqual(model.account("1000001")?.login, "renamed")
         model.handle(.accountChanged(Account(id: "8800")))
-        XCTAssertEqual(model.accounts.map(\.id), ["3407303", "583231", "8800"])
-        model.handle(.accountRemoved("583231"))
-        XCTAssertEqual(model.accounts.map(\.id), ["3407303", "8800"])
+        XCTAssertEqual(model.accounts.map(\.id), ["1000001", "200001", "8800"])
+        model.handle(.accountRemoved("200001"))
+        XCTAssertEqual(model.accounts.map(\.id), ["1000001", "8800"])
         model.handle(.unknown("later"))
         XCTAssertEqual(model.accounts.count, 2)
     }
@@ -1139,12 +1139,12 @@ final class AppModelTests: XCTestCase {
     }
 
     func testAccountsGoneFromASnapshotLeaveNoViewModel() {
-        _ = model.viewModel("3407303")
-        _ = model.viewModel("583231")
-        model.surfaceDisplayed(.popover, account: "583231", true)
+        _ = model.viewModel("1000001")
+        _ = model.viewModel("200001")
+        model.surfaceDisplayed(.popover, account: "200001", true)
         model.handle(.snapshot(accounts: [sampleAccount()], keychain: .known(.ok), dbUnreadable: false))
-        XCTAssertTrue(model.hasViewModel("3407303"))
-        XCTAssertFalse(model.hasViewModel("583231"))
+        XCTAssertTrue(model.hasViewModel("1000001"))
+        XCTAssertFalse(model.hasViewModel("200001"))
     }
 
     func testBannerButtons() {
@@ -1152,11 +1152,11 @@ final class AppModelTests: XCTestCase {
         var dialogs: [KeychainDialog] = []
         model.onOpenSettings = { settings.append($0) }
         model.onKeychainDialog = { dialogs.append($0) }
-        model.bannerButton(.settings, account: "3407303")
-        model.bannerButton(.authorize("https://github.com/orgs/x/sso"), account: "3407303")
-        model.bannerButton(.retry, account: "3407303")
+        model.bannerButton(.settings, account: "1000001")
+        model.bannerButton(.authorize("https://github.com/orgs/x/sso"), account: "1000001")
+        model.bannerButton(.retry, account: "1000001")
         model.bannerButton(.resetTokens, account: nil)
-        XCTAssertEqual(settings, [.account("3407303")])
+        XCTAssertEqual(settings, [.account("1000001")])
         XCTAssertEqual(opener.opened.map(\.absoluteString), ["https://github.com/orgs/x/sso"])
         XCTAssertEqual(dialogs, [.unavailable, .unreadable])
     }

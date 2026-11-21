@@ -415,7 +415,7 @@ public struct Row: Equatable, Decodable, Identifiable {
     }
 
     public init(
-        id: String, pr: String = "o/r#1", prTitle: String = "Title", account: String = "3407303",
+        id: String, pr: String = "o/r#1", prTitle: String = "Title", account: String = "1000001",
         owner: String = "o1", kind: RowKind,
         text: String? = nil, counts: [String: Int]? = nil, actor: String? = nil,
         actorAvatarUrl: String? = nil,
@@ -583,7 +583,7 @@ public struct Card: Equatable, Decodable, Identifiable {
     }
 
     public init(
-        id: String, pr: String = "o/r#1", account: String = "3407303", owner: String = "o1",
+        id: String, pr: String = "o/r#1", account: String = "1000001", owner: String = "o1",
         title: String = "Title", url: String = "https://github.com/o/r/pull/1", author: String = "me",
         authorAvatarUrl: String? = nil, authoredByMe: Bool = true, assignedToMe: Bool = false,
         reviewRequested: Bool = false, awaitingReview: Bool = false, stateLabel: StateLabel = .open, review: ReviewStatus = .none,

@@ -34,7 +34,7 @@ final class CompactTests: XCTestCase {
 
     func loaded(_ tab: ListTab) async -> SurfaceListModel {
         api.cards = sampleCards()
-        let data = model.viewModel("3407303")
+        let data = model.viewModel("1000001")
         data.reload()
         await settle()
         let list = data.list(.popover)
@@ -110,12 +110,12 @@ final class CompactTests: XCTestCase {
     func testItIsKeptPerAccount() async {
         let list = await loaded(.all)
         list.toggleCompact()
-        XCTAssertTrue(UIStateStore(defaults: defaults).compact(account: "3407303"))
+        XCTAssertTrue(UIStateStore(defaults: defaults).compact(account: "1000001"))
         XCTAssertFalse(UIStateStore(defaults: defaults).compact(account: "other"))
         // A new model reads it back.
         let again = makeModel()
         again.handle(.snapshot(accounts: [sampleAccount()], keychain: .known(.ok), dbUnreadable: false))
-        XCTAssertTrue(again.viewModel("3407303").compact)
+        XCTAssertTrue(again.viewModel("1000001").compact)
     }
 
     func testTheDismissedListDoesNotChange() async {

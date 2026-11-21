@@ -357,11 +357,11 @@ final class FakeAPI: DaemonAPI, @unchecked Sendable {
     func ownerAdd(account: String, owner: String) async throws -> Account {
         try record("owner_add \(account) \(owner)")
         if let error = ownerErrors[owner] { throw error }
-        return Account(id: "3407303", login: account)
+        return Account(id: "1000001", login: account)
     }
     func ownerRemove(account: String, owner: String) async throws -> Account {
         try record("owner_remove \(account) \(owner)")
-        return Account(id: "3407303", login: account)
+        return Account(id: "1000001", login: account)
     }
     func ownerEnabled(account: String, owner: String, on: Bool) async throws { try record("owner_enabled \(account) \(owner) \(on)") }
     func ownerNotify(account: String, owner: String, on: Bool) async throws { try record("owner_notify \(account) \(owner) \(on)") }
