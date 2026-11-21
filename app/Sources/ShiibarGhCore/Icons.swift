@@ -288,7 +288,7 @@ public enum IconMenu {
 public enum MenuBarImage {
     public static let width: CGFloat = 26
     public static let height: CGFloat = 18
-    static let dotRing = CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.85)
+    static let markRing = CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.85)
     /// The warning sign's colors, fixed for both appearances.
     static let warningYellow = CGColor(srgbRed: 1, green: 0.8, blue: 0, alpha: 1)
     static let warningInk = CGColor(srgbRed: 0.106, green: 0.106, blue: 0.118, alpha: 1)
@@ -360,16 +360,17 @@ public enum MenuBarImage {
         // warning sign on the lower ring with its bottom at the picture's
         // bottom.
         let top = glyph.maxY - 0.09, bottom = glyph.minY + 0.09, left = glyph.minX + 0.29
+        // Both marks take a light ring on their edge, as the dot of the
+        // shiibar-cc icon, so they stand out on a dark menu bar.
+        let ring: CGFloat = 0.9
         if marks.dot {
             let radius: CGFloat = 3.6
-            let center = CGPoint(x: glyph.minX + 15.03 * side / 16, y: top - radius)
+            let center = CGPoint(x: glyph.minX + 15.03 * side / 16, y: top - radius - ring / 2)
             knockOut(CGPath(ellipseIn: CGRect(x: center.x - 4.5, y: center.y - 4.5, width: 9, height: 9), transform: nil))
             context.setFillColor(dot)
             context.fillEllipse(in: CGRect(x: center.x - radius, y: center.y - radius, width: 2 * radius, height: 2 * radius))
-            // A light ring on the dot's edge, as on the shiibar-cc icon, so
-            // the dot stands out on a dark menu bar.
-            context.setStrokeColor(dotRing)
-            context.setLineWidth(0.9)
+            context.setStrokeColor(markRing)
+            context.setLineWidth(ring)
             context.strokeEllipse(in: CGRect(x: center.x - radius, y: center.y - radius, width: 2 * radius, height: 2 * radius))
         }
         if marks.triangle {
@@ -377,7 +378,7 @@ public enum MenuBarImage {
             // corners are round, in the warning's yellow with a dark
             // exclamation mark, the same on a light and a dark menu bar.
             let scale: CGFloat = 0.9
-            var place = CGAffineTransform(translationX: left - 1.06 * scale, y: bottom - 0.5 * scale).scaledBy(x: scale, y: scale)
+            var place = CGAffineTransform(translationX: left + ring / 2 - 1.06 * scale, y: bottom + ring / 2 - 0.5 * scale).scaledBy(x: scale, y: scale)
             let triangle = CGMutablePath()
             triangle.move(to: CGPoint(x: 5, y: 7.49), transform: place)
             triangle.addLine(to: CGPoint(x: 8.04, y: 1.4), transform: place)
@@ -385,11 +386,16 @@ public enum MenuBarImage {
             triangle.closeSubpath()
             knockOut(triangle.copy(strokingWithWidth: 4.8 * scale, lineCap: .round, lineJoin: .round, miterLimit: 1))
             knockOut(triangle)
+            context.setLineJoin(.round)
+            context.addPath(triangle)
+            context.setFillColor(markRing)
+            context.setStrokeColor(markRing)
+            context.setLineWidth(1.8 * scale + ring)
+            context.drawPath(using: .fillStroke)
             context.addPath(triangle)
             context.setFillColor(warningYellow)
             context.setStrokeColor(warningYellow)
-            context.setLineWidth(1.8 * scale)
-            context.setLineJoin(.round)
+            context.setLineWidth(1.8 * scale - ring)
             context.drawPath(using: .fillStroke)
             let bar = CGMutablePath()
             bar.move(to: CGPoint(x: 5, y: 6.3), transform: place)
