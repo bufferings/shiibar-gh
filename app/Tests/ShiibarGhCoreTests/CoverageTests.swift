@@ -720,6 +720,10 @@ final class MainMenuTests: XCTestCase {
 
     @MainActor
     func testTheAppMenuHasAboutSettingsCloseWindowAndQuit() throws {
+        // A menu item's action is sent through the application object, which
+        // does not exist yet when this test runs before any other that
+        // creates it.
+        _ = NSApplication.shared
         var ran: [String] = []
         let menu = MainMenu.make(MainMenu.Actions(about: { ran.append("about") }, settings: { ran.append("settings") }))
         let app = try XCTUnwrap(menu.items.first?.submenu)
