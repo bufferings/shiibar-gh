@@ -359,14 +359,17 @@ public enum MenuBarImage {
         // on the arrow's corner with its top at the picture's top, the
         // warning sign on the lower ring with its bottom at the picture's
         // bottom.
-        let top = glyph.maxY - 0.09, bottom = glyph.minY + 0.09, left = glyph.minX + 0.29
+        let top = glyph.maxY - 0.09, bottom = glyph.minY + 0.09
         // Both marks take a light ring on their edge, as the dot of the
-        // shiibar-cc icon, so they stand out on a dark menu bar.
+        // shiibar-cc icon, so they stand out on a dark menu bar. The picture
+        // is cut out under a mark up to the ring's outer edge, so nothing of
+        // the menu bar shows between the ring and the picture.
         let ring: CGFloat = 0.9
         if marks.dot {
             let radius: CGFloat = 3.6
             let center = CGPoint(x: glyph.minX + 15.03 * side / 16, y: top - radius - ring / 2)
-            knockOut(CGPath(ellipseIn: CGRect(x: center.x - 4.5, y: center.y - 4.5, width: 9, height: 9), transform: nil))
+            let cut = radius + ring / 2
+            knockOut(CGPath(ellipseIn: CGRect(x: center.x - cut, y: center.y - cut, width: 2 * cut, height: 2 * cut), transform: nil))
             context.setFillColor(dot)
             context.fillEllipse(in: CGRect(x: center.x - radius, y: center.y - radius, width: 2 * radius, height: 2 * radius))
             context.setStrokeColor(markRing)
@@ -377,14 +380,16 @@ public enum MenuBarImage {
             // The warning sign: a triangle drawn with a round line, so its
             // corners are round, in the warning's yellow with a dark
             // exclamation mark, the same on a light and a dark menu bar.
-            let scale: CGFloat = 0.9
-            var place = CGAffineTransform(translationX: left + ring / 2 - 1.06 * scale, y: bottom + ring / 2 - 0.5 * scale).scaledBy(x: scale, y: scale)
+            // About 10 pt wide and high, centered on the lower ring: smaller,
+            // the exclamation mark does not read at menu bar size.
+            let scale: CGFloat = 1.3
+            var place = CGAffineTransform(translationX: glyph.minX + 2.92 * side / 16 - 5 * scale, y: bottom + ring / 2 - 0.5 * scale).scaledBy(x: scale, y: scale)
             let triangle = CGMutablePath()
             triangle.move(to: CGPoint(x: 5, y: 7.49), transform: place)
             triangle.addLine(to: CGPoint(x: 8.04, y: 1.4), transform: place)
             triangle.addLine(to: CGPoint(x: 1.96, y: 1.4), transform: place)
             triangle.closeSubpath()
-            knockOut(triangle.copy(strokingWithWidth: 4.8 * scale, lineCap: .round, lineJoin: .round, miterLimit: 1))
+            knockOut(triangle.copy(strokingWithWidth: 1.8 * scale + ring, lineCap: .round, lineJoin: .round, miterLimit: 1))
             knockOut(triangle)
             context.setLineJoin(.round)
             context.addPath(triangle)
