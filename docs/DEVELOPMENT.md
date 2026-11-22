@@ -76,10 +76,21 @@ SHIIBAR_GH_TEST_DAEMON=$PWD/target/debug/shiibar-ghd swift test --package-path a
 
 アプリが起動したデーモンの標準エラー出力は、状態ディレクトリの `shiibar-ghd.log` に出力する。デーモンを再び起動すると、前のログを `shiibar-ghd.previous.log` に移す。
 
+## リポジトリの保護
+
+GitHub の ruleset を 2 つ設定している（どちらも有効で、迂回できる利用者はいない。2026-11-22 に設定）。
+
+- `protect-main`：既定のブランチ（main）の削除と、履歴を書き換える push を禁止する。main への変更はプルリクエストを必須にし（承認の人数は 0。作成者は自分のプルリクエストを承認できないため）、CI の 4 つのジョブ（`test`、`app`、`cask`、`deny`）の成功を必須にする。そのため、main には直接 push できず、CI のどれかが失敗しているプルリクエストはマージできない
+- `protect-release-tags`：`v` で始まるタグの削除と付け替えを禁止する。誤って push したタグを削除するときは、この ruleset を一時的に無効にする
+
+CI のジョブの名前を変更するとき、またはジョブを特定の変更でだけ実行するようにするときは、`protect-main` の必須のジョブも合わせて変更する。必須のジョブが実行されないプルリクエストは、マージできなくなるためである。
+
+適用されるルールは `gh api repos/<owner>/<repo>/rules/branches/main` で確認できる。
+
 ## リリース
 
-1. Cargo.toml の `[workspace.package] version` を上げてコミットする
-2. `vX.Y.Z` のタグを push する。`.github/workflows/release.yml` が、タグと版の一致を確かめ、Developer ID で署名し、公証、staple、zip をして、下書きの GitHub Release を作成する
+1. Cargo.toml の `[workspace.package] version` を上げてコミットし、プルリクエストで main にマージする（main には直接 push できない。「リポジトリの保護」）
+2. main のそのコミットに `vX.Y.Z` のタグを付けて push する。タグは push したあと削除も付け替えもできないので（「リポジトリの保護」）、版の番号とコミットを確かめてから push する。`.github/workflows/release.yml` が、タグと版の一致を確かめ、Developer ID で署名し、公証、staple、zip をして、下書きの GitHub Release を作成する
 3. 下書きの本文を shiibar-cc のリリースと同じ形式に差し替える：リード 1 文（`Shiibar GH X.Y.Z は…`に相当する英文）、利用者の視点の節（機能ごとの見出し、`## Fixed`、`## Changed`。必要なものだけ）、最後に `## Commits` の見出しの下に前のタグからのコミットの件名を新しい順に列挙する（`git log --format='- %s' vA.B.C..vX.Y.Z --no-merges`）。GitHub が自動生成する「What's Changed」と Install の節は載せない。文言は所有者の確認を経てから公開する
 4. 下書きの zip を実機で確かめてから公開する。公開すると `.github/workflows/bump-cask.yml` が `bufferings/homebrew-tap` の cask を更新する
 
