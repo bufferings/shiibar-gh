@@ -10,5 +10,15 @@ allow = ["MIT", "Apache-2.0", "Unicode-3.0", "Zlib"]
 multiple-versions = "warn"
 
 [advisories]
+# RUSTSEC-2026-0592: url 2.5.8 overflows the stack in `Url::origin()` on
+# nested `blob:` URLs. Nothing here calls `Url::origin()`, and neither do
+# reqwest 0.13.5 and tower-http 0.6.11, the crates that bring url in (their
+# sources searched, 2026-11-22). The fix, url 2.5.9, was published on
+# 2026-11-20 (crates.io API), inside the 7-day cooldown of
+# docs/DEVELOPMENT.md. Update to it on or after 2026-11-27 and remove this
+# entry.
+ignore = [
+    { id = "RUSTSEC-2026-0592", reason = "Url::origin() is not called; url 2.5.9 is inside the cooldown until 2026-11-27" },
+]
 
 [sources]
