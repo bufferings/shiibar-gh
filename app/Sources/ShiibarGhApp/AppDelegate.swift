@@ -238,8 +238,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func bringWindowsToFront(restoringMinimized: Bool) {
-        surfaces?.bringWindowsToFront(restoringMinimized: restoringMinimized)
-        if let window = settingsWindow, window.isVisible { window.orderFront(nil) }
+        var windows = surfaces?.windowsComingForward(restoringMinimized: restoringMinimized) ?? []
+        if let window = settingsWindow, window.isVisible { windows.append(window) }
+        // Back-most first, so the windows keep their order: the one an icon
+        // or a shortcut has just brought forward stays on top.
+        let order = SurfaceRules.backToFront(windows.map(\.windowNumber), frontToBack: NSApp.orderedWindows.map(\.windowNumber))
+        for number in order {
+            windows.first { $0.windowNumber == number }?.orderFront(nil)
+        }
     }
 
     private func applySurfaceAppearance() {

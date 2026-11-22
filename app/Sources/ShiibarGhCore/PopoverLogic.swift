@@ -530,6 +530,28 @@ public enum SettingsDestination: Equatable {
 }
 
 public enum SurfaceRules {
+    /// The order in which windows are ordered to the front so that all of
+    /// them come forward and keep the order they have: the back-most first.
+    /// `frontToBack` is the current order of the windows on screen; a window
+    /// that is not in it (a minimized one coming back) goes first, behind
+    /// the others. Ordering them in any other sequence would put the last
+    /// one over the window an icon or a shortcut has just brought forward.
+    public static func backToFront<ID: Hashable>(_ ids: [ID], frontToBack: [ID]) -> [ID] {
+        let rank = Dictionary(frontToBack.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        let offScreen = ids.filter { rank[$0] == nil }
+        let onScreen = ids.filter { rank[$0] != nil }.sorted { rank[$0]! > rank[$1]! }
+        return offScreen + onScreen
+    }
+
+    /// The popover closed because a menu bar icon was pressed: the icon's
+    /// action runs on the release, so whether another popover takes its
+    /// place is known only after that action. Until then the close is not
+    /// reported, and the app does not stop being a regular app under the
+    /// popover that follows (DESIGN.md, "Switching to a regular app").
+    public static func popoverCloseWaitsForIcon(replaced: Bool, pressOnIcon: Bool) -> Bool {
+        !replaced && pressOnIcon
+    }
+
     public static func content(account: Account?, dbUnreadable: Bool) -> PopoverContent {
         if dbUnreadable { return .unreadable }
         if let account, account.owners.isEmpty { return .noOwners }

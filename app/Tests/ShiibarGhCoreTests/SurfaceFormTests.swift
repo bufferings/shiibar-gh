@@ -341,3 +341,26 @@ extension FilterModelTests {
         XCTAssertEqual(window.lingering, [])
     }
 }
+
+/// Windows that come forward together keep their order, and a popover that
+/// closes on the press of a menu bar icon waits for that icon's action.
+final class SurfaceOrderTests: XCTestCase {
+    func testWindowsComeForwardInTheOrderTheyHave() {
+        // "a" was just brought to the front; ordering "b" after it would
+        // cover it.
+        XCTAssertEqual(SurfaceRules.backToFront(["b", "a"], frontToBack: ["a", "b"]), ["b", "a"])
+        XCTAssertEqual(SurfaceRules.backToFront(["a", "b"], frontToBack: ["a", "b"]), ["b", "a"])
+        XCTAssertEqual(SurfaceRules.backToFront(["a", "b", "settings"], frontToBack: ["b", "other", "settings", "a"]), ["a", "settings", "b"])
+    }
+
+    func testAWindowThatIsNotOnScreenGoesBehindTheOthers() {
+        XCTAssertEqual(SurfaceRules.backToFront(["a", "minimized", "b"], frontToBack: ["b", "a"]), ["minimized", "a", "b"])
+        XCTAssertEqual(SurfaceRules.backToFront([String](), frontToBack: ["a"]), [])
+    }
+
+    func testAPopoverClosedByAnIconPressWaitsForTheIconsAction() {
+        XCTAssertTrue(SurfaceRules.popoverCloseWaitsForIcon(replaced: false, pressOnIcon: true))
+        XCTAssertFalse(SurfaceRules.popoverCloseWaitsForIcon(replaced: true, pressOnIcon: true), "already replaced: reported at once")
+        XCTAssertFalse(SurfaceRules.popoverCloseWaitsForIcon(replaced: false, pressOnIcon: false), "Esc or a click elsewhere")
+    }
+}
