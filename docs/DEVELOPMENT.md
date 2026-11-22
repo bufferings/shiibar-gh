@@ -91,8 +91,8 @@ CI のジョブの名前を変更するとき、またはジョブを特定の�
 
 1. Cargo.toml の `[workspace.package] version` を、リリースする番号にしてコミットし、プルリクエストで main にマージする（main には直接 push できない。「リポジトリの保護」）。公開の直後に上げた仮の番号（手順 5）がリリースする番号と同じなら、この手順は不要である
 2. main のそのコミットに `vX.Y.Z` のタグを付けて push する。タグは push したあと削除も付け替えもできないので（「リポジトリの保護」）、版の番号とコミットを確かめてから push する。`.github/workflows/release.yml` が、タグと版の一致を確かめ、Developer ID で署名し、公証、staple、zip をして、下書きの GitHub Release を作成する
-3. 下書きの本文を shiibar-cc のリリースと同じ形式に差し替える：リード 1 文（`Shiibar GH X.Y.Z は…`に相当する英文）、利用者の視点の節（機能ごとの見出し、`## Fixed`、`## Changed`。必要なものだけ）、最後に `## Commits` の見出しの下に前のタグからのコミットの件名を新しい順に列挙する（`git log --format='- %s' vA.B.C..vX.Y.Z --no-merges`）。GitHub が自動生成する「What's Changed」と Install の節は載せない。文言は所有者の確認を経てから公開する
-4. 下書きの zip を実機で確かめてから公開する。公開すると `.github/workflows/bump-cask.yml` が `bufferings/homebrew-tap` の cask を更新する
+3. 下書きの本文を shiibar-cc のリリースと同じ形式に差し替える：リード 1 文（`Shiibar GH X.Y.Z は…`に相当する英文）、利用者の視点の節（機能ごとの見出し、`## Fixed`、`## Changed`。必要なものだけ）、最後に `## Commits` の見出しの下に前のタグからのコミットの件名を新しい順に列挙する（`git log --format='- %s' vA.B.C..vX.Y.Z --no-merges`）。GitHub が自動生成する「What's Changed」と Install の節は載せない。文言は所有者の確認を経てから公開する。本文の差し替えは `scripts/release/draft.sh notes vX.Y.Z <本文のファイル>` で行う。下書きを `gh release edit` や API で直接変更しない。`tag_name` を含めない変更で、下書きの `tag_name` が `untagged-…` になることがあるためである（shiibar-cc のリリースで発生した。`draft.sh` は、変更のたびに `tag_name` を送り、操作の前後に `tag_name` を読み直して、食い違えば止まる）
+4. 下書きの zip を実機で確かめてから、`scripts/release/draft.sh publish vX.Y.Z` で公開する。`draft.sh` は、公開の前後に `tag_name` を確かめ、最後に zip の URL が 200 または 302 を返すことを確かめる。公開すると `.github/workflows/bump-cask.yml` が `bufferings/homebrew-tap` の cask を更新する（終わったら、tap の cask の `version` と `sha256` を確かめる）。`tag_name` が `untagged-…` のまま公開された場合は、`tag_name` を直したうえで下書きに戻し（`gh api -X PATCH repos/bufferings/shiibar-gh/releases/<id> -f tag_name=vX.Y.Z -F draft=true`。`<id>` は `draft.sh` のエラーに出る）、`draft.sh publish` をもう一度実行する。`bump-cask.yml` の再実行では直らない（正しい `tag_name` は、新しい公開の出来事でだけ届くため）
 5. 公開の直後に、Cargo.toml の `[workspace.package] version` を次の番号（まずパッチ。0.9.0 を公開したら 0.9.1）に上げてコミットし、プルリクエストで main にマージする
 
 バージョンの決まりは次のとおりである（shiibar-cc と同じ）。
