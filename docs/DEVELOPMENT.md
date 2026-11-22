@@ -68,7 +68,7 @@ SHIIBAR_GH_TEST_DAEMON=$PWD/target/debug/shiibar-ghd swift test --package-path a
 
 ## 開発版のインストール
 
-`scripts/dev-install.sh` は、デーモン、CLI、アプリをリリースモードでビルドし、`~/Applications/Shiibar GH(Dev).app` を組み立てて（アプリの名前も `Shiibar GH(Dev)` にする。Finder、Dock、アプリの切り替えで、リリースのビルドと区別するためである。アプリの識別子はリリースと同じなので、Keychain、通知の許可、設定は共通である。以前の名前 `~/Applications/Shiibar GH.app` の開発用のインストールが残っていれば、止めて削除する）、ローカルの固定の署名の ID（`shiibar-gh-local-signing`。初回にログインキーチェーンに作成する）で hardened runtime を付けて署名し、`~/.local/bin/shiibar-gh` を同梱の CLI へのリンクにして、アプリを起動する。実行中のアプリとデーモンは先に止める。`CFBundleShortVersionString` は、ワークスペースのバージョンに `-dev` を付けた値にする（`0.9.0-dev`）。About の画面と Finder の「情報を見る」で、リリースのビルドと区別するためである。デーモンのバージョンには付けない。アプリは、デーモンのバージョンと比較するときに `-dev` を除く。`CFBundleVersion` は実行の時刻にする。アイコンのキャッシュが版で区別されるためである。
+`scripts/dev-install.sh` は、デーモン、CLI、アプリをリリースモードでビルドし、`~/Applications/Shiibar GH(Dev).app` を組み立てて（アプリの名前も `Shiibar GH(Dev)` にする。Finder、Dock、アプリの切り替えで、リリースのビルドと区別するためである。アプリの識別子はリリースと同じなので、Keychain、通知の許可、設定は共通である。以前の名前 `~/Applications/Shiibar GH.app` の開発用のインストールが残っていれば、止めて削除する）、ローカルの固定の署名の ID（`shiibar-gh-local-signing`。初回にログインキーチェーンに作成する）で hardened runtime を付けて署名し、`~/.local/bin/shiibar-gh` を同梱の CLI へのリンクにして、アプリを起動する。実行中のアプリとデーモンは先に止める。`CFBundleShortVersionString` は、ワークスペースのバージョンに `-dev` を付けた値にする（`0.9.1-dev`）。About の画面と Finder の「情報を見る」で、リリースのビルドと区別するためである。デーモンのバージョンには付けない。アプリは、デーモンのバージョンと比較するときに `-dev` を除く。`CFBundleVersion` は実行の時刻にする。アイコンのキャッシュが版で区別されるためである。
 
 `scripts/dev-uninstall.sh` は、ログイン項目の登録、アプリ、CLI のリンク、残ったデーモン、署名の ID を削除する。`--purge` を付けると、状態ディレクトリ、アプリの UserDefaults、Keychain のトークンの項目（`shiibar-gh token reset`）も削除する。0.1 の Keychain の項目（service `shiibar-gh`、account `tokens`）は削除しない。通知の許可は、システム設定の通知から利用者が削除する。
 
@@ -89,9 +89,15 @@ CI のジョブの名前を変更するとき、またはジョブを特定の�
 
 ## リリース
 
-1. Cargo.toml の `[workspace.package] version` を上げてコミットし、プルリクエストで main にマージする（main には直接 push できない。「リポジトリの保護」）
+1. Cargo.toml の `[workspace.package] version` を、リリースする番号にしてコミットし、プルリクエストで main にマージする（main には直接 push できない。「リポジトリの保護」）。公開の直後に上げた仮の番号（手順 5）がリリースする番号と同じなら、この手順は不要である
 2. main のそのコミットに `vX.Y.Z` のタグを付けて push する。タグは push したあと削除も付け替えもできないので（「リポジトリの保護」）、版の番号とコミットを確かめてから push する。`.github/workflows/release.yml` が、タグと版の一致を確かめ、Developer ID で署名し、公証、staple、zip をして、下書きの GitHub Release を作成する
 3. 下書きの本文を shiibar-cc のリリースと同じ形式に差し替える：リード 1 文（`Shiibar GH X.Y.Z は…`に相当する英文）、利用者の視点の節（機能ごとの見出し、`## Fixed`、`## Changed`。必要なものだけ）、最後に `## Commits` の見出しの下に前のタグからのコミットの件名を新しい順に列挙する（`git log --format='- %s' vA.B.C..vX.Y.Z --no-merges`）。GitHub が自動生成する「What's Changed」と Install の節は載せない。文言は所有者の確認を経てから公開する
 4. 下書きの zip を実機で確かめてから公開する。公開すると `.github/workflows/bump-cask.yml` が `bufferings/homebrew-tap` の cask を更新する
+5. 公開の直後に、Cargo.toml の `[workspace.package] version` を次の番号（まずパッチ。0.9.0 を公開したら 0.9.1）に上げてコミットし、プルリクエストで main にマージする
+
+バージョンの決まりは次のとおりである（shiibar-cc と同じ）。
+
+- main の Cargo.toml の version は、公開済みの番号より後の番号を指す。公開の直後はパッチを上げた仮の番号にし、次のリリースの内容が決まった時点で、内容に合わせて上げ直す（機能を含むリリースは 0.x、修正だけのリリースは 0.x.y を上げる）。仮の番号のままリリースしなかった番号は、欠番になる
+- 開発版のインストール（`scripts/dev-install.sh`）は、その番号に `-dev` を付けて表示する（`0.9.1-dev`）。公開済みのビルドより新しいことが番号で分かり、デーモンのバージョンも公開済みのビルドと異なるので、開発版のアプリは公開済みのビルドのデーモンを使用せずに入れ替える
 
 `release.yml` を手動（workflow_dispatch）で実行すると、リリースを作成しない試走になる。署名、公証、staple、zip までを行い、zip をワークフローの成果物に残す。必要な Secrets は `DEVELOPER_ID_CERT_P12`、`DEVELOPER_ID_CERT_PASSWORD`、`APPLE_API_KEY_P8`、`APPLE_API_KEY_ID`、`APPLE_API_ISSUER_ID`、cask の更新には `TAP_PUSH_TOKEN` である。

@@ -1,8 +1,9 @@
 # shellcheck shell=bash
 # Stopping a running "Shiibar GH.app" and its daemon before the bundle is
-# replaced, so the new build does not attach to a daemon of the old one: the
-# development and release builds carry the same version (docs/tasks/M3.md,
-# "Version numbers"). Sourced; expects BUNDLE_ID and APP_EXECUTABLE from
+# replaced, so the new build does not attach to a daemon of the old one: two
+# builds of one version cannot be told apart by the version the app compares
+# (successive development installs, or a release rebuilt from its tag;
+# docs/tasks/M3.md, "Version numbers"). Sourced; expects BUNDLE_ID and APP_EXECUTABLE from
 # scripts/lib/bundle.sh.
 #
 # Processes are found by a literal substring of their command line, never a
