@@ -98,7 +98,7 @@ specific feature.
 
 ### Homebrew (recommended)
 
-**Requirements**: macOS 14 (Sonoma) or later, Apple Silicon, and
+**Requirements**: macOS 27 (developed and tested on it), Apple Silicon, and
 [Homebrew](https://brew.sh). Intel Macs are not supported.
 
 ```sh
@@ -127,7 +127,7 @@ saved state.
 Building from source is a development setup, not a substitute for the
 Homebrew cask on Intel Macs: there is no Intel build.
 
-**Requirements**: macOS 14 (Sonoma) or later, a Rust toolchain via
+**Requirements**: macOS 27 (developed and tested on it), a Rust toolchain via
 [rustup](https://rustup.rs) (the version pinned in `rust-toolchain.toml` is
 installed automatically), and Xcode (the app is built with `swift build`;
 its tests, `swift test`, need the full Xcode).
