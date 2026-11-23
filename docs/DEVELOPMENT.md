@@ -60,7 +60,12 @@ SHIIBAR_GH_STATE_DIR=$(mktemp -d) SHIIBAR_GH_LOG=debug cargo run -p shiibar-ghd 
 # App tests, with the real daemon of the dev-ingest build
 cargo build -p shiibar-ghd --features dev-ingest
 SHIIBAR_GH_TEST_DAEMON=$PWD/target/debug/shiibar-ghd swift test --package-path app
+
+# The optimized app build, with warnings as errors
+swift build --package-path app -c release -Xswiftc -warnings-as-errors
 ```
+
+最適化ありのビルドは、インストールとリリースのスクリプトが行うビルドと同じである。最適化の処理だけが報告する警告があり、最適化なしのテストのビルドでは検出できないので、CI の `app` のジョブでも、警告をエラーとしてこのビルドを実行する。
 
 `SHIIBAR_GH_TEST_DAEMON` を指定しないと、実際のデーモンを使用するテストは省略される。
 
