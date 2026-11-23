@@ -67,7 +67,36 @@ owners, event tables, settings, PRs and rows start empty, so add your
 owners again. Version 0.2 and later do
 not read the saved state or tokens of 0.1: add your accounts again.
 
+## Permissions
+
+Installing and running Shiibar GH asks for the following. Each one maps to a
+specific feature.
+
+- **Notifications**: needed to tell you what happened on your pull
+  requests. The app asks the first time you open it.
+- **Login Items**: the app registers itself to start at login the first
+  time you open it. You can turn this off any time in Settings › General ›
+  Launch at login; once you do, the app keeps that choice.
+- **Keychain**: the daemon saves the token of every account in one
+  generic password item of the Keychain (service `shiibar-gh`, account
+  `accounts`). Nothing else reads or writes it.
+- **A GitHub token per account**: a classic personal access token with the
+  scopes `repo`, `notifications` and `read:org`. Shiibar GH only reads from
+  GitHub with it.
+- **Code signing**: the Homebrew cask ships a Developer ID–signed, notarized
+  `.app`, with no local signing step. Building from source instead signs
+  the app locally with a stable self-signed identity
+  (`shiibar-gh-local-signing`, created in your login keychain on the first
+  install), so that a rebuild keeps the Keychain access and the
+  notification permission macOS ties to the app's signature. This only
+  applies to the source build.
+- **A state directory** (`~/.local/state/shiibar-gh/`): holds the daemon's
+  Unix socket, its database (your accounts, owners, cards and settings) and
+  its log. Nothing in it leaves your machine.
+
 ## Install / Uninstall
+
+### Homebrew (recommended)
 
 **Requirements**: macOS 14 (Sonoma) or later, Apple Silicon, and
 [Homebrew](https://brew.sh). Intel Macs are not supported.
@@ -92,6 +121,43 @@ The tokens stay in the Keychain (service `shiibar-gh`, account `accounts`).
 Run `shiibar-gh token reset` before uninstalling, or delete the item in
 Keychain Access. `brew uninstall --zap --cask shiibar-gh` also removes the
 saved state.
+
+### Source build (developers)
+
+Building from source is a development setup, not a substitute for the
+Homebrew cask on Intel Macs: there is no Intel build.
+
+**Requirements**: macOS 14 (Sonoma) or later, a Rust toolchain via
+[rustup](https://rustup.rs) (the version pinned in `rust-toolchain.toml` is
+installed automatically), and Xcode (the app is built with `swift build`;
+its tests, `swift test`, need the full Xcode).
+
+```sh
+git clone https://github.com/bufferings/shiibar-gh.git
+cd shiibar-gh
+./scripts/dev-install.sh
+```
+
+This builds the daemon, the CLI and the app, bundles them as
+`Shiibar GH(Dev).app` in `~/Applications` (the name and a `-dev` version
+tell it from a release; it shares the release's identifiers, so the
+Keychain item, the notification permission and the settings are the same),
+signs it locally, links `shiibar-gh` into `~/.local/bin`, and launches the
+app (a running one is stopped first).
+
+To uninstall:
+
+```sh
+./scripts/dev-uninstall.sh           # quits the app; removes the Login Item,
+                                     # the app, the ~/.local/bin link and the
+                                     # local signing identity
+./scripts/dev-uninstall.sh --purge   # also removes the state directory, the
+                                     # app's saved preferences and the tokens
+```
+
+Either way, the notification permission itself can't be removed by a
+script: macOS ties it to the app, and only System Settings › Notifications
+can revoke it.
 
 ## How it works
 
