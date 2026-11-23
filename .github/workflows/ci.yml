@@ -45,6 +45,12 @@ jobs:
           SHIIBAR_GH_TEST_DAEMON: ${{ github.workspace }}/target/debug/shiibar-ghd
         run: swift test --package-path app
 
+      # The build the install and release scripts make, with warnings as
+      # errors: the optimizer reports some warnings (a weak reference that
+      # is always nil, for one) that the unoptimized test build does not.
+      - name: Optimized app build without warnings
+        run: swift build --package-path app -c release -Xswiftc -warnings-as-errors
+
   cask:
     runs-on: macos-15
     timeout-minutes: 15
