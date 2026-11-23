@@ -94,6 +94,14 @@ scripts/sandbox-env.sh stop               # アプリを終了し、作成した
 
 `stop` は、アプリを終了し（デーモンも終了する）、アプリ、状態ディレクトリ、UserDefaults を削除する。通知の許可は macOS が残すので、システム設定の通知から削除する。
 
+README の画像は、`screenshots` のデータで撮影し、`docs/assets/` に保存する。
+
+| ファイル | 内容 |
+| --- | --- |
+| `popover.png` | ポップオーバーの Review のタブ |
+| `notification-banner.png` | `notify` で表示した通知 |
+| `window.png` | ウインドウの All のタブ |
+
 ## 開発版のインストール
 
 `scripts/dev-install.sh` は、デーモン、CLI、アプリをリリースモードでビルドし、`~/Applications/Shiibar GH(Dev).app` を組み立てて（アプリの名前も `Shiibar GH(Dev)` にする。Finder、Dock、アプリの切り替えで、リリースのビルドと区別するためである。アプリの識別子はリリースと同じなので、Keychain、通知の許可、設定は共通である。以前の名前 `~/Applications/Shiibar GH.app` の開発用のインストールが残っていれば、止めて削除する）、ローカルの固定の署名の ID（`shiibar-gh-local-signing`。初回にログインキーチェーンに作成する）で hardened runtime を付けて署名し、`~/.local/bin/shiibar-gh` を同梱の CLI へのリンクにして、アプリを起動する。実行中のアプリとデーモンは先に止める。`CFBundleShortVersionString` は、ワークスペースのバージョンに `-dev` を付けた値にする（`0.9.1-dev`）。About の画面と Finder の「情報を見る」で、リリースのビルドと区別するためである。デーモンのバージョンには付けない。アプリは、デーモンのバージョンと比較するときに `-dev` を除く。`CFBundleVersion` は実行の時刻にする。アイコンのキャッシュが版で区別されるためである。

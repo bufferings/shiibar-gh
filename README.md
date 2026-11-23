@@ -15,6 +15,20 @@ of each tab narrows the list: show muted cards in gray or only them, pick
 the statuses, or keep only the unread cards.
 It only reads from GitHub. See `docs/DESIGN.md` and `CLAUDE.md`.
 
+<img src="docs/assets/popover.png" width="450"
+     alt="The Shiibar GH popover under its menu bar icon, on the Review tab:
+          the sections Done, Waiting, Doing and Inbox with one pull request
+          card each, every card with its title, repository, author and the
+          latest events such as a review request, a mention and a reply">
+
+Notifications say what happened and on which PR; a click opens the
+account's popover or window:
+
+<img src="docs/assets/notification-banner.png" width="450"
+     alt="A macOS notification: 'example-user · Mentioned', on
+          'example-org/mobile #311 · Cache profile images on disk', with the
+          comment that mentions you">
+
 **Several GitHub accounts.** Each account has its own menu bar icon and one
 classic personal access token (scopes `repo`, `notifications`, `read:org`).
 Under an account you add owners (organizations or personal accounts) and,
@@ -26,6 +40,11 @@ two, and the choice is remembered per account. In the window form a click on
 the icon opens the window, brings it to the front, or closes it when it is
 already in front. Keep on top (the pin) keeps the window above other
 windows.
+
+<img src="docs/assets/window.png" width="700"
+     alt="The Shiibar GH window of an account, on the All tab: every pull
+          request you are involved in, grouped by repository, with the
+          unread events of each card in the accent color">
 
 **Global shortcut.** Each account can have a key combination (Settings ›
 Accounts › the account › Global shortcut) that does what a click on its menu
