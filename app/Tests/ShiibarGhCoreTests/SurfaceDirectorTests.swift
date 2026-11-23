@@ -173,6 +173,108 @@ final class SurfaceDirectorTests: XCTestCase {
         XCTAssertEqual(host.moves, ["regular window \(a)", "present window \(a)"])
     }
 
+    /// Open but not in front (minimized, on another Space, another window
+    /// of the app key, another app in front): brought to the front, never
+    /// closed.
+    func testAWindowThatIsNotInFrontComesForward() {
+        model.store.setSurfaceForm(.window, account: a)
+        let cases: [(String, WindowFacts)] = [
+            ("minimized", WindowFacts(appActive: true, key: true, miniaturized: true)),
+            ("on another Space", WindowFacts(appActive: true, key: true, onActiveSpace: false)),
+            ("another window of the app is key", WindowFacts(appActive: true, key: false)),
+            ("another app in front, the window only kept on top", WindowFacts(appActive: false, key: false)),
+        ]
+        for (name, facts) in cases {
+            host.windows[a] = facts
+            host.log = []
+            director.toggle(account: a, pressedAt: nil)
+            XCTAssertEqual(host.moves, ["regular window \(a)", "present window \(a)"], name)
+        }
+    }
+
+    /// An active app gained by the press itself does not count; a shortcut
+    /// has no press that could have activated the app, so the state counts
+    /// as it is.
+    func testAnActivationGainedByThePressDoesNotCount() {
+        model.store.setSurfaceForm(.window, account: a)
+        let facts = WindowFacts(appActive: true, becameActiveAt: 10.5, key: true, becameKeyAt: 5)
+        host.windows[a] = facts
+        director.toggle(account: a, pressedAt: 10)
+        XCTAssertEqual(host.moves, ["regular window \(a)", "present window \(a)"])
+        host.windows[a] = facts
+        host.log = []
+        director.toggle(account: a, pressedAt: nil)
+        XCTAssertEqual(host.moves, ["close window \(a)"])
+    }
+
+    /// A window with a sheet that is not in front comes forward like any
+    /// other; the sheet only keeps a window in front from closing.
+    func testAWindowWithASheetThatIsNotInFrontComesForward() {
+        model.store.setSurfaceForm(.window, account: a)
+        model.viewModel(a).list(.window).showsGrouping = true
+        host.windows[a] = WindowFacts(appActive: false, key: true)
+        director.toggle(account: a, pressedAt: nil)
+        XCTAssertEqual(host.moves, ["regular window \(a)", "present window \(a)"])
+    }
+
+    /// A Dismiss confirmation on the window in front keeps it open: the
+    /// question is not closed unanswered.
+    func testADismissConfirmationKeepsTheWindowInFront() async {
+        model.store.setSurfaceForm(.window, account: a)
+        api.cards = sampleCards()
+        model.viewModel(a).reload()
+        await settle()
+        let window = model.viewModel(a).list(.window)
+        model.surfaceDisplayed(.window, account: a, true, opening: true)
+        model.surfaceOpened(.window, account: a)
+        let card = window.sections.flatMap(\.cards).first!
+        window.perform(.confirmDismiss(card: card.id))
+        XCTAssertNotNil(window.confirmingDismiss)
+        host.windows[a] = front
+        director.toggle(account: a, pressedAt: nil)
+        XCTAssertEqual(host.moves, [])
+    }
+
+    /// Closing the window by the icon keeps the window form: the next press
+    /// opens the window again.
+    func testThePressAfterClosingOpensTheWindowAgain() {
+        model.store.setSurfaceForm(.window, account: a)
+        host.windows[a] = front
+        director.toggle(account: a, pressedAt: nil)
+        XCTAssertEqual(host.moves, ["close window \(a)"])
+        XCTAssertEqual(model.store.surfaceForm(account: a), .window)
+        host.log = []
+        director.toggle(account: a, pressedAt: nil)
+        XCTAssertEqual(host.moves, ["regular window \(a)", "present window \(a)"])
+    }
+
+    /// What shows decides, whatever the saved form says: an open window
+    /// follows the window's rows in the popover form, and the popover shown
+    /// for the account closes in the window form.
+    func testWhatShowsDecidesOverTheSavedForm() {
+        XCTAssertEqual(model.store.surfaceForm(account: a), .popover)
+        host.windows[a] = front
+        director.toggle(account: a, pressedAt: nil)
+        XCTAssertEqual(host.moves, ["close window \(a)"])
+        model.store.setSurfaceForm(.window, account: a)
+        host.popoverShown = true
+        host.popoverAccount = a
+        host.log = []
+        director.toggle(account: a, pressedAt: nil)
+        XCTAssertEqual(host.moves, ["close popover"])
+        XCTAssertEqual(model.store.surfaceForm(account: a), .window, "the form is not changed")
+    }
+
+    /// A notification of an account in the popover form replaces another
+    /// account's popover.
+    func testANotificationReplacesAnotherAccountsPopover() {
+        host.popoverShown = true
+        host.popoverAccount = b
+        director.showForNotification(account: a)
+        XCTAssertEqual(host.moves, ["present popover \(a)"])
+        XCTAssertEqual(host.popoverAccount, a)
+    }
+
     // MARK: Opening
 
     /// Opening or raising a window closes the popover, whichever account's;
