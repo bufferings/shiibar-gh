@@ -51,6 +51,10 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate, Su
     var onPinsChanged: ((_ closing: String?) -> Void)?
     /// A popover is being replaced by another one (`toggle`).
     private var replacingPopover = false
+    /// The popover closed on the press of a menu bar icon and its close is
+    /// reported after that icon's action (`SurfaceRules.popoverCloseWaitsForIcon`).
+    private var closeAwaitsIcon = false
+    private var closeAwaitTimer: Timer?
     /// When each window last became key, and when the app last became
     /// active (system uptime): a state gained by the press itself does not
     /// count as held before it (`StateAtPress`).
@@ -152,18 +156,22 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate, Su
     /// comes back too (`restoringMinimized`); on other activations (⌘Tab,
     /// another account's icon) a minimized one stays in the Dock (DESIGN.md,
     /// "Open in window").
-    func bringWindowsToFront(restoringMinimized: Bool) {
+    /// Returns the windows to order to the front; the caller orders them
+    /// together with its own windows, keeping their order on screen.
+    func windowsComingForward(restoringMinimized: Bool) -> [NSWindow] {
+        var windows: [NSWindow] = []
         for panel in panels.values {
             switch Self.front(minimized: panel.isMiniaturized, restoring: restoringMinimized) {
             case .restore:
                 panel.deminiaturize(nil)
-                panel.orderFront(nil)
+                windows.append(panel)
             case .order:
-                panel.orderFront(nil)
+                windows.append(panel)
             case .leave:
                 break
             }
         }
+        return windows
     }
 
     enum Front: Equatable { case restore, order, leave }
@@ -276,10 +284,12 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate, Su
         let pressedAt = iconPressedAt ?? NSApp.currentEvent?.timestamp
         iconPressedAt = nil
         toggle(account: id, pressedAt: pressedAt)
+        reportAwaitedClose()
     }
 
     @objc private func clickedFallback(_ sender: NSStatusBarButton) {
         iconPressedAt = nil
+        defer { reportAwaitedClose() }
         guard !blocked else { return }
         if popover.isShown {
             if popoverAccount == nil {
@@ -438,8 +448,43 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate, Su
             }
             popoverAccount = nil
             popover.contentViewController = nil
-            onPopoverClosed?(replacingPopover || popover.isShown)
+            let replaced = replacingPopover || popover.isShown
+            if SurfaceRules.popoverCloseWaitsForIcon(replaced: replaced, pressOnIcon: isPressOnIcon(NSApp.currentEvent)) {
+                awaitIconAction()
+            } else {
+                onPopoverClosed?(replaced)
+            }
         }
+    }
+
+    /// A transient popover closes on the press of another menu bar icon,
+    /// before that icon's action.
+    private func isPressOnIcon(_ event: NSEvent?) -> Bool {
+        guard let event, event.type == .leftMouseDown || event.type == .rightMouseDown, let window = event.window else { return false }
+        return isStatusItemWindow(window)
+    }
+
+    /// The close is reported by the icon's action. A press that ends away
+    /// from the icon sends no action: then it is reported shortly after the
+    /// buttons are up.
+    private func awaitIconAction() {
+        closeAwaitsIcon = true
+        closeAwaitTimer?.invalidate()
+        closeAwaitTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] timer in
+            guard NSEvent.pressedMouseButtons == 0 else { return }
+            timer.invalidate()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                MainActor.assumeIsolated { self?.reportAwaitedClose() }
+            }
+        }
+    }
+
+    private func reportAwaitedClose() {
+        guard closeAwaitsIcon else { return }
+        closeAwaitsIcon = false
+        closeAwaitTimer?.invalidate()
+        closeAwaitTimer = nil
+        onPopoverClosed?(popover.isShown)
     }
 
     // MARK: - Switching the form
