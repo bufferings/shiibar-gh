@@ -44,7 +44,7 @@ enum NSThemeFrameProbe {
     }
 }
 
-/// The measurement and demo modes' UserDefaults: in memory only, so
+/// The measurement mode's UserDefaults: in memory only, so
 /// nothing reaches the user's Preferences (UIStateStore reads and writes
 /// only through these methods).
 final class ScratchDefaults: UserDefaults {
@@ -108,10 +108,10 @@ enum PerfMode {
     /// shows only in a key window (ListTable.swift, `ListLook`).
     @MainActor static weak var assumedKeyWindow: NSWindow?
 
-    /// The name of the scratch defaults, one per mode (a measurement run
-    /// and a demo do not share them). The values are kept in memory only
-    /// (`ScratchDefaults`): nothing is written to the user's Preferences.
-    static var suiteName: String { demo ? "shiibar.gh.demo" : "shiibar.gh.perf" }
+    /// The name of the measurement mode's scratch defaults. The values are
+    /// kept in memory only (`ScratchDefaults`): nothing is written to the
+    /// user's Preferences.
+    static let suiteName = "shiibar.gh.perf"
 
     /// Removes the file an earlier version left in the user's Preferences
     /// for the mode's suite (it kept the values in a real suite and
@@ -126,26 +126,46 @@ enum PerfMode {
         try? FileManager.default.removeItem(at: file)
     }
 
-    /// The demo mode (scripts/perf/demo.sh, `SHIIBAR_GH_DEMO=1`): the
-    /// measurement mode's sandbox (a scratch UserDefaults suite, the given
-    /// state directory and `dev-ingest` daemon, no login item, no
-    /// notification permission, file avatars) with the app used by hand:
-    /// nothing runs by itself.
-    static let demo: Bool = ProcessInfo.processInfo.environment["SHIIBAR_GH_DEMO"] == "1"
     /// The measurement mode without the warning bands
     /// (`SHIIBAR_GH_PERF_NO_BANNERS=1`): the account of the measurement data
     /// has no token, whose band would always show.
     static let hidesBanners: Bool = enabled && ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_NO_BANNERS"] == "1"
+}
 
-    /// The measurement or the demo mode: the sandbox either way.
-    static var sandboxed: Bool { enabled || demo }
+/// The sandbox mode (scripts/sandbox-env.sh, `SHIIBAR_GH_SANDBOX=1`): an
+/// app bundle with its own bundle identifier and a `dev-ingest` daemon in
+/// Contents/Helpers, on the state directory `SHIIBAR_GH_STATE_DIR` names.
+/// The daemon has no GitHub and only a test Keychain under that directory;
+/// the bundle identifier keeps the app's UserDefaults and notification
+/// permission apart from the installed app's. Otherwise the app runs as
+/// installed (notifications, global shortcuts, the popover and windows),
+/// except that it registers no login item, loads the `file:` avatars of
+/// the made-up data, and holds the answer of Refresh for
+/// `SHIIBAR_GH_SANDBOX_REFRESH_SECONDS` (the daemon answers at once).
+enum SandboxMode {
+    static let enabled: Bool = ProcessInfo.processInfo.environment["SHIIBAR_GH_SANDBOX"] == "1"
 
-    /// The demo mode's `SHIIBAR_GH_DEMO_REFRESH_SECONDS`: the answer of
-    /// Refresh is held this many seconds (the demo daemon answers at once),
-    /// so the running Refresh can be looked at. 0 outside the demo mode, or
-    /// without a number from 0 to 60.
-    static var demoRefreshSeconds: Double {
-        guard demo, let text = ProcessInfo.processInfo.environment["SHIIBAR_GH_DEMO_REFRESH_SECONDS"],
+    /// The installed app's bundle identifier (scripts/lib/bundle.sh): the
+    /// sandbox never runs under it.
+    static let installedBundleIdentifier = "shiibar.gh"
+
+    /// Why the sandbox mode cannot run here, nil when it can.
+    static func refusal(bundle: Bundle, environment: [String: String]) -> String? {
+        guard bundle.bundleURL.pathExtension == "app",
+              let identifier = bundle.bundleIdentifier, identifier != installedBundleIdentifier else {
+            return "the sandbox mode needs an app bundle with its own bundle identifier (scripts/sandbox-env.sh)"
+        }
+        guard environment[StateDirectory.environmentKey] != nil else {
+            return "the sandbox mode needs SHIIBAR_GH_STATE_DIR"
+        }
+        return nil
+    }
+
+    /// `SHIIBAR_GH_SANDBOX_REFRESH_SECONDS`: the answer of Refresh is held
+    /// this many seconds, so the running Refresh can be looked at. 0
+    /// outside the sandbox mode, or without a number from 0 to 60.
+    static var refreshSeconds: Double {
+        guard enabled, let text = ProcessInfo.processInfo.environment["SHIIBAR_GH_SANDBOX_REFRESH_SECONDS"],
               let seconds = Double(text), seconds >= 0, seconds <= 60 else { return 0 }
         return seconds
     }
@@ -502,14 +522,14 @@ final class PerfRunner: NSObject {
             await snapshots(list: list, window: window, directory: directory)
             return finish()
         }
-        // `SHIIBAR_GH_PERF_DEMOSHOTS=<directory>` (with the demo data,
-        // `make-data.py --demo`) draws searches whose matches are hidden
-        // and the × confirmation into PNG files there, checks that every
+        // `SHIIBAR_GH_PERF_EDGESHOTS=<directory>` (with the edge-cases data
+        // of scripts/lib/make-data.py) draws searches whose matches are
+        // hidden and the × confirmation into PNG files there, checks that every
         // card of those searches shows a yellow background and that the
         // heights after `more`, `less`, "+ N more" and `Show less` animate,
         // and quits.
-        if let directory = ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_DEMOSHOTS"] {
-            await demoShots(list: list, window: window, directory: directory)
+        if let directory = ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_EDGESHOTS"] {
+            await edgeCaseShots(list: list, window: window, directory: directory)
             return finish()
         }
         // `SHIIBAR_GH_PERF_SCROLLCOMPARE=1` feeds the same scroll events to
@@ -2577,7 +2597,7 @@ final class PerfRunner: NSObject {
     /// from the top of the list. A first pass (cold), then the measured
     /// one; the search is cleared between them, not measured.
     private func searchOperations(list: SurfaceListModel, window: NSWindow) async {
-        // "rows" and "cache" are in every title (scripts/perf/make-data.py),
+        // "rows" and "cache" are in every title (scripts/lib/make-data.py),
         // "re" and "c" in many rows too: every card in view draws matches.
         let text = "rows cache"
         for tab in [ListTab.all, .review] {
@@ -2596,7 +2616,7 @@ final class PerfRunner: NSObject {
                 await pause(0.5)
             }
             // A label name (`Show labels` on: the search looks at the
-            // names, scripts/perf/make-data.py's LABEL_SET).
+            // names, scripts/lib/make-data.py's LABEL_SET).
             var samples: [Sample] = []
             let label = "needs triage"
             for i in 1...label.count {
@@ -2622,9 +2642,9 @@ final class PerfRunner: NSObject {
         list.setSearch("")
     }
 
-    /// The demo data searched for words whose matches are hidden (DESIGN.md,
+    /// The edge-cases data searched for words whose matches are hidden (DESIGN.md,
     /// "Showing what matched"): `because` and `Follow`, at the top of All.
-    private func demoShots(list: SurfaceListModel, window: NSWindow, directory: String) async {
+    private func edgeCaseShots(list: SurfaceListModel, window: NSWindow, directory: String) async {
         // The my review mark's three states in Review (DESIGN.md, "Card",
         // "My review mark"), light or dark (`SHIIBAR_GH_PERF_DARK=1`).
         let dark = ProcessInfo.processInfo.environment["SHIIBAR_GH_PERF_DARK"] == "1"
@@ -2642,13 +2662,13 @@ final class PerfRunner: NSObject {
             let shown = Listing.cards(list.data.cards, tab: .all)
             guard let card = shown.first(where: { MyReviewMark.of($0) == mark && $0.tab == .review })
                 ?? shown.first(where: { MyReviewMark.of($0) == mark }) else {
-                log("demo: no card with the mark \(name)")
+                log("edge cases: no card with the mark \(name)")
                 continue
             }
             if card.tab == .all { list.openTab(.all) }
             list.reveal(pr: card.pr, waitForList: false)
             await pause(1.2)
-            checkList("demo Review \(name)")
+            checkList("edge cases Review \(name)")
             snapshot(window, directory + "/review-\(name)\(dark ? "-dark" : "").png")
             list.openTab(.review)
         }
@@ -2663,7 +2683,7 @@ final class PerfRunner: NSObject {
                 await pause(0.12)
             }
             await pause(1)
-            checkList("demo search \(text)")
+            checkList("edge cases search \(text)")
             snapshot(window, directory + "/search-\(text.lowercased()).png")
             await sweepMarks(text, window: window)
         }
@@ -2675,12 +2695,12 @@ final class PerfRunner: NSObject {
         if let line = inView.first(where: { $0.card.rows.count > Listing.rowsShown }) {
             let id = line.card.id
             if let row = line.card.rows.first(where: { $0.text?.isEmpty == false }) {
-                await animated("demo: more", row: "card:" + id, window: window) { list.perform(.toggleBody(row: row.id)) }
+                await animated("edge cases: more", row: "card:" + id, window: window) { list.perform(.toggleBody(row: row.id)) }
                 snapshot(window, directory + "/more-open.png")
-                await animated("demo: less", row: "card:" + id, window: window) { list.perform(.toggleBody(row: row.id)) }
+                await animated("edge cases: less", row: "card:" + id, window: window) { list.perform(.toggleBody(row: row.id)) }
             }
-            await animated("demo: + N more", row: "card:" + id, window: window) { list.perform(.expandRows(card: id)) }
-            await animated("demo: Show less", row: "card:" + id, window: window) { list.perform(.collapseRows(card: id)) }
+            await animated("edge cases: + N more", row: "card:" + id, window: window) { list.perform(.expandRows(card: id)) }
+            await animated("edge cases: Show less", row: "card:" + id, window: window) { list.perform(.collapseRows(card: id)) }
         }
         // The × confirmation (DESIGN.md, "Confirming ×").
         if let card = inView.first?.card {
@@ -2697,17 +2717,17 @@ final class PerfRunner: NSObject {
         if let card = Listing.cards(list.data.cards, tab: .all).first(where: { $0.labelsMore > 0 }) {
             list.reveal(pr: card.pr, waitForList: false)
             await pause(1)
-            checkList("demo labels +N")
+            checkList("edge cases labels +N")
             snapshot(window, directory + "/labels-more.png")
         }
         list.setSearch("triage")
         await pause(1)
-        checkList("demo search a label name")
+        checkList("edge cases search a label name")
         snapshot(window, directory + "/search-label.png")
         list.setSearch("")
         list.openDismissedList()
         await pause(1)
-        checkList("demo Dismissed list")
+        checkList("edge cases Dismissed list")
         snapshot(window, directory + "/dismissed.png")
         list.closeDismissedList()
     }

@@ -487,6 +487,17 @@ impl Daemon {
                 self.account_line(&id)?
             }
             #[cfg(feature = "dev-ingest")]
+            Request::DevAccountFetched {
+                account,
+                at,
+                graphql,
+                rest,
+            } => {
+                let id = self.account_of(&account)?;
+                self.engine.fetch_seen(&id, at, graphql, rest);
+                self.account_line(&id)?
+            }
+            #[cfg(feature = "dev-ingest")]
             Request::DevOwnerAdd {
                 account,
                 owner,

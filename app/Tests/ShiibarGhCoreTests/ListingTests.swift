@@ -98,7 +98,7 @@ final class HighlightTests: XCTestCase {
     }
 
     /// Every card shown with search text has a yellow background somewhere
-    /// (the cases of the demo data, `make-data.py --demo`): a laid-out text
+    /// (the cases of the edge-cases data of `make-data.py`): a laid-out text
     /// shows 40 characters a line here.
     func testEveryCardShownHasAYellowBackground() {
         let long = "A single long line: Could you take a look at the migration plan before Friday? The second step rewrites "

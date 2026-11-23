@@ -1,53 +1,69 @@
 #!/usr/bin/env python3
-"""Load the measurement data of docs/tasks/M7.md ("Speed of operation") into a
-sandbox state directory, through a `dev-ingest` build of shiibar-ghd.
+"""Load made-up data into a new state directory, through a `dev-ingest`
+build of shiibar-ghd. Nothing reaches GitHub (no SHIIBAR_GH_DEV_GITHUB_URL)
+and the real Keychain is never read (a dev-ingest daemon has none). The
+script refuses a state directory that is not empty, so it never touches a
+real one.
 
-The data: one account `me` (id 1001, no token) with the owner `org` and
-Public; 200 PRs that are not dismissed, 3 rows each (a mention with a body
-long enough for 3 lines on a third of them), spread over 20 repositories so
-every All group (Group by Repository) folds into "+ N more PRs"; Review and
-Mine with Inbox, Doing, Waiting and Done, and the cards of one muted user. For
-the Filter the PRs have the four statuses (open, draft, merged,
-closed), and a quarter of the cards are read (the rest have unread rows).
-30 more PRs are dismissed, for the Dismissed list by repository; they are not
-among the 200.
-The avatars are PNG files in the state directory, referenced by file:// URLs:
-the authors' and the rows' actors' (every fourth row has no avatar URL, as
-a row saved before 0.7, and one actor has a long login). Some cards have
-GitHub labels, a part of them enough to wrap to a second line.
+Usage:
+  make-data.py <shiibar-ghd built with --features dev-ingest> <empty dir> <set>
+  make-data.py --notify <state dir of a running sandbox> <set>
 
-No token is ever passed (a dev-ingest daemon without SHIIBAR_GH_DEV_KEYCHAIN
-has no Keychain at all) and nothing reaches GitHub (no
-SHIIBAR_GH_DEV_GITHUB_URL). The script refuses a state directory that is
-not empty, so it never touches a real one.
+The sets:
 
-Usage: make-data.py <shiibar-ghd built with --features dev-ingest> <empty dir> [--demo]
+measure: the measurement data of docs/tasks/M7.md ("Speed of operation"),
+for scripts/perf/measure.sh. One account `me` (id 1001, no token) with the
+owner `org` and Public; 200 PRs that are not dismissed, 3 rows each (a
+mention with a body long enough for 3 lines on a third of them), spread over
+20 repositories so every All group (Group by Repository) folds into "+ N
+more PRs"; Review and Mine with Inbox, Doing, Waiting and Done, and the
+cards of one muted user. For the Filter the PRs have the four statuses
+(open, draft, merged, closed), and a quarter of the cards are read (the rest
+have unread rows). 30 more PRs are dismissed, for the Dismissed list by
+repository; they are not among the 200. The avatars are PNG files in the
+state directory, referenced by file:// URLs: the authors' and the rows'
+actors' (every fourth row has no avatar URL, as a row saved before 0.7, and
+one actor has a long login). Some cards have GitHub labels, a part of them
+enough to wrap to a second line.
 
---demo loads the data of the demo mode (scripts/perf/demo.sh) instead: about
-200 cards over All, Review and Mine (each with Inbox, Doing, Waiting, Done and
-cards to `Dismiss all` in Done), dismissed cards of several repositories (the
-Dismissed list by repository), the account `me` with the color None and a
-second account with the color Blue (the dot before the name), many
-repositories, a muted repository and a muted user, merged and closed cards
-(in Done when placed), drafts, read cards and cards with unread rows (blue,
-and gray on the muted cards: what the Filter sorts out), and
-rows with bodies of every length (unread mentions of 1, 3, 6 and 12 and more
-lines, read rows, long single lines, team mentions, cards with more than
-three rows), an own PR in the muted repository, a PR of it taken out of Mute
-by itself (Unmute), and team mentions on the muted user's cards. The rows
-show their actors' avatars, some without one and some with a long login; the
-account's own merges, closes and merge queue additions are read rows, a
-removal by the merge queue an unread one, and approvals of your PRs carry no
-body. Cards carry GitHub labels (none on most, one or a few on many,
-enough to wrap on some, more than 20 with `+N` on one, colors close to
-white and to black, a yellow, upper-case colors and one invalid color);
-Ready for review and Converted to draft rows (some by the account itself,
-read); a dismissed card with a long branch and a long login; the My
-review mark in its three states (waiting for your review, a team's request
-included; approved; changes requested), a card approved and asked again,
-My review rows of both verdicts, and the second account without an avatar.
-It needs a 0.8 daemon (the working tree's: the labels, the row kinds and the
-My review mark).
+edge-cases: the cases the screens must handle, for checking them by hand in
+scripts/sandbox-env.sh (and for the measurement mode's
+SHIIBAR_GH_PERF_EDGESHOTS): about 200 cards over All, Review and Mine (each
+with Inbox, Doing, Waiting, Done and cards to `Dismiss all` in Done),
+dismissed cards of several repositories (the Dismissed list by repository),
+the account `me` with the color None and a second account with the color
+Blue (the dot before the name), many repositories, a muted repository and a
+muted user, merged and closed cards (in Done when placed), drafts, read
+cards and cards with unread rows (blue, and gray on the muted cards: what
+the Filter sorts out), and rows with bodies of every length (unread
+mentions of 1, 3, 6 and 12 and more lines, read rows, long single lines,
+team mentions, cards with more than three rows), an own PR in the muted
+repository, a PR of it taken out of Mute by itself (Unmute), and team
+mentions on the muted user's cards. The rows show their actors' avatars,
+some without one and some with a long login; the account's own merges,
+closes and merge queue additions are read rows, a removal by the merge
+queue an unread one, and approvals of your PRs carry no body. Cards carry
+GitHub labels (none on most, one or a few on many, enough to wrap on some,
+more than 20 with `+N` on one, colors close to white and to black, a
+yellow, upper-case colors and one invalid color); Ready for review and
+Converted to draft rows (some by the account itself, read); a dismissed
+card with a long branch and a long login; the My review mark in its three
+states (waiting for your review, a team's request included; approved;
+changes requested), a card approved and asked again, My review rows of both
+verdicts, and the second account without an avatar.
+
+screenshots: a small, tidy data set for the README's pictures (see
+screenshot_data.py).
+
+edge-cases and screenshots are for the sandbox (scripts/sandbox-env.sh):
+their accounts have a made-up token in a test Keychain file under the state
+directory (`keychain.json`; the daemon then shows no token warning), a time
+of the last update and an API usage, and Launch at login off, so the
+sandbox app never registers a login item. The daemon that shows them must
+be started with SHIIBAR_GH_DEV_KEYCHAIN set to that file.
+
+--notify sends one new event of the set to the sandbox's running daemon, so
+the app shows a notification banner.
 """
 
 import json
@@ -58,6 +74,9 @@ import subprocess
 import sys
 import time
 import zlib
+
+import screenshot_data
+from avatars import avatar
 
 ACCOUNT_ID = "1001"
 ME = "me"
@@ -123,11 +142,23 @@ def png(path, rgb):
         f.write(data)
 
 
+SETS = ("measure", "edge-cases", "screenshots")
+# The made-up token of the sandbox sets: never a real one.
+SANDBOX_TOKEN = "made-up-token-for-the-sandbox"
+
+
+def keychain_file(state):
+    """The test Keychain of the sandbox sets, under the state directory."""
+    return os.path.join(state, "keychain.json")
+
+
 class Daemon:
-    def __init__(self, binary, state, now):
+    def __init__(self, binary, state, now, keychain=None):
         env = dict(os.environ)
         env.pop("SHIIBAR_GH_DEV_KEYCHAIN", None)
         env.pop("SHIIBAR_GH_DEV_GITHUB_URL", None)
+        if keychain:
+            env["SHIIBAR_GH_DEV_KEYCHAIN"] = keychain
         env["SHIIBAR_GH_STATE_DIR"] = state
         env["SHIIBAR_GH_LOG"] = "error"
         env["SHIIBAR_GH_DEV_NOW"] = str(now)
@@ -193,8 +224,8 @@ def body(lines):
     return text
 
 
-def demo_labels(n):
-    """The labels of demo PR `n`: more than 20 on PR 2 (with `+5`), every
+def edge_case_labels(n):
+    """The labels of edge-cases PR `n`: more than 20 on PR 2 (with `+5`), every
     color of the set over the others, an invalid color on PR 4."""
     if n == 2:
         names = [(f"area-{i:02d}", LABEL_SET[i % len(LABEL_SET)][1]) for i in range(20)]
@@ -204,8 +235,8 @@ def demo_labels(n):
     return labels_of(n, n % 10 == 7)
 
 
-def demo(daemon, colors, start):
-    """The demo data (see the module's docstring)."""
+def edge_cases(daemon, colors, start, token=None):
+    """The edge-cases data (see the module's docstring)."""
     repos = [f"repo-{i:02d}" for i in range(1, 25)]
     muted_repo = "repo-24"
     prs, events, review, done, mine_done, mine_open, assigned, dismissed = [], [], [], [], [], [], [], []
@@ -234,7 +265,7 @@ def demo(daemon, colors, start):
             "is_private": False, "requested_me": requested, "assignees": [ME] if n % 13 == 0 else [],
             # A team's request, waiting for your review like your own.
             "requested_team": author != ME and not requested and n % 10 == 5,
-            "labels": demo_labels(n), "labels_more": 5 if n == 2 else 0,
+            "labels": edge_case_labels(n), "labels_more": 5 if n == 2 else 0,
             "links": {
                 "review": f"https://github.example/{OWNER}/{repo}/pull/{n}/files",
                 "checks": f"https://github.example/{OWNER}/{repo}/pull/{n}/checks",
@@ -355,7 +386,7 @@ def demo(daemon, colors, start):
     # `me` without a color (no dot before its name), a second account with
     # Blue (the dot).
     daemon.ok({"cmd": "account_color", "account": ME, "color": "none"})
-    daemon.ok({"cmd": "dev_account_add", "id": "1002", "login": "me-two"})
+    daemon.ok({"cmd": "dev_account_add", "id": "1002", "login": "me-two", **({"token": token} if token else {})})
     daemon.ok({"cmd": "dev_owner_add", "account": "me-two", "owner": "public", "kind": "public"})
     daemon.ok({"cmd": "account_color", "account": "me-two", "color": "blue"})
     daemon.ok({"cmd": "mute", "account": ME, "kind": "user", "name": MUTED_USER})
@@ -372,36 +403,104 @@ def demo(daemon, colors, start):
         daemon.ok({"cmd": "read", "row_ids": read[i:i + 200]})
 
 
+def sandbox_ready(daemon, logins, now):
+    """What the sandbox sets add to their accounts: a time of the last
+    update and an API usage (no fetch ever runs in the sandbox), and Launch
+    at login off."""
+    for index, login in enumerate(logins):
+        daemon.ok({"cmd": "dev_account_fetched", "account": login, "at": now - 90 - index * 30,
+                   "graphql": {"used": 312 + index * 40, "limit": 5000, "reset_at": now + 2400},
+                   "rest": {"used": 48 + index * 9, "limit": 5000, "reset_at": now + 2400}})
+    daemon.ok({"cmd": "config_set", "key": "launch_at_login", "value": False})
+
+
+def send(state, value):
+    """One request to the running daemon of `state`."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.settimeout(30)
+        s.connect(os.path.join(state, "shiibar-ghd.sock"))
+        s.sendall((json.dumps(value) + "\n").encode())
+        answer = json.loads(s.makefile().readline())
+    if answer.get("ok") is not True:
+        raise SystemExit(f"{value.get('cmd')} failed: {answer}")
+
+
+def notify_edge_cases(state):
+    """A new mention on a new PR of `me`: one notification."""
+    now = int(time.time())
+    n = 900 + now % 1000
+    pr = {
+        "id": f"PR_N{now}", "owner": OWNER, "repo": "repo-01", "number": n,
+        "url": f"https://github.example/{OWNER}/repo-01/pull/{n}", "title": f"Change {n}: a new PR for a notification",
+        "author": USERS[0], "author_avatar_url": None, "base": "main", "head": f"topic/change-{n}",
+        "state": "open", "is_draft": False, "review": "review_required", "checks": "passed",
+        "base_status": "up_to_date", "mergeable": False, "failed_check": None, "changes_requested_by": None,
+        "updated_at": now, "created_at": now - 600, "is_private": False, "requested_me": False, "assignees": [],
+        "labels": [], "links": {"review": "https://github.example/r", "checks": "https://github.example/c",
+                                "base": "https://github.example/b"},
+    }
+    event = {"id": f"E_N{now}", "pr_id": pr["id"], "kind": "mentioned", "occurred_at": now, "url": pr["url"],
+             "actor": USERS[0], "text": "@me " + SENTENCES[0], "comment_id": None, "actor_avatar_url": None}
+    send(state, {"cmd": "dev_ingest", "account": ME, "ingest": {"prs": [pr], "events": [event]}})
+
+
 def main():
-    args = [a for a in sys.argv[1:] if a != "--demo"]
-    demo_data = "--demo" in sys.argv[1:]
-    if len(args) != 2:
+    argv = sys.argv[1:]
+    if len(argv) == 3 and argv[0] == "--notify" and argv[2] in SETS[1:]:
+        if argv[2] == "screenshots":
+            send(argv[1], screenshot_data.notification(argv[1]))
+        else:
+            notify_edge_cases(argv[1])
+        return
+    if len(argv) != 3 or argv[2] not in SETS:
         raise SystemExit(__doc__)
-    binary, state = args[0], os.path.abspath(args[1])
+    binary, state, data_set = argv[0], os.path.abspath(argv[1]), argv[2]
     os.makedirs(state, mode=0o700, exist_ok=True)
     if os.listdir(state):
         raise SystemExit(f"{state} is not empty; give a new empty directory")
+
+    if data_set == "screenshots":
+        now = int(time.time())
+        # The daemon's clock starts before the oldest event: an owner takes
+        # only the events after it was added.
+        daemon = Daemon(binary, state, now - screenshot_data.SPAN, keychain_file(state))
+        try:
+            logins = screenshot_data.load(daemon, state, now, SANDBOX_TOKEN)
+            sandbox_ready(daemon, logins, now)
+        finally:
+            daemon.stop()
+        print(json.dumps({"state_dir": state, "set": data_set}))
+        return
+    sandbox = data_set == "edge-cases"
 
     avatars = os.path.join(state, "avatars")
     os.makedirs(avatars)
     colors = {}
     for i, user in enumerate(USERS + [MUTED_USER, ME, LONG_USER, MERGE_QUEUE]):
         path = os.path.join(avatars, user + ".png")
-        png(path, ((i * 47) % 256, (i * 91 + 60) % 256, (i * 23 + 120) % 256))
+        rgb = ((i * 47) % 256, (i * 91 + 60) % 256, (i * 23 + 120) % 256)
+        # The measurement keeps its plain squares, so its runs stay
+        # comparable; the sandbox's look like avatars.
+        if sandbox:
+            avatar(path, rgb, i + 1)
+        else:
+            png(path, rgb)
         colors[user] = "file://" + path
 
     # The rows happen in the hour before the data is loaded; the daemon that
     # loads them runs at the start of that hour.
     start = int(time.time()) - 3600
-    daemon = Daemon(binary, state, start)
-    # `me` with its own avatar (the My review mark); `me-two` of the demo
-    # without one.
-    daemon.ok({"cmd": "dev_account_add", "id": ACCOUNT_ID, "login": ME, "avatar_url": colors[ME]})
+    daemon = Daemon(binary, state, start, keychain_file(state) if sandbox else None)
+    # `me` with its own avatar (the My review mark); `me-two` of the
+    # edge-cases without one.
+    token = {"token": SANDBOX_TOKEN} if sandbox else {}
+    daemon.ok({"cmd": "dev_account_add", "id": ACCOUNT_ID, "login": ME, "avatar_url": colors[ME], **token})
     daemon.ok({"cmd": "dev_owner_add", "account": ME, "owner": OWNER, "kind": "org", "github_id": 100})
     daemon.ok({"cmd": "dev_owner_add", "account": ME, "owner": "public", "kind": "public"})
 
-    if demo_data:
-        demo(daemon, colors, start)
+    if sandbox:
+        edge_cases(daemon, colors, start, token=SANDBOX_TOKEN)
+        sandbox_ready(daemon, [ME, "me-two"], int(time.time()))
         cards = daemon.ok({"cmd": "list", "account": ME})["cards"]
         daemon.stop()
         shown = [c for c in cards if c.get("dismissed_at") is None]

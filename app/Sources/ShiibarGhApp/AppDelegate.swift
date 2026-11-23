@@ -38,14 +38,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         ))
         // The measurement mode (Perf.swift) runs only in a sandbox state
         // directory, never the real one.
-        // The demo mode (scripts/perf/demo.sh) uses the same sandbox.
-        let perf = PerfMode.sandboxed
+        let perf = PerfMode.enabled
         if perf && PerfMode.stateRoot == nil {
-            FileHandle.standardError.write(Data("shiibar-gh: the measurement and demo modes need SHIIBAR_GH_STATE_DIR\n".utf8))
+            FileHandle.standardError.write(Data("shiibar-gh: the measurement mode needs SHIIBAR_GH_STATE_DIR\n".utf8))
             exit(2)
         }
-        if PerfMode.demo { quitOnSignals() }
-        if PerfMode.enabled { failOnSignals() }
+        // The sandbox mode (Perf.swift, scripts/sandbox-env.sh) runs only
+        // in a bundle of its own on a state directory of its own.
+        let sandbox = SandboxMode.enabled && !perf
+        if sandbox, let refusal = SandboxMode.refusal(bundle: .main, environment: ProcessInfo.processInfo.environment) {
+            FileHandle.standardError.write(Data("shiibar-gh: \(refusal)\n".utf8))
+            exit(2)
+        }
+        if sandbox { quitOnSignals() }
+        if perf { failOnSignals() }
         let bundled = Bundle.main.bundleURL.pathExtension == "app" && !perf
         let root = StateDirectory.root() ?? NSTemporaryDirectory()
         let socket = StateDirectory.socket(root: root)
@@ -67,8 +73,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         model = AppModel(
             api: api, store: store, opener: WorkspaceOpener(), notifier: notifier, copier: PasteboardCopier(), linger: linger
         )
-        model.refreshAnswerDelay = PerfMode.demoRefreshSeconds
-        let avatars = perf
+        model.refreshAnswerDelay = SandboxMode.refreshSeconds
+        let avatars = perf || sandbox
             ? AvatarStore(loader: FileImageLoader(), schemes: ["file"])
             : AvatarStore(loader: URLSessionImageLoader())
         surfaces = SurfaceController(app: model, avatars: avatars) { [weak self] account in
@@ -88,9 +94,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             NSApp.setActivationPolicy(.accessory)
         }
         surfaces.onPinsChanged = { [weak self] closing in self?.applyAuxiliaryLevels(closing: closing) }
-        // The global shortcuts: registered in the demo mode too (its saved
-        // values live in memory only), never in the measurement mode.
-        shortcuts = GlobalShortcutCenter(store: store, registrar: CarbonHotKeyRegistrar(), enabled: !PerfMode.enabled)
+        // The global shortcuts: registered in the sandbox mode too (its
+        // saved values live in its own bundle's defaults), never in the
+        // measurement mode.
+        shortcuts = GlobalShortcutCenter(store: store, registrar: CarbonHotKeyRegistrar(), enabled: !perf)
         surfaces.director.attach(shortcuts)
         model.onAccountRemoved = { [weak self] account in self?.shortcuts.accountRemoved(account) }
         // Only the accounts of the list the daemon sent are registered; an
@@ -104,7 +111,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] ids in self?.shortcuts.accountsListed(ids) }
-        if bundled {
+        // The sandbox's bundle is never a login item.
+        if bundled && !sandbox {
             launch = LaunchAtLogin(service: MainAppLoginItem(), api: api, store: store)
         }
         settings = SettingsModel(app: model, launch: launch)
@@ -167,11 +175,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         self.supervisor = supervisor
         supervisor.start()
 
-        if PerfMode.demo {
-            // Used by hand: no notification permission is asked for and no
-            // login item is registered (`launch` is nil without a bundle).
-            return
-        }
         if perf {
             // No notification permission is asked for and no login item is
             // registered (`launch` is nil without a bundle).
@@ -345,8 +348,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         _ = surfaces?.selectAllFromMenu()
     }
 
-    /// The demo mode: Ctrl-C in demo.sh (SIGINT) or SIGTERM quits as the
-    /// menu's Quit does, so the daemon stops.
+    /// The sandbox mode: SIGTERM (sandbox-env.sh's `stop`) or SIGINT quits
+    /// as the menu's Quit does, so the daemon stops.
     /// The signals are read from a dispatch source and ignored otherwise
     /// (dispatch_source_create(3), DISPATCH_SOURCE_TYPE_SIGNAL: "a dispatch
     /// source does not install a signal handler or otherwise alter the

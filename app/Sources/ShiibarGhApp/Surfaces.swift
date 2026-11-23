@@ -508,7 +508,7 @@ final class SurfaceController: NSObject, NSPopoverDelegate, NSWindowDelegate, Su
 
     /// Opens the account's window in front, or brings it to the front
     /// (`SurfaceDirector.openWindow`): the form does not change (the
-    /// measurement and demo modes open windows this way too).
+    /// measurement mode opens windows this way too).
     func openWindow(account: String) {
         director.openWindow(account: account)
     }

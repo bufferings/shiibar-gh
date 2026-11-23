@@ -796,6 +796,19 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         avatar_url: Option<String>,
     },
+    /// What a successful fetch leaves on an account, without asking
+    /// GitHub: the time of the success (the header's `Updated`) and the
+    /// API usage, each only when given.
+    #[cfg(feature = "dev-ingest")]
+    DevAccountFetched {
+        account: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        graphql: Option<Limit>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rest: Option<Limit>,
+    },
     /// An owner without asking GitHub. `kind` `public` adds Public.
     #[cfg(feature = "dev-ingest")]
     DevOwnerAdd {

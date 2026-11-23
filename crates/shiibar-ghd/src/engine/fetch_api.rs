@@ -564,6 +564,34 @@ impl Engine {
         }
     }
 
+    /// `dev_account_fetched`: the success time and the API usage a fetch
+    /// would leave, each only when given.
+    #[cfg(feature = "dev-ingest")]
+    pub fn fetch_seen(
+        &mut self,
+        account: &str,
+        at: Option<i64>,
+        graphql: Option<proto::Limit>,
+        rest: Option<proto::Limit>,
+    ) {
+        let record_of = |l: proto::Limit| LimitRec {
+            limit: l.limit,
+            remaining: (l.limit - l.used).max(0),
+            reset_at: l.reset_at,
+        };
+        if let Some(record) = self.account_mut(account) {
+            if at.is_some() {
+                record.updated_at = at;
+            }
+            if let Some(limit) = graphql {
+                record.graphql = Some(record_of(limit));
+            }
+            if let Some(limit) = rest {
+                record.rest = Some(record_of(limit));
+            }
+        }
+    }
+
     /// The account's login as GitHub spells it now.
     pub fn login_seen(&mut self, account: &str, login: &str) {
         if !login.is_empty()
