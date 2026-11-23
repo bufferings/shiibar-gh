@@ -98,9 +98,10 @@ README の画像は、`screenshots` のデータで撮影し、`docs/assets/` �
 
 | ファイル | 内容 |
 | --- | --- |
-| `popover.png` | ポップオーバーの Review のタブ |
-| `notification-banner.png` | `notify` で表示した通知 |
 | `window.png` | ウインドウの All のタブ |
+| `notification-banner.png` | `notify` で表示した通知 |
+| `popover.png` | ポップオーバーの Review のタブ |
+| `popover-mine.png` | ポップオーバーの Mine のタブ |
 
 ## 開発版のインストール
 

@@ -3,23 +3,14 @@
 <img src="docs/assets/app-icon.png" width="120" alt="Shiibar GH app icon" align="left" hspace="16">
 
 macOS menu bar app for the GitHub pull requests you are involved in. It
-tells you what happened on them (unread marks and notifications), and you
-keep the PRs you review and your own PRs in the order you choose: the
-popover has the tabs All, Review and Mine, the last two with the sections
-Done, Waiting, Doing and Inbox.
-Dismiss a PR when you are done with it; it comes back when someone mentions
-you or your team, replies in a thread you take part in, requests your
-review, or reopens it. Mute a repository, a user or a single PR to hide its
-cards and silence them, except for mentions of you or your team. The Filter
-of each tab narrows the list: show muted cards in gray or only them, pick
-the statuses, or keep only the unread cards.
-It only reads from GitHub. See `docs/DESIGN.md` and `CLAUDE.md`.
+tells you what happened on them (unread marks and notifications): the tab
+All lists every PR you are involved in, grouped by repository, each card
+with its latest events.
 
-<img src="docs/assets/popover.png" width="450"
-     alt="The Shiibar GH popover under its menu bar icon, on the Review tab:
-          the sections Done, Waiting, Doing and Inbox with one pull request
-          card each, every card with its title, repository, author and the
-          latest events such as a review request, a mention and a reply">
+<img src="docs/assets/window.png" width="700"
+     alt="The Shiibar GH window of an account, on the All tab: every pull
+          request you are involved in, grouped by repository, with the
+          unread events of each card in the accent color">
 
 Notifications say what happened and on which PR; a click opens the
 account's popover or window:
@@ -28,6 +19,29 @@ account's popover or window:
      alt="A macOS notification: 'example-user · Mentioned', on
           'example-org/mobile #311 · Cache profile images on disk', with the
           comment that mentions you">
+
+You keep the PRs you review and your own PRs in the order you choose, in
+the tabs Review and Mine, each with the sections Done, Waiting, Doing and
+Inbox:
+
+<img src="docs/assets/popover.png" width="450"
+     alt="The Shiibar GH popover under its menu bar icon, on the Review tab:
+          the sections Done, Waiting, Doing and Inbox with one pull request
+          card each, every card with its title, repository, author and the
+          latest events such as a review request, a mention and a reply">
+
+<img src="docs/assets/popover-mine.png" width="450"
+     alt="The Shiibar GH popover on the Mine tab: your own pull requests,
+          a merged one in Done, two in Waiting (one approved), and a draft
+          in Doing">
+
+Dismiss a PR when you are done with it; it comes back when someone mentions
+you or your team, replies in a thread you take part in, requests your
+review, or reopens it. Mute a repository, a user or a single PR to hide its
+cards and silence them, except for mentions of you or your team. The Filter
+of each tab narrows the list: show muted cards in gray or only them, pick
+the statuses, or keep only the unread cards.
+It only reads from GitHub. See `docs/DESIGN.md` and `CLAUDE.md`.
 
 **Several GitHub accounts.** Each account has its own menu bar icon and one
 classic personal access token (scopes `repo`, `notifications`, `read:org`).
@@ -40,11 +54,6 @@ two, and the choice is remembered per account. In the window form a click on
 the icon opens the window, brings it to the front, or closes it when it is
 already in front. Keep on top (the pin) keeps the window above other
 windows.
-
-<img src="docs/assets/window.png" width="700"
-     alt="The Shiibar GH window of an account, on the All tab: every pull
-          request you are involved in, grouped by repository, with the
-          unread events of each card in the accent color">
 
 **Global shortcut.** Each account can have a key combination (Settings ›
 Accounts › the account › Global shortcut) that does what a click on its menu
