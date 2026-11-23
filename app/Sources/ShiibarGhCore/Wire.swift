@@ -92,6 +92,7 @@ public enum BaseStatus: String, Equatable {
 public enum RowKind: String, Equatable {
     case reviewRequested = "review_requested"
     case teamReviewRequested = "team_review_requested"
+    case assigned
     /// My review, split as Merged / Closed is (DESIGN.md, "My review rows").
     case myReviewApproved = "my_review_approved"
     case myReviewChangesRequested = "my_review_changes_requested"
@@ -122,6 +123,7 @@ public enum RowKind: String, Equatable {
 public enum EventKind: String, Equatable, CaseIterable {
     case reviewRequested = "review_requested"
     case teamReviewRequested = "team_review_requested"
+    case assigned
     /// My review: List only; its `notify` is always false (DESIGN.md,
     /// "Applying the table").
     case myReview = "my_review"

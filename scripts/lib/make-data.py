@@ -50,7 +50,10 @@ Converted to draft rows (some by the account itself, read); a dismissed
 card with a long branch and a long login; the My review mark in its three
 states (waiting for your review, a team's request included; approved;
 changes requested), a card approved and asked again, My review rows of both
-verdicts, and the second account without an avatar.
+verdicts, and the second account without an avatar. Assigned rows: unread
+ones by someone else, read ones the account made itself, one without an
+actor, one on a muted card (gray) and one that brought a dismissed card
+back.
 
 screenshots: a small, tidy data set for the README's pictures (see
 screenshot_data.py).
@@ -235,6 +238,13 @@ def edge_case_labels(n):
     return labels_of(n, n % 10 == 7)
 
 
+# Assigned to the account besides every thirteenth PR: the muted user's PR
+# 89 and the dismissed PR 173 (their Assigned rows).
+ASSIGNED_ALSO = (89, 173)
+# The edge-cases PRs dismissed alone in their repositories.
+DISMISSED_ALONE = (164, 167, 170, 173)
+
+
 def edge_cases(daemon, colors, start, token=None):
     """The edge-cases data (see the module's docstring)."""
     repos = [f"repo-{i:02d}" for i in range(1, 25)]
@@ -262,7 +272,7 @@ def edge_cases(daemon, colors, start, token=None):
             "base_status": ["up_to_date", "behind", "conflicts", "none"][n % 4],
             "mergeable": False, "failed_check": None, "changes_requested_by": None,
             "updated_at": updated, "created_at": updated - 86_400 * (1 + n % 9),
-            "is_private": False, "requested_me": requested, "assignees": [ME] if n % 13 == 0 else [],
+            "is_private": False, "requested_me": requested, "assignees": [ME] if n % 13 == 0 or n in ASSIGNED_ALSO else [],
             # A team's request, waiting for your review like your own.
             "requested_team": author != ME and not requested and n % 10 == 5,
             "labels": edge_case_labels(n), "labels_more": 5 if n == 2 else 0,
@@ -341,8 +351,10 @@ def edge_cases(daemon, colors, start, token=None):
         elif n % 13 == 0 and not requested:
             assigned.append(key)
         # The Dismissed list: five PRs in each of three repositories (n and
-        # n + 24 share one) and a few alone.
-        if not requested and author != ME and (n % 24 in (7, 9, 14) and n <= 120 or n in (151, 163)):
+        # n + 24 share one) and a few alone. Only PRs nobody asked you to
+        # review: n % 3 is 0 or 2. PR 173, alone too, comes back through its
+        # Assigned row (see below), so three stay alone.
+        if not requested and author != ME and (n % 24 in (9, 11, 14) and n <= 120 or n in DISMISSED_ALONE):
             dismissed.append(key)
 
     # A dismissed card whose branches and author do not fit its third line.
@@ -401,6 +413,24 @@ def edge_cases(daemon, colors, start, token=None):
             for row in (card["rows"] if index % 5 == 1 else card["rows"][:2])]
     for i in range(0, len(read), 200):
         daemon.ok({"cmd": "read", "row_ids": read[i:i + 200]})
+    # Assigned rows, after the read rows so the unread ones stay unread:
+    # by someone else (unread), by the account itself (read), without an
+    # actor, on a muted card (the muted user's PR 89, gray), and on the
+    # dismissed PR 173, which it brings back. None is on the account's own
+    # PRs, which make no Assigned row.
+    assignments = [(13, USERS[2]), (52, USERS[5]), (104, LONG_USER), (26, ME), (117, ME), (39, None),
+                   (89, USERS[7]), (173, USERS[4])]
+    by_number = {p["number"]: p for p in prs}
+    rows = []
+    for k, (n, who) in enumerate(assignments):
+        pr = by_number[n]
+        assert pr["author"] != ME and pr["assignees"] == [ME], n
+        rows.append({
+            "id": f"AS_{n}", "pr_id": pr["id"], "kind": "assigned", "occurred_at": start + 3300 + k * 10,
+            "url": pr["url"], "actor": who, "text": None, "comment_id": None,
+            "actor_avatar_url": colors.get(who) if who else None,
+        })
+    daemon.ok({"cmd": "dev_ingest", "account": ME, "ingest": {"prs": [], "events": rows}})
 
 
 def sandbox_ready(daemon, logins, now):

@@ -403,6 +403,11 @@ fn the_events_fetch_reads_ready_for_review_and_converted_to_draft() {
             .query()
             .contains("... on ReadyForReviewEvent { id createdAt url actor")
     );
+    assert!(events.query().contains("ASSIGNED_EVENT"));
+    assert!(events.query().contains(
+        "... on AssignedEvent { id createdAt actor { __typename login avatarUrl(size: 32) } \
+         assignee { __typename ... on User { login } } }"
+    ));
     let rows = card(&daemon, "org/app#1")["rows"].clone();
     let ready = rows
         .as_array()

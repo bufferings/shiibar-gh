@@ -4,7 +4,8 @@ README's pictures, in the sandbox (scripts/sandbox-env.sh).
 One account `example-user` with the organization `example-org` and five
 repositories. Review has a card in each of Inbox, Doing, Waiting and Done,
 Mine has your own PRs in Doing, Waiting and Done (one merged), and All adds
-a mention and a team mention on PRs that are in neither tab. Four merged
+a mention, an assignment by someone else (unread) and a team mention on
+PRs that are in neither tab. Four merged
 or closed PRs of three repositories are dismissed (the Dismissed list). The rows
 happen from minutes to a day before the data is loaded; the older ones are
 read. Every login is made up and starts with `example-`. The avatars are
@@ -63,10 +64,12 @@ def pull(repo, number, title, author, at, **extra):
 
 
 def rows_of(pr, rows):
-    """The events of `pr`: (kind, actor, minutes before now, text)."""
+    """The events of `pr`: (kind, actor, minutes before now, text). An
+    Assigned row opens the PR page: GitHub gives its event no URL."""
     return [
         {"id": f"E_{pr['id']}_{j}", "pr_id": pr["id"], "kind": kind, "occurred_at": pr["updated_at"] - ago,
-         "url": f"{pr['url']}#event-{j}", "actor": actor, "text": text, "comment_id": None, "actor_avatar_url": None}
+         "url": pr["url"] if kind == "assigned" else f"{pr['url']}#event-{j}", "actor": actor, "text": text,
+         "comment_id": None, "actor_avatar_url": None}
         for j, (kind, actor, ago, text) in enumerate(rows)
     ]
 
@@ -135,10 +138,12 @@ def data(now):
         [("comment_other", "example-dana", 0, "Looks good once the checks pass.")],
         place=("mine", "waiting"), read_from=0)
 
-    # All only: a mention and a team mention.
+    # All only: a mention after an assignment by someone else, and a team
+    # mention.
     add(pull("docs", 58, "Document the new rate limits", "example-ben", now - 70 * MINUTE,
-             labels=["documentation"]),
-        [("mentioned", "example-ben", 0, f"@{ME} is 5,000 requests an hour still right for the search API?")])
+             labels=["documentation"], assignees=[ME]),
+        [("mentioned", "example-ben", 0, f"@{ME} is 5,000 requests an hour still right for the search API?"),
+         ("assigned", "example-dana", 15 * MINUTE, None)])
     add(pull("api-server", 1292, "Rate limit the export endpoint", "example-eli", now - 5 * HOUR),
         [("team_mentioned", "example-eli", 0, f"{TEAM} this changes the limits of the export jobs; "
           "please check the numbers in the description.")],

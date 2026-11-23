@@ -760,6 +760,21 @@ pub fn mention_link(login: &str) -> String {
     )
 }
 
+/// An ASSIGNED_EVENT in a timeline, with the fields the `Events` request
+/// reads: `actor` (an `Actor`, or null) and `assignee` (the union
+/// `Assignee`, or null). `AssignedEvent` has no URL (DESIGN.md, "Row kind
+/// decisions").
+pub fn assigned_event(id: &str, at: i64, actor: Value, assignee: Value) -> Value {
+    json!({"__typename":"AssignedEvent","id":id,"createdAt":iso(at),"actor":actor,
+           "assignee":assignee})
+}
+
+/// A `User` as an `Actor` or an `Assignee`, with its avatar.
+pub fn user_node(login: &str) -> Value {
+    json!({"__typename":"User","login":login,
+           "avatarUrl":format!("https://avatars.example/{login}")})
+}
+
 /// A submitted review in a timeline, such as `APPROVED`.
 pub fn review(id: &str, author: &str, state: &str, at: i64, body: &str) -> Value {
     json!({"__typename":"PullRequestReview","id":id,"url":format!("https://github.com/r/{id}"),

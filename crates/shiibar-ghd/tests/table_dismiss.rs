@@ -363,7 +363,7 @@ fn disabled_and_unreadable_cards_keep_their_state_and_their_clocks() {
 #[test]
 fn return_trigger_table() {
     // (name, kind, actor, List off, returns)
-    // DESIGN.md, "Dismiss": the seven return trigger rows.
+    // DESIGN.md, "Dismiss": the eight return trigger rows.
     let cases = [
         ("mention", IngestKind::Mentioned, "alice", None, true),
         (
@@ -401,6 +401,8 @@ fn return_trigger_table() {
             None,
             true,
         ),
+        ("assignment", IngestKind::Assigned, "alice", None, true),
+        ("my own assignment", IngestKind::Assigned, ME, None, true),
         ("reopen", IngestKind::Reopened, "alice", None, true),
         ("my own reopen", IngestKind::Reopened, ME, None, true),
         ("comment", IngestKind::Comment, "alice", None, false),
@@ -425,6 +427,13 @@ fn return_trigger_table() {
             IngestKind::TeamReviewRequested,
             "alice",
             Some(EventKind::TeamReviewRequested),
+            false,
+        ),
+        (
+            "assignment, its List off",
+            IngestKind::Assigned,
+            "alice",
+            Some(EventKind::Assigned),
             false,
         ),
     ];
@@ -700,6 +709,12 @@ fn a_closed_pr_found_new_shows_only_through_a_return_trigger() {
             Some(Some(("review", "done"))),
         ),
         (
+            "someone else's, an assignment",
+            false,
+            Some(IngestKind::Assigned),
+            Some(None),
+        ),
+        (
             "mine, a mention",
             true,
             Some(IngestKind::Mentioned),
@@ -853,13 +868,15 @@ fn a_closed_pr_found_with_a_team_request_whose_list_is_off_is_not_taken() {
 }
 
 #[test]
-fn a_closed_pr_found_new_counts_n_days_only_through_a_request_or_a_reopen() {
+fn a_closed_pr_found_new_counts_n_days_only_through_a_request_an_assignment_or_a_reopen() {
     // DESIGN.md, "Dismiss": a mention or reply row is after the close, so
-    // no automatic Dismiss; a review request or Reopened counts n days.
+    // no automatic Dismiss; a review request, Assigned or Reopened counts n
+    // days.
     // (name, trigger, counts n days)
     let cases = [
         ("review request", IngestKind::ReviewRequested, true),
         ("team review request", IngestKind::TeamReviewRequested, true),
+        ("assigned", IngestKind::Assigned, true),
         ("reopened", IngestKind::Reopened, true),
         ("mention", IngestKind::Mentioned, false),
         ("team mention", IngestKind::TeamMentioned, false),
@@ -889,6 +906,7 @@ fn a_record_shows_again_through_each_return_trigger() {
         IngestKind::ReplyMentioned,
         IngestKind::ReviewRequested,
         IngestKind::TeamReviewRequested,
+        IngestKind::Assigned,
         IngestKind::Reopened,
     ] {
         let mut h = H::new();
@@ -989,6 +1007,7 @@ fn a_pr_closed_while_dismissed_keeps_the_after_close_exception_of_its_trigger() 
             true,
             false,
         ),
+        ("assignment", IngestKind::Assigned, false, false),
     ];
     for (name, kind, earlier, kept) in cases {
         let mut h = H::new();

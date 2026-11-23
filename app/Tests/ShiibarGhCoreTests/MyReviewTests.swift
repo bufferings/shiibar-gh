@@ -89,7 +89,7 @@ final class MyReviewTests: XCTestCase {
     }
 
     func testTheEventTableHasMyReviewWithoutNotify() {
-        XCTAssertEqual(SettingsText.eventGroups.first?.1, [.reviewRequested, .teamReviewRequested, .myReview, .mentioned, .teamMentioned])
+        XCTAssertEqual(SettingsText.eventGroups.first?.1, [.reviewRequested, .teamReviewRequested, .assigned, .myReview, .mentioned, .teamMentioned])
         XCTAssertEqual(SettingsText.eventTitle(.myReview), "My review")
         XCTAssertFalse(SettingsModel.hasColumn(.myReview, .notify))
         XCTAssertTrue(SettingsModel.hasColumn(.myReview, .list))

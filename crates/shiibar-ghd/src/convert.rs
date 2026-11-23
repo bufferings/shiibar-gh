@@ -772,6 +772,18 @@ pub fn events(input: &EventInput<'_>, ctx: Ctx<'_>) -> EventOutput {
                     out.events.push(e);
                 }
             }
+            // DESIGN.md, "Row kind decisions": an assignment of the account
+            // (a `User` with its login) to a PR it did not open. Assignments
+            // to its own PRs make no row, whoever assigns: repositories that
+            // assign the author automatically would notify on every new PR.
+            // `AssignedEvent` has no URL: the row opens the PR page.
+            Some("AssignedEvent") => {
+                let assignee = &item["assignee"];
+                if !mine && assignee["__typename"] == "User" && ctx.is_me(login(assignee)) {
+                    out.events
+                        .push(event(IngestKind::Assigned, pr_url.clone(), actor, None));
+                }
+            }
             Some("MergedEvent") => out.events.push(event(
                 IngestKind::Merged,
                 text(&item["url"]).to_string(),

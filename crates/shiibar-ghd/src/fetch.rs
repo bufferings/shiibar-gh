@@ -54,6 +54,10 @@ const ACTOR: &str = "{ __typename login avatarUrl(size: 32) }";
 const AUTHOR: &str = ACTOR;
 const REVIEWER: &str =
     "requestedReviewer { __typename ... on User { login } ... on Team { databaseId slug } }";
+/// `AssignedEvent.assignee` is the union `Assignee` (`Bot`, `Mannequin`,
+/// `Organization`, `User`), null when the assignee is gone. DESIGN.md, "Row
+/// kind decisions".
+const ASSIGNEE: &str = "assignee { __typename ... on User { login } }";
 /// A conversation comment or a review comment. DESIGN.md, "Comment times":
 /// `publishedAt` is the time it was published (`DateTime`, null for a
 /// comment of a pending review; public schema, 2026-11-18); `createdAt` is
@@ -62,7 +66,7 @@ const COMMENT: &str = "id url createdAt publishedAt bodyText bodyHTML author { _
 /// DESIGN.md, "API usage": each hit carries its `updatedAt` and state.
 const SEARCH_NODES: &str = "pageInfo { hasNextPage endCursor } nodes { ... on PullRequest { id updatedAt state repository { owner { login } } } }";
 const ITEM_TYPES: &str = "[ISSUE_COMMENT, PULL_REQUEST_REVIEW, REVIEW_REQUESTED_EVENT, \
-    READY_FOR_REVIEW_EVENT, CONVERT_TO_DRAFT_EVENT, MERGED_EVENT, CLOSED_EVENT, \
+    ASSIGNED_EVENT, READY_FOR_REVIEW_EVENT, CONVERT_TO_DRAFT_EVENT, MERGED_EVENT, CLOSED_EVENT, \
     REOPENED_EVENT, ADDED_TO_MERGE_QUEUE_EVENT, REMOVED_FROM_MERGE_QUEUE_EVENT]";
 /// DESIGN.md, "API usage": the checks of the commit a merge queue made, with
 /// `isRequired` for the PR (`$number`). Checked against the public schema and
@@ -83,6 +87,7 @@ fn timeline_nodes() -> String {
          ... on IssueComment {{ {COMMENT} }} \
          ... on PullRequestReview {{ id url createdAt submittedAt state bodyText bodyHTML author {ACTOR} }} \
          ... on ReviewRequestedEvent {{ id createdAt actor {ACTOR} {REVIEWER} }} \
+         ... on AssignedEvent {{ id createdAt actor {ACTOR} {ASSIGNEE} }} \
          ... on ReadyForReviewEvent {{ id createdAt url actor {ACTOR} }} \
          ... on ConvertToDraftEvent {{ id createdAt url actor {ACTOR} }} \
          ... on MergedEvent {{ id createdAt url actor {ACTOR} }} \

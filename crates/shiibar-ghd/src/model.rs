@@ -115,6 +115,7 @@ both_ways!(BaseStatus {
 stored_enum!(EventKind {
     ReviewRequested = "review_requested",
     TeamReviewRequested = "team_review_requested",
+    Assigned = "assigned",
     MyReview = "my_review",
     Mentioned = "mentioned",
     TeamMentioned = "team_mentioned",
@@ -139,6 +140,7 @@ stored_enum!(EventKind {
 both_ways!(EventKind {
     ReviewRequested,
     TeamReviewRequested,
+    Assigned,
     MyReview,
     Mentioned,
     TeamMentioned,
@@ -162,9 +164,10 @@ both_ways!(EventKind {
 });
 
 impl EventKind {
-    pub const ALL: [EventKind; 22] = [
+    pub const ALL: [EventKind; 23] = [
         EventKind::ReviewRequested,
         EventKind::TeamReviewRequested,
+        EventKind::Assigned,
         EventKind::MyReview,
         EventKind::Mentioned,
         EventKind::TeamMentioned,
@@ -205,6 +208,7 @@ impl EventKind {
 stored_enum!(RowKind {
     ReviewRequested = "review_requested",
     TeamReviewRequested = "team_review_requested",
+    Assigned = "assigned",
     MyReviewApproved = "my_review_approved",
     MyReviewChangesRequested = "my_review_changes_requested",
     Mentioned = "mentioned",
@@ -231,6 +235,7 @@ stored_enum!(RowKind {
 both_ways!(RowKind {
     ReviewRequested,
     TeamReviewRequested,
+    Assigned,
     MyReviewApproved,
     MyReviewChangesRequested,
     Mentioned,
@@ -261,6 +266,7 @@ impl From<proto::IngestKind> for RowKind {
         match kind {
             I::ReviewRequested => Self::ReviewRequested,
             I::TeamReviewRequested => Self::TeamReviewRequested,
+            I::Assigned => Self::Assigned,
             I::MyReviewApproved => Self::MyReviewApproved,
             I::MyReviewChangesRequested => Self::MyReviewChangesRequested,
             I::Mentioned => Self::Mentioned,
@@ -288,6 +294,7 @@ impl RowKind {
         match self {
             ReviewRequested => EventKind::ReviewRequested,
             TeamReviewRequested => EventKind::TeamReviewRequested,
+            Assigned => EventKind::Assigned,
             MyReviewApproved | MyReviewChangesRequested => EventKind::MyReview,
             Mentioned => EventKind::Mentioned,
             TeamMentioned => EventKind::TeamMentioned,
@@ -338,9 +345,9 @@ impl RowKind {
         )
     }
 
-    /// DESIGN.md, "Dismiss": the seven rows that bring a dismissed card
+    /// DESIGN.md, "Dismiss": the eight rows that bring a dismissed card
     /// back: the mentions, the replies, the review requests (to the account
-    /// and to its team) and Reopened.
+    /// and to its team), Assigned and Reopened.
     pub fn is_return_trigger(self) -> bool {
         matches!(
             self,
@@ -350,6 +357,7 @@ impl RowKind {
                 | Self::ReplyMentioned
                 | Self::ReviewRequested
                 | Self::TeamReviewRequested
+                | Self::Assigned
                 | Self::Reopened
         )
     }
@@ -359,7 +367,8 @@ impl RowKind {
     pub fn is_own_action_kind(self) -> bool {
         matches!(
             self,
-            Self::ReadyForReview
+            Self::Assigned
+                | Self::ReadyForReview
                 | Self::ConvertedToDraft
                 | Self::Merged
                 | Self::Closed
@@ -391,6 +400,7 @@ impl RowKind {
         match self {
             ReviewRequested => "Review requested",
             TeamReviewRequested => "Review requested to my team",
+            Assigned => "Assigned",
             MyReviewApproved => "Approved",
             MyReviewChangesRequested => "Changes requested",
             Mentioned => "Mentioned",
