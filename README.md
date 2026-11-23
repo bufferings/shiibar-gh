@@ -7,10 +7,11 @@ tells you what happened on them (unread marks and notifications): the tab
 All lists every PR you are involved in, grouped by repository, each card
 with its latest events.
 
-<img src="docs/assets/window.png" width="700"
-     alt="The Shiibar GH window of an account, on the All tab: every pull
-          request you are involved in, grouped by repository, with the
-          unread events of each card in the accent color">
+<img src="docs/assets/popover-all.png" width="450"
+     alt="The Shiibar GH popover under its menu bar icon, on the All tab:
+          every pull request you are involved in, grouped by repository,
+          each card with its title, author, labels and latest events, the
+          unread ones marked with a dot">
 
 Notifications say what happened and on which PR; a click opens the
 account's popover or window:
@@ -24,16 +25,14 @@ You keep the PRs you review and your own PRs in the order you choose, in
 the tabs Review and Mine, each with the sections Done, Waiting, Doing and
 Inbox:
 
-<img src="docs/assets/popover.png" width="450"
-     alt="The Shiibar GH popover under its menu bar icon, on the Review tab:
-          the sections Done, Waiting, Doing and Inbox with one pull request
-          card each, every card with its title, repository, author and the
-          latest events such as a review request, a mention and a reply">
+<img src="docs/assets/popover-review.png" width="450"
+     alt="The popover on the Review tab: an approved pull request in Done,
+          one waiting after your change request in Waiting, one in Doing
+          with a mention, and the review requests in Inbox">
 
 <img src="docs/assets/popover-mine.png" width="450"
-     alt="The Shiibar GH popover on the Mine tab: your own pull requests,
-          a merged one in Done, two in Waiting (one approved), and a draft
-          in Doing">
+     alt="The popover on the Mine tab: your own pull requests, a merged one
+          in Done, two in Waiting (one approved), and a draft in Doing">
 
 Dismiss a PR when you are done with it; it comes back when someone mentions
 you or your team, replies in a thread you take part in, requests your
