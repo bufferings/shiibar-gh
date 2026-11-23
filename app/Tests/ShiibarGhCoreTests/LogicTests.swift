@@ -272,6 +272,11 @@ final class PresentationTests: XCTestCase {
                  label: "Reopened", actor: "epage", body: nil, lines: 1),
             Case(row: Row(id: "17", kind: .closed, actor: "bw", occurredAt: at),
                  label: "Closed", actor: "bw", body: nil, lines: 1),
+            // Who assigned the account; no body (DESIGN.md, "Row text and targets").
+            Case(row: Row(id: "18", kind: .assigned, actor: "dana", occurredAt: at),
+                 label: "Assigned", actor: "dana", body: nil, lines: 1),
+            Case(row: Row(id: "18b", kind: .assigned, occurredAt: at, unread: false),
+                 label: "Assigned", actor: nil, body: nil, lines: 1),
             Case(row: Row(id: "13", kind: .teamMentioned, text: "@org/team look", actor: "gus", occurredAt: at),
                  label: "My team mentioned", actor: "gus", body: "@org/team look", lines: 3),
         ]
@@ -297,6 +302,7 @@ final class PresentationTests: XCTestCase {
         XCTAssertEqual(BoardIcons.row(.known(.checksPassed)), BoardIcons.kindPassed)
         XCTAssertEqual(BoardIcons.row(.known(.closed)), BoardIcons.kindChangesRequested)
         XCTAssertEqual(BoardIcons.row(.known(.reopened)), BoardIcons.kindReopened)
+        XCTAssertEqual(BoardIcons.row(.known(.assigned)), BoardIcons.kindAssigned, "the person of Main.html")
     }
 
     /// The avatar goes with the name: a row that shows no actor shows no
@@ -614,7 +620,12 @@ final class PresentationTests: XCTestCase {
         XCTAssertEqual(EmptyState.noOwnersDetail, "Add an owner in Settings")
         XCTAssertEqual(SettingsText.eventGroups.flatMap(\.1), EventKind.allCases, "every kind once, in table order")
         XCTAssertEqual(SettingsText.eventGroups.map(\.0), ["Reviews and mentions", "Comments", "My pull requests", "Any pull request"])
-        XCTAssertEqual(SettingsText.eventGroups.map(\.1.count), [5, 5, 6, 6], "DESIGN.md, the table's headings")
+        XCTAssertEqual(SettingsText.eventGroups.map(\.1.count), [6, 5, 6, 6], "DESIGN.md, the table's headings")
+        XCTAssertEqual(
+            SettingsText.eventGroups.first?.1, [.reviewRequested, .teamReviewRequested, .assigned, .myReview, .mentioned, .teamMentioned],
+            "Assigned follows Review requested to my team"
+        )
+        XCTAssertEqual(SettingsText.eventTitle(.assigned), "Assigned")
         XCTAssertEqual(
             SettingsText.eventGroups.last?.1, [.readyForReview, .convertedToDraft, .mergeQueueAdded, .mergeQueueRemoved, .mergedClosed, .reopened],
             "the two draft kinds lead Any pull request"
@@ -687,6 +698,16 @@ final class PresentationTests: XCTestCase {
             .curve(Point(3.3, 11), Point(5.5, 9.5), Point(8, 9.5)),
             .curve(Point(10.5, 9.5), Point(12.7, 11), Point(13.5, 14)),
         ])
+        // The shoulders of Assigned (Main.html, "Row Assigned").
+        XCTAssertEqual(SVGPath.parse("M2.75 14c.6-2.9 2.7-4.6 5.25-4.6s4.65 1.7 5.25 4.6"), [
+            .move(Point(2.75, 14)),
+            .curve(Point(3.35, 11.1), Point(5.45, 9.4), Point(8, 9.4)),
+            .curve(Point(10.55, 9.4), Point(12.65, 11.1), Point(13.25, 14)),
+        ])
+        XCTAssertEqual(
+            BoardIcons.kindAssigned.elements.first, .circle(cx: 8, cy: 5.5, r: 2.75, dash: nil), "the head"
+        )
+        XCTAssertEqual(BoardIcons.kindAssigned.lineWidth, BoardIcons.kindReopened.lineWidth, "the line of the other row icons")
         XCTAssertEqual(SVGPath.parse("M8 11.6v.1M1.5 8h13"), [
             .move(Point(8, 11.6)), .line(Point(8, 11.7)), .move(Point(1.5, 8)), .line(Point(14.5, 8)),
         ])

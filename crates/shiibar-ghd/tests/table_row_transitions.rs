@@ -45,6 +45,7 @@ fn trigger_table() {
 fn every_event_kind_makes_an_unread_row() {
     let cases = [
         IngestKind::ReviewRequested,
+        IngestKind::Assigned,
         IngestKind::Mentioned,
         IngestKind::TeamMentioned,
         IngestKind::Comment,

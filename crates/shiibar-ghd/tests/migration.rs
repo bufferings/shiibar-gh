@@ -1,13 +1,15 @@
-//! The move of a 0.7 database (schema version 9) to version 10, of a 0.6
-//! database (version 8) through 9 to 10, of a 0.5 database (version 7)
-//! through 8 and 9 to 10 and of a 0.4 database (version 6) through 7, 8 and
-//! 9 to 10, keeping everything, and of a 0.3 database (version 5) and a 0.2
-//! database (version 4) to version 10, keeping only the accounts.
-//! docs/tasks/M7.md, docs/tasks/M9.md, docs/tasks/M10.md and
-//! docs/tasks/M11.md, "Database and migration" and "How to test";
-//! DESIGN.md, "Updating from 0.7", "Updating from 0.6", "Updating from 0.5",
-//! "Updating from 0.4" and "Updating from 0.3 and 0.2". The schemas come
-//! from tags v0.7.0 (`data/schema_v07.sql`), v0.6.0 (`data/schema_v06.sql`), v0.5.0
+//! The move of a 0.9 database (schema version 10) to version 11, of a 0.7
+//! database (version 9) through 10 to 11, of a 0.6 database (version 8)
+//! through 9 and 10 to 11, of a 0.5 database (version 7) through 8, 9 and
+//! 10 to 11 and of a 0.4 database (version 6) through 7, 8, 9 and 10 to 11,
+//! keeping everything, and of a 0.3 database (version 5) and a 0.2 database
+//! (version 4) to version 11, keeping only the accounts.
+//! docs/tasks/M7.md, docs/tasks/M9.md, docs/tasks/M10.md, docs/tasks/M11.md
+//! and docs/tasks/M13.md, "Database and migration" and "How to test";
+//! DESIGN.md, "Updating from 0.9", "Updating from 0.7", "Updating from 0.6",
+//! "Updating from 0.5", "Updating from 0.4" and "Updating from 0.3 and 0.2".
+//! The schemas come from tags v0.9.1 (`data/schema_v09.sql`), v0.7.0
+//! (`data/schema_v07.sql`), v0.6.0 (`data/schema_v06.sql`), v0.5.0
 //! (`data/schema_v05.sql`), v0.4.0 (`data/schema_v04.sql`), v0.3.0
 //! (`data/schema_v03.sql`) and v0.2.0 (`data/schema_v02.sql`); the rows
 //! below are what those daemons write.
@@ -301,6 +303,7 @@ fn old_database(dir: &Path, version: i64, extra: &str) -> PathBuf {
     let db = dir.join("state.db");
     let conn = Connection::open(&db).unwrap();
     let (schema, seed) = match version {
+        10 => (include_str!("data/schema_v09.sql"), SEED_V10),
         9 => (include_str!("data/schema_v07.sql"), SEED_V9),
         8 => (include_str!("data/schema_v06.sql"), SEED_V8),
         7 => (include_str!("data/schema_v05.sql"), SEED_V7),
@@ -319,6 +322,9 @@ fn old_database(dir: &Path, version: i64, extra: &str) -> PathBuf {
     }
     if version == 9 {
         conn.execute_batch(&cards_v9()).unwrap();
+    }
+    if version == 10 {
+        conn.execute_batch(&cards_v10()).unwrap();
     }
     conn.execute_batch(extra).unwrap();
     drop(conn);
@@ -351,16 +357,27 @@ fn count(db: &Path, table: &str) -> i64 {
         .unwrap()
 }
 
-/// The counts of [`TABLES`] before a move to version 10, with the three
-/// event kinds it adds to the table of every owner.
-fn with_new_cells(db: &Path, before: &[i64]) -> Vec<i64> {
+/// The event kinds the moves add to the table of every owner: three by the
+/// move to version 10 (My review, Ready for review, Converted to draft) and
+/// one by the move to version 11 (Assigned).
+const KINDS_OF_V10: i64 = 3;
+const KINDS_OF_V11: i64 = 1;
+
+/// The counts of [`TABLES`] before a move from `from` to version 11, with
+/// the event kinds the steps add to the table of every owner.
+fn with_new_cells(db: &Path, from: i64, before: &[i64]) -> Vec<i64> {
     let owners = count(db, "owners");
+    let kinds = if from < 10 {
+        KINDS_OF_V10 + KINDS_OF_V11
+    } else {
+        KINDS_OF_V11
+    };
     TABLES
         .iter()
         .zip(before)
         .map(|(table, n)| {
             if *table == "owner_events" {
-                n + 3 * owners
+                n + kinds * owners
             } else {
                 *n
             }
@@ -378,7 +395,7 @@ fn open(db: &Path) -> (Store, Data) {
 /// What every move leaves: the accounts and nothing else.
 fn only_the_accounts_are_left(db: &Path, data: &Data) {
     assert_eq!(version(db), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 10);
+    assert_eq!(SCHEMA_VERSION, 11);
     let mut names = tables(db);
     names.sort();
     assert_eq!(
@@ -433,7 +450,7 @@ fn only_the_accounts_are_left(db: &Path, data: &Data) {
 }
 
 #[test]
-fn a_0_3_database_moves_to_version_10_keeping_only_the_accounts() {
+fn a_0_3_database_moves_to_version_11_keeping_only_the_accounts() {
     let dir = tempfile::tempdir().unwrap();
     let db = old_database(dir.path(), 5, "");
     let (store, data) = open(&db);
@@ -457,7 +474,7 @@ fn a_0_3_database_moves_to_version_10_keeping_only_the_accounts() {
 }
 
 #[test]
-fn a_0_2_database_moves_to_version_10_keeping_only_the_accounts() {
+fn a_0_2_database_moves_to_version_11_keeping_only_the_accounts() {
     let dir = tempfile::tempdir().unwrap();
     let db = old_database(dir.path(), 4, "");
     let (store, data) = open(&db);
@@ -471,7 +488,7 @@ fn a_0_2_database_moves_to_version_10_keeping_only_the_accounts() {
 }
 
 #[test]
-fn a_moved_database_saves_and_opens_again_as_version_10() {
+fn a_moved_database_saves_and_opens_again_as_version_11() {
     let dir = tempfile::tempdir().unwrap();
     let db = old_database(dir.path(), 5, "");
     let (mut store, data) = open(&db);
@@ -547,8 +564,13 @@ fn a_0_1_database_stays_unreadable_and_a_newer_one_is_an_error() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("state.db");
     let conn = Connection::open(&db).unwrap();
-    conn.execute_batch("CREATE TABLE t (x); PRAGMA user_version = 10;")
-        .unwrap();
+    // One above this program's version: an equal or older one would be a
+    // move.
+    conn.execute_batch(&format!(
+        "CREATE TABLE t (x); PRAGMA user_version = {};",
+        SCHEMA_VERSION + 1
+    ))
+    .unwrap();
     drop(conn);
     assert!(Store::open(&db).is_err());
 }
@@ -606,7 +628,7 @@ fn the_daemon_starts_on_a_0_3_state_directory() {
 // ------------------------------------------------------------- from 0.4
 
 #[test]
-fn a_0_4_database_moves_to_version_10_keeping_everything() {
+fn a_0_4_database_moves_to_version_11_keeping_everything() {
     let dir = tempfile::tempdir().unwrap();
     let db = old_database(dir.path(), 6, "");
     let counts: Vec<i64> = [
@@ -627,7 +649,7 @@ fn a_0_4_database_moves_to_version_10_keeping_everything() {
     .collect();
     let (store, data) = open(&db);
     drop(store);
-    assert_eq!(version(&db), 10);
+    assert_eq!(version(&db), SCHEMA_VERSION);
     let after: Vec<i64> = [
         "accounts",
         "owners",
@@ -646,8 +668,8 @@ fn a_0_4_database_moves_to_version_10_keeping_everything() {
     .collect();
     assert_eq!(
         after,
-        with_new_cells(&db, &counts),
-        "every row stays; each owner's table gains the three kinds of version 10"
+        with_new_cells(&db, 6, &counts),
+        "every row stays; each owner's table gains the three kinds of version 10 and the one of version 11"
     );
 
     let account = &data.accounts["1001"];
@@ -706,7 +728,7 @@ fn a_0_4_database_moves_to_version_10_keeping_everything() {
     let pr6 = &data.prs["1001:PR_6"];
     assert_eq!(pr6.dismissed_at, Some(1_799_999_900));
     assert!(pr6.restored);
-    // Through versions 7, 8 and 9 to 10: Mine's single list is Mine's
+    // Through versions 7, 8, 9 and 10 to 11: Mine's single list is Mine's
     // Inbox.
     assert_eq!(
         pr6.place,
@@ -925,18 +947,18 @@ const TABLES: [&str; 11] = [
 ];
 
 #[test]
-fn a_0_5_database_moves_to_version_10_keeping_everything() {
+fn a_0_5_database_moves_to_version_11_keeping_everything() {
     let dir = tempfile::tempdir().unwrap();
     let db = old_database(dir.path(), 7, "");
     let counts: Vec<i64> = TABLES.iter().map(|t| count(&db, t)).collect();
     let (store, data) = open(&db);
     drop(store);
-    assert_eq!(version(&db), 10);
+    assert_eq!(version(&db), SCHEMA_VERSION);
     let after: Vec<i64> = TABLES.iter().map(|t| count(&db, t)).collect();
     assert_eq!(
         after,
-        with_new_cells(&db, &counts),
-        "every row stays; each owner's table gains the three kinds of version 10"
+        with_new_cells(&db, 7, &counts),
+        "every row stays; each owner's table gains the three kinds of version 10 and the one of version 11"
     );
 
     // Mine's single list is Mine's Inbox with the same ranks; the cards in
@@ -1322,7 +1344,7 @@ fn columns(db: &Path, table: &str) -> Vec<String> {
 }
 
 #[test]
-fn a_0_6_database_moves_to_version_10_keeping_everything() {
+fn a_0_6_database_moves_to_version_11_keeping_everything() {
     let dir = tempfile::tempdir().unwrap();
     let db = old_database(dir.path(), 8, "");
     let counts: Vec<i64> = TABLES.iter().map(|t| count(&db, t)).collect();
@@ -1348,12 +1370,12 @@ fn a_0_6_database_moves_to_version_10_keeping_everything() {
     };
     let (store, data) = open(&db);
     drop(store);
-    assert_eq!(version(&db), 10);
+    assert_eq!(version(&db), SCHEMA_VERSION);
     let after: Vec<i64> = TABLES.iter().map(|t| count(&db, t)).collect();
     assert_eq!(
         after,
-        with_new_cells(&db, &counts),
-        "every row stays; each owner's table gains the three kinds of version 10"
+        with_new_cells(&db, 8, &counts),
+        "every row stays; each owner's table gains the three kinds of version 10 and the one of version 11"
     );
     assert!(columns(&db, "prs").contains(&"timeline_updated_at".to_string()));
     assert!(columns(&db, "pr_rows").contains(&"actor_avatar_url".to_string()));
@@ -1676,7 +1698,7 @@ fn saved_cells(db: &Path, owner: &str) -> std::collections::BTreeMap<String, (bo
 }
 
 #[test]
-fn a_0_7_database_moves_to_version_10_keeping_everything() {
+fn a_0_7_database_moves_to_version_11_keeping_everything() {
     let dir = tempfile::tempdir().unwrap();
     let db = old_database(dir.path(), 9, "");
     let counts: Vec<i64> = TABLES.iter().map(|t| count(&db, t)).collect();
@@ -1707,12 +1729,12 @@ fn a_0_7_database_moves_to_version_10_keeping_everything() {
     };
     let (store, data) = open(&db);
     drop(store);
-    assert_eq!(version(&db), 10);
+    assert_eq!(version(&db), SCHEMA_VERSION);
     let after: Vec<i64> = TABLES.iter().map(|t| count(&db, t)).collect();
     assert_eq!(
         after,
-        with_new_cells(&db, &counts),
-        "every row stays; each owner's table gains the three kinds of version 10"
+        with_new_cells(&db, 9, &counts),
+        "every row stays; each owner's table gains the three kinds of version 10 and the one of version 11"
     );
     assert!(columns(&db, "prs").contains(&"labels".to_string()));
     assert!(columns(&db, "prs").contains(&"labels_more".to_string()));
@@ -1722,18 +1744,20 @@ fn a_0_7_database_moves_to_version_10_keeping_everything() {
     assert!(data.prs.values().all(|p| p.my_review.is_none()));
     assert!(data.accounts.values().all(|a| a.avatar_url.is_none()));
 
-    // The three kinds join every owner's table at their defaults; the other
-    // values stay.
+    // The three kinds of version 10 and Assigned of version 11 join every
+    // owner's table at their defaults; the other values stay.
     let org = saved_cells(&db, "o2");
+    assert_eq!(org["assigned"], (true, true));
     assert_eq!(org["ready_for_review"], (true, true));
     assert_eq!(org["converted_to_draft"], (true, false));
     assert_eq!(org["comment"], (true, false));
     assert_eq!(org["checks_passed"], (false, false));
     assert_eq!(org["merged_closed"], (true, true));
     assert_eq!(org["my_review"], (true, false));
-    assert_eq!(org.len(), 6, "the kinds 0.7 never saved stay unsaved");
+    assert_eq!(org.len(), 7, "the kinds 0.7 never saved stay unsaved");
     let public = saved_cells(&db, "o6");
-    assert_eq!(public.len(), 3);
+    assert_eq!(public.len(), 4);
+    assert_eq!(public["assigned"], (true, true));
     assert_eq!(public["my_review"], (true, false));
     assert_eq!(public["ready_for_review"], (true, true));
     assert_eq!(public["converted_to_draft"], (true, false));
@@ -2014,6 +2038,7 @@ fn the_daemon_starts_on_a_0_7_state_directory() {
         json!({"list":true,"notify":false})
     );
     assert_eq!(events["comment"], json!({"list":true,"notify":false}));
+    assert_eq!(events["assigned"], json!({"list":true,"notify":true}));
     assert_eq!(
         daemon.ok(json!({"cmd":"config_get","key":"show_labels"}))["value"],
         true
@@ -2122,5 +2147,349 @@ fn the_first_fetch_after_the_move_makes_my_review_rows_inside_its_range() {
         .collect();
     mine.sort();
     assert_eq!(mine, ["1001:PRR_AFTER", "1001:PRR_OVERLAP"]);
+    daemon.stop();
+}
+
+// ------------------------------------------------------------- from 0.9
+
+/// One of everything 0.9 saves (DESIGN.md, "Updating from 0.9"): two owners
+/// with every kind of the event table saved, one of them with values other
+/// than the defaults; Mine's and Review's sections, a card in Done, a
+/// dismissed card, a muted card, Mute lists, settings, rows read and unread
+/// (the kinds of version 10 included), a deleted row, a Dismiss record, a
+/// Reaction baseline, labels and the account's verdicts and avatar.
+const SEED_V10: &str = r#"
+INSERT INTO meta (key, value) VALUES ('seq', '6'), ('restore_accounts', 'false');
+INSERT INTO config (key, value) VALUES
+    ('text_size', '15'), ('appearance', '"dark"'), ('show_labels', 'false');
+INSERT INTO accounts (id, login, color, seq, token, updated_at, dot, teams, graphql_limit,
+    rest_limit, stopped_until, fetch, avatar_url) VALUES (
+    '1001', 'me', 'green', 1, '{"registered":true}', 1799999000, 1,
+    '[{"database_id":42,"slug":"core","org":"org"}]', NULL, NULL, NULL, '{}',
+    'https://avatars.example/me');
+INSERT INTO mutes (account, kind, position, name) VALUES
+    ('1001', 'pr', 0, 'org/app#2'), ('1001', 'user', 0, 'example-bot'),
+    ('1001', 'repo', 0, 'org/legacy');
+INSERT INTO owners (id, account, name, kind, github_id, seq, enabled, notify, skip_drafts,
+    watch_started_at, fetched_at) VALUES
+    ('o2', '1001', 'org', 'org', 100, 2, 1, 1, 1, 1799000000, 1799999000),
+    ('o6', '1001', 'Public', 'public', NULL, 6, 1, 0, 0, 1799000000, NULL);
+INSERT INTO owner_events (owner, event, list, notify) VALUES
+    ('o2', 'review_requested', 1, 0), ('o2', 'team_review_requested', 0, 0),
+    ('o2', 'my_review', 0, 0), ('o2', 'mentioned', 1, 1), ('o2', 'team_mentioned', 1, 0),
+    ('o2', 'comment', 1, 0), ('o2', 'comment_other', 0, 0), ('o2', 'reply', 1, 1),
+    ('o2', 'reply_mentioned', 1, 1), ('o2', 'reaction', 1, 1), ('o2', 'approved', 1, 1),
+    ('o2', 'changes_requested', 1, 1), ('o2', 'checks_failed', 1, 1),
+    ('o2', 'checks_passed', 0, 0), ('o2', 'conflicts', 1, 1), ('o2', 'mergeable', 1, 1),
+    ('o2', 'ready_for_review', 1, 0), ('o2', 'converted_to_draft', 1, 1),
+    ('o2', 'merge_queue_added', 1, 0), ('o2', 'merge_queue_removed', 1, 1),
+    ('o2', 'merged_closed', 1, 1), ('o2', 'reopened', 0, 0),
+    ('o6', 'review_requested', 1, 1), ('o6', 'team_review_requested', 1, 1),
+    ('o6', 'my_review', 1, 0), ('o6', 'mentioned', 1, 1), ('o6', 'team_mentioned', 1, 1),
+    ('o6', 'comment', 1, 1), ('o6', 'comment_other', 1, 1), ('o6', 'reply', 1, 1),
+    ('o6', 'reply_mentioned', 1, 1), ('o6', 'reaction', 1, 1), ('o6', 'approved', 1, 1),
+    ('o6', 'changes_requested', 1, 1), ('o6', 'checks_failed', 1, 1),
+    ('o6', 'checks_passed', 1, 1), ('o6', 'conflicts', 1, 1), ('o6', 'mergeable', 1, 1),
+    ('o6', 'ready_for_review', 1, 1), ('o6', 'converted_to_draft', 1, 0),
+    ('o6', 'merge_queue_added', 1, 0), ('o6', 'merge_queue_removed', 1, 1),
+    ('o6', 'merged_closed', 1, 0), ('o6', 'reopened', 1, 1);
+INSERT INTO pr_rows (id, account, pr, kind, text, counts, actor, url, occurred_at, comment_id,
+    unread, listed, made_at, notify, actor_avatar_url) VALUES
+    ('1001:R_1', '1001', '1001:PR_7', 'review_requested', 'for you', NULL, 'bob', 'u1',
+     1799999101, NULL, 1, 1, 1799999102, 'delivered', 'https://avatars.example/bob'),
+    ('1001:R_2', '1001', '1001:PR_7', 'my_review_approved', NULL, NULL, 'me', 'u2',
+     1799999102, NULL, 0, 0, 1799999103, 'none', 'https://avatars.example/me'),
+    ('1001:R_3', '1001', '1001:PR_8', 'ready_for_review', NULL, NULL, 'carol', 'u3',
+     1799999103, NULL, 1, 1, 1799999104, 'pending', NULL),
+    ('1001:R_4', '1001', '1001:PR_8', 'converted_to_draft', NULL, NULL, NULL, 'u4',
+     1799999104, NULL, 0, 1, 1799999105, 'none', NULL),
+    ('1001:R_5', '1001', '1001:PR_1', 'comment', 'hello', NULL, 'alice', 'u5', 1799999105,
+     'C_5', 1, 1, 1799999106, 'pending', 'https://avatars.example/alice'),
+    ('1001:R_6', '1001', '1001:PR_1', 'reaction', 'my comment', '{"THUMBS_UP":2}', NULL, 'u6',
+     1799999106, 'C_1', 0, 1, 1799999107, 'none', NULL),
+    ('1001:R_7', '1001', '1001:PR_6', 'closed', NULL, NULL, 'bob', 'u7', 1799999107, NULL, 1,
+     1, 1799999108, 'delivered', NULL),
+    ('1001:R_8', '1001', '1001:PR_2', 'mentioned', 'hi @me', NULL, 'dave', 'u8', 1799999108,
+     'C_8', 1, 1, 1799999109, 'none', NULL);
+INSERT INTO deleted_rows (id, pr) VALUES ('1001:R_0', '1001:PR_1');
+INSERT INTO dismiss_records (key, account, pr_id, owner, updated_at) VALUES
+    ('1001:PR_R', '1001', 'PR_R', 'o2', 1799990000);
+INSERT INTO reaction_baselines (key, pr, counts) VALUES
+    ('1001:C_1', '1001:PR_1', '{"THUMBS_UP":2}');
+"#;
+
+/// The cards of [`SEED_V10`]: those of 0.7 with the sections of 0.8
+/// (`inbox`), labels and the account's verdicts.
+fn cards_v10() -> String {
+    [
+        cards_v9(),
+        "UPDATE prs SET place_section = 'inbox' WHERE place_section = 'todo';
+         UPDATE prs SET labels = '[{\"name\":\"bug\",\"color\":\"d73a4a\"}]', labels_more = 2,
+             my_review = 'approved' WHERE key = '1001:PR_7';
+         UPDATE prs SET labels = '[]', my_review = 'dismissed' WHERE key = '1001:PR_8';"
+            .to_string(),
+    ]
+    .concat()
+}
+
+/// Every row of a table as text, in a fixed order.
+fn dump(db: &Path, table: &str) -> Vec<String> {
+    let conn = Connection::open(db).unwrap();
+    let mut statement = conn.prepare(&format!("SELECT * FROM {table}")).unwrap();
+    let width = statement.column_count();
+    let mut rows: Vec<String> = statement
+        .query_map([], |r| {
+            Ok((0..width)
+                .map(|i| format!("{:?}", r.get::<_, rusqlite::types::Value>(i).unwrap()))
+                .collect::<Vec<_>>()
+                .join("|"))
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    rows.sort();
+    rows
+}
+
+#[test]
+fn a_0_9_database_moves_to_version_11_keeping_everything() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = old_database(dir.path(), 10, "");
+    let counts: Vec<i64> = TABLES.iter().map(|t| count(&db, t)).collect();
+    let before: Vec<Vec<String>> = TABLES.iter().map(|t| dump(&db, t)).collect();
+    let cells_before = [saved_cells(&db, "o2"), saved_cells(&db, "o6")];
+    let columns_before: Vec<Vec<String>> = TABLES.iter().map(|t| columns(&db, t)).collect();
+    let (store, data) = open(&db);
+    drop(store);
+    assert_eq!(version(&db), SCHEMA_VERSION);
+    assert_eq!(SCHEMA_VERSION, 11);
+    let after: Vec<i64> = TABLES.iter().map(|t| count(&db, t)).collect();
+    assert_eq!(
+        after,
+        with_new_cells(&db, 10, &counts),
+        "every row stays; each owner's table gains Assigned"
+    );
+    // The tables keep their definitions.
+    let columns_after: Vec<Vec<String>> = TABLES.iter().map(|t| columns(&db, t)).collect();
+    assert_eq!(columns_after, columns_before);
+    // Every value of every table but the event tables stays as 0.9 saved
+    // it.
+    for (table, rows) in TABLES.iter().zip(&before) {
+        if *table != "owner_events" {
+            assert_eq!(&dump(&db, table), rows, "{table}");
+        }
+    }
+    // Assigned joins both tables at its default; every other kind keeps its
+    // value, the ones other than the defaults included.
+    for (owner, cells) in ["o2", "o6"].iter().zip(cells_before) {
+        let mut want = cells.clone();
+        assert!(!want.contains_key("assigned"), "{owner}");
+        want.insert("assigned".to_string(), (true, true));
+        assert_eq!(saved_cells(&db, owner), want, "{owner}");
+    }
+    let org = &data.owners["o2"].events;
+    assert_eq!(
+        org.cell(EventKind::Assigned),
+        Cell {
+            list: true,
+            notify: true
+        }
+    );
+    assert!(!org.cell(EventKind::TeamReviewRequested).list);
+    assert!(!org.cell(EventKind::ReviewRequested).notify);
+    assert!(!org.cell(EventKind::Reopened).list);
+    assert!(org.cell(EventKind::ConvertedToDraft).notify);
+    assert!(!data.owners["o6"].notify);
+
+    // What the engine reads: placements, Done, Dismiss, Mute, rows, labels
+    // and verdicts.
+    let place = |n: u32| {
+        let pr = &data.prs[&format!("1001:PR_{n}")];
+        let p = pr.place.unwrap();
+        (
+            p.tab,
+            p.section,
+            p.rank,
+            pr.done_at,
+            pr.dismissed_at.is_some(),
+        )
+    };
+    let want = [
+        (1, PlacedTab::Mine, Section::Doing, 0, None, false),
+        (2, PlacedTab::Mine, Section::Inbox, 0, None, false),
+        (3, PlacedTab::Mine, Section::Inbox, 1, None, true),
+        (4, PlacedTab::Mine, Section::Waiting, 0, None, false),
+        (
+            5,
+            PlacedTab::Mine,
+            Section::Inbox,
+            2,
+            Some(1_799_999_000),
+            false,
+        ),
+        (
+            6,
+            PlacedTab::Review,
+            Section::Waiting,
+            1,
+            Some(1_799_998_000),
+            false,
+        ),
+        (7, PlacedTab::Review, Section::Doing, 0, None, false),
+        (8, PlacedTab::Review, Section::Inbox, 0, None, false),
+        (9, PlacedTab::Review, Section::Waiting, 0, None, false),
+    ];
+    for (n, tab, section, rank, done_at, dismissed) in want {
+        assert_eq!(place(n), (tab, section, rank, done_at, dismissed), "PR_{n}");
+    }
+    let pr7 = &data.prs["1001:PR_7"];
+    assert_eq!(
+        pr7.labels,
+        [LabelRec {
+            name: "bug".into(),
+            color: "d73a4a".into()
+        }]
+    );
+    assert_eq!(pr7.labels_more, 2);
+    assert_eq!(pr7.my_review, Some(Verdict::Approved));
+    assert_eq!(data.prs["1001:PR_8"].my_review, Some(Verdict::Dismissed));
+    assert_eq!(
+        data.accounts["1001"].avatar_url.as_deref(),
+        Some("https://avatars.example/me")
+    );
+    assert_eq!(data.rows.len(), 8);
+    assert!(data.rows["1001:R_1"].unread);
+    assert_eq!(data.rows["1001:R_1"].notify, NotifyState::Delivered);
+    assert!(!data.rows["1001:R_2"].unread);
+    assert_eq!(data.rows["1001:R_3"].notify, NotifyState::Pending);
+    assert!(data.deleted_rows.contains_key("1001:R_0"));
+    assert_eq!(data.records["1001:PR_R"].updated_at, 1_799_990_000);
+    let mutes = &data.accounts["1001"].mutes;
+    assert_eq!(mutes.prs, vec!["org/app#2".to_string()]);
+    assert_eq!(mutes.users, vec!["example-bot".to_string()]);
+    assert_eq!(mutes.repos, vec!["org/legacy".to_string()]);
+    assert_eq!(data.config.text_size, 15);
+    assert!(!data.config.show_labels);
+}
+
+#[test]
+fn a_moved_0_9_database_saves_and_opens_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = old_database(dir.path(), 10, "");
+    let (mut store, data) = open(&db);
+    let mut engine = shiibar_ghd::engine::Engine::restore(data);
+    let now = shiibar_ghd::clock::Now::fixed(1_800_000_000, "Asia/Tokyo").unwrap();
+    engine.set_clock(&now);
+    engine
+        .owner_events_set(
+            "o2",
+            shiibar_gh_proto::EventKind::Assigned,
+            shiibar_gh_proto::EventColumn::Notify,
+            false,
+            &now,
+        )
+        .unwrap();
+    store.save(engine.data(), engine.dirty()).unwrap();
+    drop(store);
+    let (_, again) = open(&db);
+    assert_eq!(&again, engine.data(), "nothing lost");
+    assert_eq!(
+        again.owners["o2"].events.cell(EventKind::Assigned),
+        Cell {
+            list: true,
+            notify: false
+        }
+    );
+    assert_eq!(version(&db), SCHEMA_VERSION);
+}
+
+#[test]
+fn a_failed_move_from_0_9_rolls_back_and_leaves_version_10_unreadable() {
+    // The new kind cannot be written to the event tables, or the moved
+    // state cannot be read (a section no build knows in Review): either way
+    // the move fails inside its transaction and nothing changes.
+    for extra in [
+        "CREATE TRIGGER no_insert BEFORE INSERT ON owner_events
+         BEGIN SELECT RAISE(ABORT, 'no'); END;",
+        "UPDATE prs SET place_section = 'main' WHERE key = '1001:PR_7';",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let db = old_database(dir.path(), 10, extra);
+        let before: Vec<Vec<String>> = TABLES.iter().map(|t| dump(&db, t)).collect();
+        for start in 1..=2 {
+            assert!(
+                matches!(Store::open(&db).unwrap(), OpenOutcome::Unreadable),
+                "{extra}: start {start}"
+            );
+            assert_eq!(version(&db), 10, "{extra}: start {start}: old version");
+            let now: Vec<Vec<String>> = TABLES.iter().map(|t| dump(&db, t)).collect();
+            assert_eq!(now, before, "{extra}: start {start}: rolled back");
+            assert!(
+                !saved_cells(&db, "o2").contains_key("assigned"),
+                "{extra}: start {start}"
+            );
+        }
+    }
+}
+
+/// The daemon on a 0.9 state directory, with a test Keychain file and no
+/// GitHub: the cards list as before, and the event tables carry Assigned at
+/// its default next to the values 0.9 saved.
+#[cfg(feature = "dev-ingest")]
+#[test]
+fn the_daemon_starts_on_a_0_9_state_directory() {
+    use common::*;
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    old_database(dir.path(), 10, "");
+    let item = dir.path().join("keychain.json");
+    std::fs::write(
+        &item,
+        r#"{"version":2,"accounts":[{"id":"1001","login":"me","token":"ghp_test_only"}]}"#,
+    )
+    .unwrap();
+    let mut command = command(dir.path());
+    command
+        .env("SHIIBAR_GH_DEV_NOW", T0.to_string())
+        .env("SHIIBAR_GH_DEV_TZ", TZ)
+        .env("SHIIBAR_GH_DEV_KEYCHAIN", &item);
+    let daemon = TestDaemon::spawn(dir.path(), command);
+    assert_eq!(daemon.subscribe("cli").snapshot()["db_unreadable"], false);
+    let review: Vec<(String, serde_json::Value)> = daemon
+        .ok(json!({"cmd":"list","account":"me","tab":"review"}))["cards"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            (
+                c["pr"].as_str().unwrap().to_string(),
+                c["placement"]["section"].clone(),
+            )
+        })
+        .collect();
+    let at = |pr: &str, section: &str| (pr.to_string(), json!(section));
+    assert_eq!(
+        review,
+        [
+            at("org/app#6", "done"),
+            at("org/app#9", "waiting"),
+            at("org/app#7", "doing"),
+            at("org/app#8", "inbox"),
+        ]
+    );
+    let response = daemon.ok(json!({"cmd":"owner_events_get","account":"me","owner":"org"}));
+    let events = response["events"].as_object().unwrap().clone();
+    let kinds: Vec<&str> = events.keys().map(String::as_str).collect();
+    assert_eq!(kinds.len(), 23, "{kinds:?}");
+    assert_eq!(events["assigned"], json!({"list":true,"notify":true}));
+    assert_eq!(
+        events["team_review_requested"],
+        json!({"list":false,"notify":false})
+    );
+    assert_eq!(
+        events["review_requested"],
+        json!({"list":true,"notify":false})
+    );
+    assert_eq!(events["reopened"], json!({"list":false,"notify":false}));
     daemon.stop();
 }

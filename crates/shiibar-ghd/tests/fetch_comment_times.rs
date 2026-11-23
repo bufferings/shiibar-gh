@@ -396,11 +396,12 @@ const COMMENT_FIELDS: &str = "id url createdAt publishedAt bodyText bodyHTML aut
 /// DESIGN.md, "API usage": every request that reads comments asks for
 /// `publishedAt` (`Events`, the next pages of the review threads, the
 /// collection of a newly found PR and its next pages), and every request
-/// that reads the timeline asks for the two draft events (`Events` and its
-/// next pages). The next pages are only asked for when an answer says there
+/// that reads the timeline asks for the two draft events and the
+/// assignments (`Events` and its next pages). The next pages are only asked for when an answer says there
 /// are more, so the answers here say so.
 #[test]
-fn every_request_that_reads_comments_or_the_timeline_asks_for_published_at_and_the_draft_events() {
+fn every_request_that_reads_comments_or_the_timeline_asks_for_published_at_the_draft_events_and_the_assignments()
+ {
     let github = world();
     github.with(|w| {
         w.prs.push(pr_node("PR_1", "org", 1, "alice", json!({})));
@@ -448,8 +449,11 @@ fn every_request_that_reads_comments_or_the_timeline_asks_for_published_at_and_t
         assert!(!all.is_empty(), "no {op} request");
         all[0].clone()
     };
-    let item_types = "READY_FOR_REVIEW_EVENT, CONVERT_TO_DRAFT_EVENT";
+    let item_types = "REVIEW_REQUESTED_EVENT, ASSIGNED_EVENT, READY_FOR_REVIEW_EVENT, \
+                      CONVERT_TO_DRAFT_EVENT";
     let fragments = [
+        "... on AssignedEvent { id createdAt actor",
+        "assignee { __typename ... on User { login } }",
         "... on ReadyForReviewEvent { id createdAt url actor",
         "... on ConvertToDraftEvent { id createdAt url actor",
     ];

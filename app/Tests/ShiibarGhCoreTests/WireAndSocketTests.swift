@@ -150,7 +150,7 @@ final class WireTests: XCTestCase {
         XCTAssertTrue(mutes.contains(.user, "Example-Bot"))
         XCTAssertEqual(mutes.list(.pr), ["o/r#2"])
         XCTAssertEqual(EventKind.allCases.map(\.rawValue), [
-            "review_requested", "team_review_requested", "my_review", "mentioned", "team_mentioned", "comment", "comment_other", "reply",
+            "review_requested", "team_review_requested", "assigned", "my_review", "mentioned", "team_mentioned", "comment", "comment_other", "reply",
             "reply_mentioned", "reaction", "approved", "changes_requested", "checks_failed", "checks_passed", "conflicts", "mergeable",
             "ready_for_review", "converted_to_draft", "merge_queue_added", "merge_queue_removed", "merged_closed", "reopened",
         ], "DESIGN.md, Wire format")

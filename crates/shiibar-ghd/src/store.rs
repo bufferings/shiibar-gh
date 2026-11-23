@@ -14,23 +14,28 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// 0.8. Version 9 (0.7) moves to 10 at startup keeping everything; version
-/// 8 (0.6) moves to 9 and then to 10; version 7 (0.5) moves through 8 and 9;
-/// version 6 (0.4) moves through 7, 8 and 9 to 10, keeping everything;
-/// versions 5 (0.3) and 4 (0.2) move to 10 keeping only the accounts.
+/// 0.10. Version 10 (0.8 and 0.9) moves to 11 at startup keeping
+/// everything; version 9 (0.7) moves to 10 and then to 11; version 8 (0.6)
+/// moves through 9 and 10; version 7 (0.5) moves through 8, 9 and 10;
+/// version 6 (0.4) moves through 7, 8, 9 and 10 to 11, keeping everything;
+/// versions 5 (0.3) and 4 (0.2) move to 11 keeping only the accounts.
 /// Versions 1 to 3 are the 0.1 schema, which is not migrated: such a
 /// database is treated like an unreadable one (DESIGN.md, "Saved state").
-pub const SCHEMA_VERSION: i64 = 10;
-/// The 0.7 schema, moved to 10 at startup with all its data.
+pub const SCHEMA_VERSION: i64 = 11;
+/// The 0.8 and 0.9 schema, moved to 11 at startup with all its data.
+const V09_VERSION: i64 = 10;
+/// The 0.7 schema, moved to 10 and then to 11 at startup with all its data.
 const V07_VERSION: i64 = 9;
-/// The 0.6 schema, moved to 9 and then to 10 at startup with all its data.
-const V06_VERSION: i64 = 8;
-/// The 0.5 schema, moved through 8 and 9 to 10 at startup with all its data.
-const V05_VERSION: i64 = 7;
-/// The 0.4 schema, moved through 7, 8 and 9 to 10 at startup with all its
+/// The 0.6 schema, moved through 9 and 10 to 11 at startup with all its
 /// data.
+const V06_VERSION: i64 = 8;
+/// The 0.5 schema, moved through 8, 9 and 10 to 11 at startup with all its
+/// data.
+const V05_VERSION: i64 = 7;
+/// The 0.4 schema, moved through 7, 8, 9 and 10 to 11 at startup with all
+/// its data.
 const V04_VERSION: i64 = 6;
-/// The 0.3 and 0.2 schemas, moved to 10 at startup with only the accounts.
+/// The 0.3 and 0.2 schemas, moved to 11 at startup with only the accounts.
 const MOVED_VERSIONS: [i64; 2] = [4, 5];
 /// The newest version of the 0.1 schema.
 const LAST_V01_VERSION: i64 = 3;
@@ -38,15 +43,16 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 const FILE_MODE: u32 = 0o600;
 const SIDE_FILES: [&str; 2] = ["-wal", "-shm"];
 
-/// The tables of version 10 (0.8): the tables of versions 7 (0.5) and 8
-/// (0.6), which differ only in the values of Mine's sections, with
-/// `prs.timeline_updated_at` and `pr_rows.actor_avatar_url` (version 9) and
-/// `prs.labels`, `prs.labels_more`, `prs.my_review` and
-/// `accounts.avatar_url` (version 10). A PR's placement, Dismiss state, Checks
-/// results, newest review request and own Unmute are columns of `prs`; Mute
-/// lists hang off the account; deleted row ids and Dismiss records have
-/// their own tables. It is the 0.4 schema (version 6) with `prs.done_seq`
-/// and `prs.unmuted`.
+/// The tables of version 11 (0.10). They are those of version 10 (0.8):
+/// version 11 adds only rows of `owner_events`. Version 10 has the tables of
+/// versions 7 (0.5) and 8 (0.6), which differ only in the values of Mine's
+/// sections, with `prs.timeline_updated_at` and `pr_rows.actor_avatar_url`
+/// (version 9) and `prs.labels`, `prs.labels_more`, `prs.my_review` and
+/// `accounts.avatar_url` (version 10). A PR's placement, Dismiss state,
+/// Checks results, newest review request and own Unmute are columns of
+/// `prs`; Mute lists hang off the account; deleted row ids and Dismiss
+/// records have their own tables. It is the 0.4 schema (version 6) with
+/// `prs.done_seq` and `prs.unmuted`.
 const SCHEMA_TABLES: &str = "
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -266,9 +272,26 @@ fn migrate_v9_to_v10(tx: &Transaction<'_>) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// DESIGN.md, "Updating from 0.9": inside the caller's transaction, give
+/// every owner's event table the kind of version 11 at its default:
+/// Assigned with List and Notify. The tables keep their definitions, and
+/// every other value stays, the other kinds of the event tables included. It
+/// runs after the older moves, so a table they filled gets the kind too. Any
+/// error leaves the transaction for the caller to roll back.
+fn migrate_v10_to_v11(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    let kind = EventKind::Assigned;
+    let cell = kind.default_cell();
+    tx.execute(
+        "INSERT OR IGNORE INTO owner_events (owner, event, list, notify)
+         SELECT id, ?1, ?2, ?3 FROM owners",
+        params![kind.as_str(), cell.list, cell.notify],
+    )?;
+    Ok(())
+}
+
 /// DESIGN.md, "Updating from 0.3 and 0.2": inside the caller's transaction,
 /// keep each account's id, login, color and order, drop every table, create
-/// the version 10 tables, put the accounts back and set `user_version`. The
+/// the version 11 tables, put the accounts back and set `user_version`. The
 /// `accounts` table of versions 4 and 5 has the same four columns. Any error
 /// leaves the transaction for the caller to roll back.
 fn migrate_accounts_only(tx: &Transaction<'_>) -> rusqlite::Result<()> {
@@ -520,15 +543,15 @@ impl Store {
             || version == V04_VERSION
             || version == V05_VERSION
             || version == V06_VERSION
-            || version == V07_VERSION;
+            || version == V07_VERSION
+            || version == V09_VERSION;
         if migrating {
-            // DESIGN.md, "Updating from 0.7", "Updating from 0.6", "Updating
-            // from 0.5", "Updating from 0.4" and "Updating from 0.3 and
-            // 0.2": every step from the stored version up to 10 runs in the
-            // one transaction, the
-            // version is written after the last one, and a failed move rolls
-            // back and leaves the database as it was, in the unreadable
-            // state.
+            // DESIGN.md, "Updating from 0.9", "Updating from 0.7", "Updating
+            // from 0.6", "Updating from 0.5", "Updating from 0.4" and
+            // "Updating from 0.3 and 0.2": every step from the stored
+            // version up to 11 runs in the one transaction, the version is
+            // written after the last one, and a failed move rolls back and
+            // leaves the database as it was, in the unreadable state.
             let moved = if accounts_only {
                 migrate_accounts_only(&tx)
             } else {
@@ -542,7 +565,10 @@ impl Store {
                 if version <= V06_VERSION {
                     step = step.and_then(|()| migrate_v8_to_v9(&tx));
                 }
-                step.and_then(|()| migrate_v9_to_v10(&tx))
+                if version <= V07_VERSION {
+                    step = step.and_then(|()| migrate_v9_to_v10(&tx));
+                }
+                step.and_then(|()| migrate_v10_to_v11(&tx))
                     .and_then(|()| tx.pragma_update(None, "user_version", SCHEMA_VERSION))
             };
             if let Err(e) = moved {

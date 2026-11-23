@@ -144,6 +144,24 @@ final class LabelSearchTests: XCTestCase {
         }
     }
 
+    /// DESIGN.md, "Row text and targets" and "How rows look": the Assigned
+    /// row shows who assigned the account, has no body, and opens the PR
+    /// page the daemon gives as its `url`.
+    func testTheAssignedRowDecodesWithItsActorAndThePRPage() throws {
+        let json = #"{"id":"r","pr":"o/r#1","pr_title":"T","account":"1","owner":"o1","kind":"assigned","text":null,"actor":"dana","actor_avatar_url":"https://avatars.example/dana","url":"https://github.com/o/r/pull/1","occurred_at":5,"unread":true}"#
+        let row = try JSONDecoder().decode(Row.self, from: Data(json.utf8))
+        XCTAssertEqual(row.kind, .known(.assigned))
+        XCTAssertEqual(row.url, "https://github.com/o/r/pull/1", "a double-click opens the PR page")
+        XCTAssertEqual(row.actorAvatarUrl, "https://avatars.example/dana")
+        XCTAssertTrue(RowPresentation.showsActor(.assigned))
+        let p = RowPresentation(row, now: 65)
+        XCTAssertEqual(p.label, "Assigned")
+        XCTAssertEqual(p.actor, "dana")
+        XCTAssertNil(p.body)
+        XCTAssertEqual(p.mark, .blue)
+        XCTAssertEqual(BoardIcons.row(row.kind), BoardIcons.kindAssigned)
+    }
+
     func testLabelNamesMatchOnlyWithShowLabels() {
         let words = Search.words("fetch first")
         XCTAssertTrue(Search.matches(labelled, words: Search.words("first"), labels: true))

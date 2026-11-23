@@ -1156,6 +1156,99 @@ fn ready_for_review_and_converted_to_draft_carry_who_and_the_event_url() {
     }
 }
 
+/// An ASSIGNED_EVENT of `assignee` by `actor`, with the fields the `Events`
+/// request reads.
+fn assigned_event(id: &str, at: i64, actor: Value, assignee: Value) -> Value {
+    json!({"__typename":"AssignedEvent","id":id,"createdAt":iso(at),"actor":actor,
+           "assignee":assignee})
+}
+
+/// DESIGN.md, "Row kind decisions": an assignment of the account (a `User`
+/// with its login, compared without case) to a PR it did not open is an
+/// Assigned row. Assignments of anyone else, of a deleted or non-user
+/// assignee, before the window, and unassignments make none.
+#[test]
+fn an_assignment_of_the_account_to_someone_elses_pr_is_an_assigned_row() {
+    let alice = json!({"__typename":"User","login":"alice","avatarUrl":"https://a/alice"});
+    let mut pr = Pr::others();
+    pr.timeline = vec![
+        assigned_event("A_1", T0 + 1, alice.clone(), user(ME)),
+        assigned_event("A_2", T0 + 2, user(ME), user("Me")),
+        assigned_event("A_3", T0 + 3, json!(null), user("ME")),
+        assigned_event("A_4", T0 + 4, bot("example-bot"), user(ME)),
+        assigned_event("A_OTHER", T0 + 5, alice.clone(), user("bob")),
+        assigned_event("A_NULL", T0 + 6, alice.clone(), json!(null)),
+        assigned_event("A_BOT", T0 + 7, alice.clone(), bot(ME)),
+        assigned_event(
+            "A_MANNEQUIN",
+            T0 + 8,
+            alice.clone(),
+            json!({"__typename":"Mannequin"}),
+        ),
+        assigned_event(
+            "A_ORG",
+            T0 + 9,
+            alice.clone(),
+            json!({"__typename":"Organization"}),
+        ),
+        assigned_event("A_OLD", T0 - 1, alice.clone(), user(ME)),
+        json!({"__typename":"UnassignedEvent","id":"U_1","createdAt":iso(T0 + 10),
+               "actor":alice,"assignee":user(ME)}),
+    ];
+    let out = pr.run().events;
+    let got: Vec<_> = out
+        .iter()
+        .map(|e| {
+            (
+                e.id.as_str(),
+                e.kind,
+                e.occurred_at,
+                e.url.as_str(),
+                e.actor.as_deref(),
+                e.text.as_deref(),
+            )
+        })
+        .collect();
+    let row = |id, at, actor| {
+        (
+            id,
+            EventKind::Assigned,
+            at,
+            "https://github.com/o/r/pull/1",
+            actor,
+            None,
+        )
+    };
+    assert_eq!(
+        got,
+        [
+            row("A_1", T0 + 1, Some("alice")),
+            row("A_2", T0 + 2, Some(ME)),
+            row("A_3", T0 + 3, None),
+            row("A_4", T0 + 4, Some("example-bot")),
+        ],
+        "the PR page as the target, the one who assigned as the actor"
+    );
+    assert_eq!(out[0].actor_avatar_url.as_deref(), Some("https://a/alice"));
+    assert_eq!(out[2].actor_avatar_url, None);
+}
+
+/// DESIGN.md, "Row kind decisions": an assignment to a PR the account
+/// opened makes no row, whoever assigns.
+#[test]
+fn an_assignment_to_the_accounts_own_pr_is_no_row() {
+    for author in [user(ME), user("ME")] {
+        let mut pr = Pr::new(author);
+        pr.timeline = vec![
+            assigned_event("A_1", T0 + 1, user("alice"), user(ME)),
+            assigned_event("A_2", T0 + 2, bot("example-bot"), user(ME)),
+            assigned_event("A_3", T0 + 3, user(ME), user(ME)),
+            assigned_event("A_4", T0 + 4, json!(null), user(ME)),
+        ];
+        assert!(pr.run().events.is_empty());
+    }
+}
+
 /// DESIGN.md, "My review rows": the account's own reviews with a verdict,
 /// on any PR, in the window, as GitHub states them at this fetch.
 #[test]

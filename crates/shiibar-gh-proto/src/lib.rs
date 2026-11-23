@@ -111,6 +111,7 @@ pub enum BaseStatus {
 pub enum EventKind {
     ReviewRequested,
     TeamReviewRequested,
+    Assigned,
     MyReview,
     Mentioned,
     TeamMentioned,
@@ -134,9 +135,10 @@ pub enum EventKind {
 }
 
 impl EventKind {
-    pub const ALL: [EventKind; 22] = [
+    pub const ALL: [EventKind; 23] = [
         EventKind::ReviewRequested,
         EventKind::TeamReviewRequested,
+        EventKind::Assigned,
         EventKind::MyReview,
         EventKind::Mentioned,
         EventKind::TeamMentioned,
@@ -168,6 +170,7 @@ impl EventKind {
 pub enum IngestKind {
     ReviewRequested,
     TeamReviewRequested,
+    Assigned,
     MyReviewApproved,
     MyReviewChangesRequested,
     Mentioned,
@@ -192,6 +195,7 @@ pub enum IngestKind {
 pub enum RowKind {
     ReviewRequested,
     TeamReviewRequested,
+    Assigned,
     MyReviewApproved,
     MyReviewChangesRequested,
     Mentioned,
@@ -1325,6 +1329,7 @@ mod tests {
             [
                 "review_requested",
                 "team_review_requested",
+                "assigned",
                 "my_review",
                 "mentioned",
                 "team_mentioned",

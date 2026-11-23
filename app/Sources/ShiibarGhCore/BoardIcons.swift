@@ -208,6 +208,14 @@ public enum BoardIcons {
         lineWidth: 1.4, roundCaps: true, roundJoins: true
     )
 
+    /// Assigned (Main.html, "Row Assigned"): a person, the head a circle of
+    /// radius 2.75 around (8, 5.5) and the shoulders an arch from (2.75, 14)
+    /// to (13.25, 14).
+    public static let kindAssigned = BoardIcon(
+        [.circle(cx: 8, cy: 5.5, r: 2.75, dash: nil), .path("M2.75 14c.6-2.9 2.7-4.6 5.25-4.6s4.65 1.7 5.25 4.6")],
+        lineWidth: 1.4, roundCaps: true, roundJoins: true
+    )
+
     /// The one eye of the app (DESIGN.md, "Card", "My review mark", and
     /// "Constants"; GitHub's octicon eye-16): an almond outline stroked,
     /// from 1 to 15 across and 2.75 to 13.25 down, and a filled pupil of
@@ -272,6 +280,7 @@ extension BoardIcons {
         // GitHub's icons (DESIGN.md, "Card", "My review mark"): the eye
         // for a review request and for a draft made ready.
         case .reviewRequested, .teamReviewRequested, .readyForReview: return eye
+        case .assigned: return kindAssigned
         case .mentioned, .teamMentioned: return kindMention
         // Main.html draws Reaction with the comment icon too.
         case .comment, .commentOther, .reply, .replyMentioned, .reaction, nil: return kindComment

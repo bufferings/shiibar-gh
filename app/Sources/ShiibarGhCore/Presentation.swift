@@ -278,6 +278,7 @@ public enum RowText {
         }
         switch kind {
         case .reviewRequested, .teamReviewRequested: return "Review requested"
+        case .assigned: return "Assigned"
         // My review reads as the verdict it records (DESIGN.md, "Row labels").
         case .myReviewApproved: return "Approved"
         case .myReviewChangesRequested: return "Changes requested"
@@ -802,7 +803,7 @@ public enum SettingsText {
 
     /// The event table's rows, grouped as DESIGN.md, "Row kinds and states".
     public static let eventGroups: [(String, [EventKind])] = [
-        ("Reviews and mentions", [.reviewRequested, .teamReviewRequested, .myReview, .mentioned, .teamMentioned]),
+        ("Reviews and mentions", [.reviewRequested, .teamReviewRequested, .assigned, .myReview, .mentioned, .teamMentioned]),
         ("Comments", [.comment, .commentOther, .reply, .replyMentioned, .reaction]),
         ("My pull requests", [.approved, .changesRequested, .checksFailed, .checksPassed, .conflicts, .mergeable]),
         ("Any pull request", [.readyForReview, .convertedToDraft, .mergeQueueAdded, .mergeQueueRemoved, .mergedClosed, .reopened]),
@@ -812,6 +813,7 @@ public enum SettingsText {
         switch kind {
         case .reviewRequested: return "Review requested"
         case .teamReviewRequested: return "Review requested to my team"
+        case .assigned: return "Assigned"
         case .myReview: return "My review"
         case .mentioned: return "Mentioned"
         case .teamMentioned: return "My team mentioned"

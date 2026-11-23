@@ -168,7 +168,8 @@ fn the_table_has_two_columns_with_the_design_defaults() {
     // and Merged / Closed only.
     let h = H::new();
     let events = h.engine.owner_events(&h.owner_id(ORG));
-    assert_eq!(events.len(), 22);
+    assert_eq!(events.len(), 23);
+    assert!(events.contains_key("assigned"));
     for (name, cell) in &events {
         let quiet = [
             "my_review",

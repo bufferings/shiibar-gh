@@ -653,6 +653,28 @@ fn account_and_owner_commands_work_from_the_command_line() {
     ]);
     assert_eq!(set.code, 0, "{}", set.stderr);
     assert!(set.stdout.contains("merged_closed list=on notify=on"));
+    // DESIGN.md, "Row kinds and states": Assigned is the third kind of
+    // Reviews and mentions, List and Notify on by default, and the CLI takes
+    // its wire value.
+    assert!(
+        events.contains(
+            "team_review_requested list=on notify=on\nassigned list=on notify=on\nmy_review "
+        ),
+        "{events}"
+    );
+    let set = daemon.cli(&[
+        "owner",
+        "events",
+        "set",
+        "org",
+        "assigned",
+        "notify",
+        "off",
+        "--account",
+        "me",
+    ]);
+    assert_eq!(set.code, 0, "{}", set.stderr);
+    assert!(set.stdout.contains("assigned list=on notify=off"));
     // Notify while List is off is refused.
     daemon.cli(&[
         "owner",
@@ -692,6 +714,7 @@ fn account_and_owner_commands_work_from_the_command_line() {
     ]);
     assert_eq!(copied.code, 0, "{}", copied.stderr);
     assert!(copied.stdout.contains("merged_closed list=on notify=on"));
+    assert!(copied.stdout.contains("assigned list=on notify=off"));
 
     // The Mute lists (DESIGN.md, "CLI (AI integration)").
     for args in [
@@ -1182,6 +1205,7 @@ mod with_events {
             events.starts_with(
                 "review_requested list=on notify=on\n\
                  team_review_requested list=on notify=on\n\
+                 assigned list=on notify=on\n\
                  my_review list=on notify=-\nmentioned list=on notify=on\n"
             ),
             "{events}"
