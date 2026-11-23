@@ -399,3 +399,30 @@ fn a_failed_read_is_tried_again_by_refresh_only() {
     assert!(daemon.account(ME)["token"]["registered"] == true);
     daemon.stop();
 }
+
+#[test]
+fn dev_account_fetched_sets_the_success_time_and_the_api_usage() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path(), &keychain_path(dir.path()));
+    daemon.ok(json!({"cmd":"dev_account_add","id":ACCOUNT,"login":ME,"token":"t"}));
+    let account = &daemon.ok(
+        json!({"cmd":"dev_account_fetched","account":ME,"at":T0 - 120,
+        "graphql":{"used":250,"limit":5000,"reset_at":T0 + 1800}}),
+    )["account"];
+    assert_eq!(account["updated_at"], T0 - 120);
+    assert_eq!(
+        account["rate_limit"]["graphql"],
+        json!({"used":250,"limit":5000,"reset_at":T0 + 1800})
+    );
+    assert_eq!(account["rate_limit"]["rest"], Value::Null);
+    // A field left out keeps its value.
+    let account = &daemon.ok(json!({"cmd":"dev_account_fetched","account":ME,
+        "rest":{"used":10,"limit":5000,"reset_at":null}}))["account"];
+    assert_eq!(account["updated_at"], T0 - 120);
+    assert_eq!(account["rate_limit"]["graphql"]["used"], 250);
+    assert_eq!(
+        account["rate_limit"]["rest"],
+        json!({"used":10,"limit":5000,"reset_at":null})
+    );
+    daemon.stop();
+}

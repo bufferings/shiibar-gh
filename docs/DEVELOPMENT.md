@@ -69,7 +69,30 @@ swift build --package-path app -c release -Xswiftc -warnings-as-errors
 
 `SHIIBAR_GH_TEST_DAEMON` を指定しないと、実際のデーモンを使用するテストは省略される。
 
-デモのモード（`scripts/perf/demo.sh`）は、作成したデータを持つ `dev-ingest` のデーモンと、メモリーだけの UserDefaults を使用するアプリを起動し、実際の状態ディレクトリ、Keychain、GitHub に触れずに画面を操作できる。`SHIIBAR_GH_DEMO_REFRESH_SECONDS`（0〜60 の秒数。デモのモードだけ）を指定すると、Refresh（見出しのボタンまたは ⌘R）の応答をその秒数だけ保ち、回転する Refresh のアイコンを確認できる。指定しなければ、デモのデーモンはすぐに応答する。
+## サンドボックス
+
+`scripts/sandbox-env.sh` は、作成したデータでアプリを起動する環境（サンドボックス）を用意する。画面を手で操作して確認するときと、README の画像を撮影するときに使用する。GitHub、Keychain、実際の状態ディレクトリ、インストール済みのアプリの設定に触れず、通知は実際に表示する。
+
+```sh
+scripts/sandbox-env.sh start edge-cases   # 画面の確認用のデータで起動する
+scripts/sandbox-env.sh start screenshots  # README の画像用のデータで起動する
+scripts/sandbox-env.sh notify             # 新しいイベントを 1 件送り、通知を表示する
+scripts/sandbox-env.sh stop               # アプリを終了し、作成したものを削除する
+```
+
+データは `scripts/lib/make-data.py` が作成する。データの種類は 3 つで、`measure` は計測（`scripts/perf/measure.sh`）、`edge-cases` は画面が扱う必要のある場合（長い本文、多数のラベル、ミュート、Dismissed の一覧など）、`screenshots` は README の画像用の、件数を絞った整ったデータである。利用者の名前はすべて架空で、アバターは、1 色の四角を 5×5 の格子に左右対称に並べた模様の画像を生成する。
+
+`start` は、`dev-ingest` のデーモンと CLI、アプリをリリースモードでビルドし、`/tmp` に作成した状態ディレクトリにデータを読み込み、独自の識別子（`shiibar.gh.sandbox`）のアプリを `~/Library/Caches/shiibar.gh.sandbox` に組み立てて、サンドボックスのモード（`SHIIBAR_GH_SANDBOX=1`）で起動する。
+
+- 同梱するデーモンは、データを読み込んだ `dev-ingest` のビルドである。GitHub に接続せず、トークンは状態ディレクトリの中のファイルに保存した架空の値である。リリースのデーモンは実際の Keychain を読むので、同梱しない。
+- 識別子が異なるので、UserDefaults と通知の許可は、インストール済みのアプリと別になる。初回の起動で通知の許可を求める。
+- ログイン項目は登録しない。インストール済みのアプリと並べて起動できる（メニューバーのアイコンが増える）。画像に写さない場合は、インストール済みのアプリを先に終了する。
+- アバターは、作成したデータの `file:` の画像を読み込む。
+- データに、最後の更新の時刻と API の使用量を入れる（サンドボックスでは取得を実行しないため。デーモンの `dev_account_fetched`）。
+
+`SHIIBAR_GH_SANDBOX_REFRESH_SECONDS`（0〜60 の秒数）を指定して `start` を実行すると、Refresh（見出しのボタンまたは ⌘R）の応答をその秒数だけ保ち、回転する Refresh のアイコンを確認できる。指定しなければ、デーモンはすぐに応答する。
+
+`stop` は、アプリを終了し（デーモンも終了する）、アプリ、状態ディレクトリ、UserDefaults を削除する。通知の許可は macOS が残すので、システム設定の通知から削除する。
 
 ## 開発版のインストール
 

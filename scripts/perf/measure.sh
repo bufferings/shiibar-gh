@@ -6,7 +6,8 @@
 #      $SHIIBAR_GH_PERF_WORK (printed);
 #   2. a release (optimized) build of the app;
 #   3. a new state directory under /tmp (the socket path must stay short),
-#      filled by make-data.py: 200 cards, 3 rows each, file:// avatars;
+#      filled by scripts/lib/make-data.py (the set `measure`): 200 cards,
+#      3 rows each, file:// avatars;
 #   4. the app in its measurement mode (SHIIBAR_GH_PERF=1, app/Sources/
 #      ShiibarGhApp/Perf.swift), which starts that daemon, opens the
 #      account's window, scrolls, runs every operation 10 times, prints the
@@ -85,7 +86,7 @@ app_bin="$app_pkg/.build/release/ShiibarGhApp"
 
 state=$(mktemp -d /tmp/sgperf.XXXXXX)
 trap 'rm -rf "$state"' EXIT
-python3 "$repo/scripts/perf/make-data.py" "$daemon" "$state"
+python3 "$repo/scripts/lib/make-data.py" "$daemon" "$state" measure
 
 # The display on while the app runs (caffeinate(8): -u turns a sleeping
 # display on, -d keeps it on), so the window is on a display that is in use.
