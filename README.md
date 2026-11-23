@@ -93,6 +93,41 @@ Run `shiibar-gh token reset` before uninstalling, or delete the item in
 Keychain Access. `brew uninstall --zap --cask shiibar-gh` also removes the
 saved state.
 
+## How it works
+
+```mermaid
+flowchart LR
+    github[GitHub API] -- "GraphQL and REST, read only" --> daemon[shiibar-ghd daemon]
+    keychain[Keychain] --> daemon
+    daemon -- "Unix socket, NDJSON" --> app[menu bar app]
+    daemon -- "Unix socket, NDJSON" --> cli[shiibar-gh CLI]
+```
+
+- The daemon (`shiibar-ghd`) does all the work: it polls GitHub for each
+  account (every minute by default, Settings › General › PR status
+  interval), turns what happened into the rows of each card, decides which
+  rows notify, and keeps the state. It only reads from GitHub.
+- The daemon is the only part that touches the Keychain, where the tokens
+  of all accounts live in one item (service `shiibar-gh`, account
+  `accounts`).
+- The menu bar app and the `shiibar-gh` CLI are both clients of the daemon
+  over a Unix domain socket. The app starts the daemon and stops it when
+  you quit; there is no launchd job. The app shows the macOS notifications
+  the daemon decides on.
+- The CLI does what the popover and Settings do, except the app's own
+  state on this Mac (global shortcuts, the popover or window form) and
+  Open in window / Open in popover. It reads tokens from stdin, never from
+  arguments. `--help` lists the commands, and `--json` prints
+  machine-readable output:
+
+  ```sh
+  shiibar-gh list --tab review --json
+  shiibar-gh place owner/repo#123 review doing --account <login>
+  ```
+
+- All local state (the daemon's socket, its database and its log) lives
+  under `~/.local/state/shiibar-gh/`.
+
 ## License
 
 Licensed under either of
