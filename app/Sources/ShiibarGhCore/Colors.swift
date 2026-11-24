@@ -136,11 +136,11 @@ extension Palette {
         NSColor(name: nil) { _ in NSColor.controlAccentColor.withAlphaComponent(0.16) }, swiftUI: Color.accentColor.opacity(0.16)
     )
     /// A selection while the list does not have the keys (the search field
-    /// has them, or the window is not key): a pale neutral gray, slightly
-    /// denser on dark (shiibar-cc's inactive selection).
-    public static let inactiveSelection = Tone(NSColor(name: nil) { appearance in
-        NSColor.systemGray.withAlphaComponent(appearance.isDark ? 0.26 : 0.18)
-    })
+    /// has them, or the window is not key): the system's gray for a
+    /// selection in a view that is not key. On light it is darker than the
+    /// band (systemGray at 0.12 over the list's ground), so a selected card
+    /// or band heading stays apart from the bands and the ground.
+    public static let inactiveSelection = Tone(.unemphasizedSelectedContentBackgroundColor)
 
     // MARK: Bands
 

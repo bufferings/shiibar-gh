@@ -155,7 +155,10 @@ final class StoreTests: XCTestCase {
             let selection = Palette.selection.resolved(dark: dark)
             XCTAssertEqual(selection.alphaComponent, 0.16, accuracy: 0.001)
             XCTAssertEqual(selection.redComponent, accent.redComponent, accuracy: 0.001)
-            XCTAssertEqual(Palette.inactiveSelection.resolved(dark: dark).alphaComponent, dark ? 0.26 : 0.18, accuracy: 0.001)
+            XCTAssertEqual(
+                Palette.inactiveSelection.resolved(dark: dark),
+                Tone(.unemphasizedSelectedContentBackgroundColor).resolved(dark: dark)
+            )
         }
     }
 }
