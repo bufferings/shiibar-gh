@@ -1151,21 +1151,26 @@ enum LineLayout {
             // A row with an actor keeps the avatar's height whether its
             // image has loaded or not, so the row does not move when it does.
             if p.actor != nil { lineA = max(lineA, rowAvatar * k) }
+            // Line 1 is as high as the chain button (Main.html `.evl`), and
+            // the dot, the icon, the label, the avatar, the name and the
+            // time are centered on it: a row without a body is centered in
+            // the row, and a body starts below the button.
+            let line1 = max(lineA, op)
             let labelWidth = Ink.width(p.label, f11b)
-            let labelRect = CGRect(x: textX, y: 0, width: min(labelWidth, textWidth), height: lineA)
+            let labelRect = CGRect(x: textX, y: 0, width: min(labelWidth, textWidth), height: line1)
             var mx = labelRect.maxX + 6
             var countsRect: CGRect?
             if let counts = p.counts {
                 let w = min(Ink.width(counts, f12), max(0, textX + textWidth - mx))
-                countsRect = CGRect(x: mx, y: 0, width: w, height: lineA)
+                countsRect = CGRect(x: mx, y: 0, width: w, height: line1)
                 mx += w + 6
             }
             // DESIGN.md, "How rows look": the chain icon at the right end of
             // line 1 and the time right before it, at the same place in every
             // row.
-            let chainRect = CGRect(x: textX + textWidth - op, y: (lineA - op) / 2, width: op, height: op)
-            let metaRect = CGRect(x: mx, y: 0, width: max(0, chainRect.minX - timeGap - mx), height: lineA)
-            var content = lineA
+            let chainRect = CGRect(x: textX + textWidth - op, y: (line1 - op) / 2, width: op, height: op)
+            let metaRect = CGRect(x: mx, y: 0, width: max(0, chainRect.minX - timeGap - mx), height: line1)
+            var content = line1
             var bodyRect: CGRect?
             var toggleRect: CGRect?
             var bodyLines = 0
@@ -1177,25 +1182,23 @@ enum LineLayout {
                 bodyLines = min(Ink.lines(body, f12, width: bodyWidth), p.bodyLines)
                 let textHeight = Ink.height(f12, lines: bodyLines)
                 let toggleHeight = toggleSize.height + 1
-                let bodyTop = lineA + 1
+                let bodyTop = line1 + 1
                 bodyRect = CGRect(x: textX, y: bodyTop, width: bodyWidth, height: textHeight)
                 if show {
                     toggleRect = CGRect(x: textX + textWidth - toggleSize.width, y: bodyTop + 1, width: toggleSize.width, height: toggleSize.height)
                 }
-                content = lineA + 1 + (show ? max(textHeight, toggleHeight) : textHeight)
+                content = line1 + 1 + (show ? max(textHeight, toggleHeight) : textHeight)
             }
-            let inner = max(6 * k + 7 * k, 2 * k + 14 * k, content, op)
-            let rowHeight = 5 * k + inner + 6 * k
-            let top = 5 * k
+            // The 1-point dividing line at the row's top, 5 below it and 6
+            // at the bottom (Main.html `.ev`: border-top 1, padding 5 and 6).
+            let top = 1 + 5 * k
+            let rowHeight = top + content + 6 * k
             func shift(_ rect: CGRect) -> CGRect { rect.offsetBy(dx: 0, dy: y + top) }
             rows.append(CardGeometry.RowFrame(
                 id: row.id,
                 frame: CGRect(x: 0, y: y, width: width, height: rowHeight),
-                // The unread dot and the kind icon are centered on line 1,
-                // as the label, the avatar and the time are (Main.html
-                // `.ev`), whatever line 1's height is.
-                dot: shift(CGRect(x: rowLeft, y: (lineA - 7 * k) / 2, width: 7 * k, height: 7 * k)),
-                icon: shift(CGRect(x: rowLeft + 7 * k + 8, y: (lineA - 14 * k) / 2, width: 14 * k, height: 14 * k)),
+                dot: shift(CGRect(x: rowLeft, y: (line1 - 7 * k) / 2, width: 7 * k, height: 7 * k)),
+                icon: shift(CGRect(x: rowLeft + 7 * k + 8, y: (line1 - 14 * k) / 2, width: 14 * k, height: 14 * k)),
                 label: shift(labelRect), counts: countsRect.map(shift), meta: shift(metaRect),
                 body: bodyRect.map(shift), bodyLines: bodyLines, toggle: toggleRect.map(shift),
                 chain: shift(chainRect)

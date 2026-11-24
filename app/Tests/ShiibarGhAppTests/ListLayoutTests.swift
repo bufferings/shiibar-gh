@@ -311,6 +311,21 @@ final class DismissedBandPressTests: XCTestCase {
         }
     }
 
+    /// Line 1 is as high as the chain button (18): a row without a body
+    /// is 1 + 5 + 18 + 6 high with line 1 centered below the dividing line,
+    /// and a body starts 1 below line 1.
+    func testLineOneIsAsHighAsTheChainButton() {
+        let shape = rowShape(rowLine(rowCard()))
+        let merged = shape.rows[0]
+        let comment = shape.rows[1]
+        XCTAssertEqual(merged.frame.height, 30, accuracy: 0.01)
+        XCTAssertEqual(merged.label.midY, merged.frame.minY + 1 + 5 + 9, accuracy: 0.01)
+        XCTAssertEqual(merged.chain.minY, merged.frame.minY + 1 + 5, accuracy: 0.01)
+        let body = try! XCTUnwrap(comment.body)
+        XCTAssertEqual(body.minY, comment.frame.minY + 1 + 5 + 18 + 1, accuracy: 0.01)
+        XCTAssertEqual(comment.frame.maxY, body.maxY + 6, accuracy: 0.01)
+    }
+
     /// The avatar and the name show the login as their tooltip; the image,
     /// once loaded, moves the name and draws the card again.
     func testTheActorsTooltipAndTheLoadedAvatar() async throws {
