@@ -300,6 +300,17 @@ final class DismissedBandPressTests: XCTestCase {
         XCTAssertEqual(parts[1].1, "Merged, al, 10 min ago", "the name on line 1, no `by`")
     }
 
+    /// The unread dot and the kind icon are centered on line 1 with the
+    /// label and the time, with an actor's avatar on line 1 or without.
+    func testTheDotAndTheIconAreCenteredOnLineOne() {
+        let shape = rowShape(rowLine(rowCard()))
+        for row in shape.rows {
+            XCTAssertEqual(row.icon.midY, row.label.midY, accuracy: 0.01, row.id)
+            XCTAssertEqual(row.dot.midY, row.label.midY, accuracy: 0.01, row.id)
+            XCTAssertEqual(row.meta.midY, row.label.midY, accuracy: 0.01, row.id)
+        }
+    }
+
     /// The avatar and the name show the login as their tooltip; the image,
     /// once loaded, moves the name and draws the card again.
     func testTheActorsTooltipAndTheLoadedAvatar() async throws {
