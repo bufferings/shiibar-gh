@@ -1191,8 +1191,11 @@ enum LineLayout {
             rows.append(CardGeometry.RowFrame(
                 id: row.id,
                 frame: CGRect(x: 0, y: y, width: width, height: rowHeight),
-                dot: shift(CGRect(x: rowLeft, y: 6 * k, width: 7 * k, height: 7 * k)),
-                icon: shift(CGRect(x: rowLeft + 7 * k + 8, y: 2 * k, width: 14 * k, height: 14 * k)),
+                // The unread dot and the kind icon are centered on line 1,
+                // as the label, the avatar and the time are (Main.html
+                // `.ev`), whatever line 1's height is.
+                dot: shift(CGRect(x: rowLeft, y: (lineA - 7 * k) / 2, width: 7 * k, height: 7 * k)),
+                icon: shift(CGRect(x: rowLeft + 7 * k + 8, y: (lineA - 14 * k) / 2, width: 14 * k, height: 14 * k)),
                 label: shift(labelRect), counts: countsRect.map(shift), meta: shift(metaRect),
                 body: bodyRect.map(shift), bodyLines: bodyLines, toggle: toggleRect.map(shift),
                 chain: shift(chainRect)
